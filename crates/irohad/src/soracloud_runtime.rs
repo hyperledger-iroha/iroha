@@ -1648,6 +1648,7 @@ impl SoracloudIvmHost {
                         payload_bytes: std::num::NonZeroU64::new(payload_bytes)
                             .ok_or(VMError::NoritoInvalid)?,
                         payload_commitment,
+                        fhe_public_key_digest: None,
                         fhe_residual_multiple_bound: None,
                         fhe_bound_mode: None,
                         last_update_sequence: self.request.execution_sequence,
@@ -21221,6 +21222,7 @@ mod tests {
                         payload: b"alice-session".to_vec(),
                         payload_bytes: std::num::NonZeroU64::new(13).expect("nonzero"),
                         payload_commitment: Hash::new(b"alice-session"),
+                        fhe_public_key_digest: None,
                         fhe_residual_multiple_bound: None,
                         fhe_bound_mode: None,
                         last_update_sequence: 4,
@@ -21743,6 +21745,7 @@ mod tests {
             payload: b"alice-session".to_vec(),
             payload_bytes: std::num::NonZeroU64::new(13).expect("non-zero"),
             payload_commitment: Hash::new(b"alice-session"),
+            fhe_public_key_digest: None,
             fhe_residual_multiple_bound: None,
             fhe_bound_mode: None,
             last_update_sequence: 4,

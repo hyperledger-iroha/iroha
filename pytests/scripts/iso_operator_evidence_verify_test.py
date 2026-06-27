@@ -1,4 +1,5 @@
 import argparse
+import array
 import base64
 import contextlib
 import importlib.util
@@ -45,6 +46,15 @@ def write_json(path, body):
     return path
 
 
+def canary_receipt_path(kind, offset, name=None):
+    receipt_dir = (
+        "/ops/iso/notary-receipts"
+        if kind == "iso-audit-notary"
+        else "/ops/iso/rail-receipts"
+    )
+    return f"{receipt_dir}/{name or f'{kind}.{offset}.receipt.json'}"
+
+
 def receipt_stdout(
     receipt_kind=None,
     *,
@@ -61,7 +71,7 @@ def receipt_stdout(
         kinds = receipt_kind or ["iso-audit-notary", "iso-rail-gateway"]
         receipts = [
             {
-                "path": f"/ops/iso/receipts/{kind}.{offset}.receipt.json",
+                "path": canary_receipt_path(kind, offset),
                 "receipt_kind": kind,
                 "receipt_sha256": f"{offset + 1:064x}",
                 "ok": True,
@@ -114,6 +124,52 @@ def receipt_stdout(
     )
 
 
+def rail_stdout(
+    receipt_dir="/ops/iso/rail-receipts",
+    *,
+    submitted_messages=1,
+    failures=0,
+    receipts=None,
+):
+    return (
+        json.dumps(
+            {
+                "submitted_messages": submitted_messages,
+                "receipts": receipts
+                if receipts is not None
+                else [f"{receipt_dir}/iso-rail-gateway.1.receipt.json"],
+                "failures": failures,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def notary_stdout(
+    receipt_dir="/ops/iso/notary-receipts",
+    *,
+    published_anchors=1,
+    endpoint_count=1,
+    failures=0,
+    receipts=None,
+):
+    return (
+        json.dumps(
+            {
+                "published_anchors": published_anchors,
+                "endpoint_count": endpoint_count,
+                "receipts": receipts
+                if receipts is not None
+                else [f"{receipt_dir}/iso-audit-notary.0.receipt.json"],
+                "failures": failures,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
 def stage(
     name,
     command,
@@ -123,13 +179,20 @@ def stage(
     started_at="2026-06-04T00:00:00+00:00",
     finished_at="2026-06-04T00:00:01+00:00",
 ):
+    if stdout is None:
+        if name == "rail" and receipt_dir is not None:
+            stdout = rail_stdout(receipt_dir)
+        elif name == "notary" and receipt_dir is not None:
+            stdout = notary_stdout(receipt_dir)
+        else:
+            stdout = "{}\n"
     return {
         "name": name,
         "started_at": started_at,
         "finished_at": finished_at,
         "returncode": 0,
         "command": command,
-        "stdout_preview": stdout if stdout is not None else "{}\n",
+        "stdout_preview": stdout,
         "stderr_preview": "",
         "stdout_truncated": False,
         "stderr_truncated": False,
@@ -209,6 +272,21 @@ def add_canonical_verify_receipt_dir(command, receipt_dir):
 
 
 def valid_canary_summary(*, receipt_entries=None, allow_default_profile=False):
+    verifier_stdout = receipt_stdout(
+        receipt_entries=receipt_entries,
+        allow_default_profile=allow_default_profile,
+    )
+    verifier_summary = json.loads(verifier_stdout)
+    rail_receipts = [
+        receipt["path"]
+        for receipt in verifier_summary["receipts"]
+        if receipt["receipt_kind"] == "iso-rail-gateway"
+    ]
+    notary_receipts = [
+        receipt["path"]
+        for receipt in verifier_summary["receipts"]
+        if receipt["receipt_kind"] == "iso-audit-notary"
+    ]
     return digest_summary(
         {
             "version": EVIDENCE.CANARY_SUMMARY_VERSION,
@@ -227,6 +305,10 @@ def valid_canary_summary(*, receipt_entries=None, allow_default_profile=False):
                     "rail",
                     rail_command(),
                     "/ops/iso/rail-receipts",
+                    stdout=rail_stdout(
+                        receipts=rail_receipts or None,
+                        submitted_messages=max(1, len(rail_receipts)),
+                    ),
                     started_at="2026-06-04T00:00:00+00:00",
                     finished_at="2026-06-04T00:00:00.200000+00:00",
                 ),
@@ -234,16 +316,17 @@ def valid_canary_summary(*, receipt_entries=None, allow_default_profile=False):
                     "notary",
                     notary_command(),
                     "/ops/iso/notary-receipts",
+                    stdout=notary_stdout(
+                        receipts=notary_receipts or None,
+                        published_anchors=max(1, len(notary_receipts)),
+                    ),
                     started_at="2026-06-04T00:00:00.200000+00:00",
                     finished_at="2026-06-04T00:00:00.400000+00:00",
                 ),
                 stage(
                     "verify",
                     verify_command(),
-                    stdout=receipt_stdout(
-                        receipt_entries=receipt_entries,
-                        allow_default_profile=allow_default_profile,
-                    ),
+                    stdout=verifier_stdout,
                     started_at="2026-06-04T00:00:00.400000+00:00",
                     finished_at="2026-06-04T00:00:01+00:00",
                 ),
@@ -531,7 +614,7 @@ def receipt_entries_from_dirs(*receipt_dirs):
         for path in sorted(Path(receipt_dir).glob("*.receipt.json")):
             receipt = json.loads(path.read_text(encoding="utf-8"))
             entry = {
-                "path": f"/ops/iso/receipts/{path.name}",
+                "path": canary_receipt_path(receipt["receipt_kind"], 0, path.name),
                 "receipt_kind": receipt["receipt_kind"],
                 "receipt_sha256": receipt["receipt_sha256"],
                 "ok": receipt["ok"],
@@ -613,6 +696,37 @@ def run_evidence(argv, *, include_context=True, include_freshness=True):
 
 
 class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
+    def test_os_error_detail_redacts_unsafe_strerror_without_echo(self):
+        self.assertEqual(
+            EVIDENCE._safe_os_error_detail(OSError(5, "Permission denied")),
+            "Permission denied",
+        )
+        unsafe_values = (
+            "token=/tmp/evidence-hidden-secret",
+            "open /tmp/evidence-hidden-path",
+            "bad\ncontrol",
+            "nonascii-\u2603",
+            "x" * 129,
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                detail = EVIDENCE._safe_os_error_detail(OSError(5, value))
+                self.assertEqual(detail, "I/O error")
+                self.assertNotIn("evidence-hidden", detail)
+
+    def test_canonical_json_bytes_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    EVIDENCE._canonical_json_bytes({"value": value})
+
+    def test_json_float_parser_rejects_overflow_and_negative_zero(self):
+        for value in ("1e9999", "-1e9999", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._parse_canonical_json_float(value)
+                self.assertNotIn(value, str(caught.exception))
+
     def test_json_lists_are_count_bounded_without_echo(self):
         items = [None] * (EVIDENCE.MAX_JSON_LIST_ITEMS + 1)
 
@@ -2029,6 +2143,33 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertIn("must use printable ASCII", stderr)
                 self.assertNotIn(hidden, stderr)
 
+    def test_numeric_cli_flags_reject_noncanonical_decimal_spellings_before_replay(self):
+        cases = (
+            ["--max-canary-age-days", "0007"],
+            ["--max-trust-age-days", "+7"],
+            ["--max-trust-source-age-days=0007"],
+            ["--max-trust-source-age-days", "-0"],
+            ["--receipt-verifier-timeout-secs", ".5"],
+            ["--receipt-verifier-timeout-secs", "01"],
+            ["--receipt-verifier-timeout-secs", "1e01"],
+            ["--receipt-verifier-timeout-secs", "1."],
+            ["--receipt-verifier-timeout-secs", "+1"],
+            ["--receipt-verifier-timeout-secs", "-0"],
+            ["--receipt-verifier-timeout-secs", "-0.0"],
+            ["--receipt-verifier-timeout-secs", "-0e0"],
+            ["--receipt-verifier-timeout-secs", "1e9999"],
+            ["--receipt-verifier-timeout-secs", "-1e9999"],
+            ["--receipt-verifier-timeout-secs=-0e0"],
+            ["--receipt-verifier-timeout-secs=1e9999"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_evidence(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("numeric value", stderr)
+
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
             ["--private-key=evidence-secret"],
@@ -2191,13 +2332,17 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             ["--provider"],
             ["--provider", ""],
             ["--provider", "--environment"],
+            ["--provider", "-environment"],
             ["--provider="],
             ["--provider=--environment"],
+            ["--provider=-environment"],
             ["--environment"],
             ["--environment", ""],
             ["--environment", "--summary-out"],
+            ["--environment", "-summary-out"],
             ["--environment="],
             ["--environment=--summary-out"],
+            ["--environment=-summary-out"],
         )
         for argv in cases:
             with self.subTest(argv=argv):
@@ -2218,6 +2363,16 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 ["--default-rail-profile="],
                 "requires a profile id value",
                 None,
+            ),
+            (
+                ["--default-rail-profile", "-swift-cbpr-plus"],
+                "requires a profile id value",
+                "-swift-cbpr-plus",
+            ),
+            (
+                ["--default-rail-profile=-swift-cbpr-plus"],
+                "requires a profile id value",
+                "-swift-cbpr-plus",
             ),
             (
                 ["--default-rail-profile", "Swift-CBPR-Plus"],
@@ -3469,6 +3624,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         self.assertEqual(stdout, "")
                         self.assertIn(expected, stderr)
                         self.assertIn(label, stderr)
+                        self.assertNotIn("line 1 column", stderr)
+                        self.assertNotIn("(char ", stderr)
                         self.assertNotIn(str(summary_path), stderr)
                         self.assertNotIn(hidden_dir.name, stderr)
 
@@ -3930,9 +4087,22 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             canary_path = root / "canary.receipt.json"
             receipt_summary = json.loads(receipt_stdout())
             receipt_summary["receipts"][0]["path"] = str(canary_path)
+            body = valid_canary_summary(receipt_entries=receipt_summary["receipts"])
+            body["stages"][1]["receipt_dir"] = str(root)
+            body["stages"][1]["command"][5] = str(root)
+            body["stages"][1]["stdout_preview"] = notary_stdout(
+                str(root),
+                receipts=[str(canary_path)],
+            )
+            remove_verify_receipt_dir(
+                body["stages"][2]["command"],
+                "/ops/iso/notary-receipts",
+            )
+            add_canonical_verify_receipt_dir(body["stages"][2]["command"], str(root))
+            body.pop("summary_sha256")
             write_json(
                 canary_path,
-                valid_canary_summary(receipt_entries=receipt_summary["receipts"]),
+                digest_summary(body),
             )
             trust_path = write_trust_summary(root / "trust")
 
@@ -4197,6 +4367,23 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertNotIn(hidden, message)
         self.assertNotIn("evidence-timestamp-leak", message)
 
+    def test_timestamp_helper_rejects_noncanonical_spellings_without_echo(self):
+        cases = (
+            "2026-06-04 00:00:00Z",
+            "2026-06-04t00:00:00+00:00",
+            "2026-06-04T00:00:00+0000",
+            "2026-06-04T00:00:00,000+00:00",
+            "2026-06-04T00:00:00-00:00",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._parse_timestamp(value, "trust.source.retrieved_at")
+
+                message = str(caught.exception)
+                self.assertIn("canonical ISO 8601 timestamp", message)
+                self.assertNotIn(value, message)
+
     def test_duplicate_canary_and_trust_inputs_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4371,6 +4558,28 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("NaN", stderr)
 
+    def test_noncanonical_canary_summary_json_numbers_are_rejected(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    canary_path = root / "canary.summary.json"
+                    canary_path.write_text(f'{{"provider":{value}}}\n', encoding="utf-8")
+                    trust_path = write_trust_summary(root / "trust")
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
+
     def test_canary_summary_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4420,6 +4629,32 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("NaN", stderr)
+
+    def test_noncanonical_receipt_stdout_json_numbers_are_rejected(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = valid_canary_summary()
+                    body["stages"][2]["stdout_preview"] = (
+                        f'{{"verified_receipts":{value}}}\n'
+                    )
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+                    trust_path = write_trust_summary(root / "trust")
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
 
     def test_receipt_stdout_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4503,6 +4738,41 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("Infinity", stderr)
 
+    def test_noncanonical_direct_receipt_verifier_stdout_json_numbers_are_rejected(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    canary_path = write_canary(root)
+                    trust_path = write_trust_summary(root / "trust")
+
+                    original_run = EVIDENCE._run_command_bounded
+                    EVIDENCE._run_command_bounded = lambda *_args, **_kwargs: (
+                        0,
+                        f'{{"verified_receipts":{value}}}\n',
+                        False,
+                        "",
+                        False,
+                        False,
+                    )
+                    try:
+                        rc, _stdout, stderr = run_evidence(
+                            [
+                                "--canary-summary",
+                                str(canary_path),
+                                "--trust-summary",
+                                str(trust_path),
+                                "--receipt-dir",
+                                str(root / "receipts"),
+                            ]
+                        )
+                    finally:
+                        EVIDENCE._run_command_bounded = original_run
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
+
     def test_direct_receipt_verifier_stdout_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4552,6 +4822,21 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 "receipt verifier \x1b[31mwarning",
                 "\x1b",
             ),
+            (
+                "local-path",
+                "receipt verifier could not read /tmp/evidence-receipt.json",
+                "/tmp/evidence-receipt.json",
+            ),
+            (
+                "windows-path",
+                "receipt verifier could not read C:\\ops\\evidence-receipt.json",
+                "C:\\ops\\evidence-receipt.json",
+            ),
+            (
+                "non-ascii",
+                "receipt verifier r\u00e9seau",
+                "r\u00e9seau",
+            ),
         )
         for name, leaked_stderr, leaked_marker in cases:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
@@ -4588,6 +4873,45 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn(leaked_marker, stderr)
                 self.assertNotIn("evidence-verifier-secret", stderr)
                 self.assertNotIn("[31mwarning", stderr)
+                self.assertNotIn("evidence-receipt.json", stderr)
+                self.assertNotIn("r\u00e9seau", stderr)
+
+    def test_failed_direct_receipt_verifier_stderr_folds_multiline_without_log_injection(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_path = write_trust_summary(root / "trust")
+            original_run = EVIDENCE._run_command_bounded
+            EVIDENCE._run_command_bounded = lambda *_args, **_kwargs: (
+                1,
+                "",
+                False,
+                "receipt verifier failed\nerror: forged diagnostic\tcontinued",
+                False,
+                False,
+            )
+            try:
+                rc, stdout, stderr = run_evidence(
+                    [
+                        "--canary-summary",
+                        str(canary_path),
+                        "--trust-summary",
+                        str(trust_path),
+                        "--receipt-dir",
+                        str(root / "receipts"),
+                    ]
+                )
+            finally:
+                EVIDENCE._run_command_bounded = original_run
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "receipt verifier failed error: forged diagnostic continued",
+                stderr,
+            )
+            self.assertNotIn("\nerror: forged", stderr)
+            self.assertNotIn("\tcontinued", stderr)
 
     def test_successful_direct_receipt_verifier_stderr_is_rejected(self):
         cases = (
@@ -4614,6 +4938,24 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 "receipt verifier \x1b[31mwarning",
                 "receipt verifier stderr redacted",
                 "\x1b",
+            ),
+            (
+                "local-path",
+                "receipt verifier could not read /tmp/evidence-receipt.json",
+                "receipt verifier stderr redacted",
+                "/tmp/evidence-receipt.json",
+            ),
+            (
+                "windows-path",
+                "receipt verifier could not read C:\\ops\\evidence-receipt.json",
+                "receipt verifier stderr redacted",
+                "C:\\ops\\evidence-receipt.json",
+            ),
+            (
+                "non-ascii",
+                "receipt verifier r\u00e9seau",
+                "receipt verifier stderr redacted",
+                "r\u00e9seau",
             ),
         )
         for name, emitted_stderr, expected, leaked_marker in cases:
@@ -4655,6 +4997,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertNotIn(leaked_marker, stderr)
                     self.assertNotIn("evidence-verifier-secret", stderr)
                     self.assertNotIn("[31mwarning", stderr)
+                    self.assertNotIn("evidence-receipt.json", stderr)
+                    self.assertNotIn("r\u00e9seau", stderr)
 
     def test_direct_receipt_verifier_output_truncation_is_rejected(self):
         cases = [
@@ -4752,6 +5096,45 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertNotIn(hidden, message)
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_direct_receipt_verifier_pipe_reader_clamps_bytes_like_chunks_by_byte_length(self):
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        wide = memoryview(array.array("H", [0x4142] * 8))
+        cases = (
+            ("bytes", b"abcdefgh", b"abcdef"),
+            ("bytearray", bytearray(b"abcdefgh"), b"abcdef"),
+            ("memoryview", memoryview(b"abcdefgh"), b"abcdef"),
+            ("wide-memoryview", wide, wide.cast("B")[:6].tobytes()),
+        )
+        for name, chunk, expected in cases:
+            with self.subTest(name=name):
+                captured, truncated = EVIDENCE._read_limited_pipe(
+                    FakePipe([chunk]),
+                    6,
+                )
+                self.assertEqual(captured, expected)
+                self.assertTrue(truncated)
+
+    def test_direct_receipt_verifier_pipe_reader_rejects_non_byte_chunks_without_echo(self):
+        hidden = "token=evidence-verifier-pipe-secret"
+
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        with self.assertRaises(OSError) as caught:
+            EVIDENCE._read_limited_pipe(FakePipe([hidden]), 6)
+        self.assertIn("non-byte data", str(caught.exception))
+        self.assertNotIn(hidden, str(caught.exception))
 
     def test_direct_receipt_verifier_runtime_timeout_is_bounded(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5541,6 +5924,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     entry["receipt_sha256"],
                 ),
             )
+            for offset, entry in enumerate(entries):
+                entry["path"] = canary_receipt_path(
+                    entry["receipt_kind"],
+                    offset,
+                    Path(entry["path"]).name,
+                )
             canary_path = write_canary(
                 root,
                 valid_canary_summary(receipt_entries=entries),
@@ -5575,7 +5964,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             root = Path(raw_root)
             notary_receipts, rail_receipts = write_https_receipt_dirs(root)
             entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
-            entries[0]["path"] = "/ops/iso/receipts/relabelled-notary.receipt.json"
+            entries[0]["path"] = canary_receipt_path(
+                entries[0]["receipt_kind"],
+                0,
+                "relabelled-notary.receipt.json",
+            )
             canary_path = write_canary(
                 root,
                 valid_canary_summary(receipt_entries=entries),
@@ -5793,7 +6186,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             entries_two = [dict(entry) for entry in entries]
             duplicate_digest = entries_two[0]["receipt_sha256"]
             for offset, entry in enumerate(entries_two):
-                entry["path"] = f"/ops/iso/other-receipts/{offset}.receipt.json"
+                entry["path"] = canary_receipt_path(
+                    entry["receipt_kind"],
+                    offset,
+                    f"other-{offset}.receipt.json",
+                )
             body_two = valid_canary_summary(receipt_entries=entries_two)
             body_two["config_path"] = "/ops/iso/canary-two.json"
             body_two.pop("summary_sha256")
@@ -5832,8 +6229,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             entries_two = [dict(entry) for entry in entries]
             for offset, entry in enumerate(entries_two):
-                entry["path"] = (
-                    f"/ops/iso/relabelled-canary/{entry['receipt_kind']}.{offset}.receipt.json"
+                entry["path"] = canary_receipt_path(
+                    entry["receipt_kind"],
+                    offset,
+                    f"relabelled-{entry['receipt_kind']}.{offset}.receipt.json",
                 )
                 entry["receipt_sha256"] = f"{offset + 8:064x}"
             body_two = valid_canary_summary(receipt_entries=entries_two)
@@ -6614,6 +7013,24 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             body = valid_canary_summary()
             body["stages"][0]["command"].append("--allow-legacy-colr007")
             body["stages"][2]["command"].append("--allow-legacy-colr007")
+            rail_receipts_for_stdout = [
+                entry["path"]
+                for entry in receipt_entries
+                if entry["receipt_kind"] == "iso-rail-gateway"
+            ]
+            notary_receipts_for_stdout = [
+                entry["path"]
+                for entry in receipt_entries
+                if entry["receipt_kind"] == "iso-audit-notary"
+            ]
+            body["stages"][0]["stdout_preview"] = rail_stdout(
+                receipts=rail_receipts_for_stdout,
+                submitted_messages=len(rail_receipts_for_stdout),
+            )
+            body["stages"][1]["stdout_preview"] = notary_stdout(
+                receipts=notary_receipts_for_stdout,
+                published_anchors=len(notary_receipts_for_stdout),
+            )
             body["stages"][2]["stdout_preview"] = receipt_stdout(
                 allow_legacy_colr007=True,
                 receipt_entries=receipt_entries,
@@ -7554,6 +7971,31 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "--timeout-secs must be a positive finite number",
                 )
             )
+            for spelling in (".5", "01", "1e01", "1.", "+1"):
+                noncanonical_timeout = valid_canary_summary()
+                noncanonical_timeout["stages"][0]["command"].append(
+                    f"--timeout-secs={spelling}"
+                )
+                noncanonical_timeout.pop("summary_sha256")
+                cases.append(
+                    (
+                        digest_summary(noncanonical_timeout),
+                        [],
+                        "--timeout-secs must be a positive finite number",
+                    )
+                )
+            planned_noncanonical_timeout = plan_only_canary_summary()
+            planned_noncanonical_timeout["planned_stages"][1]["command"].append(
+                "--timeout-secs=01"
+            )
+            planned_noncanonical_timeout.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(planned_noncanonical_timeout),
+                    ["--allow-plan-only"],
+                    "--timeout-secs must be a positive finite number",
+                )
+            )
             for body, extra_args, message in cases:
                 with self.subTest(message=message):
                     canary_path = write_canary(root, body)
@@ -7581,12 +8023,32 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[0].command has --torii-base-url without a value",
                 )
             )
+            rail_leading_dash_url_value = valid_canary_summary()
+            rail_leading_dash_url_value["stages"][0]["command"][5] = "-receipt-dir"
+            rail_leading_dash_url_value.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_leading_dash_url_value),
+                    [],
+                    "stages[0].command has --torii-base-url without a value",
+                )
+            )
             notary_missing_endpoint_value = valid_canary_summary()
             notary_missing_endpoint_value["stages"][1]["command"][7] = "--all"
             notary_missing_endpoint_value.pop("summary_sha256")
             cases.append(
                 (
                     digest_summary(notary_missing_endpoint_value),
+                    [],
+                    "stages[1].command has --endpoint without a value",
+                )
+            )
+            notary_leading_dash_endpoint_value = valid_canary_summary()
+            notary_leading_dash_endpoint_value["stages"][1]["command"][7] = "-all"
+            notary_leading_dash_endpoint_value.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_leading_dash_endpoint_value),
                     [],
                     "stages[1].command has --endpoint without a value",
                 )
@@ -7627,6 +8089,18 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[0].command has --torii-base-url without a value",
                 )
             )
+            rail_leading_dash_url_equals = valid_canary_summary()
+            command = rail_leading_dash_url_equals["stages"][0]["command"]
+            del command[4:6]
+            command.insert(4, "--torii-base-url=-receipt-dir")
+            rail_leading_dash_url_equals.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_leading_dash_url_equals),
+                    [],
+                    "stages[0].command has --torii-base-url without a value",
+                )
+            )
             notary_empty_endpoint_equals = valid_canary_summary()
             command = notary_empty_endpoint_equals["stages"][1]["command"]
             del command[6:8]
@@ -7635,6 +8109,18 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             cases.append(
                 (
                     digest_summary(notary_empty_endpoint_equals),
+                    [],
+                    "stages[1].command has --endpoint without a value",
+                )
+            )
+            notary_leading_dash_endpoint_equals = valid_canary_summary()
+            command = notary_leading_dash_endpoint_equals["stages"][1]["command"]
+            del command[6:8]
+            command.insert(6, "--endpoint=-all")
+            notary_leading_dash_endpoint_equals.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_leading_dash_endpoint_equals),
                     [],
                     "stages[1].command has --endpoint without a value",
                 )
@@ -7673,6 +8159,16 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[0] has --bearer-token-file without a value",
                 )
             )
+            bearer_token_leading_dash_value = valid_canary_summary()
+            bearer_token_leading_dash_value["stages"][0]["command"][9] = "-receipt-dir"
+            bearer_token_leading_dash_value.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(bearer_token_leading_dash_value),
+                    [],
+                    "stages[0] has --bearer-token-file without a value",
+                )
+            )
             bearer_token_equals_flag_value = valid_canary_summary()
             command = bearer_token_equals_flag_value["stages"][0]["command"]
             del command[8:10]
@@ -7681,6 +8177,18 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             cases.append(
                 (
                     digest_summary(bearer_token_equals_flag_value),
+                    [],
+                    "stages[0] has --bearer-token-file without a value",
+                )
+            )
+            bearer_token_leading_dash_equals = valid_canary_summary()
+            command = bearer_token_leading_dash_equals["stages"][0]["command"]
+            del command[8:10]
+            command.insert(8, "--bearer-token-file=-receipt-dir")
+            bearer_token_leading_dash_equals.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(bearer_token_leading_dash_equals),
                     [],
                     "stages[0] has --bearer-token-file without a value",
                 )
@@ -8617,11 +9125,28 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                             verify_command,
                             "/ops/iso/notary-receipts",
                         )
+                        selected_dir = "/ops/iso/rail-receipts"
                     elif stage_indexes == (1, 2):
                         remove_verify_receipt_dir(
                             verify_command,
                             "/ops/iso/rail-receipts",
                         )
+                        selected_dir = "/ops/iso/notary-receipts"
+                    else:
+                        selected_dir = "/ops/iso/rail-receipts"
+                    receipt_summary = json.loads(body["stages"][-1]["stdout_preview"])
+                    for offset, receipt in enumerate(receipt_summary["receipts"]):
+                        if EVIDENCE._receipt_parent_dir(receipt["path"]) != selected_dir:
+                            receipt["path"] = (
+                                f"{selected_dir}/mismatched-{offset}.receipt.json"
+                            )
+                    body["stages"][-1]["stdout_preview"] = (
+                        json.dumps(
+                            digest_receipt_summary(receipt_summary),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
                     body.pop("summary_sha256")
                     canary_path = write_canary(case_root, digest_summary(body))
 
@@ -10250,6 +10775,227 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_canary_adapter_stage_stdout_must_be_replayed_summary_json(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = []
+            forged_log = valid_canary_summary()
+            forged_log["stages"][0]["stdout_preview"] = (
+                "accepted stage\nerror: forged-stdout-marker\n"
+            )
+            forged_log.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(forged_log),
+                    "stages[0].stdout_preview is not valid adapter summary JSON",
+                    "forged-stdout-marker",
+                )
+            )
+            rail_failed = valid_canary_summary()
+            rail_failed["stages"][0]["stdout_preview"] = rail_stdout(failures=1)
+            rail_failed.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_failed),
+                    "stages[0].stdout_preview.failures must be zero",
+                )
+            )
+            rail_escape = valid_canary_summary()
+            rail_escape["stages"][0]["stdout_preview"] = rail_stdout(
+                receipts=["/ops/iso/private/rail.receipt.json"],
+            )
+            rail_escape.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_escape),
+                    "stages[0].stdout_preview.receipts[0] must be under stage receipt_dir",
+                )
+            )
+            rail_count_mismatch = valid_canary_summary()
+            rail_count_mismatch["stages"][0]["stdout_preview"] = rail_stdout(
+                submitted_messages=2,
+            )
+            rail_count_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_count_mismatch),
+                    "stages[0].stdout_preview.receipts must match submitted_messages",
+                )
+            )
+            rail_explicit_message_mismatch = valid_canary_summary()
+            rail_explicit_message_mismatch["stages"][0]["command"].extend(
+                ["--message", "/ops/iso/inbox/explicit.xml"]
+            )
+            rail_explicit_message_mismatch["stages"][0]["stdout_preview"] = rail_stdout(
+                submitted_messages=2,
+                receipts=[
+                    "/ops/iso/rail-receipts/iso-rail-gateway.1.receipt.json",
+                    "/ops/iso/rail-receipts/forged-message.receipt.json",
+                ],
+            )
+            rail_explicit_message_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(rail_explicit_message_mismatch),
+                    "stages[0].stdout_preview.submitted_messages must be one "
+                    "when command uses --message",
+                    "forged-message.receipt.json",
+                )
+            )
+            notary_missing_fields = valid_canary_summary()
+            notary_missing_fields["stages"][1]["stdout_preview"] = "{}\n"
+            notary_missing_fields.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_missing_fields),
+                    "stages[1].stdout_preview.failures must be a non-negative integer",
+                )
+            )
+            notary_count_mismatch = valid_canary_summary()
+            notary_count_mismatch["stages"][1]["stdout_preview"] = notary_stdout(
+                published_anchors=2,
+                endpoint_count=1,
+            )
+            notary_count_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_count_mismatch),
+                    "stages[1].stdout_preview.receipts must match "
+                    "published_anchors and endpoint_count",
+                )
+            )
+            notary_endpoint_count_mismatch = valid_canary_summary()
+            notary_endpoint_count_mismatch["stages"][1]["stdout_preview"] = notary_stdout(
+                endpoint_count=2,
+                receipts=[
+                    "/ops/iso/notary-receipts/iso-audit-notary.0.receipt.json",
+                    "/ops/iso/notary-receipts/forged-endpoint.receipt.json",
+                ],
+            )
+            notary_endpoint_count_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_endpoint_count_mismatch),
+                    "stages[1].stdout_preview.endpoint_count does not match command "
+                    "--endpoint count",
+                    "forged-endpoint.receipt.json",
+                )
+            )
+            notary_latest_anchor_mismatch = valid_canary_summary()
+            notary_latest_anchor_mismatch["stages"][1]["stdout_preview"] = notary_stdout(
+                published_anchors=2,
+                receipts=[
+                    "/ops/iso/notary-receipts/iso-audit-notary.0.receipt.json",
+                    "/ops/iso/notary-receipts/forged-anchor.receipt.json",
+                ],
+            )
+            notary_latest_anchor_mismatch.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_latest_anchor_mismatch),
+                    "stages[1].stdout_preview.published_anchors must be one "
+                    "unless command uses --all",
+                    "forged-anchor.receipt.json",
+                )
+            )
+            notary_dry_run_shape = valid_canary_summary()
+            notary_dry_run_shape["stages"][1]["stdout_preview"] = (
+                json.dumps(
+                    {
+                        "dry_run": False,
+                        "validated_anchors": 1,
+                        "payload_sha256": "1" * 64,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            notary_dry_run_shape.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(notary_dry_run_shape),
+                    "stages[1].stdout_preview contains unknown keys",
+                    "validated_anchors",
+                )
+            )
+            for body, message, *hidden_values in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    for hidden_value in hidden_values:
+                        self.assertNotIn(hidden_value, stderr)
+
+    def test_receipt_verifier_stdout_paths_must_match_verify_stage_selectors(self):
+        receipt_summary = json.loads(receipt_stdout())
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._check_receipt_stdout_selector_binding(
+                ["/ops/iso/notary-receipts", "/ops/iso/rail-receipts"],
+                ["/ops/iso/rail-receipts/missing.receipt.json"],
+                receipt_summary,
+                "canary.stages[2]",
+            )
+        self.assertIn(
+            "stdout_preview.receipts must include every verify command --receipt file",
+            str(caught.exception),
+        )
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            hidden_path = "/ops/iso/other/notary.receipt.json"
+            body = valid_canary_summary()
+            receipt_summary = json.loads(body["stages"][2]["stdout_preview"])
+            receipt_summary["receipts"][0]["path"] = hidden_path
+            body["stages"][2]["stdout_preview"] = (
+                json.dumps(
+                    digest_receipt_summary(receipt_summary),
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn(
+                "stages[2].stdout_preview.receipts[0].path must be covered "
+                "by verify command receipt selectors",
+                stderr,
+            )
+            self.assertNotIn(hidden_path, stderr)
+
+    def test_adapter_stage_stdout_receipts_must_match_verifier_stdout(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            hidden_path = "/ops/iso/rail-receipts/forged-rail.receipt.json"
+            body = valid_canary_summary()
+            body["stages"][0]["stdout_preview"] = rail_stdout(receipts=[hidden_path])
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn(
+                "receipt_summary rail receipt paths do not match rail stage stdout",
+                stderr,
+            )
+            self.assertNotIn(hidden_path, stderr)
 
     def test_failed_skipped_truncated_and_weak_verify_stages_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

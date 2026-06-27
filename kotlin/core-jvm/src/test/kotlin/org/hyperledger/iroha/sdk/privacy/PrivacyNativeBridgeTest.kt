@@ -336,6 +336,13 @@ class PrivacyNativeBridgeTest {
         assertIllegalArgumentContains("proof must not be empty") {
             PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(ByteArray(0))
         }
+        val oversizedProof = ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1)
+        assertIllegalArgumentContains("proof must not exceed 33554432 bytes") {
+            PrivacyConfidentialWitnessCodecs.buildConfidentialTransferVerifyRequestV1(oversizedProof)
+        }
+        assertIllegalArgumentContains("proof must not exceed 33554432 bytes") {
+            PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(oversizedProof)
+        }
         assertIllegalArgumentContains("confidential transfer witness must include one or two transferOutputs") {
             PrivacyConfidentialWitnessCodecs.encodeTransferWitness(
                 PrivacyConfidentialWitnessV1(

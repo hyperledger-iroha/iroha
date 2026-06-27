@@ -75,6 +75,29 @@ MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MAX_RAIL_MESSAGE_ID_CHARS = 128
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
+CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CLI_NONFINITE_NUMBER_TEXTS = {
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
+    "nan",
+    "+nan",
+    "-nan",
+}
+
+
+def _is_negative_zero_number_text(value: str) -> bool:
+    if not value.startswith("-"):
+        return False
+    mantissa = re.split(r"[eE]", value[1:], maxsplit=1)[0]
+    return all(ch in {"0", "."} for ch in mantissa)
 SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
 SECRET_PREVIEW_MARKERS = (
     "authorization",
@@ -139,8 +162,7 @@ CLI_OPTION_FLAGS = {
     "--torii-base-url",
 }
 REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
-REDACTED_ERROR = "[redacted: sensitive error]"
-MAX_RECEIPT_ERROR_CHARS = 4096
+URL_TRANSPORT_ERROR = "Torii transport failed"
 
 ENDPOINTS = {
     "pacs.008": "pacs008",
@@ -350,7 +372,41 @@ def sha256_hex(data: bytes) -> str:
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    detail = getattr(error, "strerror", None)
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
 
 
 def _is_lower_hex_sha256(value: Any) -> bool:
@@ -579,7 +635,8 @@ def _read_regular_file(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise AdapterError(f"{display_path} must not be a symlink") from error
-        raise AdapterError(f"cannot open {display_path} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot open {display_path} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -796,7 +853,7 @@ def _preflight_required_cli_values(
                 if index + 1 >= len(raw_args):
                     raise AdapterError(f"{flag} requires a {value_name} value")
                 value = raw_args[index + 1]
-                if not value or value.startswith("--"):
+                if not value or value.startswith("-"):
                     raise AdapterError(f"{flag} requires a {value_name} value")
                 if value_name == "URL":
                     _reject_raw_url_cli_value(value, flag)
@@ -806,7 +863,7 @@ def _preflight_required_cli_values(
             prefix = f"{flag}="
             if arg.startswith(prefix):
                 value = arg[len(prefix) :]
-                if not value or value.startswith("--"):
+                if not value or value.startswith("-"):
                     raise AdapterError(f"{flag} requires a {value_name} value")
                 if value_name == "URL":
                     _reject_raw_url_cli_value(value, flag)
@@ -835,10 +892,25 @@ def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None
         raise AdapterError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise AdapterError(f"{flag} must use printable ASCII")
+    if integer:
+        canonical = CLI_CANONICAL_INT_RE.fullmatch(raw) is not None
+    else:
+        canonical = (
+            raw.lower() in CLI_NONFINITE_NUMBER_TEXTS
+            or CLI_CANONICAL_NUMBER_RE.fullmatch(raw) is not None
+        )
+    if not canonical or _is_negative_zero_number_text(raw):
+        raise AdapterError(f"{flag} must be a numeric value")
     try:
-        int(raw, 10) if integer else float(raw)
+        parsed = int(raw, 10) if integer else float(raw)
     except ValueError as error:
         raise AdapterError(f"{flag} must be a numeric value") from error
+    if (
+        not integer
+        and raw.lower() not in CLI_NONFINITE_NUMBER_TEXTS
+        and not math.isfinite(parsed)
+    ):
+        raise AdapterError(f"{flag} must be a numeric value")
 
 
 def _preflight_numeric_cli_values(
@@ -965,8 +1037,9 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
         except OSError as error:
             if error.errno == errno.ELOOP:
                 raise AdapterError(f"{label} temp file must not be a symlink") from error
+            detail = _safe_os_error_detail(error)
             raise AdapterError(
-                f"cannot open temporary output for {label}: {error.strerror}"
+                f"cannot open temporary output for {label}: {detail}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
@@ -1070,10 +1143,12 @@ def _load_json(
         value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise AdapterError(f"{label} is not valid JSON: {error}") from error
+        raise AdapterError(f"{label} is not valid JSON") from error
     except RecursionError as error:
         raise AdapterError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
@@ -1084,6 +1159,23 @@ def _load_json(
 
 def _reject_json_constant(value: str) -> None:
     raise AdapterError("JSON contains non-finite numeric constant")
+
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise AdapterError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise AdapterError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise AdapterError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise AdapterError("JSON contains non-canonical numeric value")
+    return parsed
 
 
 def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
@@ -1156,7 +1248,8 @@ def _bounded_read(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise AdapterError(f"{display_path} must not be a symlink") from error
-        raise AdapterError(f"cannot open {display_path} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot open {display_path} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -1747,11 +1840,13 @@ def submit_message(
                 body = response.read(response_limit_bytes + 1)
             except Exception:
                 return _transport_read_failure_result("Torii response could not be read")
-            if not isinstance(body, bytes):
+            bounded_body = _bounded_response_body(body, response_limit_bytes)
+            if bounded_body is None:
                 return _transport_read_failure_result(
                     "Torii response body was not bytes"
                 )
-            if len(body) > response_limit_bytes:
+            body, body_overflow = bounded_body
+            if body_overflow:
                 raise AdapterError(
                     f"Torii response exceeded {response_limit_bytes} byte limit"
                 )
@@ -1759,6 +1854,10 @@ def submit_message(
                 raise AdapterError("Torii response body contains secret-looking material")
             if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
                 raise AdapterError("Torii response body contains unsafe control characters")
+            if 200 <= status_code <= 299 and _response_body_has_non_ascii_preview_text(
+                body
+            ):
+                raise AdapterError("Torii response body contains non-ASCII text")
         finally:
             _close_response(response)
     except urllib.error.HTTPError as error:
@@ -1775,11 +1874,13 @@ def submit_message(
                 )
         finally:
             _close_http_error(error)
-        if not isinstance(body, bytes):
+        bounded_body = _bounded_response_body(body, response_limit_bytes)
+        if bounded_body is None:
             return _transport_read_failure_result(
                 "Torii error response body was not bytes"
             )
-        if len(body) > response_limit_bytes:
+        body, body_overflow = bounded_body
+        if body_overflow:
             raise AdapterError(f"Torii error response exceeded {response_limit_bytes} byte limit")
         return SubmitResult(
             status_code=status_code,
@@ -1828,25 +1929,20 @@ def _error_status_code(error: urllib.error.HTTPError) -> int | None:
 
 
 def _parse_http_status_code(value: Any) -> int | None:
-    try:
-        status_code = int(value)
-    except Exception:
+    if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if 0 <= status_code <= 999:
-        return status_code
+    if 0 <= value <= 999:
+        return value
     return None
 
 
 def _invalid_http_status_result(status_code: int | None) -> SubmitResult:
-    error = "invalid HTTP status"
-    if status_code is not None:
-        error = f"{error} {status_code}"
     return SubmitResult(
         status_code=None,
         ok=False,
         response_body_sha256=None,
         response_body_preview=None,
-        error=error,
+        error="invalid HTTP status",
     )
 
 
@@ -1870,6 +1966,27 @@ def _transport_open_failure_result() -> SubmitResult:
     )
 
 
+def _bounded_response_body(
+    body: Any,
+    response_limit_bytes: int,
+) -> tuple[bytes, bool] | None:
+    capture_limit = response_limit_bytes + 1
+    if isinstance(body, bytes):
+        return body[:capture_limit], len(body) > response_limit_bytes
+    if isinstance(body, bytearray):
+        return bytes(body[:capture_limit]), len(body) > response_limit_bytes
+    if isinstance(body, memoryview):
+        try:
+            byte_body = body.cast("B")
+        except (TypeError, ValueError):
+            return None
+        return (
+            byte_body[:capture_limit].tobytes(),
+            byte_body.nbytes > response_limit_bytes,
+        )
+    return None
+
+
 def _close_http_error(error: urllib.error.HTTPError) -> None:
     _close_response(error)
 
@@ -1891,9 +2008,15 @@ def _response_preview(body: bytes) -> str:
     preview = body[:4096].decode("utf-8", errors="replace")
     if _response_preview_looks_secret(preview) or _contains_unsafe_preview_control(
         preview
+    ) or _contains_non_ascii_preview_text(
+        preview
     ):
         return REDACTED_RESPONSE_PREVIEW
-    return preview
+    return _single_line_response_preview(preview)
+
+
+def _single_line_response_preview(value: str) -> str:
+    return re.sub(r"[\n\t]+", " ", value).strip()
 
 
 def _response_body_looks_secret(body: bytes) -> bool:
@@ -1904,6 +2027,10 @@ def _response_body_has_unsafe_control(body: bytes) -> bool:
     return _contains_unsafe_preview_control(body.decode("utf-8", errors="replace"))
 
 
+def _response_body_has_non_ascii_preview_text(body: bytes) -> bool:
+    return _contains_non_ascii_preview_text(body.decode("utf-8", errors="replace"))
+
+
 def _response_preview_looks_secret(preview: str) -> bool:
     return _contains_secret_material(preview) or any(
         _contains_secret_marker(candidate, SECRET_PREVIEW_MARKERS)
@@ -1911,23 +2038,8 @@ def _response_preview_looks_secret(preview: str) -> bool:
     )
 
 
-def _url_error_receipt_error(error: urllib.error.URLError) -> str:
-    try:
-        message = str(error.reason)
-    except Exception:
-        return REDACTED_ERROR
-    return _receipt_error(message)
-
-
-def _receipt_error(message: str) -> str:
-    if (
-        len(message) > MAX_RECEIPT_ERROR_CHARS
-        or not message.isascii()
-        or _response_preview_looks_secret(message)
-        or _contains_unsafe_preview_control(message)
-    ):
-        return REDACTED_ERROR
-    return message
+def _url_error_receipt_error(_error: urllib.error.URLError) -> str:
+    return URL_TRANSPORT_ERROR
 
 
 def _contains_unsafe_preview_control(value: str) -> bool:
@@ -1937,6 +2049,10 @@ def _contains_unsafe_preview_control(value: str) -> bool:
         or unicodedata.category(ch) == "Cf"
         for ch in value
     )
+
+
+def _contains_non_ascii_preview_text(value: str) -> bool:
+    return any(ord(ch) > 0x7E for ch in value)
 
 
 def receipt_value(message: GatewayMessage, result: SubmitResult, endpoint_url: str) -> dict[str, Any]:
@@ -1972,7 +2088,7 @@ def write_receipt(receipt_dir: Path, message: GatewayMessage, result: SubmitResu
     path = receipt_output_path(receipt_dir, message)
     _write_text_output(
         path,
-        json.dumps(receipt, indent=2) + "\n",
+        json.dumps(receipt, allow_nan=False, indent=2) + "\n",
         display_label="receipt output",
     )
     return path
@@ -2113,7 +2229,7 @@ def run(args: argparse.Namespace) -> int:
             "payload_sha256": [message.payload_sha256 for message in messages],
             "message_type": [message.message_type for message in messages],
         }
-        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(json.dumps(summary, allow_nan=False, indent=2, sort_keys=True))
         return 0
 
     _ensure_output_directory(receipt_dir, "receipt_dir")
@@ -2143,7 +2259,7 @@ def run(args: argparse.Namespace) -> int:
         "receipts": receipts,
         "failures": failures,
     }
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary, allow_nan=False, indent=2, sort_keys=True))
     return 1 if failures else 0
 
 

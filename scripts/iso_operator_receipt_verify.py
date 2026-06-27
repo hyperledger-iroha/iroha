@@ -64,6 +64,19 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
 }
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CANONICAL_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?"
+    r"(?:Z|[+-][0-9]{2}:[0-9]{2})"
+)
+LOCAL_PATH_ERROR_RE = re.compile(
+    r"(?:^|[\s'\"(<:=])(?:[A-Za-z]:[\\/]|/[^/\s'\"<>]+|\.{1,2}/|~/)"
+)
 MAX_RECEIPT_JSON_BYTES = 4 * 1024 * 1024
 MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
 MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
@@ -277,6 +290,12 @@ def _contains_unsafe_preview_control(value: str) -> bool:
         or unicodedata.category(ch) == "Cf"
         for ch in value
     )
+
+
+def _contains_non_ascii_preview_text(value: str) -> bool:
+    return any(ord(ch) > 0x7E for ch in value)
+
+
 RAIL_SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
 COMMON_RECEIPT_KEYS = {
     "version",
@@ -311,6 +330,27 @@ RAIL_GATEWAY_RECEIPT_KEYS = COMMON_RECEIPT_KEYS | {
 RECEIPT_KEYS_BY_KIND = {
     "iso-audit-notary": AUDIT_NOTARY_RECEIPT_KEYS,
     "iso-rail-gateway": RAIL_GATEWAY_RECEIPT_KEYS,
+}
+HTTP_RECEIPT_ERROR_RE = re.compile(r"^HTTP ([1-5][0-9]{2})$")
+TRANSPORT_RECEIPT_ERRORS_BY_KIND = {
+    "iso-audit-notary": {
+        "endpoint transport failed",
+        "endpoint transport could not be opened",
+        "endpoint response could not be read",
+        "endpoint response body was not bytes",
+        "endpoint error response could not be read",
+        "endpoint error response body was not bytes",
+        "invalid HTTP status",
+    },
+    "iso-rail-gateway": {
+        "Torii transport failed",
+        "Torii transport could not be opened",
+        "Torii response could not be read",
+        "Torii response body was not bytes",
+        "Torii error response could not be read",
+        "Torii error response body was not bytes",
+        "invalid HTTP status",
+    },
 }
 AUDIT_INDEX_KEYS = {
     "version",
@@ -420,12 +460,47 @@ def sha256_hex(data: bytes) -> str:
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    detail = getattr(error, "strerror", None)
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
 
 
 def _canonical_summary_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -649,7 +724,8 @@ def _read_regular_file(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise ReceiptError(f"{label} must not be a symlink") from error
-        raise ReceiptError(f"cannot open {label} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot open {label} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -672,12 +748,14 @@ def _load_json(
         value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError as error:
         raise ReceiptError(f"{label} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
-        raise ReceiptError(f"{label} is not valid JSON: {error}") from error
+        raise ReceiptError(f"{label} is not valid JSON") from error
     except RecursionError as error:
         raise ReceiptError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
@@ -803,6 +881,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise ReceiptError("JSON contains non-finite numeric constant")
+
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise ReceiptError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise ReceiptError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise ReceiptError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise ReceiptError("JSON contains non-canonical numeric value")
+    return parsed
 
 
 def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
@@ -1493,12 +1588,15 @@ def _check_status(receipt: dict[str, Any], label: str, *, allow_failed: bool) ->
 
 def _check_timestamp(receipt: dict[str, Any], key: str, label: str) -> None:
     value = _require_clean_string(receipt.get(key), f"{label} {key}")
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = dt.datetime.fromisoformat(value)
+        parsed = dt.datetime.fromisoformat(normalized)
     except ValueError as error:
         raise ReceiptError(f"{label} {key} is not a valid ISO timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ReceiptError(f"{label} {key} must include a timezone offset")
+    if CANONICAL_TIMESTAMP_RE.fullmatch(value) is None or value.endswith("-00:00"):
+        raise ReceiptError(f"{label} {key} must use a canonical ISO timestamp")
 
 
 def _check_endpoint_digest(receipt: dict[str, Any], label: str, endpoint: str) -> None:
@@ -1510,7 +1608,24 @@ def _check_endpoint_digest(receipt: dict[str, Any], label: str, endpoint: str) -
         raise ReceiptError(f"{label} endpoint_sha256 does not match endpoint")
 
 
-def _check_response_metadata(receipt: dict[str, Any], label: str) -> None:
+def _check_failed_receipt_error(
+    receipt: dict[str, Any],
+    label: str,
+    *,
+    kind: str,
+    error: str,
+) -> None:
+    status_code = receipt.get("status_code")
+    if isinstance(status_code, int) and not isinstance(status_code, bool):
+        match = HTTP_RECEIPT_ERROR_RE.fullmatch(error)
+        if match is None or int(match.group(1)) != status_code:
+            raise ReceiptError(f"{label} failed receipt error must match status_code")
+        return
+    if error not in TRANSPORT_RECEIPT_ERRORS_BY_KIND.get(kind, set()):
+        raise ReceiptError(f"{label} failed receipt error is unsupported")
+
+
+def _check_response_metadata(receipt: dict[str, Any], label: str, *, kind: str) -> None:
     status_code = receipt.get("status_code")
     has_http_response = isinstance(status_code, int) and not isinstance(status_code, bool)
     response_body_sha256 = receipt.get("response_body_sha256")
@@ -1534,8 +1649,12 @@ def _check_response_metadata(receipt: dict[str, Any], label: str) -> None:
             raise ReceiptError(
                 f"{label} response_body_preview contains unsafe control characters"
             )
+        if _contains_non_ascii_preview_text(response_body_preview):
+            raise ReceiptError(f"{label} response_body_preview contains non-ASCII text")
         if _response_preview_looks_secret(response_body_preview):
             raise ReceiptError(f"{label} response_body_preview contains secret-looking material")
+        if "\n" in response_body_preview or "\t" in response_body_preview:
+            raise ReceiptError(f"{label} response_body_preview must be single-line text")
         if receipt.get("ok") and response_body_preview == REDACTED_RESPONSE_PREVIEW:
             raise ReceiptError(
                 f"{label} successful receipt must not carry redacted response_body_preview"
@@ -1546,12 +1665,26 @@ def _check_response_metadata(receipt: dict[str, Any], label: str) -> None:
         error = _normalize_optional_string(error, f"{label} error")
         if _contains_unsafe_preview_control(error):
             raise ReceiptError(f"{label} error contains unsafe control characters")
+        if _contains_non_ascii_preview_text(error):
+            raise ReceiptError(f"{label} error contains non-ASCII text")
         if _response_preview_looks_secret(error):
             raise ReceiptError(f"{label} error contains secret-looking material")
+        if _contains_local_path_material(error):
+            raise ReceiptError(f"{label} error contains local path material")
     if receipt.get("ok") and error is not None:
         raise ReceiptError(f"{label} successful receipt must not record error")
     if receipt.get("ok") is False and error is None:
         raise ReceiptError(f"{label} failed receipt must record error")
+    if receipt.get("ok") is False and error is not None:
+        _check_failed_receipt_error(receipt, label, kind=kind, error=error)
+
+
+def _contains_local_path_material(value: str) -> bool:
+    return (
+        "\\" in value
+        or "file:" in value.casefold()
+        or LOCAL_PATH_ERROR_RE.search(value) is not None
+    )
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
@@ -2152,7 +2285,7 @@ def verify_receipt_file(
     _reject_unknown_keys(receipt, RECEIPT_KEYS_BY_KIND[kind], label)
     require_digest_matches(receipt, RECEIPT_DIGEST_FIELD, label)
     _check_status(receipt, label, allow_failed=allow_failed)
-    _check_response_metadata(receipt, label)
+    _check_response_metadata(receipt, label, kind=kind)
 
     if kind == "iso-audit-notary":
         _check_timestamp(receipt, "published_at", label)
@@ -2384,7 +2517,7 @@ def run(args: argparse.Namespace) -> int:
         "receipts": receipt_entries,
     }
     summary[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_summary_json_bytes(summary))
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    print(json.dumps(summary, allow_nan=False, indent=2, sort_keys=True))
     return 0
 
 

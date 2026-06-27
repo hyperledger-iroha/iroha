@@ -61,8 +61,10 @@ public final class TransactionBuilderTests {
     encodeAndSignWithExplicitSigner();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
+    transactionPayloadRejectsPaddedIdsBeforeSigning();
     kagemushaInstructionArchivesBuildPayloads();
     kagemushaInstructionArchivesAcceptAbi7Fixtures();
+    kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem();
     kagemushaInstructionArchivesRejectAdversarialInputs();
     offlineCashLifecycleAndTransportGuards();
     encodeAndSignEnvelopeWithAttestationBundle();
@@ -167,6 +169,19 @@ public final class TransactionBuilderTests {
         : "Instruction list must round-trip";
   }
 
+  private static void transactionPayloadRejectsPaddedIdsBeforeSigning() {
+    final String authority = TestAccountIds.ed25519Authority(0x2F);
+    assertIllegalArgumentMessage(
+        () -> TransactionPayload.builder().setChainId(" 00000042"),
+        "chainId must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () -> TransactionPayload.builder().setChainId("00000042 "),
+        "chainId must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () -> TransactionPayload.builder().setAuthority(" " + authority),
+        "authority must not contain surrounding whitespace");
+  }
+
   private static void kagemushaInstructionArchivesBuildPayloads() {
     final byte[] archive =
         kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
@@ -185,6 +200,8 @@ public final class TransactionBuilderTests {
 
     final byte[] transferArchive =
         kagemushaArchive(KagemushaInstructionArchives.InstructionType.TRANSFER);
+    final byte[] expectedTransferArchive =
+        Arrays.copyOf(transferArchive, transferArchive.length);
     final TransactionPayload payload =
         KagemushaInstructionArchives.transactionPayload(
             KagemushaInstructionArchives.InstructionType.TRANSFER,
@@ -204,6 +221,9 @@ public final class TransactionBuilderTests {
         : "Transfer instruction wire name must be canonical";
     assert Arrays.equals(transferArchive, transferWire.payloadBytes())
         : "Transfer archive bytes must be preserved";
+    transferArchive[0] = (byte) 0x7F;
+    assert Arrays.equals(expectedTransferArchive, transferWire.payloadBytes())
+        : "Transfer archive bytes must be defensively copied";
     assert JsonValue.string("kagemusha").equals(payload.metadata().get("mode"))
         : "String metadata must be encoded as JSON string";
     assert JsonValue.bool(true).equals(payload.metadata().get("enabled"))
@@ -214,6 +234,32 @@ public final class TransactionBuilderTests {
     assert KagemushaInstructionArchives.RECURSIVE_REDEEM_REQUEST_WIRE_NAME.equals(
             "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1")
         : "Redeem request wire-name constant must be canonical";
+
+    final byte[] redeemArchive =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    final byte[] expectedRedeemArchive = Arrays.copyOf(redeemArchive, redeemArchive.length);
+    final TransactionPayload redeemPayload =
+        KagemushaInstructionArchives.recursiveRedeemTransactionPayload(
+            redeemArchive,
+            "00000042",
+            TestAccountIds.ed25519Authority(0x2C),
+            1_735_000_000_000L,
+            3_500L,
+            17,
+            Map.of("mode", "kagemusha"));
+    assert redeemPayload.executable().isInstructions()
+        : "Recursive redeem payload must use instruction executable";
+    final InstructionBox.WirePayload redeemWire =
+        (InstructionBox.WirePayload) redeemPayload.executable().instructions().get(0).payload();
+    assert redeemWire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::RedeemKagemushaRecursive")
+        : "Recursive redeem instruction wire name must be canonical";
+    assert Arrays.equals(expectedRedeemArchive, redeemWire.payloadBytes())
+        : "Recursive redeem archive bytes must be preserved";
+    redeemArchive[0] = (byte) 0x7E;
+    assert Arrays.equals(expectedRedeemArchive, redeemWire.payloadBytes())
+        : "Recursive redeem transaction archive bytes must be defensively copied";
   }
 
   private static void kagemushaInstructionArchivesAcceptAbi7Fixtures() {
@@ -227,6 +273,56 @@ public final class TransactionBuilderTests {
         : "ABI-7 redeem instruction wire name must be canonical";
     assert Arrays.equals(archive, wire.payloadBytes())
         : "ABI-7 redeem instruction archive bytes must be preserved";
+  }
+
+  private static void kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem() {
+    final String authority = TestAccountIds.ed25519Authority(0x2C);
+    assertIllegalArgumentMessage(
+        () ->
+            KagemushaInstructionArchives.transactionPayload(
+                KagemushaInstructionArchives.InstructionType.TRANSFER,
+                new byte[0],
+                " 00000042",
+                authority,
+                1_735_000_000_000L,
+                null,
+                null,
+                Map.of()),
+        "chainId must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () ->
+            KagemushaInstructionArchives.transactionPayload(
+                KagemushaInstructionArchives.InstructionType.TRANSFER,
+                new byte[0],
+                "00000042",
+                " " + authority,
+                1_735_000_000_000L,
+                null,
+                null,
+                Map.of()),
+        "authority must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () ->
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                new byte[0],
+                " 00000042",
+                authority,
+                1_735_000_000_000L,
+                null,
+                null,
+                Map.of()),
+        "chainId must not contain surrounding whitespace");
+    assertIllegalArgumentMessage(
+        () ->
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                new byte[0],
+                "00000042",
+                " " + authority,
+                1_735_000_000_000L,
+                null,
+                null,
+                Map.of()),
+        "authority must not contain surrounding whitespace");
   }
 
   private static void kagemushaInstructionArchivesRejectAdversarialInputs() {
@@ -762,6 +858,16 @@ public final class TransactionBuilderTests {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  private static void assertIllegalArgumentMessage(final Runnable runnable, final String expected) {
+    try {
+      runnable.run();
+    } catch (final IllegalArgumentException actual) {
+      assert expected.equals(actual.getMessage()) : "Expected " + expected + " but got " + actual;
+      return;
+    }
+    throw new AssertionError("Expected IllegalArgumentException: " + expected);
   }
 
   private static void assertThrowsRuntime(final Runnable runnable, final String message) {

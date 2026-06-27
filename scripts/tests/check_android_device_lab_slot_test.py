@@ -2363,6 +2363,142 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertTrue(
             all("must not manage other running jobs" in error for error in errors)
         )
+        self.assertNotIn(slot_assembler.ADB_SERIAL_REDACTION, "\n".join(errors))
+
+    def test_android_command_gates_reject_package_state_mutations(self) -> None:
+        helpers = (
+            (
+                "capture command",
+                capture_runner._command_disruption_errors,
+                capture_runner.ADB_SERIAL_REDACTION,
+            ),
+            (
+                "slot command",
+                slot_assembler._command_disruption_errors,
+                slot_assembler.ADB_SERIAL_REDACTION,
+            ),
+            (
+                "raw pull command",
+                raw_puller._command_disruption_errors,
+                raw_puller.ADB_SERIAL_REDACTION,
+            ),
+        )
+        commands = (
+            ("reboot executable path", ["/sbin/reboot"]),
+            ("pm clear", ["adb", "-s", "ABC123", "shell", "pm", "clear", "pkg"]),
+            (
+                "pm disable-user",
+                ["adb", "-s", "ABC123", "shell", "pm", "disable-user", "pkg"],
+            ),
+            (
+                "pm enable",
+                ["adb", "-s", "ABC123", "shell", "pm", "enable", "pkg"],
+            ),
+            (
+                "cmd package suspend",
+                [
+                    "adb",
+                    "-s",
+                    "ABC123",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "suspend",
+                    "pkg",
+                ],
+            ),
+            (
+                "cmd package unsuspend",
+                [
+                    "adb",
+                    "-s",
+                    "ABC123",
+                    "shell",
+                    "cmd",
+                    "package",
+                    "unsuspend",
+                    "pkg",
+                ],
+            ),
+            (
+                "setprop ctl.restart",
+                ["adb", "-s", "ABC123", "shell", "setprop", "ctl.restart", "zygote"],
+            ),
+            (
+                "setprop sys.powerctl",
+                ["adb", "-s", "ABC123", "shell", "setprop", "sys.powerctl", "reboot"],
+            ),
+            (
+                "svc power shutdown",
+                ["adb", "-s", "ABC123", "shell", "svc", "power", "shutdown"],
+            ),
+            (
+                "pm grant",
+                [
+                    "adb",
+                    "-s",
+                    "ABC123",
+                    "shell",
+                    "pm",
+                    "grant",
+                    "pkg",
+                    "android.permission.NFC",
+                ],
+            ),
+            (
+                "cmd appops set",
+                [
+                    "adb",
+                    "-s",
+                    "ABC123",
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "set",
+                    "pkg",
+                    "RUN_IN_BACKGROUND",
+                    "deny",
+                ],
+            ),
+            (
+                "appops reset",
+                [
+                    "adb",
+                    "-s",
+                    "ABC123",
+                    "shell",
+                    "appops",
+                    "reset",
+                    "pkg",
+                ],
+            ),
+            (
+                "cmd appops reset",
+                [
+                    "adb",
+                    "-s",
+                    "ABC123",
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "reset",
+                    "pkg",
+                ],
+            ),
+            ("adb uninstall", ["adb", "-s", "ABC123", "uninstall", "pkg"]),
+        )
+
+        for helper_label, helper, serial_redaction in helpers:
+            for command_label, command in commands:
+                with self.subTest(helper=helper_label, command=command_label):
+                    errors = helper(command, helper_label)
+                    rendered = "\n".join(errors)
+
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("must not manage other running jobs", rendered)
+                    if "ABC123" in command:
+                        self.assertIn(serial_redaction, rendered)
+                    self.assertNotIn("ABC123", rendered)
 
     def test_kagemusha_slot_assembler_adb_getprop_uses_timeout(self) -> None:
         outputs = {
@@ -6474,6 +6610,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 f"{raw_puller.DEFAULT_DEVICE_LAB_DEVICE_ROOT}/latest-slot.txt"
             ],
         )
+        self.assertNotIn(raw_puller.ADB_SERIAL_REDACTION, "\n".join(errors))
 
     def test_kagemusha_android_raw_puller_rejects_disruptive_tar_pull_before_runner(
         self,
@@ -6503,11 +6640,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
             [
                 "raw slot tar ADB pull must not manage other running jobs: "
-                "adb -s ABC123 exec-out run-as kill-server tar -C "
+                f"adb -s {raw_puller.ADB_SERIAL_REDACTION} "
+                "exec-out run-as kill-server tar -C "
                 f"{raw_puller.DEFAULT_DEVICE_LAB_DEVICE_ROOT} "
                 "-cf - pixel6 latest-slot.txt"
             ],
         )
+        self.assertNotIn("ABC123", "\n".join(errors))
 
     def test_kagemusha_android_raw_puller_rejects_control_out_root_before_adb(
         self,

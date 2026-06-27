@@ -159,6 +159,17 @@ fn parse_hex_32(hex: &str) -> Result<[u8; 32]> {
     Ok(bytes)
 }
 
+fn confidential_features_with_policy_hash(
+    existing: Option<ConfidentialFeatureDigest>,
+    hash: [u8; 32],
+) -> ConfidentialFeatureDigest {
+    let mut digest = existing.unwrap_or_else(|| {
+        ConfidentialFeatureDigest::new(None, None, None, Some(CONFIDENTIAL_RULES_VERSION), None)
+    });
+    digest.zk_policy_hash = Some(hash);
+    digest
+}
+
 fn resign_block(
     block: &SignedBlock,
     key_pair: &KeyPair,
@@ -167,12 +178,9 @@ fn resign_block(
     let transactions = block.external_transactions().cloned().collect::<Vec<_>>();
     let confidential_features =
         zk_policy_hash.map_or(block.header().confidential_features, |hash| {
-            Some(ConfidentialFeatureDigest::new(
-                None,
-                None,
-                None,
-                Some(CONFIDENTIAL_RULES_VERSION),
-                Some(hash),
+            Some(confidential_features_with_policy_hash(
+                block.header().confidential_features,
+                hash,
             ))
         });
     SignedBlock::try_genesis_with_da_proof_policies(
@@ -187,7 +195,8 @@ fn resign_block(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hex_32;
+    use super::{confidential_features_with_policy_hash, parse_hex_32};
+    use iroha_data_model::confidential::{CONFIDENTIAL_RULES_VERSION, ConfidentialFeatureDigest};
 
     #[test]
     fn parse_hex_32_accepts_exact_hash() {
@@ -206,5 +215,34 @@ mod tests {
             parse_hex_32("zz0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn confidential_features_with_policy_hash_preserves_existing_commitments() {
+        let existing = ConfidentialFeatureDigest::new(
+            Some([0x11; 32]),
+            Some(7),
+            Some(9),
+            Some(3),
+            Some([0x22; 32]),
+        );
+        let updated = confidential_features_with_policy_hash(Some(existing), [0x33; 32]);
+
+        assert_eq!(updated.vk_set_hash, Some([0x11; 32]));
+        assert_eq!(updated.poseidon_params_id, Some(7));
+        assert_eq!(updated.pedersen_params_id, Some(9));
+        assert_eq!(updated.conf_rules_version, Some(3));
+        assert_eq!(updated.zk_policy_hash, Some([0x33; 32]));
+    }
+
+    #[test]
+    fn confidential_features_with_policy_hash_creates_v1_digest_when_missing() {
+        let updated = confidential_features_with_policy_hash(None, [0x44; 32]);
+
+        assert_eq!(updated.vk_set_hash, None);
+        assert_eq!(updated.poseidon_params_id, None);
+        assert_eq!(updated.pedersen_params_id, None);
+        assert_eq!(updated.conf_rules_version, Some(CONFIDENTIAL_RULES_VERSION));
+        assert_eq!(updated.zk_policy_hash, Some([0x44; 32]));
     }
 }

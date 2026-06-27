@@ -395,7 +395,10 @@ data class VerifySpendResult(
     val chainAdmissionReason: String,
     val witnesslessRedeemSupported: Boolean = false,
     val lineageWitnessRequired: Boolean = false,
-)
+) {
+    val lineageWitnessRequiredForRedeem: Boolean
+        get() = lineageWitnessRequired
+}
 
 /** Typed request for `KagemushaRecursiveSpendRedeemRequestV1`. */
 class RedeemSpendRequest @JvmOverloads constructor(
@@ -407,6 +410,7 @@ class RedeemSpendRequest @JvmOverloads constructor(
     changeOutput: ByteArray? = null,
     val lineageVerifierRecord: VerifierRecordRef? = null,
     val blockHeight: Long? = null,
+    lineageVerifierRecords: List<VerifierRecordRef> = emptyList(),
 ) {
     private val bundleArchive = bundle.copyOf()
     private val redeemProofArchive = redeemProof.copyOf()
@@ -417,6 +421,7 @@ class RedeemSpendRequest @JvmOverloads constructor(
         }
     }
     private val canonicalPublicAmount = canonicalU128Decimal(publicAmount, "publicAmount")
+    val lineageVerifierRecords: List<VerifierRecordRef> = lineageVerifierRecords.toList()
 
     init {
         requireNonNegativeHeight(blockHeight)
@@ -430,6 +435,10 @@ class RedeemSpendRequest @JvmOverloads constructor(
         changeOutputBytes?.let { requireRedeemChangeOutputNotReserved(it, bundleSummary) }
         val finalIsLineage =
             KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId)
+        val hasLineageVerifierRecord = lineageVerifierRecord != null || this.lineageVerifierRecords.isNotEmpty()
+        require(!finalIsLineage || hasLineageVerifierRecord) {
+            "lineageVerifierRecord is required for reserved-lineage bundles"
+        }
         val witnessHasReservedPrevious =
             if (lineageWitnessArchive != null) {
                 KagemushaRecursiveSpendRequestCodecs.lineageWitnessHasReservedPreviousProof(
@@ -439,10 +448,10 @@ class RedeemSpendRequest @JvmOverloads constructor(
                 false
             }
         if (!finalIsLineage) {
-            require(!witnessHasReservedPrevious || lineageVerifierRecord != null) {
+            require(!witnessHasReservedPrevious || hasLineageVerifierRecord) {
                 "lineageVerifierRecord is required for lineage witnesses with reserved-lineage previous proofs"
             }
-            require(witnessHasReservedPrevious || lineageVerifierRecord == null) {
+            require(witnessHasReservedPrevious || !hasLineageVerifierRecord) {
                 "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses"
             }
         }
@@ -456,7 +465,7 @@ class RedeemSpendRequest @JvmOverloads constructor(
         }
         require(
             !KagemushaRecursiveSpendProver.isLineageProofCircuitId(bundleSummary.proofCircuitId) ||
-                lineageVerifierRecord != null,
+                hasLineageVerifierRecord,
         ) {
             "lineageVerifierRecord is required for reserved-lineage bundles"
         }
@@ -1057,6 +1066,9 @@ object KagemushaRecursiveSpendRequestCodecs {
             previousProofs.readUInt(64),
             "lineageWitness.previousRecursiveProofs count",
         )
+        require(count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS) {
+            "lineageWitness.previousRecursiveProofs count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"
+        }
         var hasReserved = false
         repeat(count) { index ->
             val itemLength = checkedInt(
@@ -1353,6 +1365,18 @@ object KagemushaRecursiveSpendRequestCodecs {
                 )
             }
             writeField(encoder) { writeOptionU64(it, value.blockHeight) }
+            writeField(encoder) {
+                writeRawVec(
+                    it,
+                    value.lineageVerifierRecords.map { record ->
+                        compactPayloadForRequest(
+                            record.recordBytes,
+                            SCHEMA_VERIFYING_KEY_RECORD,
+                            "lineageVerifierRecords",
+                        )
+                    },
+                )
+            }
         }
 
         override fun decode(decoder: NoritoDecoder): RedeemSpendRequest {
@@ -1377,12 +1401,16 @@ object KagemushaRecursiveSpendRequestCodecs {
             "bundle.accumulator.domain must be ${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN}"
         }
         val chainId = readField(decoder) { readAccumulatorChainId(it) }
-        val asset = readField(decoder) { readAssetDefinitionId(it) }
-        val initialRoot = readField(decoder) { it.readFixed32("initial_root") }
-        val finalRoot = readField(decoder) { it.readFixed32("final_root") }
+        val asset = readField(decoder) { readAssetDefinitionId(it, "bundle.accumulator.asset") }
+        val initialRoot = readField(decoder) { it.readFixed32("bundle.accumulator.initial_root") }
+        val finalRoot = readField(decoder) { it.readFixed32("bundle.accumulator.final_root") }
         requireAccumulatorRoots(initialRoot, finalRoot)
         val topupAnchorNullifiers = readField(decoder) {
-            readFixed32Sequence(it, "bundle.accumulator.topup_anchor_nullifiers")
+            readFixed32Sequence(
+                it,
+                "bundle.accumulator.topup_anchor_nullifiers",
+                maxCount = KAGEMUSHA_FOLD_STEP_MAX_INPUTS,
+            )
         }
         val hopCount = readField(
             decoder,
@@ -1392,7 +1420,12 @@ object KagemushaRecursiveSpendRequestCodecs {
             "bundle.accumulator.hop_count must be in 1..${KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1}"
         }
         requireAccumulatorCorridor(decoder, hopCount)
-        val currentNote = readField(decoder) { readSpendableNote(it) }
+        val currentNote = readField(
+            decoder,
+            "Trailing bytes after bundle.accumulator.current_note",
+        ) {
+            readSpendableNote(it, "bundle.accumulator.current_note")
+        }
         requireTopupAnchorNullifiers(topupAnchorNullifiers, currentNote)
         require(decoder.remaining() == 0) { "Trailing bytes after accumulator" }
         return AccumulatorSummary(
@@ -1962,6 +1995,9 @@ private fun readVerifiedFoldRecordBundleHopCount(payload: ByteArray, flags: Int,
 
 private fun readVerifiedFoldStepCount(decoder: NoritoDecoder, field: String): Int {
     val count = checkedInt(decoder.readUInt(64), "$field count")
+    require(count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS) {
+        "$field fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"
+    }
     repeat(count) { index ->
         val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field item length")
         val item = NoritoDecoder(decoder.readBytes(itemLength), decoder.flags, decoder.flagsHint)
@@ -2058,9 +2094,13 @@ private fun readPallasIpaParams(decoder: NoritoDecoder, field: String): Int {
     require(n <= KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_N) {
         "$field.n exceeds max 2^$KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_K"
     }
-    val gCount = readField(decoder) { readFixed32SequenceCount(it, "$field.g") }
+    val gCount = readField(decoder) {
+        readFixed32SequenceCount(it, "$field.g", n, "$field.g length must equal params.n")
+    }
     require(gCount == n) { "$field.g length must equal params.n" }
-    val hCount = readField(decoder) { readFixed32SequenceCount(it, "$field.h") }
+    val hCount = readField(decoder) {
+        readFixed32SequenceCount(it, "$field.h", n, "$field.h length must equal params.n")
+    }
     require(hCount == n) { "$field.h length must equal params.n" }
     readField(decoder) { it.readFixed32("$field.u") }
     require(decoder.remaining() == 0) { "Trailing bytes after $field" }
@@ -2083,10 +2123,24 @@ private fun readPallasPolyOpenPublic(decoder: NoritoDecoder, field: String): Int
 private fun readPallasIpaProof(decoder: NoritoDecoder, n: Int, field: String) {
     val version = readField(decoder) { checkedInt(it.readUInt(16), "$field.version") }
     require(version == 1) { "$field.version must be 1" }
-    val lCount = readField(decoder) { readFixed32SequenceCount(it, "$field.l") }
-    val rCount = readField(decoder) { readFixed32SequenceCount(it, "$field.r") }
-    require(lCount == rCount) { "$field L/R round count mismatch" }
     val expectedRounds = n.countTrailingZeroBits()
+    val lCount = readField(decoder) {
+        readFixed32SequenceCount(
+            it,
+            "$field.l",
+            expectedRounds,
+            "$field round count mismatch: expected $expectedRounds, found count prefix",
+        )
+    }
+    val rCount = readField(decoder) {
+        readFixed32SequenceCount(
+            it,
+            "$field.r",
+            expectedRounds,
+            "$field round count mismatch: expected $expectedRounds, found count prefix",
+        )
+    }
+    require(lCount == rCount) { "$field L/R round count mismatch" }
     require(lCount == expectedRounds) {
         "$field round count mismatch: expected $expectedRounds, found $lCount"
     }
@@ -2095,12 +2149,35 @@ private fun readPallasIpaProof(decoder: NoritoDecoder, n: Int, field: String) {
     require(decoder.remaining() == 0) { "Trailing bytes after $field" }
 }
 
-private fun readFixed32SequenceCount(decoder: NoritoDecoder, field: String): Int {
-    return readFixed32Sequence(decoder, field).size
+private fun readFixed32SequenceCount(
+    decoder: NoritoDecoder,
+    field: String,
+    expectedCount: Int? = null,
+    mismatchMessage: String = "$field count mismatch",
+): Int {
+    val count = checkedInt(decoder.readUInt(64), "$field count")
+    if (expectedCount != null) {
+        require(count == expectedCount) { mismatchMessage }
+    }
+    repeat(count) { index ->
+        val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field item length")
+        val item = NoritoDecoder(decoder.readBytes(itemLength), decoder.flags, decoder.flagsHint)
+        item.readFixed32("$field[$index]")
+        require(item.remaining() == 0) { "Trailing bytes after $field[$index]" }
+    }
+    require(decoder.remaining() == 0) { "Trailing bytes after $field" }
+    return count
 }
 
-private fun readFixed32Sequence(decoder: NoritoDecoder, field: String): List<ByteArray> {
+private fun readFixed32Sequence(
+    decoder: NoritoDecoder,
+    field: String,
+    maxCount: Int? = null,
+): List<ByteArray> {
     val count = checkedInt(decoder.readUInt(64), "$field count")
+    if (maxCount != null) {
+        require(count in 1..maxCount) { "$field count is out of range" }
+    }
     return List(count) { index ->
         val itemLength = checkedInt(decoder.readLength(compact(decoder)), "$field item length")
         val item = NoritoDecoder(decoder.readBytes(itemLength), decoder.flags, decoder.flagsHint)
@@ -2225,18 +2302,20 @@ private fun requireTopupAnchorNullifiers(
     currentNote: SpendableNoteDescriptor,
 ) {
     require(nullifiers.isNotEmpty() && nullifiers.size <= KAGEMUSHA_FOLD_STEP_MAX_INPUTS) {
-        "bundle.accumulator.topup_anchor_nullifiers"
+        "bundle.accumulator.topup_anchor_nullifiers count is out of range"
     }
     for (index in nullifiers.indices) {
-        require(!isZero32(nullifiers[index])) { "bundle.accumulator.topup_anchor_nullifiers" }
+        require(!isZero32(nullifiers[index])) {
+            "bundle.accumulator.topup_anchor_nullifiers must not contain zero values"
+        }
         if (index > 0) {
             require(compareUnsigned(nullifiers[index - 1], nullifiers[index]) < 0) {
-                "bundle.accumulator.topup_anchor_nullifiers"
+                "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"
             }
         }
     }
     require(nullifiers.none { it.contentEquals(currentNote.noteCommitment) || it.contentEquals(currentNote.spendNullifier) }) {
-        "bundle.accumulator.topup_anchor_nullifiers"
+        "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"
     }
 }
 
@@ -2249,7 +2328,7 @@ private fun requireAccumulatorRoots(initialRoot: ByteArray, finalRoot: ByteArray
 
 private fun requireAccumulatorCorridor(decoder: NoritoDecoder, hopCount: Int) {
     fun readFixed32(field: String): ByteArray =
-        readField(decoder) { it.readFixed32(field) }
+        readField(decoder) { it.readFixed32("bundle.accumulator.$field") }
 
     fun requireNonzero(field: String): ByteArray {
         val value = readFixed32(field)
@@ -2287,16 +2366,26 @@ private fun requireAccumulatorCorridor(decoder: NoritoDecoder, hopCount: Int) {
         "fixed_window_table_base_digest",
         "verifier_witness_batch_digest",
     ).forEach(::requireNonzero)
-    val verifierOpeningLen = readField(
-        decoder,
-        trailingMessage = "bundle.accumulator.verifier_opening_len",
-    ) {
-        checkedInt(it.readUInt(32), "verifier_opening_len")
-    }
+    val verifierOpeningLen = readAccumulatorVerifierOpeningLen(decoder)
     require(verifierOpeningLen in setOf(2, 4, 8, 16, 32, 64, 128)) {
         "bundle.accumulator.verifier_opening_len"
     }
 }
+
+private fun readAccumulatorVerifierOpeningLen(decoder: NoritoDecoder): Int =
+    try {
+        readField(
+            decoder,
+            trailingMessage = "bundle.accumulator.verifier_opening_len",
+        ) {
+            checkedInt(it.readUInt(32), "verifier_opening_len")
+        }
+    } catch (error: IllegalArgumentException) {
+        if (error.message == "Unexpected end of data") {
+            throw IllegalArgumentException("bundle.accumulator.verifier_opening_len", error)
+        }
+        throw error
+    }
 
 private fun compareCanonicalDecimal(left: String, right: String): Int =
     when {
@@ -2327,6 +2416,13 @@ private fun writeString(encoder: NoritoEncoder, value: String) {
 private fun writeBytesVec(encoder: NoritoEncoder, value: ByteArray) {
     encoder.writeUInt(value.size.toLong(), 64)
     encoder.writeBytes(value)
+}
+
+private fun writeRawVec(encoder: NoritoEncoder, payloads: List<ByteArray>) {
+    encoder.writeUInt(payloads.size.toLong(), 64)
+    for (payload in payloads) {
+        writeRawField(encoder, payload)
+    }
 }
 
 private fun writeConstVec(encoder: NoritoEncoder, value: ByteArray) {
@@ -2525,23 +2621,23 @@ private fun publicKeyCompactPayload(curveId: Int, publicKey: ByteArray): ByteArr
     return bytes
 }
 
-private fun readSpendableNote(decoder: NoritoDecoder): SpendableNoteDescriptor =
+private fun readSpendableNote(decoder: NoritoDecoder, field: String = "current_note"): SpendableNoteDescriptor =
     SpendableNoteDescriptor(
-        noteCommitment = readField(decoder) { it.readFixed32("note_commitment") },
-        spendNullifier = readField(decoder) { it.readFixed32("spend_nullifier") },
-        amount = readField(decoder) { readNumeric(it) },
+        noteCommitment = readField(decoder) { it.readFixed32("$field.note_commitment") },
+        spendNullifier = readField(decoder) { it.readFixed32("$field.spend_nullifier") },
+        amount = readField(decoder, "Trailing bytes after $field.amount") { readNumeric(it, "$field.amount") },
     )
 
-private fun readNumeric(decoder: NoritoDecoder): String {
-    val mantissaBytes = readField(decoder) { payload ->
+private fun readNumeric(decoder: NoritoDecoder, field: String = "amount"): String {
+    val mantissaBytes = readField(decoder, "Trailing bytes after $field.mantissa") { payload ->
         val length = checkedInt(payload.readUInt(32), "numeric mantissa length")
         payload.readBytes(length)
     }
-    val scale = readField(decoder) { checkedInt(it.readUInt(32), "numeric scale") }
-    require(scale == 0) { "numeric scale must be zero" }
+    val scale = readField(decoder, "Trailing bytes after $field.scale") { checkedInt(it.readUInt(32), "numeric scale") }
+    require(scale == 0) { "$field numeric scale must be zero" }
     val value = bigIntegerFromLittleEndianTwosComplement(mantissaBytes)
-    require(value > BigInteger.ZERO) { "numeric amount must be greater than zero" }
-    require(value <= MAX_U128) { "numeric amount must fit in u128" }
+    require(value > BigInteger.ZERO) { "$field numeric amount must be greater than zero" }
+    require(value <= MAX_U128) { "$field numeric amount must fit in u128" }
     return value.toString()
 }
 
@@ -2567,8 +2663,8 @@ private fun readAccumulatorChainId(decoder: NoritoDecoder): String =
         throw IllegalArgumentException("bundle.accumulator.chain_id", error)
     }
 
-private fun readAssetDefinitionId(decoder: NoritoDecoder): String {
-    val bytes = decoder.readFixedBytes(16, "asset")
+private fun readAssetDefinitionId(decoder: NoritoDecoder, field: String = "asset"): String {
+    val bytes = decoder.readFixedBytes(16, field)
     return try {
         AssetDefinitionIdEncoder.encodeFromBytes(bytes)
     } catch (_: IllegalArgumentException) {

@@ -3178,6 +3178,54 @@ def _is_nonzero_hex32(value: Any) -> bool:
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
 
 
+def _source_adapter_gate_template_hashes(domain: Any) -> tuple[bytes, ...]:
+    if type(domain) is not int:
+        return ()
+    all_lanes = _load_all_lanes_module()
+    profile = all_lanes.LANE_PROFILES.get(domain)
+    if profile is None:
+        return ()
+    return tuple(all_lanes._source_material_template_hashes(profile).values())
+
+
+def _public_cryptographic_source_adapter_gate_template_hash_errors(
+    row_label: str,
+    domain: Any,
+    gate_hash: Any,
+    audit_hashes: dict[str, Any],
+) -> list[str]:
+    """Return public-row blockers when source-gate hashes replay templates."""
+
+    if type(domain) is not int:
+        return []
+    template_hashes = _source_adapter_gate_template_hashes(domain)
+    if not template_hashes:
+        return []
+    errors: list[str] = []
+    if _is_nonzero_hex32(gate_hash):
+        assert isinstance(gate_hash, str)
+        if bytes.fromhex(gate_hash[2:]) in template_hashes:
+            errors.append(
+                f"{row_label} source_adapter_gate_hash must be deployed gate "
+                "evidence, not built-in template material"
+            )
+    expected_audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
+        domain,
+        frozenset(),
+    )
+    for audit_field in sorted(expected_audit_keys):
+        audit_hash = audit_hashes.get(audit_field)
+        if not _is_nonzero_hex32(audit_hash):
+            continue
+        assert isinstance(audit_hash, str)
+        if bytes.fromhex(audit_hash[2:]) in template_hashes:
+            errors.append(
+                f"{row_label} source_adapter_gate_audit_hashes {audit_field} "
+                "must be deployed audit evidence, not built-in template material"
+            )
+    return errors
+
+
 def _is_canonical_sha256_text(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -11121,6 +11169,14 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
             _public_cryptographic_source_adapter_gate_hash_role_errors(
                 row_label,
                 row,
+                semantic_audit_hashes,
+            )
+        )
+        errors.extend(
+            _public_cryptographic_source_adapter_gate_template_hash_errors(
+                row_label,
+                domain,
+                row.get("source_adapter_gate_hash"),
                 semantic_audit_hashes,
             )
         )

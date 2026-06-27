@@ -100,6 +100,25 @@ require_cmd() {
   fi
 }
 
+pid_is_running() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  if ! command -v ps >/dev/null 2>&1; then
+    return 0
+  fi
+  ps -p "$pid" -o pid= >/dev/null 2>&1
+}
+
+pid_is_own_background_job() {
+  local pid="$1"
+  local job_pid
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  while IFS= read -r job_pid; do
+    [[ "${job_pid}" == "${pid}" ]] && return 0
+  done < <(jobs -pr 2>/dev/null || true)
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
@@ -209,14 +228,14 @@ ENV_PATH="${WORKDIR}/${PROFILE}.env"
 
 handle_cleanup() {
   if [[ -n "${TORII_PID}" ]]; then
-    if kill -0 "${TORII_PID}" >/dev/null 2>&1; then
+    if pid_is_own_background_job "${TORII_PID}" && pid_is_running "${TORII_PID}"; then
       kill "${TORII_PID}" >/dev/null 2>&1 || true
       wait "${TORII_PID}" >/dev/null 2>&1 || true
     fi
     TORII_PID=""
   fi
   if [[ -n "${HANDOFF_PID}" ]]; then
-    if kill -0 "${HANDOFF_PID}" >/dev/null 2>&1; then
+    if pid_is_own_background_job "${HANDOFF_PID}" && pid_is_running "${HANDOFF_PID}"; then
       kill "${HANDOFF_PID}" >/dev/null 2>&1 || true
       wait "${HANDOFF_PID}" >/dev/null 2>&1 || true
     fi
@@ -256,7 +275,7 @@ start_torii_demo() {
     if [[ -s "${state_file}" ]]; then
       break
     fi
-    if ! kill -0 "${TORII_PID}" >/dev/null 2>&1; then
+    if ! pid_is_own_background_job "${TORII_PID}" || ! pid_is_running "${TORII_PID}"; then
       echo "[android-sample-env] Torii sandbox exited early. Check ${runner_log}" >&2
       exit 1
     fi

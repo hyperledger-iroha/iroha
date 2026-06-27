@@ -712,7 +712,7 @@ const routeManifest = (overrides = {}) => {
     artifactSha256: BURN_RECORD_SHA256,
     codeHash: HASH_33,
     vkRef: {
-      backend: "halo2_ipa",
+      backend: "halo2/ipa",
       name: "taira_bsc_xor_burn_record_v1",
       ...burnVkRefOverrides,
     },
@@ -783,7 +783,7 @@ const tairaBurnRecordContract = (overrides = {}) => ({
   artifact_sha256: BURN_RECORD_SHA256,
   code_hash: HASH_33,
   vk_ref: {
-    backend: "halo2_ipa",
+    backend: "halo2/ipa",
     name: "taira_bsc_xor_burn_record_v1",
   },
   ...overrides,
@@ -2162,7 +2162,7 @@ test("BSC route-manifest command binds deployment evidence and TAIRA burn-record
   );
   assert.equal(manifest.tairaXorBurnRecord.artifactSha256, BURN_RECORD_SHA256);
   assert.deepEqual(manifest.tairaXorBurnRecord.vkRef, {
-    backend: "halo2_ipa",
+    backend: "halo2/ipa",
     name: "taira_bsc_xor_burn_record_v1",
   });
   assert.doesNotMatch(

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import http.client
 import json
+import re
 import socket
 import sys
 import urllib.error
@@ -27,9 +29,29 @@ import iso_xsd_fixture_verify as xsd
 
 PROBE_SUMMARY_VERSION = 1
 DEFAULT_TIMEOUT_SECS = 25.0
+MAX_TIMEOUT_SECS = 300.0
 DEFAULT_MAX_BYTES = 4096
 MAX_PROBE_BYTES = 65536
+MAX_CONTENT_TYPE_CHARS = 256
 SUMMARY_DIGEST_FIELD = "summary_sha256"
+ASCII_FLOAT_RE = re.compile(
+    r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+ASCII_INT_RE = re.compile(r"0|[1-9][0-9]*")
+XSD_ROOT_OPEN_RE = re.compile(
+    rb"\A(?:\xef\xbb\xbf)?[ \t\r\n]*"
+    rb"(?:<\?xml\b[^>]*\?>[ \t\r\n]*)?"
+    rb"(?:(?:<!--.*?-->|<\?[A-Za-z_][^?]*\?>)[ \t\r\n]*)*"
+    rb"(?:"
+    rb"<xs:schema(?:[ \t\r\n/>])"
+    rb"(?=[^>]*\bxmlns:xs\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])"
+    rb"|<xsd:schema(?:[ \t\r\n/>])"
+    rb"(?=[^>]*\bxmlns:xsd\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])"
+    rb"|<schema(?:[ \t\r\n/>])"
+    rb"(?=[^>]*\bxmlns\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])"
+    rb")",
+    re.DOTALL,
+)
 
 
 class ProbeError(RuntimeError):
@@ -42,6 +64,7 @@ UrlOpen = Callable[..., Any]
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -56,8 +79,25 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _ascii_cli_number_text(value: Any, label: str) -> Any:
+    if not isinstance(value, str):
+        return value
+    if not value:
+        raise ProbeError(f"{label} must not be empty")
+    if value != value.strip():
+        raise ProbeError(f"{label} must not have surrounding whitespace")
+    try:
+        value.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise ProbeError(f"{label} must use ASCII digits") from error
+    return value
+
+
 def _positive_float(value: Any, label: str) -> float:
     if isinstance(value, bool):
+        raise ProbeError(f"{label} must be a positive finite number")
+    value = _ascii_cli_number_text(value, label)
+    if isinstance(value, str) and ASCII_FLOAT_RE.fullmatch(value) is None:
         raise ProbeError(f"{label} must be a positive finite number")
     try:
         parsed = float(value)
@@ -65,11 +105,16 @@ def _positive_float(value: Any, label: str) -> float:
         raise ProbeError(f"{label} must be a positive finite number") from error
     if not (parsed > 0.0 and parsed < float("inf")):
         raise ProbeError(f"{label} must be a positive finite number")
+    if parsed > MAX_TIMEOUT_SECS:
+        raise ProbeError(f"{label} must be no larger than {MAX_TIMEOUT_SECS:g}")
     return parsed
 
 
 def _positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool):
+        raise ProbeError(f"{label} must be a positive integer")
+    value = _ascii_cli_number_text(value, label)
+    if isinstance(value, str) and ASCII_INT_RE.fullmatch(value) is None:
         raise ProbeError(f"{label} must be a positive integer")
     try:
         parsed = int(value)
@@ -82,13 +127,57 @@ def _positive_int(value: Any, label: str) -> int:
     return parsed
 
 
-def _selected_message_ids(values: list[str] | None) -> list[str]:
+def _preflight_probe_limit_cli_values(argv: list[str] | None) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    validators = {
+        "--max-bytes": _positive_int,
+        "--timeout-secs": _positive_float,
+    }
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            raise ProbeError("argument terminator is not supported")
+        matched = False
+        for flag, validator in validators.items():
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise ProbeError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise ProbeError(f"{flag} requires a numeric value")
+                validator(value, flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise ProbeError(f"{flag} requires a numeric value")
+                validator(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _selected_message_ids(values: Any) -> list[str]:
     known = xsd.KNOWN_PENDING_SCHEMA_SOURCE_METADATA
     if not values:
         return sorted(known)
+    if isinstance(values, (str, bytes)):
+        raise ProbeError("--message-def-id must be a repeatable string list")
+    try:
+        selected = list(values)
+    except TypeError as error:
+        raise ProbeError("--message-def-id must be a repeatable string list") from error
     result: list[str] = []
     seen: dict[str, int] = {}
-    for offset, value in enumerate(values):
+    for offset, value in enumerate(selected):
+        if not isinstance(value, str):
+            raise ProbeError(f"--message-def-id[{offset}] must be a string")
         if value not in known:
             raise ProbeError(f"--message-def-id[{offset}] is not a known pending schema")
         if value in seen:
@@ -102,11 +191,7 @@ def _selected_message_ids(values: list[str] | None) -> list[str]:
 
 def _looks_like_xsd(data: bytes) -> bool:
     sample = data[: min(len(data), 4096)].lstrip()
-    return (
-        sample.startswith(b"<?xml")
-        or b"<xs:schema" in sample
-        or b"<xsd:schema" in sample
-    )
+    return XSD_ROOT_OPEN_RE.search(sample) is not None
 
 
 def _content_type(headers: Any) -> str | None:
@@ -120,18 +205,36 @@ def _content_type(headers: Any) -> str | None:
         get = getattr(headers, "get", None)
         if callable(get):
             value = get("content-type") or get("Content-Type")
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str) or not value:
+        return None
+    if len(value) > MAX_CONTENT_TYPE_CHARS:
+        return None
+    if value != value.strip():
+        return None
+    if xsd._contains_control_character(value):
+        return None
+    if any(ord(ch) > 0x7E for ch in value):
+        return None
+    if xsd._contains_secret_material(value) or xsd._contains_secret_identifier_material(value):
+        return None
+    return value
+
+
+def _http_status_code(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if 100 <= value <= 599:
+        return value
+    return None
 
 
 def _response_status(response: Any) -> int | None:
-    status = getattr(response, "status", None)
-    if isinstance(status, int):
+    status = _http_status_code(getattr(response, "status", None))
+    if status is not None:
         return status
     getcode = getattr(response, "getcode", None)
     if callable(getcode):
-        code = getcode()
-        if isinstance(code, int):
-            return code
+        return _http_status_code(getcode())
     return None
 
 
@@ -163,25 +266,129 @@ def _probe_download(
     try:
         with opener(request, timeout=timeout_secs) as response:
             status = _response_status(response)
-            data = response.read(max_bytes + 1)
-            downloaded = min(len(data), max_bytes)
+            if status is None:
+                return {
+                    **base,
+                    "status": "network_error",
+                    "http_status": None,
+                    "content_type": None,
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "NetworkError",
+                }
+            if 400 <= status <= 599:
+                return {
+                    **base,
+                    "status": "http_error",
+                    "http_status": status,
+                    "content_type": _content_type(getattr(response, "headers", None)),
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "HTTPError",
+                }
+            try:
+                data = response.read(max_bytes + 1)
+            except http.client.HTTPException:
+                return {
+                    **base,
+                    "status": "network_error",
+                    "http_status": None,
+                    "content_type": None,
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "NetworkError",
+                }
+            if not isinstance(data, (bytes, bytearray, memoryview)):
+                return {
+                    **base,
+                    "status": "network_error",
+                    "http_status": None,
+                    "content_type": None,
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "NetworkError",
+                }
+            try:
+                if isinstance(data, memoryview):
+                    byte_data = data.cast("B")
+                    total_bytes = byte_data.nbytes
+                    downloaded = min(total_bytes, max_bytes)
+                    sample = byte_data[:downloaded].tobytes()
+                else:
+                    total_bytes = len(data)
+                    downloaded = min(total_bytes, max_bytes)
+                    sample = bytes(data[:downloaded])
+            except (TypeError, ValueError):
+                return {
+                    **base,
+                    "status": "network_error",
+                    "http_status": None,
+                    "content_type": None,
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "NetworkError",
+                }
+            looks_like_xsd = _looks_like_xsd(sample)
+            if not downloaded or looks_like_xsd and not (200 <= status <= 399):
+                return {
+                    **base,
+                    "status": "network_error",
+                    "http_status": None,
+                    "content_type": None,
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "NetworkError",
+                }
             return {
                 **base,
-                "status": "reachable" if status is not None and 200 <= status <= 399 and downloaded else "unexpected",
+                "status": (
+                    "reachable"
+                    if 200 <= status <= 399
+                    and downloaded
+                    and looks_like_xsd
+                    else "unexpected"
+                ),
                 "http_status": status,
                 "content_type": _content_type(getattr(response, "headers", None)),
                 "downloaded_bytes": downloaded,
-                "truncated": len(data) > max_bytes,
-                "looks_like_xsd": _looks_like_xsd(data[:downloaded]),
+                "sample_sha256": sha256_hex(sample) if sample else None,
+                "truncated": total_bytes > max_bytes,
+                "looks_like_xsd": looks_like_xsd,
                 "error_kind": None,
             }
     except urllib.error.HTTPError as error:
+        status = _http_status_code(getattr(error, "code", None))
+        if status is None or not (400 <= status <= 599):
+            return {
+                **base,
+                "status": "network_error",
+                "http_status": None,
+                "content_type": None,
+                "downloaded_bytes": 0,
+                "sample_sha256": None,
+                "truncated": False,
+                "looks_like_xsd": False,
+                "error_kind": "NetworkError",
+            }
         return {
             **base,
             "status": "http_error",
-            "http_status": error.code,
+            "http_status": status,
             "content_type": _content_type(getattr(error, "headers", None)),
             "downloaded_bytes": 0,
+            "sample_sha256": None,
             "truncated": False,
             "looks_like_xsd": False,
             "error_kind": "HTTPError",
@@ -193,20 +400,22 @@ def _probe_download(
             "http_status": None,
             "content_type": None,
             "downloaded_bytes": 0,
+            "sample_sha256": None,
             "truncated": False,
             "looks_like_xsd": False,
             "error_kind": "TimeoutError",
         }
-    except (urllib.error.URLError, socket.timeout, OSError) as error:
+    except (urllib.error.URLError, socket.timeout, OSError):
         return {
             **base,
             "status": "network_error",
             "http_status": None,
             "content_type": None,
             "downloaded_bytes": 0,
+            "sample_sha256": None,
             "truncated": False,
             "looks_like_xsd": False,
-            "error_kind": type(error).__name__,
+            "error_kind": "NetworkError",
         }
 
 
@@ -272,7 +481,7 @@ def run(args: argparse.Namespace) -> int:
         timeout_secs=timeout_secs,
         max_bytes=max_bytes,
     )
-    text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(summary, allow_nan=False, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
         xsd._write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")
@@ -310,8 +519,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        xsd._preflight_raw_cli_secrets(
+            argv,
+            {
+                "--max-bytes",
+                "--message-def-id",
+                "--summary-out",
+                "--timeout-secs",
+            },
+        )
+        _preflight_probe_limit_cli_values(argv)
+        xsd._preflight_output_cli_paths(argv, {"--summary-out"})
+        args = parser.parse_args(argv)
         return run(args)
     except ProbeError as error:
         print(f"error: {error}", file=sys.stderr)

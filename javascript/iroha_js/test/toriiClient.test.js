@@ -8391,6 +8391,66 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
   assert.equal(nativeEncodeCalls, 1);
 });
 
+test("submitTransaction unwraps native NRT0 Norito frames before pipeline submit", async () => {
+  const payload = new Uint8Array([0x8a, 0x01, 0x88, 0x01]);
+  const encodedPayload = Buffer.from([0xca, 0xfe, 0xba, 0xbe]);
+  const header = Buffer.alloc(40);
+  header.write("NRT0", 0, "ascii");
+  header.writeBigUInt64LE(BigInt(encodedPayload.length), 23);
+  const nativeBinding = {
+    encodeSignedTransactionNorito: (buffer) => {
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [...payload]);
+      return Buffer.concat([header, encodedPayload]);
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    assert.deepEqual([...Buffer.from(init.body).values()], [
+      0x01,
+      ...encodedPayload,
+    ]);
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const response = await client.submitTransaction(payload);
+  assert.deepEqual(response, { ok: true });
+});
+
 test("submitTransaction preserves native versioned transaction payload", async () => {
   const payload = new Uint8Array([0xde, 0xad]);
   let noritoEncodeCalls = 0;

@@ -8070,7 +8070,8 @@ fn retail_recipient_lookup_operation() -> Map {
         Value::String(
             "Verifies that the supplied alias is bound to the canonical account in Iroha, \
              then calls the configured bank Core API route for HBL or UBL and returns the \
-             normalized recipient confirmation."
+             normalized recipient confirmation. Public alias lookups are unsigned; restricted \
+             alias lookups require canonical request signing and alias-resolve permission."
                 .to_owned(),
         ),
     );
@@ -8089,6 +8090,13 @@ fn retail_recipient_lookup_operation() -> Map {
         "400".to_owned(),
         json_response(
             "Malformed request or unsupported FI alias scope.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Restricted recipient alias lookup requires canonical request signing and permission.",
             error_schema_reference(),
         ),
     );

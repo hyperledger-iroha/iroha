@@ -34,6 +34,9 @@ public struct OfflineIssuerPublicKey: Equatable, Sendable {
         guard trimmed == value else {
             throw OfflineIssuerPublicKeyError.surroundingWhitespace
         }
+        guard !value.contains("=") else {
+            throw OfflineIssuerPublicKeyError.invalidBase64
+        }
         guard value.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value <= 0x7E }),
               let rawRepresentation = Self.decodeBase64OrBase64URL(value) else {
             throw OfflineIssuerPublicKeyError.invalidBase64

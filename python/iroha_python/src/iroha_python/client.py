@@ -12424,9 +12424,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> "TransactionDraft":
         from .tx import TransactionConfig, TransactionDraft
 
-        effective_chain_id = _require_non_empty_string(chain_id, "chain_id")
+        effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")
         effective_authority = self._native_transaction_account_id(
-            authority,
+            _require_exact_non_empty_string(authority, "authority"),
             "authority",
         )
         return TransactionDraft(

@@ -16,6 +16,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(abi6.chainAdmissionReason, "offline verification failed")
         XCTAssertFalse(abi6.witnesslessRedeemSupported)
         XCTAssertTrue(abi6.lineageWitnessRequired)
+        XCTAssertEqual(abi6.lineageWitnessRequiredForRedeem, abi6.lineageWitnessRequired)
 
         let abi7 = try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
             Self.sharedRecursiveSpendArchive(abi: .abi7, name: "verify_result")
@@ -24,6 +25,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertGreaterThan(abi7.encodedBytes, 0)
         XCTAssertEqual(abi7.chainAdmissionReason.isEmpty, abi7.chainAdmissible)
         XCTAssertEqual(!abi7.lineageWitnessRequired, abi7.witnesslessRedeemSupported)
+        XCTAssertEqual(abi7.lineageWitnessRequiredForRedeem, abi7.lineageWitnessRequired)
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
                 Self.recursiveSpendVerifyResultWithTrailingField()
@@ -41,6 +43,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             (try Self.recursiveSpendLineageWitnessWithTrailingField(), .invalidArchive("lineageWitness")),
             (
                 try Self.recursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
+                .invalidArchive("lineageWitness.previousRecursiveProofs")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(
+                    UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1
+                ),
                 .invalidArchive("lineageWitness.previousRecursiveProofs")
             ),
             (
@@ -69,6 +77,27 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 try Self.recursiveSpendLineageWitnessWithPreviousProofField(
                     fieldIndex: 2,
                     replacement: Data(repeating: 0x44, count: 32)
+                ),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofField(
+                    fieldIndex: 2,
+                    replacement: Self.fixedArrayPayload(0x44, count: 31)
+                ),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofField(
+                    fieldIndex: 2,
+                    replacement: Self.countPrefixedFixedArrayPayload(0x44, count: 32)
+                ),
+                .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")
+            ),
+            (
+                try Self.recursiveSpendLineageWitnessWithPreviousProofField(
+                    fieldIndex: 2,
+                    replacement: Self.fixedArrayPayload(0x44, count: 33)
                 ),
                 .invalidArchive("lineageWitness.previousRecursiveProofs.proof_public_inputs_hash")
             ),
@@ -122,20 +151,44 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             "iroha:kagemusha:v1:recursive-spend-accumulator"
         )
         XCTAssertGreaterThanOrEqual(initBundle.topupAnchorNullifiers.count, 2)
-        let malformedTopupAnchorSets: [[Data]] = [
-            [],
-            [Data(repeating: 0, count: 32)],
-            [
+        let malformedTopupAnchorCases: [(String, [Data], KagemushaRecursiveSpendRequestCodecError)] = [
+            (
+                "topup anchor empty list",
+                [],
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers count is out of range")
+            ),
+            (
+                "topup anchor zero nullifier",
+                [Data(repeating: 0, count: 32)],
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must not contain zero values")
+            ),
+            ("topup anchor count over limit", [
                 initBundle.topupAnchorNullifiers[0],
                 initBundle.topupAnchorNullifiers[1],
                 Data(repeating: 0x34, count: 32)
-            ],
-            [initBundle.topupAnchorNullifiers[0], initBundle.topupAnchorNullifiers[0]],
-            [initBundle.topupAnchorNullifiers[1], initBundle.topupAnchorNullifiers[0]],
-            [initBundle.currentNote.noteCommitment],
-            [initBundle.currentNote.spendNullifier]
+            ], .invalidArchive("bundle.accumulator.topup_anchor_nullifiers count is out of range")),
+            (
+                "topup anchor duplicate nullifier",
+                [initBundle.topupAnchorNullifiers[0], initBundle.topupAnchorNullifiers[0]],
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique")
+            ),
+            (
+                "topup anchor descending order",
+                [initBundle.topupAnchorNullifiers[1], initBundle.topupAnchorNullifiers[0]],
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique")
+            ),
+            (
+                "topup anchor current note commitment reuse",
+                [initBundle.currentNote.noteCommitment],
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must not reuse current note material")
+            ),
+            (
+                "topup anchor current note spend nullifier reuse",
+                [initBundle.currentNote.spendNullifier],
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must not reuse current note material")
+            )
         ]
-        for nullifiers in malformedTopupAnchorSets {
+        for (label, nullifiers, expectedError) in malformedTopupAnchorCases {
             XCTAssertThrowsError(
                 try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                     Self.recursiveSpendBundleWithTopupAnchorNullifiers(nullifiers)
@@ -143,9 +196,60 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     error as? KagemushaRecursiveSpendRequestCodecError,
-                    .invalidArchive("bundle.accumulator.topup_anchor_nullifiers")
+                    expectedError,
+                    label
                 )
             }
+        }
+        var overLimitTopupAnchorCountPrefix = Data()
+        Self.appendUInt64LE(3, to: &overLimitTopupAnchorCountPrefix)
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithAccumulatorField(
+                    fieldIndex: 5,
+                    replacement: overLimitTopupAnchorCountPrefix
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers count is out of range"),
+                "topup anchor over-limit count prefix"
+            )
+        }
+        let malformedProofCannotMaskInvalidTopupAnchorNullifiers =
+            "malformed proof cannot mask invalid top-up anchor nullifiers"
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+                    [Data(repeating: 0, count: 32)]
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must not contain zero values"
+                ),
+                malformedProofCannotMaskInvalidTopupAnchorNullifiers
+            )
+        }
+        let trailingAccumulatorCannotMaskInvalidTopupAnchorNullifiers =
+            "trailing accumulator cannot mask invalid top-up anchor nullifiers"
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                Self.recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+                    [Data(repeating: 0, count: 32)]
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must not contain zero values"
+                ),
+                trailingAccumulatorCannotMaskInvalidTopupAnchorNullifiers
+            )
         }
 
         let appendBundle = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
@@ -253,6 +357,22 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 .invalidArchive("bundle.proof_public_inputs")
             )
         }
+        for replacement in [
+            Self.fixedArrayPayload(0x44, count: 31),
+            Self.countPrefixedFixedArrayPayload(0x44, count: 32),
+            Self.fixedArrayPayload(0x44, count: 33)
+        ] {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+                    Self.recursiveSpendBundleWithProofPublicInputsHash(replacement)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    .invalidArchive("bundle.proof_public_inputs_hash")
+                )
+            }
+        }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
                 Self.recursiveSpendBundleWithZeroProofPublicInputsHash()
@@ -297,56 +417,56 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     fieldIndex: 2,
                     replacement: Self.zeroNumericPayload()
                 ),
-                .invalidField("amount")
+                .invalidField("bundle.accumulator.current_note.amount")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 0,
                     replacement: Self.fixedArrayPayload(0x04, count: 31)
                 ),
-                .invalidArchive("fixedArray")
+                .invalidArchive("bundle.accumulator.current_note.note_commitment")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 0,
                     replacement: Self.fixedArrayPayload(0x04, count: 33)
                 ),
-                .invalidArchive("fixedArray")
+                .invalidArchive("bundle.accumulator.current_note.note_commitment")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 0,
                     replacement: Self.countPrefixedFixedArrayPayload(0x04, count: 32)
                 ),
-                .invalidArchive("fixedArray")
+                .invalidArchive("bundle.accumulator.current_note.note_commitment")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 1,
                     replacement: Self.fixedArrayPayload(0x05, count: 31)
                 ),
-                .invalidArchive("fixedArray")
+                .invalidArchive("bundle.accumulator.current_note.spend_nullifier")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 1,
                     replacement: Self.fixedArrayPayload(0x05, count: 33)
                 ),
-                .invalidArchive("fixedArray")
+                .invalidArchive("bundle.accumulator.current_note.spend_nullifier")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 1,
                     replacement: Self.countPrefixedFixedArrayPayload(0x05, count: 32)
                 ),
-                .invalidArchive("fixedArray")
+                .invalidArchive("bundle.accumulator.current_note.spend_nullifier")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 2,
                     replacement: Self.numericPayload(Data([1]), scale: 1)
                 ),
-                .invalidField("numeric")
+                .invalidField("bundle.accumulator.current_note.amount")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
@@ -355,7 +475,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                         Self.countPrefixedFixedArrayPayload(0x16, count: 4)
                     )
                 ),
-                .invalidArchive("field")
+                .invalidArchive("bundle.accumulator.current_note.amount.scale")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
@@ -369,21 +489,21 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     fieldIndex: 2,
                     replacement: Self.numericPayload(Data([0xff]))
                 ),
-                .invalidField("amount")
+                .invalidField("bundle.accumulator.current_note.amount")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 2,
                     replacement: Self.numericPayload(Data(repeating: 0, count: 16) + Data([1]))
                 ),
-                .invalidField("amount")
+                .invalidField("bundle.accumulator.current_note.amount")
             ),
             (
                 try Self.recursiveSpendBundleWithCurrentNoteField(
                     fieldIndex: 2,
                     replacement: Self.numericPayloadWithTrailingField()
                 ),
-                .invalidArchive("field")
+                .invalidArchive("bundle.accumulator.current_note.amount")
             ),
         ]
         for (archive, expectedError) in malformedCurrentNotes {
@@ -410,7 +530,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
-                .invalidArchive("field")
+                .invalidArchive("bundle.accumulator.current_note")
             )
         }
         XCTAssertThrowsError(
@@ -440,44 +560,79 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             (3, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.initial_root")),
             (4, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.final_root")),
             (4, initBundle.initialRoot, .invalidArchive("bundle.accumulator.final_root")),
-            (2, Self.encodeFields(Array(repeating: Data([0x01]), count: 15), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
-            (2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive("fixedArray")),
-            (2, Self.encodeFields(Array(repeating: Data([0x01]), count: 17), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
-            (3, Self.encodeFields(Array(repeating: Data([0x02]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
-            (3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive("fixedArray")),
-            (3, Self.encodeFields(Array(repeating: Data([0x02]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
-            (4, Self.encodeFields(Array(repeating: Data([0x03]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
-            (4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive("fixedArray")),
-            (4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive("fixedArray")),
+            (2, Self.encodeFields(Array(repeating: Data([0x01]), count: 15), flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.asset")),
+            (2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive("bundle.accumulator.asset")),
+            (2, Self.encodeFields(Array(repeating: Data([0x01]), count: 17), flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.asset")),
+            (3, Self.encodeFields(Array(repeating: Data([0x02]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.initial_root")),
+            (3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive("bundle.accumulator.initial_root")),
+            (3, Self.encodeFields(Array(repeating: Data([0x02]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.initial_root")),
+            (4, Self.encodeFields(Array(repeating: Data([0x03]), count: 31), flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.final_root")),
+            (4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive("bundle.accumulator.final_root")),
+            (4, Self.encodeFields(Array(repeating: Data([0x03]), count: 33), flags: NoritoHeader.compactLen), .invalidArchive("bundle.accumulator.final_root")),
             (6, Data([0, 0, 0, 0]), .invalidArchive("bundle.accumulator.hop_count")),
             (6, Self.countPrefixedFixedArrayPayload(0x06, count: 4), .invalidArchive("bundle.accumulator.hop_count")),
             (6, Data([65, 0, 0, 0]), .invalidArchive("bundle.accumulator.hop_count")),
             (7, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.lineage_digest")),
-            (7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("fixedArray")),
-            (7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("fixedArray")),
-            (7, Self.fixedArrayPayload(0x07, count: 33), .invalidArchive("fixedArray")),
+            (7, Self.fixedArrayPayload(0x07, count: 31), .invalidArchive("bundle.accumulator.lineage_digest")),
+            (7, Self.countPrefixedFixedArrayPayload(0x07, count: 32), .invalidArchive("bundle.accumulator.lineage_digest")),
+            (7, Self.fixedArrayPayload(0x07, count: 33), .invalidArchive("bundle.accumulator.lineage_digest")),
             (8, Data(repeating: 0x7d, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
             (8, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
+            (8, Self.fixedArrayPayload(0x08, count: 31), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
+            (8, Self.countPrefixedFixedArrayPayload(0x08, count: 32), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
+            (8, Self.fixedArrayPayload(0x08, count: 33), .invalidArchive("bundle.accumulator.aggregation_transcript_digest")),
             (9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest")),
+            (9, Self.fixedArrayPayload(0x09, count: 31), .invalidArchive("bundle.accumulator.nullifier_digest")),
+            (9, Self.countPrefixedFixedArrayPayload(0x09, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest")),
+            (9, Self.fixedArrayPayload(0x09, count: 33), .invalidArchive("bundle.accumulator.nullifier_digest")),
             (10, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest")),
+            (10, Self.fixedArrayPayload(0x0a, count: 31), .invalidArchive("bundle.accumulator.output_commitment_digest")),
+            (10, Self.countPrefixedFixedArrayPayload(0x0a, count: 32), .invalidArchive("bundle.accumulator.output_commitment_digest")),
+            (10, Self.fixedArrayPayload(0x0a, count: 33), .invalidArchive("bundle.accumulator.output_commitment_digest")),
             (11, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fold_digest")),
+            (11, Self.fixedArrayPayload(0x0b, count: 31), .invalidArchive("bundle.accumulator.fold_digest")),
+            (11, Self.countPrefixedFixedArrayPayload(0x0b, count: 32), .invalidArchive("bundle.accumulator.fold_digest")),
+            (11, Self.fixedArrayPayload(0x0b, count: 33), .invalidArchive("bundle.accumulator.fold_digest")),
             (12, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest")),
+            (12, Self.fixedArrayPayload(0x0c, count: 31), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest")),
+            (12, Self.countPrefixedFixedArrayPayload(0x0c, count: 32), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest")),
+            (12, Self.fixedArrayPayload(0x0c, count: 33), .invalidArchive("bundle.accumulator.recursive_proof_chain_digest")),
             (13, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest")),
+            (13, Self.fixedArrayPayload(0x0d, count: 31), .invalidArchive("bundle.accumulator.transition_profile_binding_digest")),
+            (13, Self.countPrefixedFixedArrayPayload(0x0d, count: 32), .invalidArchive("bundle.accumulator.transition_profile_binding_digest")),
+            (13, Self.fixedArrayPayload(0x0d, count: 33), .invalidArchive("bundle.accumulator.transition_profile_binding_digest")),
             (14, Data(repeating: 0x7e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest")),
-            (14, Self.fixedArrayPayload(0x0e, count: 31), .invalidArchive("fixedArray")),
-            (14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("fixedArray")),
-            (14, Self.fixedArrayPayload(0x0e, count: 33), .invalidArchive("fixedArray")),
+            (14, Self.fixedArrayPayload(0x0e, count: 31), .invalidArchive("bundle.accumulator.append_opening_preflight_digest")),
+            (14, Self.countPrefixedFixedArrayPayload(0x0e, count: 32), .invalidArchive("bundle.accumulator.append_opening_preflight_digest")),
+            (14, Self.fixedArrayPayload(0x0e, count: 33), .invalidArchive("bundle.accumulator.append_opening_preflight_digest")),
             (15, Data(repeating: 0x7f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest")),
+            (15, Self.fixedArrayPayload(0x0f, count: 31), .invalidArchive("bundle.accumulator.append_boundary_digest")),
+            (15, Self.countPrefixedFixedArrayPayload(0x0f, count: 32), .invalidArchive("bundle.accumulator.append_boundary_digest")),
+            (15, Self.fixedArrayPayload(0x0f, count: 33), .invalidArchive("bundle.accumulator.append_boundary_digest")),
             (16, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint")),
+            (16, Self.fixedArrayPayload(0x10, count: 31), .invalidArchive("bundle.accumulator.verifier_params_fingerprint")),
+            (16, Self.countPrefixedFixedArrayPayload(0x10, count: 32), .invalidArchive("bundle.accumulator.verifier_params_fingerprint")),
+            (16, Self.fixedArrayPayload(0x10, count: 33), .invalidArchive("bundle.accumulator.verifier_params_fingerprint")),
             (17, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest")),
+            (17, Self.fixedArrayPayload(0x11, count: 31), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest")),
+            (17, Self.countPrefixedFixedArrayPayload(0x11, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest")),
+            (17, Self.fixedArrayPayload(0x11, count: 33), .invalidArchive("bundle.accumulator.fixed_window_table_schedule_digest")),
             (18, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest")),
+            (18, Self.fixedArrayPayload(0x12, count: 31), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest")),
+            (18, Self.countPrefixedFixedArrayPayload(0x12, count: 32), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest")),
+            (18, Self.fixedArrayPayload(0x12, count: 33), .invalidArchive("bundle.accumulator.fixed_window_shared_table_manifest_digest")),
             (19, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest")),
+            (19, Self.fixedArrayPayload(0x13, count: 31), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest")),
+            (19, Self.countPrefixedFixedArrayPayload(0x13, count: 32), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest")),
+            (19, Self.fixedArrayPayload(0x13, count: 33), .invalidArchive("bundle.accumulator.fixed_window_table_base_digest")),
             (20, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest")),
-            (20, Self.fixedArrayPayload(0x14, count: 31), .invalidArchive("fixedArray")),
-            (20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("fixedArray")),
-            (20, Self.fixedArrayPayload(0x14, count: 33), .invalidArchive("fixedArray")),
+            (20, Self.fixedArrayPayload(0x14, count: 31), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest")),
+            (20, Self.countPrefixedFixedArrayPayload(0x14, count: 32), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest")),
+            (20, Self.fixedArrayPayload(0x14, count: 33), .invalidArchive("bundle.accumulator.verifier_witness_batch_digest")),
             (21, Data([3, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len")),
             (21, Self.countPrefixedFixedArrayPayload(0x15, count: 4), .invalidArchive("bundle.accumulator.verifier_opening_len")),
+            (21, Data([2, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len")),
+            (21, Data([2, 0, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len")),
         ]
         for (fieldIndex, replacement, expectedError) in malformedAccumulatorFields {
             XCTAssertThrowsError(
@@ -599,7 +754,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             redeemArchive,
             schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
         )
-        XCTAssertEqual(redeemFields.count, 8)
+        XCTAssertEqual(redeemFields.count, 9)
         XCTAssertEqual(
             try Self.compactPayload(redeemBundle, schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName),
             redeemFields[0]
@@ -621,6 +776,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             try Self.optionSomePayload(redeemFields[6])
         )
         XCTAssertEqual(UInt64(10), try Self.readUInt64Payload(Self.optionSomePayload(redeemFields[7])))
+        XCTAssertEqual([], try Self.sequencePayloads(redeemFields[8]))
 
         let exactRedeemFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
@@ -634,7 +790,7 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ),
             schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
         )
-        XCTAssertEqual(exactRedeemFields.count, 8)
+        XCTAssertEqual(exactRedeemFields.count, 9)
         try Self.assertOptionNone(exactRedeemFields[4])
         try Self.assertOptionNone(exactRedeemFields[5])
         XCTAssertEqual(
@@ -645,6 +801,31 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             try Self.optionSomePayload(exactRedeemFields[6])
         )
         try Self.assertOptionNone(exactRedeemFields[7])
+        XCTAssertEqual([], try Self.sequencePayloads(exactRedeemFields[8]))
+
+        let pluralRedeemFields = try Self.requestFields(
+            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
+                try KagemushaRecursiveSpendRedeemRequest(
+                    bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                    recipient: try Self.sampleRecipient(),
+                    publicAmount: "7",
+                    redeemProof: redeemProof,
+                    lineageVerifierRecords: [lineageVerifierRecord]
+                )
+            ),
+            schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
+        )
+        XCTAssertEqual(pluralRedeemFields.count, 9)
+        try Self.assertOptionNone(pluralRedeemFields[6])
+        XCTAssertEqual(
+            [
+                try Self.compactPayload(
+                    lineageVerifierRecord.recordBytes,
+                    schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName
+                )
+            ],
+            try Self.sequencePayloads(pluralRedeemFields[8])
+        )
 
         let verifyFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(
@@ -674,6 +855,19 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
     }
 
     func testTypedRequestsRejectMalformedInputsBeforeNativeDispatch() throws {
+        func assertTypedRequestInvalidField(
+            _ expectedField: String,
+            _ makeRequest: () throws -> Void
+        ) {
+            XCTAssertThrowsError(try makeRequest()) { error in
+                guard case let KagemushaRecursiveSpendRequestCodecError.invalidField(field) = error else {
+                    XCTFail("Expected invalidField(\(expectedField)), got \(error)")
+                    return
+                }
+                XCTAssertEqual(field, expectedField)
+            }
+        }
+
         for amount in [
             "",
             "0",
@@ -691,15 +885,15 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             Self.u128MaxPlusOne,
             Self.u128TooManyDigits
         ] {
-            XCTAssertThrowsError(
-                try KagemushaRecursiveSpendableNoteDescriptor(
+            assertTypedRequestInvalidField("amount") {
+                _ = try KagemushaRecursiveSpendableNoteDescriptor(
                     noteCommitment: Data(repeating: 4, count: 32),
                     spendNullifier: Data(repeating: 5, count: 32),
                     amount: amount
                 )
-            )
-            XCTAssertThrowsError(
-                try KagemushaRecursiveSpendRedeemRequest(
+            }
+            assertTypedRequestInvalidField("publicAmount") {
+                _ = try KagemushaRecursiveSpendRedeemRequest(
                     bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
                     recipient: Self.sampleRecipient(),
                     publicAmount: amount,
@@ -707,22 +901,36 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                         schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
                     )
                 )
-            )
+            }
         }
-        XCTAssertThrowsError(
-            try KagemushaRecursiveSpendableNoteDescriptor(
+        assertTypedRequestInvalidField("noteCommitment") {
+            _ = try KagemushaRecursiveSpendableNoteDescriptor(
                 noteCommitment: Data(repeating: 1, count: 31),
                 spendNullifier: Data(repeating: 2, count: 32),
                 amount: "1"
             )
-        )
-        XCTAssertThrowsError(
-            try KagemushaRecursiveSpendableNoteDescriptor(
+        }
+        assertTypedRequestInvalidField("noteCommitment") {
+            _ = try KagemushaRecursiveSpendableNoteDescriptor(
+                noteCommitment: Data(repeating: 0, count: 32),
+                spendNullifier: Data(repeating: 2, count: 32),
+                amount: "1"
+            )
+        }
+        assertTypedRequestInvalidField("spendNullifier") {
+            _ = try KagemushaRecursiveSpendableNoteDescriptor(
+                noteCommitment: Data(repeating: 3, count: 32),
+                spendNullifier: Data(repeating: 0, count: 32),
+                amount: "1"
+            )
+        }
+        assertTypedRequestInvalidField("spendNullifier") {
+            _ = try KagemushaRecursiveSpendableNoteDescriptor(
                 noteCommitment: Data(repeating: 3, count: 32),
                 spendNullifier: Data(repeating: 3, count: 32),
                 amount: "1"
             )
-        )
+        }
         func assertRedeemRequestInvalidField(
             _ expectedField: String,
             _ makeRequest: () throws -> KagemushaRecursiveSpendRedeemRequest
@@ -796,6 +1004,18 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 redeemProof: Self.syntheticArchive(
                     schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
                 )
+            )
+        }
+        let reservedMissingRecordMasksMalformedWitness = Data([0])
+        assertRedeemRequestInvalidField("lineageVerifierRecord") {
+            try KagemushaRecursiveSpendRedeemRequest(
+                bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                recipient: Self.sampleRecipient(),
+                publicAmount: "7",
+                redeemProof: Self.syntheticArchive(
+                    schema: KagemushaRecursiveSpendRequestCodecs.proofAttachmentWireName
+                ),
+                lineageWitness: reservedMissingRecordMasksMalformedWitness
             )
         }
         XCTAssertThrowsError(
@@ -920,6 +1140,9 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             }
         )
         let recordBundle = Self.syntheticRecordBundleArchive()
+        let recordBundleWithOverLimitStepCount = Self.syntheticRecordBundleArchive(
+            stepsPayload: Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)
+        )
         let pallasOpenEnvelopes = Self.syntheticPallasOpenEnvelopesArchive()
         let (lineageVerifierKey, lineageProvingKeyArchive) = try Self.sharedInitLineageKeyMaterial()
         XCTAssertThrowsError(
@@ -930,7 +1153,23 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: nil,
                 lineageProvingKeyArchive: nil
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageVerifierKey")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundleWithOverLimitStepCount,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageVerifierKey: lineageVerifierKey,
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, .invalidArchive("recordBundle.steps"))
+        }
 
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendInitRequest(
@@ -1049,7 +1288,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: lineageVerifierKey,
                 lineageProvingKeyArchive: lineageProvingKeyArchive
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("pallasOpenEnvelopes")
+            )
+        }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendInitRequest(
                 recordBundle: recordBundle,
@@ -1058,7 +1302,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: lineageVerifierKey,
                 lineageProvingKeyArchive: lineageProvingKeyArchive
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("pallasOpenEnvelopes")
+            )
+        }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendInitRequest(
                 recordBundle: recordBundle,
@@ -1069,7 +1318,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: lineageVerifierKey,
                 lineageProvingKeyArchive: lineageProvingKeyArchive
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("pallasOpenEnvelopes.domain_tag")
+            )
+        }
         for transcriptLabel in ["", String(repeating: "\u{00e9}", count: 65)] {
             XCTAssertThrowsError(
                 try KagemushaRecursiveSpendInitRequest(
@@ -1180,6 +1434,38 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 )
             }
         }
+        let malformedPallasSequenceArchives: [(String, Data)] = [
+            (
+                "params",
+                Self.syntheticPallasOpenEnvelopesArchive(
+                    paramsGSequencePayload: Self.uint64Payload(5)
+                )
+            ),
+            (
+                "proof",
+                Self.syntheticPallasOpenEnvelopesArchive(
+                    proofLSequencePayload: Self.uint64Payload(3)
+                )
+            )
+        ]
+        for (sequenceField, archive) in malformedPallasSequenceArchives {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendInitRequest(
+                    recordBundle: recordBundle,
+                    pallasOpenEnvelopes: archive,
+                    currentNote: Self.sampleNote(),
+                    lineageVerifierKey: lineageVerifierKey,
+                    lineageProvingKeyArchive: lineageProvingKeyArchive
+                ),
+                sequenceField
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    .invalidArchive("pallasOpenEnvelopes.\(sequenceField)"),
+                    sequenceField
+                )
+            }
+        }
 
         var corrupted = Self.syntheticPallasOpenEnvelopesArchive()
         corrupted[corrupted.count - 1] ^= 0x01
@@ -1191,16 +1477,31 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: lineageVerifierKey,
                 lineageProvingKeyArchive: lineageProvingKeyArchive
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("pallasOpenEnvelopes")
+            )
+        }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendVerifyRequest(
                 bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "verify_result")
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
+            )
+        }
 
         var tamperedBundle = try Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle")
         tamperedBundle[tamperedBundle.count - 1] ^= 0x01
-        XCTAssertThrowsError(try KagemushaRecursiveSpendRequestCodecs.decodeBundle(tamperedBundle))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendRequestCodecs.decodeBundle(tamperedBundle)) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("bundle")
+            )
+        }
 
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendAppendRequest(
@@ -1214,7 +1515,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: Data(repeating: 0x6b, count: 64),
                 lineageProvingKeyArchive: Self.syntheticArchive(schema: "test.LineageProvingKeyArchive")
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("previousProofOpenEnvelopes")
+            )
+        }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendAppendRequest(
                 previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
@@ -1227,7 +1533,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 lineageVerifierKey: Data(repeating: 0x6b, count: 64),
                 lineageProvingKeyArchive: Self.syntheticArchive(schema: "test.LineageProvingKeyArchive")
             )
-        )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidArchive("previousProofOpenEnvelopes")
+            )
+        }
         for transcriptLabel in ["", String(repeating: "\u{00e9}", count: 65)] {
             XCTAssertThrowsError(
                 try KagemushaRecursiveSpendAppendRequest(
@@ -1269,6 +1580,28 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                     error as? KagemushaRecursiveSpendRequestCodecError,
                     .invalidArchive("previousProofOpenEnvelopes.\(metadataField)"),
                     metadataField
+                )
+            }
+        }
+        for (sequenceField, archive) in malformedPallasSequenceArchives {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendAppendRequest(
+                    previousBundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+                    recordBundle: recordBundle,
+                    pallasOpenEnvelopes: pallasOpenEnvelopes,
+                    currentNote: Self.sampleNote(seed: 0x41),
+                    outputProofCircuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+                    previousLineageVerifierRecord: Self.sampleVerifierRecord(),
+                    previousProofOpenEnvelopes: archive,
+                    lineageVerifierKey: Data(repeating: 0x6b, count: 64),
+                    lineageProvingKeyArchive: Self.syntheticArchive(schema: "test.LineageProvingKeyArchive")
+                ),
+                sequenceField
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    .invalidArchive("previousProofOpenEnvelopes.\(sequenceField)"),
+                    sequenceField
                 )
             }
         }
@@ -1354,6 +1687,50 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
     }
 
+    private static func recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+        _ nullifiers: [Data]
+    ) throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var accumulatorFields = try fieldPayloads(bundleFields[0])
+        accumulatorFields[5] = encodeSequence(nullifiers)
+        bundleFields[0] = encodeFields(accumulatorFields, flags: NoritoHeader.compactLen)
+        var proofFields = try fieldPayloads(bundleFields[1])
+        var proofBoxFields = try fieldPayloads(proofFields[3])
+        proofBoxFields[1] = byteVecPayload(Data())
+        proofFields[3] = encodeFields(proofBoxFields, flags: NoritoHeader.compactLen)
+        bundleFields[1] = encodeFields(proofFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+        _ nullifiers: [Data]
+    ) throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var accumulatorFields = try fieldPayloads(bundleFields[0])
+        accumulatorFields[5] = encodeSequence(nullifiers)
+        accumulatorFields.append(
+            noritoString("ignored-extra-accumulator-field", flags: NoritoHeader.compactLen)
+        )
+        bundleFields[0] = encodeFields(accumulatorFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
     private static func recursiveSpendBundleWithTrailingBundleField() throws -> Data {
         let payload = try compactPayload(
             sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
@@ -1410,6 +1787,22 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 flags: NoritoHeader.compactLen
             )
         )
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
+            payload: encodeFields(fields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private static func recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(
+        _ count: UInt64
+    ) throws -> Data {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "lineage_witness_append_result"),
+            schema: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName
+        )
+        var fields = try fieldPayloads(payload)
+        fields[3] = uint64Payload(count)
         return noritoEncode(
             typeName: KagemushaRecursiveSpendRequestCodecs.lineageWitnessWireName,
             payload: encodeFields(fields, flags: NoritoHeader.compactLen),
@@ -1861,6 +2254,24 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
     }
 
+    private static func recursiveSpendBundleWithProofPublicInputsHash(_ replacement: Data) throws
+        -> Data
+    {
+        let payload = try compactPayload(
+            sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            schema: KagemushaRecursiveSpendRequestCodecs.bundleWireName
+        )
+        var bundleFields = try fieldPayloads(payload)
+        var proofFields = try fieldPayloads(bundleFields[1])
+        proofFields[2] = replacement
+        bundleFields[1] = encodeFields(proofFields, flags: NoritoHeader.compactLen)
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.bundleWireName,
+            payload: encodeFields(bundleFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
+    }
+
     private static func recursiveSpendBundleWithZeroProofPublicInputsHash() throws -> Data {
         let payload = try compactPayload(
             sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
@@ -2080,22 +2491,28 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
     }
 
-    private static func syntheticRecordBundleArchive(hopCount: Int = 1) -> Data {
-        precondition(hopCount >= 1)
+    private static func syntheticRecordBundleArchive(hopCount: Int = 1, stepsPayload: Data? = nil) -> Data {
+        precondition(hopCount >= 1 || stepsPayload != nil)
         let stepPayload = encodeFields(
             (0..<6).map { Data([UInt8(0xa0 + $0)]) },
             flags: NoritoHeader.compactLen
         )
-        var stepsPayload = Data()
-        appendUInt64LE(UInt64(hopCount), to: &stepsPayload)
-        for _ in 0..<hopCount {
-            stepsPayload.append(noritoField(stepPayload, flags: NoritoHeader.compactLen))
+        let resolvedStepsPayload: Data
+        if let stepsPayload {
+            resolvedStepsPayload = stepsPayload
+        } else {
+            var builtStepsPayload = Data()
+            appendUInt64LE(UInt64(hopCount), to: &builtStepsPayload)
+            for _ in 0..<hopCount {
+                builtStepsPayload.append(noritoField(stepPayload, flags: NoritoHeader.compactLen))
+            }
+            resolvedStepsPayload = builtStepsPayload
         }
         let bundlePayload = encodeFields(
             [
                 Data([0x41]),
                 Data([0x42]),
-                stepsPayload
+                resolvedStepsPayload
             ],
             flags: NoritoHeader.compactLen
         )
@@ -2121,7 +2538,11 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         domainTagPayload: Data? = nil,
         vkCommitmentOptionPayload: Data? = nil,
         publicInputsSchemaHashOptionPayload: Data? = nil,
-        domainTagOptionPayload: Data? = nil
+        domainTagOptionPayload: Data? = nil,
+        paramsGSequencePayload: Data? = nil,
+        paramsHSequencePayload: Data? = nil,
+        proofLSequencePayload: Data? = nil,
+        proofRSequencePayload: Data? = nil
     ) -> Data {
         let envelope = syntheticPallasOpenEnvelopePayload(
             includeDomainTag: includeDomainTag,
@@ -2131,7 +2552,11 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             domainTagPayload: domainTagPayload,
             vkCommitmentOptionPayload: vkCommitmentOptionPayload,
             publicInputsSchemaHashOptionPayload: publicInputsSchemaHashOptionPayload,
-            domainTagOptionPayload: domainTagOptionPayload
+            domainTagOptionPayload: domainTagOptionPayload,
+            paramsGSequencePayload: paramsGSequencePayload,
+            paramsHSequencePayload: paramsHSequencePayload,
+            proofLSequencePayload: proofLSequencePayload,
+            proofRSequencePayload: proofRSequencePayload
         )
         var payload = Data()
         appendUInt64LE(UInt64(count), to: &payload)
@@ -2158,7 +2583,11 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         domainTagPayload: Data?,
         vkCommitmentOptionPayload: Data?,
         publicInputsSchemaHashOptionPayload: Data?,
-        domainTagOptionPayload: Data?
+        domainTagOptionPayload: Data?,
+        paramsGSequencePayload: Data?,
+        paramsHSequencePayload: Data?,
+        proofLSequencePayload: Data?,
+        proofRSequencePayload: Data?
     ) -> Data {
         let n: UInt32 = 4
         let params = encodeFields(
@@ -2166,8 +2595,8 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 uint16Payload(1),
                 uint16Payload(1),
                 uint32Payload(n),
-                fixed32SequencePayload(count: Int(n), seed: 0x10),
-                fixed32SequencePayload(count: Int(n), seed: 0x20),
+                paramsGSequencePayload ?? fixed32SequencePayload(count: Int(n), seed: 0x10),
+                paramsHSequencePayload ?? fixed32SequencePayload(count: Int(n), seed: 0x20),
                 fixed32(0x30)
             ],
             flags: NoritoHeader.compactLen
@@ -2186,8 +2615,8 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let proof = encodeFields(
             [
                 uint16Payload(1),
-                fixed32SequencePayload(count: 2, seed: 0x40),
-                fixed32SequencePayload(count: 2, seed: 0x50),
+                proofLSequencePayload ?? fixed32SequencePayload(count: 2, seed: 0x40),
+                proofRSequencePayload ?? fixed32SequencePayload(count: 2, seed: 0x50),
                 fixed32(0x60),
                 fixed32(0x61)
             ],
@@ -2328,6 +2757,12 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
     private static func uint32Payload(_ value: UInt32) -> Data {
         var payload = Data()
         appendUInt32LE(value, to: &payload)
+        return payload
+    }
+
+    private static func uint64Payload(_ value: UInt64) -> Data {
+        var payload = Data()
+        appendUInt64LE(value, to: &payload)
         return payload
     }
 

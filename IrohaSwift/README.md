@@ -790,7 +790,9 @@ same public-binding preflight before the native bridge returns a
 `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a
 matching active `lineage_verifier_record`, semantic bundles must omit it, and
 unsupported proof attachments are rejected as malformed requests rather than
-soft invalid proof results. Production init requests and
+soft invalid proof results. Decoded verify results expose both
+`lineageWitnessRequiredForRedeem` and the earlier `lineageWitnessRequired`
+alias for the same redeem decision. Production init requests and
 Reserved-lineage append-output requests must also include packaged lineage key
 artifacts in the raw Norito request: `lineage_verifier_key` and
 `lineage_proving_key_archive`. Missing artifacts are rejected before runtime key
@@ -798,6 +800,11 @@ generation. The
 previous bundle must already be Reserved-lineage before a Reserved-lineage
 append output is valid; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
+Swift typed redeem builders accept the legacy single `lineageVerifierRecord`
+path plus `lineageVerifierRecords` / raw `lineage_verifier_records` for
+additional Reserved-lineage verifier records. Use the plural field for
+multi-profile record-backed lineage witnesses, or place every Reserved-lineage
+verifier record there for vector-only callers.
 `normalizedAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId`
 helpers expose that defaulting rule for wallet-side preflight. The
 `recursivePreviousProofOpenEnvelopesRequiredCountV1` and

@@ -512,13 +512,23 @@ object OfflineJsonParser {
     }
 
     private fun asPresentAliasInt(value: Any?, path: String): Int {
-        val parsed = if (value is String) {
+        if (value is String) {
             check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact integer string" }
-            value.toLong()
-        } else {
-            JsonNumbers.asLong(value, path)
+            check(value.matches(Regex("[1-9][0-9]*"))) { "$path must be an exact integer string" }
+            val parsed = try {
+                BigInteger(value)
+            } catch (ex: NumberFormatException) {
+                throw IllegalStateException("$path must be an integer", ex)
+            }
+            check(parsed > BigInteger.ZERO) { "$path must be a positive integer" }
+            check(parsed <= BigInteger.valueOf(Int.MAX_VALUE.toLong())) {
+                "$path must fit in signed 32-bit range"
+            }
+            return parsed.toInt()
         }
-        check(parsed in Int.MIN_VALUE..Int.MAX_VALUE) { "$path is outside Int range" }
+        val parsed = JsonNumbers.asLong(value, path)
+        check(parsed > 0) { "$path must be a positive integer" }
+        check(parsed <= Int.MAX_VALUE.toLong()) { "$path must fit in signed 32-bit range" }
         return parsed.toInt()
     }
 

@@ -42,11 +42,63 @@ WALLET_ROLLBACK_REQUIRED = (
     "wallet integrity transcript rollback_rejection_passed must be true"
 )
 MAX_ADB_COMMAND_DISPLAY_CHARS = 240
+ADB_SERIAL_REDACTION = "<redacted-adb-serial>"
 DEFAULT_ADB_TIMEOUT_SECONDS = 120
-DISRUPTIVE_EXECUTABLE_NAMES = frozenset(("kill", "pkill", "killall"))
-DISRUPTIVE_COMMAND_TOKENS = frozenset(("kill-server", "reconnect", "disconnect"))
+DISRUPTIVE_EXECUTABLE_NAMES = frozenset(
+    ("halt", "kill", "killall", "pkill", "poweroff", "reboot", "shutdown")
+)
+DISRUPTIVE_COMMAND_TOKENS = frozenset(
+    (
+        "kill-server",
+        "reconnect",
+        "disconnect",
+        "reboot",
+        "root",
+        "unroot",
+        "remount",
+        "shutdown",
+        "poweroff",
+        "halt",
+        "uninstall",
+    )
+)
 DISRUPTIVE_TOKEN_SEQUENCES: tuple[tuple[str, ...], ...] = (
+    ("am", "kill"),
+    ("am", "kill-all"),
     ("am", "force-stop"),
+    ("cmd", "activity", "kill"),
+    ("cmd", "activity", "kill-all"),
+    ("cmd", "activity", "force-stop"),
+    ("cmd", "activity", "stop-app"),
+    ("pm", "clear"),
+    ("pm", "disable"),
+    ("pm", "disable-user"),
+    ("pm", "enable"),
+    ("pm", "grant"),
+    ("pm", "revoke"),
+    ("pm", "reset-permissions"),
+    ("pm", "suspend"),
+    ("pm", "unsuspend"),
+    ("cmd", "package", "clear"),
+    ("cmd", "package", "disable"),
+    ("cmd", "package", "disable-user"),
+    ("cmd", "package", "enable"),
+    ("cmd", "package", "grant"),
+    ("cmd", "package", "revoke"),
+    ("cmd", "package", "reset-permissions"),
+    ("cmd", "package", "suspend"),
+    ("cmd", "package", "unsuspend"),
+    ("appops", "set"),
+    ("appops", "reset"),
+    ("cmd", "appops", "set"),
+    ("cmd", "appops", "reset"),
+    ("emu", "kill"),
+    ("shell", "stop"),
+    ("shell", "start"),
+    ("setprop", "ctl.stop"),
+    ("setprop", "ctl.restart"),
+    ("setprop", "ctl.start"),
+    ("setprop", "sys.powerctl"),
 )
 
 DEVICE_FAMILY_MODEL_RULES: tuple[
@@ -89,8 +141,20 @@ def _json_dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
+def _is_adb_executable(command: Sequence[str]) -> bool:
+    if not command:
+        return False
+    executable = str(command[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return executable in {"adb", "adb.exe"}
+
+
 def _safe_adb_command_display(command: Sequence[str]) -> str:
-    rendered = " ".join(str(token) for token in command)
+    display_tokens = [str(token) for token in command]
+    if _is_adb_executable(display_tokens):
+        for index, token in enumerate(display_tokens[:-1]):
+            if token == "-s":
+                display_tokens[index + 1] = ADB_SERIAL_REDACTION
+    rendered = " ".join(display_tokens)
     if device_lab.SECRET_RE.search(rendered):
         return "<redacted-adb-command>"
     if device_lab._contains_control_character(rendered):

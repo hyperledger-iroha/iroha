@@ -19163,6 +19163,110 @@ def test_release_readiness_report_public_crypto_rejects_source_gate_transcript_r
     ) in errors
 
 
+def test_release_readiness_report_public_crypto_rejects_source_gate_template_replays_when_required_false_or_malformed() -> None:
+    """Public crypto source-gate template hashes must not hide behind flags."""
+
+    report = load_report_module()
+    all_lanes = report._load_all_lanes_module()
+    domain = report.ACTIVE_LAUNCH_DOMAIN
+    profile = all_lanes.LANE_PROFILES[domain]
+    template_hash = next(
+        iter(all_lanes._source_material_template_hashes(profile).values())
+    )
+    template_value = "0x" + template_hash.hex()
+    gate_field = report.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[domain]
+
+    cases = (
+        (
+            False,
+            "source_adapter_gate_required must be true for this domain",
+        ),
+        (
+            "true",
+            "source_adapter_gate_required must be boolean",
+        ),
+    )
+    for required, expected_flag_error in cases:
+        rows = public_crypto_rows_for_all_domains(report)
+        active_row = next(row for row in rows if row["domain"] == domain)
+        active_row["source_adapter_gate_required"] = required
+        active_row["source_adapter_gate_hash"] = template_value
+        active_row["source_adapter_gate_audit_hashes"][gate_field] = template_value
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+
+        assert (
+            f"readiness report cryptographic_evidence[0] {expected_flag_error}"
+        ) in errors
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            "source_adapter_gate_hash must be deployed gate evidence, "
+            "not built-in template material"
+        ) in errors
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            f"source_adapter_gate_audit_hashes {gate_field} must be deployed "
+            "audit evidence, not built-in template material"
+        ) in errors
+
+
+def test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_template_replay_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must suppress copied source-gate template crypto rows."""
+
+    report = load_report_module()
+    all_lanes = report._load_all_lanes_module()
+    domain = report.ACTIVE_LAUNCH_DOMAIN
+    profile = all_lanes.LANE_PROFILES[domain]
+    template_hash = next(
+        iter(all_lanes._source_material_template_hashes(profile).values())
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field = report.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[domain]
+    crypto_rows = public_crypto_rows_for_all_domains(report)
+    active_row = next(row for row in crypto_rows if row["domain"] == domain)
+    active_row["source_adapter_gate_required"] = "true"
+    active_row["source_adapter_gate_hash"] = forged_hash
+    active_row["source_adapter_gate_audit_hashes"][gate_field] = forged_hash
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "cryptographic_evidence": crypto_rows,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "cryptographic_evidence" not in payload
+    assert (
+        "readiness report cryptographic_evidence[0] "
+        "source_adapter_gate_required must be boolean"
+    ) in blockers
+    assert (
+        "readiness report cryptographic_evidence[0] "
+        "source_adapter_gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in blockers
+    assert (
+        "readiness report cryptographic_evidence[0] "
+        f"source_adapter_gate_audit_hashes {gate_field} must be deployed "
+        "audit evidence, not built-in template material"
+    ) in blockers
+    assert forged_hash not in captured.out
+    assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_drift_without_leaking(
     tmp_path: Path,
     monkeypatch,

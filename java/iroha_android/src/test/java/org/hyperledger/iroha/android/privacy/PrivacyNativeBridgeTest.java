@@ -391,6 +391,14 @@ public final class PrivacyNativeBridgeTest {
     assertIllegalArgument(
         () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[0]),
         "proof must not be empty");
+    final byte[] oversizedProof =
+        new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1];
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(oversizedProof),
+        "proof must not exceed 33554432 bytes");
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(oversizedProof),
+        "proof must not exceed 33554432 bytes");
     assertIllegalArgument(
         () ->
             PrivacyConfidentialWitness.encodeTransferWitness(
