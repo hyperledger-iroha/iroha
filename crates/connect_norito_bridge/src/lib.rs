@@ -10593,8 +10593,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn bridge_abi_version_advertises_sorafs_pop_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 11);
+    fn bridge_abi_version_advertises_sorafs_hedging_validation() {
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 12);
     }
 
     #[test]

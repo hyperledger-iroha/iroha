@@ -10228,7 +10228,9 @@ mod tests {
         ChainId, Registrable,
         block::{BlockSignature, SignedBlock},
         metadata::Metadata,
-        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        nexus::{
+            LaneId, PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+        },
         peer::{Peer, PeerId},
         prelude::{Account, AccountId, Domain, EventBox, Level, Log, TransactionBuilder},
         transaction::SignedTransaction,
@@ -10311,6 +10313,72 @@ mod tests {
         assert!(records.contains_key(&valid_peer));
         assert!(!records.contains_key(&mismatched_lane_peer));
         assert!(!records.contains_key(&mismatched_account_peer));
+    }
+
+    #[test]
+    fn collect_candidate_profiles_ignores_mismatched_stake_share_rows() {
+        let world = World::default();
+        let validator_keypair = KeyPair::try_random().expect("validator test keypair");
+        let staker_keypair = KeyPair::try_random().expect("staker test keypair");
+        let mismatched_staker_keypair =
+            KeyPair::try_random().expect("mismatched staker test keypair");
+        let validator = AccountId::new(validator_keypair.public_key().clone());
+        let staker = AccountId::new(staker_keypair.public_key().clone());
+        let mismatched_staker = AccountId::new(mismatched_staker_keypair.public_key().clone());
+        let peer = PeerId::new(validator_keypair.public_key().clone());
+        let lane_id = LaneId::new(6);
+
+        {
+            let mut block = world.public_lane_validators.block();
+            block.insert(
+                (lane_id, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id,
+                    validator: validator.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: Numeric::new(30, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: Some(1),
+                    activation_height: Some(1),
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+        {
+            let mut block = world.public_lane_stake_shares.block();
+            block.insert(
+                (lane_id, validator.clone(), staker.clone()),
+                PublicLaneStakeShare {
+                    lane_id,
+                    validator: validator.clone(),
+                    staker: staker.clone(),
+                    bonded: Numeric::new(10, 0),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Metadata::default(),
+                },
+            );
+            block.insert(
+                (lane_id, validator.clone(), mismatched_staker.clone()),
+                PublicLaneStakeShare {
+                    lane_id: LaneId::new(7),
+                    validator: validator.clone(),
+                    staker: mismatched_staker,
+                    bonded: Numeric::new(20, 0),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Metadata::default(),
+                },
+            );
+            block.commit();
+        }
+
+        let profiles = collect_candidate_profiles_from_world(&world.view(), &[peer]);
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].stake_shares.len(), 1);
+        assert_eq!(profiles[0].stake_shares[0].staker, staker);
     }
 
     #[test]
