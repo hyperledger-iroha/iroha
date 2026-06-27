@@ -2615,15 +2615,34 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    private func inferredAuthorityDiscriminant(_ authority: String) -> UInt16? {
-        inferredAccountAddressDiscriminant(authority)
+    func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16 {
+        guard !authority.isEmpty,
+              authority.trimmingCharacters(in: .whitespacesAndNewlines) == authority,
+              authority.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              !authority.contains("@"),
+              !authority.contains("#"),
+              !authority.contains("$") else {
+            throw NativeBridgeError.authority
+        }
+        do {
+            let prefix = try AccountAddress.inspectI105NetworkPrefix(authority, expectedPrefix: nil).chainDiscriminant
+            let address = try AccountAddress.parseEncodedSwiftOnly(authority, expectedPrefix: prefix)
+            guard try address.toI105(networkPrefix: prefix) == authority else {
+                throw NativeBridgeError.authority
+            }
+            return prefix
+        } catch let error as NativeBridgeError {
+            throw error
+        } catch {
+            throw NativeBridgeError.authority
+        }
     }
 
     private func withAuthorityChainDiscriminant<R>(
         authority: String,
         _ body: () throws -> R
     ) throws -> R {
-        try withChainDiscriminant(inferredAuthorityDiscriminant(authority), body)
+        try withChainDiscriminant(validatedAuthorityChainDiscriminant(authority: authority), body)
     }
 
     private init() {
@@ -4550,27 +4569,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return AccountAddressError.fromBridgePayload(payload)
     }
     #endif
-
-    private func inferredAccountAddressDiscriminant(_ literal: String) -> UInt16? {
-        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("sora") {
-            return 753
-        }
-        if trimmed.hasPrefix("test") {
-            return 0x0171
-        }
-        if trimmed.hasPrefix("dev") {
-            return 0
-        }
-        guard trimmed.hasPrefix("n") else {
-            return nil
-        }
-        let digits = trimmed.dropFirst().prefix { $0.isASCII && $0.isNumber }
-        guard !digits.isEmpty else {
-            return nil
-        }
-        return UInt16(String(digits))
-    }
 
     func parseAccountAddress(
         literal: String,

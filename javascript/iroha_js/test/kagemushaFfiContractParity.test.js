@@ -1585,12 +1585,44 @@ test("Kagemusha Swift instruction transaction builder stays wired", () => {
     "Swift Kagemusha instruction transaction builder",
   );
   assertContainsAll(
+    source("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"),
+    [
+      "func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+      "authority.trimmingCharacters(in: .whitespacesAndNewlines) == authority",
+      "authority.rangeOfCharacter(from: .whitespacesAndNewlines) == nil",
+      '!authority.contains("@")',
+      '!authority.contains("#")',
+      '!authority.contains("$")',
+      "AccountAddress.inspectI105NetworkPrefix(authority, expectedPrefix: nil).chainDiscriminant",
+      "AccountAddress.parseEncodedSwiftOnly(authority, expectedPrefix: prefix)",
+      "address.toI105(networkPrefix: prefix) == authority",
+      "try withChainDiscriminant(validatedAuthorityChainDiscriminant(authority: authority), body)",
+    ],
+    "Swift native bridge exact authority discriminant",
+  );
+  assertContainsAll(
     source("IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"),
     [
       "testBuildRecursiveRedeemInstructionTransactionWrapsNativeInstructionArchive",
       "testBuildKagemushaTransferInstructionTransactionUsesTransferWireName",
       "testKagemushaArchiveValidationAcceptsSharedAbi7Fixtures",
       "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+      "testKagemushaInstructionRequestsPreserveDataAfterCallerMutation",
+      "testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem",
+      "let expectedInstructionArchive = instructionArchive",
+      "instructionArchive[0] = 0",
+      "let expectedRedeemRequestArchive = redeemRequestArchive",
+      "redeemRequestArchive[0] = 0",
+      "nativeInstructionArchive[0] = 0",
+      "XCTAssertEqual(redeemedRequests, [expectedRedeemRequestArchive])",
+      'XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))',
+      '.malformedAccountId(field: "authority", value: " \\(authority) ")',
+      "XCTAssertEqual(redeemedRequests, [])",
+      "testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference",
+      "validatedAuthorityChainDiscriminant(authority: authority)",
+      "AccountId.defaultNetworkPrefix",
+      '"\\(authority)@banka.dataspace"',
+      "XCTAssertEqual(error as? NativeBridgeError, .authority)",
       "testKagemushaInstructionTransactionRejectsAdversarialArchives",
       "testKagemushaRecursiveRedeemTransactionRejectsMalformedRequestBeforeNativeRedeem",
       "testKagemushaRecursiveRedeemTransactionRejectsAdversarialNativeInstructionArchives",
@@ -1705,6 +1737,25 @@ test("Kagemusha C# instruction transaction builder stays wired", () => {
 
 test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
   assertContainsAll(
+    source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/TransactionPayload.kt"),
+    [
+      "require(chainId.trim().isNotEmpty())",
+      'require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }',
+      'requireCanonicalI105Address(authority, "authority")',
+    ],
+    "Kotlin transaction payload exact identifier validation",
+  );
+  assertContainsAll(
+    source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java"),
+    [
+      'this.chainId = normalizeExact(chainId, "chainId")',
+      "private static String normalizeExact(final String value, final String field)",
+      'field + " must not contain surrounding whitespace"',
+      'AccountIdLiteral.requireCanonicalI105Address(authority, "authority")',
+    ],
+    "Android Java transaction payload exact identifier validation",
+  );
+  assertContainsAll(
     source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"),
     [
       "enum class KagemushaInstructionType",
@@ -1726,6 +1777,12 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
       "decoded.header.compression == NoritoHeader.COMPRESSION_NONE",
       "decoded.header.payloadLength > 0",
       "decoded.header.validateChecksum(decoded.payload)",
+      'chainId = requireNonBlankUnpadded(chainId, "chainId")',
+      'authority = requireNonBlankUnpadded(authority, "authority")',
+      'val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+      'val exactAuthority = requireNonBlankUnpadded(authority, "authority")',
+      'require(value.trim() == value) { "$field must not contain surrounding whitespace" }',
+      "val archive = instructionArchive.copyOf()",
       "InstructionBox.fromWirePayload(instructionType.wireName, archive)",
       "Executable.instructions(listOf(instructionBox(instructionType, instructionArchive)))",
     ],
@@ -1753,6 +1810,12 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
       "decoded.header().compression() != NoritoHeader.COMPRESSION_NONE",
       "decoded.header().payloadLength() == 0",
       "decoded.header().validateChecksum(decoded.payload())",
+      'setChainId(requireNonBlankUnpadded(chainId, "chainId"))',
+      'setAuthority(requireNonBlankUnpadded(authority, "authority"))',
+      'final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+      'final String exactAuthority = requireNonBlankUnpadded(authority, "authority")',
+      'field + " must not contain surrounding whitespace"',
+      "final byte[] archive = instructionArchive.clone();",
       "InstructionBox.fromWirePayload(instructionType.wireName(), archive)",
       "Executable.instructions(List.of(instructionBox(instructionType, instructionArchive)))",
     ],
@@ -1763,11 +1826,18 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
     [
       "instructionBox preserves redeem archive bytes and wire name",
       "transactionPayload wraps a single transfer archive instruction",
+      "recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation",
+      "transactionPayload rejects padded ids before archive validation or native redeem",
       "instructionBox accepts native ABI 7 redeem instruction fixture",
       "instructionBox rejects malformed wrong schema empty and tampered archives",
       "KagemushaInstructionType.REDEEM_RECURSIVE",
       "KagemushaInstructionType.TRANSFER",
-      "assertContentEquals(archive, wire.payloadBytes)",
+      "assertContentEquals(kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE), payload.payloadBytes)",
+      "val expectedArchive = archive.copyOf()",
+      "archive[0] = 0x7f.toByte()",
+      "assertContentEquals(expectedArchive, wire.payloadBytes)",
+      "chainId must not contain surrounding whitespace",
+      "authority must not contain surrounding whitespace",
       "recursiveRedeemInstructionBoxFromRequest(byteArrayOf())",
       "recursiveRedeemTransactionPayloadFromRequest(",
       '"KagemushaRecursiveSpendRedeemRequestV1"',
@@ -1780,10 +1850,23 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
     "Kotlin Kagemusha instruction archive transaction helper tests",
   );
   assertContainsAll(
+    source("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt"),
+    [
+      "padded chainId throws before payload can be signed",
+      "authority must be exact canonical I105 before payload can be signed",
+      "chainId must not contain surrounding whitespace",
+      "authority must not contain surrounding whitespace",
+      "authority must use canonical I105 encoded account without @domain",
+    ],
+    "Kotlin transaction payload exact identifier tests",
+  );
+  assertContainsAll(
     source("java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"),
     [
+      "transactionPayloadRejectsPaddedIdsBeforeSigning",
       "kagemushaInstructionArchivesBuildPayloads",
       "kagemushaInstructionArchivesAcceptAbi7Fixtures",
+      "kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
       "kagemushaInstructionArchivesRejectAdversarialInputs",
       "KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE",
       "KagemushaInstructionArchives.InstructionType.TRANSFER",
@@ -1792,6 +1875,12 @@ test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
       "KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0])",
       "KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(",
       "Arrays.equals(transferArchive, transferWire.payloadBytes())",
+      "final byte[] expectedTransferArchive",
+      "transferArchive[0] = (byte) 0x7F",
+      "Arrays.equals(expectedTransferArchive, transferWire.payloadBytes())",
+      "assertIllegalArgumentMessage",
+      "chainId must not contain surrounding whitespace",
+      "authority must not contain surrounding whitespace",
       '"KagemushaRecursiveSpendRedeemRequestV1"',
       "tampered[tampered.length - 1] ^= 0x01",
       "compressed[22] = 1",
@@ -1827,12 +1916,17 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
         "RedeemKagemushaRecursive",
       "instruction_type",
       'typeof type !== "string"',
+      "normalizeTransactionAssetDefinitionId",
+      "authority must not contain surrounding whitespace",
+      "assetDefinition.assetDefinitionId",
       "normalizeExactMetadataString",
       "verifyingKey.id.backend",
       "verifyingKey.record.circuit_id",
       "must not contain surrounding whitespace",
       "kagemushaRecursiveSpendRedeem",
       "kagemushaRecursiveRedeem.redeemRequestArchive",
+      "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
+      "Buffer.from(new Uint8Array(value))",
     ],
       `${relative} Kagemusha instruction transaction builder`,
     );
@@ -1907,6 +2001,9 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "bytesBase64 must be canonical standard base64",
       "buildKagemushaInstructionTransaction wraps one archive instruction",
       "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+      "transaction builders reject padded authority and asset definition IDs before native dispatch",
+      "authority must not contain surrounding whitespace",
+      "assetDefinition\\.assetDefinitionId must not contain surrounding whitespace",
       "proof builders reject padded inline verifier-key metadata",
       "buildPrivateKaigiFeeSpend",
       "privateKaigiFeeSpend\\.verifyingKey\\.id\\.backend must not contain surrounding whitespace",
@@ -1914,8 +2011,33 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "instruction_type: \"KagemushaTransfer\"",
       "redeemRequestArchive must be a Buffer or ArrayBuffer view",
       "redeem native rejected",
+      "buildKagemusha transaction helpers copy mutable buffers before native calls",
+      "mutableTransferArchive",
+      "mutableRedeemInstructionArchive",
+      "mutableRedeemRequestArchive",
+      "mutablePrivateKey",
+      "fill(0xa5)",
     ],
     "JavaScript Kagemusha instruction transaction builder tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package dist Kagemusha transaction helpers copy mutable buffers before native calls",
+      "package dist Kagemusha transaction helpers reject padded authority before native dispatch",
+      "authority must not contain surrounding whitespace",
+      "PACKAGE_DIST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
+      "packageDistKagemushaInstructionArchive",
+      "buildKagemushaInstructionArchiveInstruction",
+      "buildKagemushaInstructionTransaction",
+      "buildKagemushaRecursiveRedeemTransaction",
+      "mutableTransferArchive",
+      "mutableRedeemInstructionArchive",
+      "mutableRedeemRequestArchive",
+      "mutablePrivateKey",
+      "fill(0xa5)",
+    ],
+    "JavaScript package dist Kagemusha instruction transaction builder tests",
   );
 });
 
@@ -1939,6 +2061,8 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       "def kagemusha_recursive_redeem_instruction(",
       "def build_kagemusha_instruction_transaction(",
       "def build_kagemusha_recursive_redeem_transaction(",
+      '_kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+      '_kagemusha_require_non_blank_unpadded(authority, "authority")',
       '_norito_archive_bytes_named(instruction_archive, "instruction_archive")',
       'getattr(Instruction, "kagemusha_instruction_archive", None)',
       'getattr(Instruction, "kagemusha_recursive_redeem", None)',
@@ -1978,6 +2102,19 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
     "Python TransactionDraft Kagemusha helpers",
   );
   assertContainsAll(
+    source("python/iroha_python/src/iroha_python/tx.py"),
+    [
+      "def _require_exact_non_empty_string(value: Any, context: str) -> str:",
+      'chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id")',
+      'authority=_require_exact_non_empty_string(config.authority, "authority")',
+      '_require_exact_non_empty_string(chain_id, "chain_id")',
+      "if chain_id is not None",
+      '_require_exact_non_empty_string(authority, "authority")',
+      "if authority is not None",
+    ],
+    "Python TransactionDraft exact identifier config and override guards",
+  );
+  assertContainsAll(
     source("python/iroha_python/iroha_python_rs/src/lib.rs"),
     [
       "fn kagemusha_instruction_archive_box(",
@@ -1989,15 +2126,53 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
       "kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives",
       "kagemusha_instruction_archive_box_rejects_adversarial_archives",
+      "fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()>",
+      'require_non_blank_unpadded(chain_id, "chain_id")?',
+      'require_non_blank_unpadded(authority, "authority")?',
+      "fn transaction_builder_rejects_padded_chain_id_and_authority()",
+      "ValueError: chain_id must not contain surrounding whitespace",
+      "ValueError: authority must not contain surrounding whitespace",
     ],
-    "Python PyO3 Kagemusha instruction archive decoder",
+    "Python PyO3 Kagemusha instruction archive decoder and TransactionBuilder exactness",
+  );
+  assertContainsAll(
+    source("python/iroha_python/src/iroha_python/client.py"),
+    [
+      "def _transaction_draft(",
+      'effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")',
+      'effective_authority = self._native_transaction_account_id(',
+      '_require_exact_non_empty_string(authority, "authority")',
+    ],
+    "Python Torii transaction draft exactness",
   );
   assertContainsAll(
     source("python/iroha_python/tests/kagemusha_test.py"),
     [
       "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
       "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
+      "test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building",
+      "test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
+      "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
+      "test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing",
       "test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs",
+      'iroha_python.TransactionBuilder(" chain", authority)',
+      "iroha_python.TransactionDraft(",
+      'iroha_python.TransactionConfig(chain_id=" chain", authority=authority)',
+      'iroha_python.TransactionConfig(chain_id="", authority=authority)',
+      'iroha_python.TransactionConfig(chain_id="chain", authority="")',
+      'draft.sign(keypair.private_key, chain_id=" chain")',
+      'draft.sign(keypair.private_key, chain_id="")',
+      'draft.sign(keypair.private_key, authority=f"{authority} ")',
+      'draft.sign(keypair.private_key, authority="")',
+      "chain_id must be non-empty",
+      "authority must be non-empty",
+      "iroha_python.build_signed_transaction(",
+      "redeem_instruction_archive = bytearray(",
+      "redeem_request_archive = bytearray(",
+      "private_key = bytearray(keypair.private_key)",
+      "memoryview(redeem_instruction_archive)",
+      "memoryview(redeem_request_archive)",
+      "memoryview(private_key)",
       '_shared_recursive_spend_abi7_archive("redeem_instruction")',
       '_shared_recursive_spend_abi7_archive("redeem_request")',
       "_instruction_archive_bytes(instruction)",
@@ -2012,11 +2187,24 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
       "invalid_field_bitset[39] = 0x20",
       "non_zero_padding.insert(40, 0x7F)",
       'excessive_padding[40:40] = b"\\x00" * 65',
+      "chain_id must not contain surrounding whitespace",
+      "authority must not contain surrounding whitespace",
       "bad_request_flags[39] = 0x20",
       "redeem_request_archive must be a valid Norito archive",
       "draft.kagemusha_recursive_redeem(request_archive)",
     ],
     "Python Kagemusha instruction transaction tests",
+  );
+  assertContainsAll(
+    source("python/iroha_python/tests/client_ledger_helpers_test.py"),
+    [
+      "test_transaction_draft_rejects_padded_chain_and_authority_before_signing",
+      'client._transaction_draft(chain_id=" chain", authority="authority@is")',
+      'client._transaction_draft(chain_id="chain", authority=" authority@is ")',
+      "chain_id must not contain surrounding whitespace",
+      "authority must not contain surrounding whitespace",
+    ],
+    "Python Torii transaction draft exact identifier tests",
   );
 });
 
@@ -3434,9 +3622,12 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
   const readiness = source("ci/check_kagemusha_production_readiness.sh");
   const readinessScript = source("scripts/kagemusha_production_readiness.py");
   const readinessTests = source("scripts/tests/kagemusha_production_readiness_test.py");
+  const androidCaptureHelper = source("scripts/kagemusha_android_device_lab_capture.py");
+  const androidSlotHelper = source("scripts/kagemusha_android_device_lab_slot.py");
+  const androidRawPuller = source("scripts/kagemusha_pull_android_device_lab_raw_slot.py");
   const dataModel = source("crates/iroha_data_model/src/offline/mod.rs");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
-  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
+  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1";
   const expectedModes = [
     "--negative-control-abi6-manifest",
     "--negative-control-abi6-manifest-direct-invalid-json",
@@ -4453,6 +4644,30 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "test_load_wait_allows_null_signal_and_sigkill",
     ],
     [
+      "--negative-control-android-sample-env-pid-safety-test",
+      "scripts/tests/android_sample_env_test.py",
+      "test_background_liveness_uses_ps_without_sigkill",
+      "test_background_liveness_allows_null_signal_and_sigkill",
+    ],
+    [
+      "--negative-control-ios-demo-pid-safety-test",
+      "scripts/tests/ios_demo_start_test.py",
+      "test_background_liveness_uses_owned_job_and_ps_without_sigkill",
+      "test_background_liveness_allows_null_signal_and_sigkill",
+    ],
+    [
+      "--negative-control-kaigi-demo-pid-safety-test",
+      "scripts/tests/kaigi_demo_test.py",
+      "test_background_liveness_uses_owned_job_and_ps_without_sigkill",
+      "test_background_liveness_allows_null_signal_and_sigkill",
+    ],
+    [
+      "--negative-control-mochi-local-sandbox-pid-safety-test",
+      "scripts/tests/mochi_local_sandbox_test.py",
+      "test_pidfile_liveness_uses_ps_and_command_ownership",
+      "test_pidfile_liveness_allows_pidfile_reuse_without_command_ownership",
+    ],
+    [
       "--negative-control-android-device-lab-capture-adb-diagnostic-state-test",
       "scripts/tests/check_android_device_lab_slot_test.py",
       "test_android_capture_classifies_adb_devices_diagnostic_states",
@@ -4599,6 +4814,119 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     );
   }
 
+  const androidCommandGateUnitTests = [
+    "test_android_capture_command_gate_rejects_process_management",
+    "test_android_slot_command_gate_rejects_process_management",
+    "test_android_raw_puller_command_gate_rejects_process_management",
+  ];
+  assertContainsAll(
+    readiness,
+    androidCommandGateUnitTests,
+    "production readiness Android command-gate unittest requirements",
+  );
+  assertContainsAll(
+    readiness,
+    [
+      '"scripts/kagemusha_android_device_lab_slot.py": (',
+      '"ADB_SERIAL_REDACTION"',
+      '"def _is_adb_executable(command: Sequence[str]) -> bool:"',
+      '"if _is_adb_executable(display_tokens):"',
+      '"display_tokens[index + 1] = ADB_SERIAL_REDACTION"',
+      '"(\\"am\\", \\"kill\\"),"',
+      '"(\\"am\\", \\"kill-all\\"),"',
+      '"(\\"cmd\\", \\"activity\\", \\"kill\\"),"',
+      '"(\\"cmd\\", \\"activity\\", \\"kill-all\\"),"',
+      '"(\\"cmd\\", \\"activity\\", \\"force-stop\\"),"',
+      '"(\\"emu\\", \\"kill\\"),"',
+      '"(\\"shell\\", \\"stop\\"),"',
+      '"(\\"shell\\", \\"start\\"),"',
+      '"(\\"setprop\\", \\"sys.powerctl\\"),"',
+      '"shutdown",',
+      '"poweroff",',
+      '"halt",',
+    ],
+    "production readiness Android slot serial-redaction source requirements",
+  );
+  assertContainsAll(
+    readinessTests,
+    [
+      ...androidCommandGateUnitTests.map((name) => `def ${name}(self) -> None:`),
+      "def test_android_command_gates_reject_package_state_mutations(self) -> None:",
+      '["kill", "1234"]',
+      '["pkill", "adb"]',
+      '["killall", "adb"]',
+      '["adb", "kill-server"]',
+      '["adb", "disconnect"]',
+      '"adb reboot"',
+      '"adb root"',
+      '"adb unroot"',
+      '"adb remount"',
+      '"adb emu kill"',
+      '"adb power shutdown"',
+      '"adb shell stop"',
+      '"adb shell start"',
+      '"adb powerctl"',
+      '"adb am kill"',
+      '"adb am kill-all"',
+      '"adb cmd activity kill"',
+      '"adb cmd activity kill-all"',
+      '"shell", "am", "force-stop", "pkg"',
+      '"adb cmd activity force-stop"',
+      '"pm enable"',
+      '"cmd package suspend"',
+      '"cmd package unsuspend"',
+      '"setprop sys.powerctl"',
+      '"svc power shutdown"',
+      '"appops reset"',
+      '"cmd appops reset"',
+      '"cmd",',
+      '"activity",',
+      '"force-stop",',
+      'self.assertNotIn("SERIAL-123", rendered)',
+      'self.assertNotIn("SERIAL-456", rendered)',
+      'self.assertNotIn("SERIAL-789", rendered)',
+      '["adb", "-s", "SERIAL-123", "devices", "-l"]',
+      '["adb", "-s", "SERIAL-456", "shell", "getprop", "ro.product.model"]',
+      '["adb", "-s", "SERIAL-789", "shell", "run-as", "pkg", "cat", "slot"]',
+    ],
+    "Kagemusha production readiness Android command-gate unit tests",
+  );
+  for (const [sourceText, label] of [
+    [androidCaptureHelper, "Android capture helper"],
+    [androidSlotHelper, "Android slot assembler"],
+    [androidRawPuller, "Android raw puller"],
+  ]) {
+    assertContainsAll(
+      sourceText,
+      [
+        'ADB_SERIAL_REDACTION = "<redacted-adb-serial>"',
+        "def _is_adb_executable(command: Sequence[str]) -> bool:",
+        "if _is_adb_executable(display_tokens):",
+        '"kill-server",',
+        '"reconnect",',
+        '"disconnect",',
+        '"reboot",',
+        '"root",',
+        '"unroot",',
+        '"remount",',
+        '"shutdown",',
+        '"poweroff",',
+        '"halt",',
+        "display_tokens[index + 1] = ADB_SERIAL_REDACTION",
+        '("am", "kill")',
+        '("am", "kill-all")',
+        '("cmd", "activity", "kill")',
+        '("cmd", "activity", "kill-all")',
+        '("cmd", "activity", "force-stop")',
+        '("emu", "kill")',
+        '("shell", "stop")',
+        '("shell", "start")',
+        '("setprop", "sys.powerctl")',
+      ],
+      `${label} ADB serial redaction`,
+    );
+  }
+
   const exactMutationNegativeControls = [
     [
       "--negative-control-kagami-localnet-stop-script-pid-safety",
@@ -4663,8 +4991,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     readiness,
     [
       verifierWitnessProfile,
-      "64-by-4 scalar coverage",
-      "64-by-4 fixed-window Vesta verifier witness profile",
+      "255-by-1 scalar coverage",
+      "255-by-1 fixed-window Vesta verifier witness profile",
     ],
     "Kagemusha readiness verifier witness profile docs requirements",
   );
@@ -4849,7 +5177,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-offline-doc-verifier-profile-exactness",
-      /pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-64x4[\s\S]*?pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-85x3[\s\S]*?64-by-4 scalar coverage[\s\S]*?85-by-3 scalar coverage/u,
+      /pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-255x1[\s\S]*?pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-85x3[\s\S]*?255-by-1 scalar coverage[\s\S]*?85-by-3 scalar coverage/u,
       "offline Kagemusha verifier-witness profile exactness",
     ],
     [
@@ -9650,6 +9978,10 @@ test("recursive Kagemusha policy workflow and doc negative controls require exac
       "roadmap.md is missing complete recursive spend ABI-6 surface documentation: Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile helpers, append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points",
     ],
     [
+      "--negative-control-readiness-section-consistency",
+      "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: all_blockers.extend(_section_readiness_blockers(section_key, section))",
+    ],
+    [
       "--negative-control-policy-negative-controls-workflow",
       "Kagemusha payload workflow must run the policy core redeem execution-order negative control",
     ],
@@ -9739,6 +10071,7 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
     "crates/iroha_torii/src/offline_v2_issuer.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
+    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
     "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
@@ -9746,12 +10079,20 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
   ];
   const genericContentSurfaces = [
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
+    "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
     "crates/iroha_cli/src/main_shared.rs",
+    "crates/iroha_core/src/executor.rs",
     "crates/iroha_core/src/queue/router.rs",
+    "crates/iroha_torii/src/offline_issuer.rs",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
     "python/iroha_python/src/iroha_python/offline_cash.py",
   ];
 
@@ -9766,6 +10107,7 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
       ...workflowBackedSurfaces,
       "core offline ISI active marker",
       "payload workflow active marker",
+      "Torii Kagemusha-only smoke active marker",
       "Torii offline-v2 smoke active marker",
       "Android device-lab instrumentation active marker",
       "Android recursive spend instrumentation active marker",
@@ -10473,7 +10815,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ArchiveBranch,
-    /b1d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f[\s\S]*?00d6fe2498b66a98df3021be6e6614a75c6305f7d8f9e802799931c0dcfd2b6f[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
+    /4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906[\s\S]*?00f72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
     "ABI-7 archive fixture negative control must mutate the archive and require the exact hash diagnostic",
   );
   const abi7SdkCoverageBranch = guard.slice(
@@ -10538,6 +10880,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   const expectedModes = [
     "--negative-control-core-append-cap-boundary",
     "--negative-control-core-lineage-profile-split",
+    "--negative-control-roadmap-current-profile-staleness",
     "--negative-control-core-proof-chain-accumulator",
     "--negative-control-core-fixed-window-table-base-accumulator",
     "--negative-control-core-shared-table-identity-base-selection",
@@ -10595,9 +10938,12 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     guard,
     [
       "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
-      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
-      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
-      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
+      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;",
+      "CURRENT_ROADMAP_PROFILE_NEEDLES",
+      "STALE_ROADMAP_PROFILE_MARKERS",
+      "roadmap.md still references stale Kagemusha verifier-witness profile marker",
     ],
     "Kagemusha policy verifier witness profile source pins",
   );
@@ -10665,6 +11011,9 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     guard,
     [
+      "ZeroProofHash {",
+      "zero_proof_hash.steps[0].proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
+      "zero_proof_hash.proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
       "assert_zero_legacy_compact_hash_rejected(",
       "zero-prehash legacy compact digest must be rejected",
       "assert_zero_recursive_compact_hash_rejected(",
@@ -10686,6 +11035,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "is_zero_prehash_hash(preflight.current_hop_proof_hash)",
       "is_zero_prehash_hash(boundary.current_hop_proof_hash)",
       "is_zero_prehash_hash(boundary.resulting_public_inputs_hash)",
+      "fold-step proof-hash zero-prehash validation",
+      "proof_hash: Hash",
+      "if is_zero_prehash_hash(proof_hash)",
+      "hash_bytes_from_hash(proof_hash)",
+      "fold-step proof-hash zero-prehash validation must not convert Hash digests to bytes before zero checks",
       "legacy compact zero-prehash Hash validation",
       "recursive compact zero-prehash Hash validation",
       '("nullifier_digest", self.nullifier_digest)',
@@ -10702,6 +11056,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     zeroPrehashHashGuardBranch,
     /is_zero_prehash_hash\(boundary\.current_hop_proof_hash\)[\s\S]*?hash_bytes_from_hash\(boundary\.current_hop_proof_hash\) == \[0u8; Hash::LENGTH\]/u,
     "zero-prehash Hash guard negative control must reintroduce the raw-byte zero comparison",
+  );
+  assert.match(
+    zeroPrehashHashGuardBranch,
+    /is_zero_prehash_hash\(proof_hash\)[\s\S]*?hash_bytes_from_hash\(proof_hash\) == \[0u8; Hash::LENGTH\]/u,
+    "zero-prehash Hash guard negative control must reintroduce the proof-hash raw-byte zero comparison",
   );
   assert.match(
     zeroPrehashHashGuardBranch,
@@ -11962,9 +12321,9 @@ test("recursive Kagemusha policy negative controls pin lineage witness preflight
     ],
     [
       "--negative-control-core-lineage-witness-final-bundle-context",
-      /hop count 1 does not match redeem bundle hop count 2[\s\S]*?hop count 1 may mismatch redeem bundle hop count 2/u,
+      /fixed_bytes\(b\\"kagemusha-lineage-context-spliced-final-nullifier\\"\)[\s\S]*?fixed_bytes\(b\\"kagemusha-lineage-context-spliced-final-nullifier-unchecked\\"\)/u,
       "lineage witness final-bundle context",
-      "hop count 1 does not match redeem bundle hop count 2",
+      'fixed_bytes(b\\"kagemusha-lineage-context-spliced-final-nullifier\\")',
     ],
     [
       "--negative-control-core-lineage-witness-final-bundle-predecode",
@@ -12954,6 +13313,60 @@ test("recursive Kagemusha policy negative controls pin JS append-boundary output
   );
 });
 
+test("recursive Kagemusha policy negative controls pin JS append-boundary forged-result exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-js-host-append-boundary-forged-result-hashes";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-host-append-boundary-forged-result-hashes":'),
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-vk-hash":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "fn kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes",
+      "fn kagemusha_recursive_spend_lineage_append_boundary_accepts_forged_result_hashes",
+      "JS host append-boundary helper must reject forged resulting accumulator digest",
+      "JS host append-boundary helper may accept forged resulting accumulator digest",
+      "JS host append-boundary helper must reject forged resulting public-input hash",
+      "JS host append-boundary helper may accept forged resulting public-input hash",
+      "accepted_resulting_accumulator_digest",
+      "accepted_resulting_public_inputs_hash",
+    ],
+    "JS append-boundary forged-result negative control must pin test, assertion, and exact field coverage",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "JS append-boundary forged-result negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?JS host append-boundary forged result drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: JS host append-boundary forged result drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "JS append-boundary forged-result negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS append-boundary forged-result negative control must not unconditionally pass after run_checks",
+  );
+});
+
 test("recursive Kagemusha policy negative controls pin Python append-boundary binding exactness", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -13001,6 +13414,60 @@ test("recursive Kagemusha policy negative controls pin Python append-boundary bi
     branch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Python append-boundary negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin Python append-boundary forged-result exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-python-append-boundary-forged-result-hashes";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-append-boundary-forged-result-hashes":'),
+    guard.indexOf('if mode == "--negative-control-fixed-window-manifest-digest-splice":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes",
+      "fn kagemusha_recursive_spend_lineage_append_boundary_python_accepts_forged_result_hashes",
+      "Python append-boundary helper must reject forged resulting accumulator digest",
+      "Python append-boundary helper may accept forged resulting accumulator digest",
+      "Python append-boundary helper must reject forged resulting public-input hash",
+      "Python append-boundary helper may accept forged resulting public-input hash",
+      "accepted_resulting_accumulator_digest",
+      "accepted_resulting_public_inputs_hash",
+    ],
+    "Python append-boundary forged-result negative control must pin test, assertion, and exact field coverage",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "Python append-boundary forged-result negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?Python append-boundary forged result drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: Python append-boundary forged result drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "Python append-boundary forged-result negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python append-boundary forged-result negative control must not unconditionally pass after run_checks",
   );
 });
 
@@ -13104,6 +13571,60 @@ test("recursive Kagemusha policy negative controls pin bridge previous-proof ope
   );
 });
 
+test("recursive Kagemusha policy negative controls pin bridge append-boundary forged-result exactness", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const mode = "--negative-control-bridge-append-boundary-forged-result-hashes";
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [mode],
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+  assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+
+  const branch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-bridge-append-boundary-forged-result-hashes":'),
+    guard.indexOf('if mode == "--negative-control-js-host-recursive-compact-vk-hash":'),
+  );
+  assertContainsAll(
+    branch,
+    [
+      "forged_resulting_accumulator_profile",
+      "accepted_resulting_accumulator_profile",
+      "forged resulting accumulator digest",
+      "accepted resulting accumulator digest",
+      "forged_resulting_public_inputs_profile",
+      "accepted_resulting_public_inputs_profile",
+      "forged resulting public-input hash",
+      "accepted resulting public-input hash",
+    ],
+    "bridge append-boundary forged-result negative control must pin both forged result hash cases",
+  );
+  assert.match(
+    branch,
+    /for before, after, label in cases:[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "bridge append-boundary forged-result negative control must validate each mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /if label not in message:[\s\S]*?bridge append-boundary forged result drift was not detected for[\s\S]*?if first_message is None:[\s\S]*?raise\s+SystemExit\("negative control failed: bridge append-boundary forged result drift was not detected"\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "bridge append-boundary forged-result negative control must only pass after every case detects injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "bridge append-boundary forged-result negative control must not unconditionally pass after run_checks",
+  );
+});
+
 test("recursive Kagemusha SDK parity inventories avoid shadowed method names", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_sdk_parity.sh");
   const tupleBody = (name) => {
@@ -13188,20 +13709,21 @@ test("recursive Kagemusha SDK parity inventories avoid shadowed method names", (
       "Python typed recursive spend blockHeight test vectors",
       "require_tuple_contains",
       "invalid_block_heights",
-      "True",
-      "False",
-      "1.5",
-      '"1"',
-      '"00"',
-      '"01"',
-      '"0007"',
-      '"-0"',
-      '"+7"',
-      '"7 "',
-      '" 7"',
-      '"18446744073709551616"',
-      "-1",
-      "1 << 64",
+      '(True, TypeError, "block_height must be an integer")',
+      '(False, TypeError, "block_height must be an integer")',
+      '(1.5, TypeError, "block_height must be an integer")',
+      '("1", TypeError, "block_height must be an integer")',
+      '("00", TypeError, "block_height must be an integer")',
+      '("01", TypeError, "block_height must be an integer")',
+      '("0007", TypeError, "block_height must be an integer")',
+      '("-0", TypeError, "block_height must be an integer")',
+      '("+7", TypeError, "block_height must be an integer")',
+      '("7 ", TypeError, "block_height must be an integer")',
+      '(" 7", TypeError, "block_height must be an integer")',
+      '("18446744073709551616", TypeError, "block_height must be an integer")',
+      '(-1, ValueError, "block_height must be non-negative")',
+      '(1 << 64, ValueError, "block_height must fit in u64")',
+      "with pytest.raises(error_type, match=expected_error)",
     ],
     "Python typed recursive spend block-height string vector inventory",
   );
@@ -13268,12 +13790,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-append-lineage-key-boundary",
     "--negative-control-js-lineage-key-artifact-request-object",
     "--negative-control-js-kagemusha-instruction-transaction-builder",
+    "--negative-control-jvm-kagemusha-instruction-transaction-builder",
     "--negative-control-js-note-amount-vectors",
     "--negative-control-js-redeem-public-amount-vectors",
     "--negative-control-js-block-height-vectors",
     "--negative-control-js-package-dist-pallas-opening-vectors",
     "--negative-control-js-package-dist-raw-lineage-key-vectors",
     "--negative-control-js-python-native-output-headers",
+    "--negative-control-js-confidential-v2-derivation-exactness",
     "--negative-control-python-kagemusha-instruction-transaction-builder",
     "--negative-control-csharp-kagemusha-instruction-transaction-builder",
     "--negative-control-csharp-kagemusha-recursive-redeem-builder-metadata",
@@ -13304,6 +13828,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-non-csharp-pallas-builder-input-guards",
     "--negative-control-non-csharp-pallas-builder-native-output-guards",
     "--negative-control-non-csharp-pallas-metadata-option-shape",
+    "--negative-control-non-csharp-pallas-sequence-count-prechecks",
     "--negative-control-jvm-android-pallas-transcript-label-byte-limit",
     "--negative-control-swift-pallas-transcript-label-byte-limit",
     "--negative-control-js-python-pallas-transcript-label-byte-limit",
@@ -13319,6 +13844,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-offline-doc-localnet-lifecycle-release-evidence",
     "--negative-control-offline-doc-pallas-builder-surface",
     "--negative-control-offline-doc-instruction-transaction-surface",
+    "--negative-control-offline-doc-redeem-lineage-selection",
     "--negative-control-sdk-proof-chain-accumulator-input",
     "--negative-control-sdk-accumulator-digest-inputs",
     "--negative-control-sdk-accumulator-material-inputs",
@@ -13330,8 +13856,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-accumulator-asset-uuid-boundary-vectors",
     "--negative-control-sdk-bundle-summary-trailing-field-vectors",
     "--negative-control-sdk-verify-result-trailing-field-vectors",
+    "--negative-control-sdk-verify-result-redeem-aliases",
     "--negative-control-sdk-verify-lineage-record-preflight",
     "--negative-control-sdk-lineage-witness-trailing-field-vectors",
+    "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks",
+    "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks",
     "--negative-control-sdk-current-note-amount-trailing-field-vectors",
     "--negative-control-sdk-bundle-proof-circuit-vectors",
     "--negative-control-sdk-bundle-proof-backend-vectors",
@@ -13429,6 +13958,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-native-bridge-runner-workflow",
     "--negative-control-native-bridge-cache-workflow",
     "--negative-control-native-bridge-test-workflow",
+    "--negative-control-native-bridge-js-host-order-workflow",
     "--negative-control-native-bridge-windowed-record-order-workflow",
     "--negative-control-native-bridge-needs-workflow",
     "--negative-control-python-sdk-job-workflow",
@@ -13477,6 +14007,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-lineage-frozen-copy",
     "--negative-control-python-sdk-test-workflow",
     "--negative-control-python-host-test-workflow",
+    "--negative-control-python-host-test-order-workflow",
     "--negative-control-python-sdk-needs-workflow",
     "--negative-control-jvm-sdk-job-workflow",
     "--negative-control-jvm-sdk-runner-workflow",
@@ -13953,14 +14484,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-identifier-receipt-kind-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt kind exactness branch must require the Python Torii exactness label",
+      marker:
+        'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(record.get("kind"), "identifier receipt attestation.kind")',
+      label: "identifier receipt kind exactness branch must require the exact Python kind marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-proof-base64-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-signature-exactness-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt proof-base64 exactness branch must require the Python Torii exactness label",
+      marker:
+        'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(record.get("proof_b64"), "identifier receipt attestation.proof_b64")',
+      label: "identifier receipt proof-base64 exactness branch must require the exact Python proof_b64 marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-signature-exactness-guard":',
@@ -13971,26 +14504,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt policy-id exactness branch must require the Python Torii exactness label",
+      marker:
+        'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing value = _require_exact_non_empty_string(raw, "payload.policy_id")',
+      label: "identifier receipt policy-id exactness branch must require the exact Python policy-id marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt policy-summary exactness branch must require the Python Torii exactness label",
+      marker:
+        'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing policy_id = _require_exact_non_empty_string(policy.get("policy_id"), "policy.policy_id")',
+      label: "identifier receipt policy-summary exactness branch must require the exact Python policy-summary marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt program-id exactness branch must require the Python Torii exactness label",
+      marker:
+        "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_sized_field(_identifier_exact_string(raw, context))",
+      label: "identifier receipt program-id exactness branch must require the exact Python program-id marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-account-id-exactness-guard":',
       end: 'if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt account-id exactness branch must require the Python Torii exactness label",
+      marker:
+        'Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string(account_id, "payload.account_id")',
+      label: "identifier receipt account-id exactness branch must require the exact Python account-id marker",
     },
     {
       start: 'if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":',
@@ -14001,14 +14538,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-identifier-receipt-hash-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt hash exactness branch must require the Python Torii exactness label",
+      marker:
+        "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing def _identifier_hash_bytes(raw: Any, context: str) -> bytes:",
+      label: "identifier receipt hash exactness branch must require the exact Python hash marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-timestamp-exactness-guard":',
       end: 'if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":',
-      marker: "Python Torii client must expose exact signed identifier receipt encoding and verification gates",
-      label: "identifier receipt timestamp exactness branch must require the Python Torii exactness label",
+      marker:
+        "Python Torii client must expose exact signed identifier receipt encoding and verification gates missing elif isinstance(value, str) and value.isdigit():",
+      label: "identifier receipt timestamp exactness branch must require the exact Python timestamp marker",
     },
     {
       start: 'if mode == "--negative-control-identifier-receipt-timestamp-u64-guard":',
@@ -14027,6 +14566,25 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label,
     );
   }
+  const identifierReceiptPolicySummaryExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-policy-summary-id-exactness-guard":'),
+    guard.indexOf('if mode == "--negative-control-identifier-receipt-program-id-exactness-guard":'),
+  );
+  assert.match(
+    identifierReceiptPolicySummaryExactnessBranch,
+    /Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_policy_id_payload\(policy_id\)/u,
+    "identifier receipt policy-summary exactness branch must require the exact Python policy-id payload marker",
+  );
+  assert.match(
+    guard,
+    /require_contains\(\s*texts,\s*"python\/iroha_torii_client\/client\.py"[\s\S]*?_require_exact_non_empty_string\(record\.get\("proof_b64"\), "identifier receipt attestation\.proof_b64"\)[\s\S]*?_require_exact_non_empty_string\(attestation\.get\("proof_b64"\), "attestation\.proof_b64"\)[\s\S]*?"Python Torii client must expose exact signed identifier receipt encoding and verification gates"/u,
+    "identifier receipt Python source guard must emit marker-level proof-base64 diagnostics",
+  );
+  assert.match(
+    guard,
+    /require_contains\(\s*texts,\s*"python\/iroha_torii_client\/tests\/test_client\.py"[\s\S]*?test_identifier_resolution_receipt_matches_shared_vectors[\s\S]*?negative_cases[\s\S]*?timestamp_exactness_cases[\s\S]*?identifier receipt attestation\.proof_b64 must not contain surrounding whitespace[\s\S]*?attestation\.proof_b64 must be valid base64[\s\S]*?"Python Torii client tests must cover identifier receipt shared vectors and adversarial cases"/u,
+    "identifier receipt Python test guard must emit marker-level adversarial-vector diagnostics",
+  );
   for (const { start, end, failure, label } of [
     {
       start: 'if mode == "--negative-control-identifier-receipt-proof-base64-guard":',
@@ -14119,6 +14677,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /replacements\s*=\s*\([\s\S]*?identifier receipt attestation\.proof_b64[\s\S]*?attestation\.proof_b64[\s\S]*?for old, new in replacements:[\s\S]*?next_mutated = mutated\.replace\(old, new, 1\)[\s\S]*?if next_mutated == mutated:/u,
     "identifier receipt proof-base64 exactness negative control must fail if either exactness guard mutation stops matching",
   );
+  assert.match(
+    identifierReceiptProofBase64ExactnessBranch,
+    /Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _require_exact_non_empty_string\(attestation\.get\("proof_b64"\), "attestation\.proof_b64"\)/u,
+    "identifier receipt proof-base64 exactness branch must require the exact Python attestation proof_b64 marker",
+  );
   const identifierReceiptSignatureExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-identifier-receipt-signature-exactness-guard":'),
     guard.indexOf('if mode == "--negative-control-identifier-receipt-policy-id-exactness-guard":'),
@@ -14127,6 +14690,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     identifierReceiptSignatureExactnessBranch,
     /replacements\s*=\s*\([\s\S]*?payload\.opening\.signature[\s\S]*?identifier receipt attestation\.signature[\s\S]*?for old, new in replacements:[\s\S]*?next_mutated = mutated\.replace\(old, new, 1\)[\s\S]*?if next_mutated == mutated:/u,
     "identifier receipt signature exactness negative control must fail if either signature exactness mutation stops matching",
+  );
+  assert.match(
+    identifierReceiptSignatureExactnessBranch,
+    /Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_exact_hex_bytes\(record\.get\("signature"\), "payload\.opening\.signature"\)/u,
+    "identifier receipt signature exactness branch must require the exact Python opening signature marker",
+  );
+  assert.match(
+    identifierReceiptSignatureExactnessBranch,
+    /Python Torii client must expose exact signed identifier receipt encoding and verification gates missing _identifier_exact_hex_bytes\(record\.get\("signature"\), "identifier receipt attestation\.signature"\)/u,
+    "identifier receipt signature exactness branch must require the exact Python attestation signature marker",
   );
   const swiftIdentifierAccountIdExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-identifier-receipt-account-id-exactness":'),
@@ -14729,6 +15302,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /normalizeMultisigContractCallResponse[\s\S]*?multisig resolved account exactness[\s\S]*?JavaScript multisig resolved account exactness tests[\s\S]*?Swift multisig resolved account exactness[\s\S]*?Python multisig resolved account exactness[\s\S]*?Android Java multisig resolved account exactness[\s\S]*?Kotlin multisig resolved account exactness/u,
     "multisig resolved account exactness guard must pin source and regression markers across non-C# SDKs",
   );
+  assert.match(
+    guard,
+    /require_contains\(\s*texts,\s*"python\/iroha_torii_client\/client\.py"[\s\S]*?def _require_exact_i105_account_id\([\s\S]*?if any\(ch\.isspace\(\) for ch in literal\) or "@" in literal:[\s\S]*?resolved_multisig_account_id=ToriiClient\._require_exact_i105_account_id\([\s\S]*?"Python multisig resolved account exactness"/u,
+    "multisig resolved account exactness guard must emit Python source marker diagnostics",
+  );
+  assert.match(
+    guard,
+    /require_contains\(\s*texts,\s*"python\/iroha_torii_client\/tests\/test_client\.py"[\s\S]*?test_propose_multisig_rejects_malformed_response_fields[\s\S]*?f"\{CANONICAL_OWNER\} "[\s\S]*?"multisig@banka"[\s\S]*?"Python multisig resolved account exactness tests"/u,
+    "multisig resolved account exactness guard must emit Python test marker diagnostics",
+  );
   const multisigResolvedAccountBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-multisig-resolved-account-exactness":'),
     guard.indexOf('if mode == "--negative-control-android-device-lab-family-fail-closed":'),
@@ -14750,13 +15333,29 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     multisigResolvedAccountBranch,
-    /_require_exact_i105_account_id[\s\S]*?_normalize_canonical_account_id[\s\S]*?test_propose_multisig_rejects_malformed_response_fields[\s\S]*?test_propose_multisig_allows_normalized_response_fields/u,
+    /_require_exact_i105_account_id[\s\S]*?_normalize_canonical_account_id[\s\S]*?if any\(ch\.isspace\(\) for ch in literal\) or "@" in literal:[\s\S]*?if any\(ch\.isspace\(\) for ch in literal\) and "@" not in literal:[\s\S]*?test_propose_multisig_rejects_malformed_response_fields[\s\S]*?test_propose_multisig_allows_normalized_response_fields/u,
     "multisig resolved account negative control must mutate Python exact helper markers",
   );
   assert.match(
     multisigResolvedAccountBranch,
     /multisig response decoders reject non-exact resolved account ids[\s\S]*?multisig response decoders allow normalized resolved account ids[\s\S]*?testMultisigResponsesRejectNonExactResolvedAccountIds[\s\S]*?testMultisigResponsesAllowNormalizedResolvedAccountIds[\s\S]*?padded resolved multisig account id must be rejected[\s\S]*?padded resolved multisig account id may normalize[\s\S]*?testMultisigAccountId[\s\S]*?testNormalizedMultisigAccountId/u,
     "multisig resolved account negative control must mutate regression markers",
+  );
+  assertContainsAll(
+    multisigResolvedAccountBranch,
+    [
+      "javascript/iroha_js/src/toriiClient.js multisig resolved account exactness",
+      "JavaScript multisig resolved account exactness tests",
+      "Swift multisig resolved account exactness",
+      "Swift multisig resolved account exactness tests",
+      "Python multisig resolved account exactness",
+      "Python multisig resolved account exactness tests",
+      "Android Java multisig resolved account exactness",
+      "Kotlin multisig resolved account exactness",
+      "Android Java multisig resolved account exactness tests",
+      "Kotlin multisig resolved account exactness tests",
+    ],
+    "multisig resolved account negative control must require every exact SDK drift label",
   );
   assert.match(
     multisigResolvedAccountBranch,
@@ -15112,7 +15711,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
 
   const nativeBridgeTestWorkflowBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-bridge-test-workflow":'),
-    guard.indexOf('if mode == "--negative-control-native-bridge-windowed-record-order-workflow":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-js-host-order-workflow":'),
   );
   assert.match(
     guard,
@@ -15136,6 +15735,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     nativeBridgeTestWorkflowBranch,
+    /JS_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND[\s\S]*?--skip kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes[\s\S]*?JS host append-boundary forged-result test/u,
+    "native bridge workflow negative control must mutate the JS host append-boundary forged-result test command",
+  );
+  assert.match(
+    nativeBridgeTestWorkflowBranch,
     /expected_labels\.append\(f"Kagemusha payload workflow must run the \{label\}"\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
     "native bridge workflow negative control must require the full workflow diagnostic for every mutated command",
   );
@@ -15143,6 +15747,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     nativeBridgeTestWorkflowBranch,
     /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
     "native bridge workflow negative control must print diagnostics for every mutated workflow label",
+  );
+  const nativeBridgeJsHostOrderWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-native-bridge-js-host-order-workflow":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-windowed-record-order-workflow":'),
+  );
+  assert.match(
+    nativeBridgeJsHostOrderWorkflowBranch,
+    /duplicate_line \+ forged_line[\s\S]*?forged_line \+ duplicate_line[\s\S]*?duplicate-output JS host tests[\s\S]*?before forged-result JS host tests/u,
+    "native bridge JS host ordering negative control must swap duplicate-output and forged-result host commands",
+  );
+  assert.match(
+    nativeBridgeJsHostOrderWorkflowBranch,
+    /expected\s*=\s*\([\s\S]*?duplicate-output JS host tests[\s\S]*?before forged-result JS host tests[\s\S]*?expected not in message/u,
+    "native bridge JS host ordering negative control must require the exact ordering diagnostic",
   );
   const nativeBridgeWindowedRecordOrderWorkflowBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-bridge-windowed-record-order-workflow":'),
@@ -15217,12 +15835,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label: "Python SDK test workflow branch must require the package-test label",
     },
     {
-      start: 'if mode == "--negative-control-python-host-test-workflow":',
-      end: 'if mode == "--negative-control-python-sdk-needs-workflow":',
-      expected: "Kagemusha payload workflow must run the Python PyO3 append-boundary host test",
-      label: "Python host workflow branch must require the PyO3 host-test label",
-    },
-    {
       start: 'if mode == "--negative-control-python-sdk-needs-workflow":',
       end: 'if mode == "--negative-control-jvm-sdk-job-workflow":',
       expected: "Kagemusha payload benchmark job must wait for the Python SDK test job",
@@ -15239,6 +15851,44 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       label,
     );
   }
+  const pythonHostWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-host-test-workflow":'),
+    guard.indexOf('if mode == "--negative-control-python-sdk-needs-workflow":'),
+  );
+  assertContainsAll(
+    pythonHostWorkflowBranch,
+    [
+      "PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND",
+      "PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND",
+      "Kagemusha payload workflow must run the Python PyO3 append-boundary host test",
+      "Kagemusha payload workflow must run the Python PyO3 append-boundary forged-result host test",
+    ],
+    "Python host workflow branch must cover both PyO3 append-boundary host commands",
+  );
+  assert.match(
+    pythonHostWorkflowBranch,
+    /mutations\s*=\s*\([\s\S]*?PYTHON_HOST_APPEND_BOUNDARY_TEST_COMMAND[\s\S]*?PYTHON_HOST_APPEND_BOUNDARY_FORGED_RESULT_TEST_COMMAND[\s\S]*?for old, new, label in mutations:/u,
+    "Python host workflow negative control must mutate both host test commands",
+  );
+  assert.match(
+    pythonHostWorkflowBranch,
+    /expected_labels\s*=\s*tuple\(label for _, _, label in mutations\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?for detected_message in first_lines_for_labels\(message, expected_labels\):/u,
+    "Python host workflow negative control must require every host-test diagnostic",
+  );
+  const pythonHostOrderWorkflowBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-host-test-order-workflow":'),
+    guard.indexOf('if mode == "--negative-control-python-sdk-needs-workflow":'),
+  );
+  assert.match(
+    pythonHostOrderWorkflowBranch,
+    /duplicate_line \+ forged_line[\s\S]*?forged_line \+ duplicate_line[\s\S]*?duplicate-output PyO3 host tests[\s\S]*?before forged-result PyO3 host tests/u,
+    "Python host ordering negative control must swap duplicate-output and forged-result host commands",
+  );
+  assert.match(
+    pythonHostOrderWorkflowBranch,
+    /expected\s*=\s*\([\s\S]*?duplicate-output PyO3 host tests[\s\S]*?before forged-result PyO3 host tests[\s\S]*?expected not in message/u,
+    "Python host ordering negative control must require the exact ordering diagnostic",
+  );
   for (const { start, end, sourceLabel, testLabel, label } of [
     {
       start: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
@@ -16903,8 +17553,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmNoteAmountVectorBranch,
-    /KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
-    "JVM/Android note amount vector negative control must mutate Kotlin and Android Java vector lists and digest diagnostics",
+    /python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?amount must be a decimal integer[\s\S]*?KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
+    "JVM/Android note amount vector negative control must mutate Python, Kotlin, and Android Java vector lists and digest diagnostics",
   );
   assertContainsAll(
     guard,
@@ -16914,6 +17564,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'assertEquals("spendNullifier must be exactly 32 bytes", shortSpendNullifier.message)',
       'assertEquals("spendNullifier must be non-zero", zeroSpendNullifier.message)',
       'assertEquals("spendNullifier must differ from noteCommitment", repeatedDigest.message)',
+      'match="note_commitment must be exactly 32 bytes"',
+      'match="spend_nullifier must be exactly 32 bytes"',
+      'match="note_commitment must be non-zero"',
+      'match="spend_nullifier must be non-zero"',
+      'match="spend_nullifier must differ from note_commitment"',
       '"noteCommitment must be exactly 32 bytes"',
       '"noteCommitment must be non-zero"',
       '"spendNullifier must be exactly 32 bytes"',
@@ -16936,6 +17591,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'Triple("1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Triple("1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+      '("", "amount must be a decimal integer")',
+      '("0", "amount must be greater than zero")',
+      '("00", "amount must be canonical")',
+      '(str(1 << 128), "amount must fit in u128")',
+      "for amount, expected_error in invalid_amounts:",
       '{"01", "amount must be canonical", "publicAmount must be canonical"}',
       '{"+1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       '{"1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
@@ -16960,26 +17620,50 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     jvmNoteAmountVectorBranch,
     [
+      'Kotlin typed recursive spend note amount test vectors missing Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+      'Kotlin typed recursive spend note amount test vectors missing Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero")',
+      'Kotlin typed recursive spend note amount test vectors missing Triple("00", "amount must be canonical", "publicAmount must be canonical")',
       'Kotlin typed recursive spend note amount test vectors missing Triple("0007", "amount must be canonical", "publicAmount must be canonical")',
       'Kotlin typed recursive spend note amount test vectors missing Triple("01", "amount must be canonical", "publicAmount must be canonical")',
+      'Kotlin typed recursive spend note amount test vectors missing Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend note amount test vectors missing Triple("+1", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend note amount test vectors missing Triple("1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend note amount test vectors missing Triple("1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+      'Kotlin typed recursive spend note amount test vectors missing Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend note amount test vectors missing Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       String.raw`Kotlin typed recursive spend note amount test vectors missing Triple("\\t7", "amount must be a decimal integer", "publicAmount must be a decimal integer")`,
       String.raw`Kotlin typed recursive spend note amount test vectors missing Triple("7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer")`,
+      'Kotlin typed recursive spend note amount test vectors missing Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128")',
+      'Kotlin typed recursive spend note amount test vectors missing Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128")',
+      'Android Java typed recursive spend note amount test vectors missing {"", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+      'Android Java typed recursive spend note amount test vectors missing {"0", "amount must be greater than zero", "publicAmount must be greater than zero"}',
+      'Android Java typed recursive spend note amount test vectors missing {"00", "amount must be canonical", "publicAmount must be canonical"}',
       'Android Java typed recursive spend note amount test vectors missing {"0007", "amount must be canonical", "publicAmount must be canonical"}',
       'Android Java typed recursive spend note amount test vectors missing {"01", "amount must be canonical", "publicAmount must be canonical"}',
+      'Android Java typed recursive spend note amount test vectors missing {"-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend note amount test vectors missing {"+1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend note amount test vectors missing {"1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend note amount test vectors missing {"1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+      'Android Java typed recursive spend note amount test vectors missing {"7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend note amount test vectors missing {" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       String.raw`Android Java typed recursive spend note amount test vectors missing {"\\t7", "amount must be a decimal integer", "publicAmount must be a decimal integer"}`,
       String.raw`Android Java typed recursive spend note amount test vectors missing {"7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer"}`,
-      "Kotlin typed recursive spend note amount test vectors missing assertEquals(amountMessage, invalidAmount.message)",
-      "Kotlin typed recursive spend public amount test vectors missing assertEquals(publicAmountMessage, invalidPublicAmount.message)",
-      "Android Java typed recursive spend note amount test vectors missing (String) invalidAmount[1]",
-      "Android Java typed recursive spend public amount test vectors missing (String) invalidAmount[2]",
+      'Android Java typed recursive spend note amount test vectors missing {"340282366920938463463374607431768211456", "amount must fit in u128", "publicAmount must fit in u128"}',
+      'Android Java typed recursive spend note amount test vectors missing {"9999999999999999999999999999999999999999", "amount must fit in u128", "publicAmount must fit in u128"}',
+      'Python typed recursive spend note amount test vectors missing ("", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing ("0", "amount must be greater than zero")',
+      'Python typed recursive spend note amount test vectors missing ("00", "amount must be canonical")',
+      'Python typed recursive spend note amount test vectors missing (str(1 << 128), "amount must fit in u128")',
+      "Python typed recursive spend note amount exact diagnostics missing with pytest.raises(ValueError, match=expected_error):",
+      'Python typed recursive spend note digest diagnostics missing match="note_commitment must be exactly 32 bytes"',
+      'Python typed recursive spend note digest diagnostics missing match="spend_nullifier must be exactly 32 bytes"',
+      'Python typed recursive spend note digest diagnostics missing match="note_commitment must be non-zero"',
+      'Python typed recursive spend note digest diagnostics missing match="spend_nullifier must be non-zero"',
+      'Python typed recursive spend note digest diagnostics missing match="spend_nullifier must differ from note_commitment"',
+      "Kotlin typed recursive spend note amount test vectors missing invalidAmount.message exact assertion",
+      "Kotlin typed recursive spend public amount test vectors missing invalidPublicAmount.message exact assertion",
+      "Android Java typed recursive spend note amount test vectors missing exact invalidAmount[1] diagnostic",
+      "Android Java typed recursive spend public amount test vectors missing exact invalidAmount[2] diagnostic",
       "Kotlin typed recursive spend note digest diagnostics missing val shortNoteCommitment = assertFailsWith<IllegalArgumentException>",
       'Kotlin typed recursive spend note digest diagnostics missing assertEquals("noteCommitment must be exactly 32 bytes", shortNoteCommitment.message)',
       "Kotlin typed recursive spend note digest diagnostics missing val zeroNoteCommitment = assertFailsWith<IllegalArgumentException>",
@@ -17024,8 +17708,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jvmRedeemPublicAmountVectorBranch,
-    /KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
-    "JVM/Android publicAmount vector negative control must mutate Kotlin and Android Java vector lists",
+    /python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?public_amount must be a decimal integer[\s\S]*?KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?KagemushaRecursiveSpendProverTest\.java[\s\S]*?"0007"[\s\S]*?run_checks\(mutated\)/u,
+    "JVM/Android publicAmount vector negative control must mutate Python, Kotlin, and Android Java vector lists",
   );
   assertContainsAll(
     guard,
@@ -17038,6 +17722,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'Triple("1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Triple("1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+      '("", "public_amount must be a decimal integer")',
+      '("0", "public_amount must be greater than zero")',
+      '("00", "public_amount must be canonical")',
+      '(str(1 << 128), "public_amount must fit in u128")',
+      "for public_amount, expected_error in invalid_public_amounts:",
       '{"01", "amount must be canonical", "publicAmount must be canonical"}',
       '{"+1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       '{"1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
@@ -17062,22 +17751,41 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     jvmRedeemPublicAmountVectorBranch,
     [
+      'Kotlin typed recursive spend public amount test vectors missing Triple("", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+      'Kotlin typed recursive spend public amount test vectors missing Triple("0", "amount must be greater than zero", "publicAmount must be greater than zero")',
+      'Kotlin typed recursive spend public amount test vectors missing Triple("00", "amount must be canonical", "publicAmount must be canonical")',
       'Kotlin typed recursive spend public amount test vectors missing Triple("0007", "amount must be canonical", "publicAmount must be canonical")',
       'Kotlin typed recursive spend public amount test vectors missing Triple("01", "amount must be canonical", "publicAmount must be canonical")',
+      'Kotlin typed recursive spend public amount test vectors missing Triple("-1", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend public amount test vectors missing Triple("+1", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend public amount test vectors missing Triple("1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend public amount test vectors missing Triple("1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
+      'Kotlin typed recursive spend public amount test vectors missing Triple("7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       'Kotlin typed recursive spend public amount test vectors missing Triple(" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer")',
       String.raw`Kotlin typed recursive spend public amount test vectors missing Triple("\\t7", "amount must be a decimal integer", "publicAmount must be a decimal integer")`,
       String.raw`Kotlin typed recursive spend public amount test vectors missing Triple("7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer")`,
+      'Kotlin typed recursive spend public amount test vectors missing Triple(U128_MAX_PLUS_ONE, "amount must fit in u128", "publicAmount must fit in u128")',
+      'Kotlin typed recursive spend public amount test vectors missing Triple(U128_TOO_MANY_DIGITS, "amount must fit in u128", "publicAmount must fit in u128")',
+      'Android Java typed recursive spend public amount test vectors missing {"", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+      'Android Java typed recursive spend public amount test vectors missing {"0", "amount must be greater than zero", "publicAmount must be greater than zero"}',
+      'Android Java typed recursive spend public amount test vectors missing {"00", "amount must be canonical", "publicAmount must be canonical"}',
       'Android Java typed recursive spend public amount test vectors missing {"0007", "amount must be canonical", "publicAmount must be canonical"}',
       'Android Java typed recursive spend public amount test vectors missing {"01", "amount must be canonical", "publicAmount must be canonical"}',
+      'Android Java typed recursive spend public amount test vectors missing {"-1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend public amount test vectors missing {"+1", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend public amount test vectors missing {"1.0", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend public amount test vectors missing {"1e3", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
+      'Android Java typed recursive spend public amount test vectors missing {"7 ", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       'Android Java typed recursive spend public amount test vectors missing {" 7", "amount must be a decimal integer", "publicAmount must be a decimal integer"}',
       String.raw`Android Java typed recursive spend public amount test vectors missing {"\\t7", "amount must be a decimal integer", "publicAmount must be a decimal integer"}`,
       String.raw`Android Java typed recursive spend public amount test vectors missing {"7\\n", "amount must be a decimal integer", "publicAmount must be a decimal integer"}`,
+      'Android Java typed recursive spend public amount test vectors missing {"340282366920938463463374607431768211456", "amount must fit in u128", "publicAmount must fit in u128"}',
+      'Android Java typed recursive spend public amount test vectors missing {"9999999999999999999999999999999999999999", "amount must fit in u128", "publicAmount must fit in u128"}',
+      'Python typed recursive spend public amount test vectors missing ("", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing ("0", "public_amount must be greater than zero")',
+      'Python typed recursive spend public amount test vectors missing ("00", "public_amount must be canonical")',
+      'Python typed recursive spend public amount test vectors missing (str(1 << 128), "public_amount must fit in u128")',
+      "Python typed recursive spend public amount exact diagnostics missing with pytest.raises(ValueError, match=expected_error):",
     ],
     "JVM/Android publicAmount vector negative control must require exact SDK labels",
   );
@@ -17109,18 +17817,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jvmPallasBuilderInputGuardBranch,
     [
       'Kotlin typed recursive spend proof-output evidence diagnostics missing assertEquals("hops must not be empty", pallasError.message)',
-      "Kotlin typed recursive spend proof-output evidence diagnostics missing val rejectedProofResult = assertFailsWith<IllegalArgumentException>",
+      "Kotlin typed recursive spend proof-output evidence diagnostics missing initError.message",
+      "Kotlin typed recursive spend proof-output evidence diagnostics missing appendError.message",
+      "Kotlin typed recursive spend proof-output evidence diagnostics missing rejectedProofResult.message",
       'Kotlin typed recursive spend proof-output evidence diagnostics missing "unshieldProofOutputArchive must be a successful privacy proof result: status=1 error_code=5"',
-      "Kotlin typed recursive spend proof-output evidence diagnostics missing val inactiveUnshieldVerifierRecord = assertFailsWith<IllegalArgumentException>",
+      "Kotlin typed recursive spend proof-output evidence diagnostics missing inactiveUnshieldVerifierRecord.message",
       'Kotlin typed recursive spend proof-output evidence diagnostics missing "unshieldVerifierRecord status must be Active"',
-      "Kotlin typed recursive spend proof-output evidence diagnostics missing val unshieldProofAsFoldHop = assertFailsWith<IllegalArgumentException>",
+      "Kotlin typed recursive spend proof-output evidence diagnostics missing unshieldProofAsFoldHop.message",
       'Kotlin typed recursive spend proof-output evidence diagnostics missing "hop 0 proofOutputArchive algorithm_id must be confidential-transfer-v2"',
       'Android Java typed recursive spend proof-output evidence diagnostics missing "hops must not be empty".equals(pallasError.getMessage())',
-      "Android Java typed recursive spend proof-output evidence diagnostics missing final IllegalArgumentException rejectedProofResult =",
+      "Android Java typed recursive spend proof-output evidence diagnostics missing proofOnlyRequestMessage.equals(initError.getMessage())",
+      "Android Java typed recursive spend proof-output evidence diagnostics missing proofOnlyRequestMessage.equals(appendError.getMessage())",
+      "Android Java typed recursive spend proof-output evidence diagnostics missing rejectedProofResult.getMessage()",
       'Android Java typed recursive spend proof-output evidence diagnostics missing "unshieldProofOutputArchive must be a successful privacy proof result: status=1 error_code=5"',
-      "Android Java typed recursive spend proof-output evidence diagnostics missing final IllegalArgumentException inactiveUnshieldVerifierRecord =",
+      "Android Java typed recursive spend proof-output evidence diagnostics missing inactiveUnshieldVerifierRecord.getMessage()",
       'Android Java typed recursive spend proof-output evidence diagnostics missing "unshieldVerifierRecord status must be Active"',
-      "Android Java typed recursive spend proof-output evidence diagnostics missing final IllegalArgumentException unshieldProofAsFoldHop =",
+      "Android Java typed recursive spend proof-output evidence diagnostics missing unshieldProofAsFoldHop.getMessage()",
       'Android Java typed recursive spend proof-output evidence diagnostics missing "hop 0 proofOutputArchive algorithm_id must be confidential-transfer-v2"',
     ],
     "JVM Pallas builder input negative control must require exact proof-output evidence diagnostics",
@@ -17200,7 +17912,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const nonCsharpPallasMetadataOptionShapeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":'),
-    guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
+    guard.indexOf('if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":'),
   );
   assert.match(
     nonCsharpPallasMetadataOptionShapeBranch,
@@ -17292,6 +18004,63 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     nonCsharpPallasMetadataOptionShapeBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "non-C# Pallas metadata option-shape negative control must not unconditionally pass after run_checks",
+  );
+  const nonCsharpPallasSequenceCountBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":'),
+    guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
+  );
+  assertContainsAll(
+    nonCsharpPallasSequenceCountBranch,
+    [
+      "JavaScript Pallas sequence count precheck decoder",
+      "JavaScript dist Pallas sequence count precheck decoder",
+      "Python Pallas sequence count precheck decoder",
+      "Swift Pallas sequence count precheck decoder",
+      "Kotlin Pallas sequence count precheck decoder",
+      "Android Java Pallas sequence count precheck decoder",
+      "JavaScript Pallas sequence count-prefix vectors",
+      "JavaScript package dist Pallas sequence count-prefix vectors",
+      "Python Pallas sequence count-prefix vectors",
+      "Swift Pallas sequence count-prefix vectors",
+      "Kotlin Pallas sequence count-prefix vectors",
+      "Android Java Pallas sequence count-prefix vectors",
+      "expectedCount,",
+      "expected_count: int | None = None",
+      "expectedCount: Int? = nil",
+      "expectedCount: Int? = null",
+      "final int expectedCount,",
+      "paramsGSequencePayload: u64LE(5)",
+      '"params_g_sequence_payload": _u64_le(5)',
+      "paramsGSequencePayload: Self.uint64Payload(5)",
+      "it.paramsGSequencePayload = testPayload { writeUInt(5, 64) }",
+      "spec.paramsGSequencePayload = testPayload(child -> child.writeUInt(5, 64))",
+    ],
+    "non-C# Pallas sequence-count negative control must mutate decoder prechecks and raw count-prefix vectors in every non-C# SDK",
+  );
+  assert.doesNotMatch(
+    nonCsharpPallasSequenceCountBranch,
+    /csharp\/README\.md|csharp\//u,
+    "non-C# Pallas sequence-count negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    nonCsharpPallasSequenceCountBranch,
+    /for target, old, new, label in replacements:[\s\S]*?expected_labels\.append\(f"\{label\} missing \{old\.splitlines\(\)\[0\]\.strip\(\)\}"\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?non-C# Pallas sequence-count precheck drift was not detected for/u,
+    "non-C# Pallas sequence-count negative control must require exact emitted diagnostics for every mutated SDK marker",
+  );
+  assert.match(
+    nonCsharpPallasSequenceCountBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "non-C# Pallas sequence-count negative control must print diagnostics for every mutated SDK label",
+  );
+  assert.match(
+    nonCsharpPallasSequenceCountBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: non-C# Pallas sequence-count precheck drift was not detected"\s*\)/u,
+    "non-C# Pallas sequence-count negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nonCsharpPallasSequenceCountBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "non-C# Pallas sequence-count negative control must not unconditionally pass after run_checks",
   );
   const jvmAndroidPallasTranscriptLabelByteLimitBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
@@ -17514,6 +18283,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeBoundaryBranch,
     /IrohaSwift\/README\.md[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?may rewrite the previous proof archive before native dispatch/u,
     "SDK README boundary negative control must mutate the previous-proof boundary across non-C# READMEs",
+  );
+  assert.match(
+    guard,
+    /NON_CSHARP_REDEEM_LINEAGE_RECORD_README_NEEDLES = \([\s\S]*?lineage_verifier_records[\s\S]*?additional Reserved-lineage verifier records[\s\S]*?multi-profile record-backed lineage witnesses[\s\S]*?vector-only callers[\s\S]*?missing redeem lineage verifier-record README boundary/u,
+    "SDK README boundary guard must require the plural lineage verifier-record documentation across non-C# READMEs",
+  );
+  assert.match(
+    sdkReadmeBoundaryBranch,
+    /multi-profile[\s\S]*?single-profile/u,
+    "SDK README boundary negative control must mutate the plural lineage verifier-record documentation",
   );
   assert.doesNotMatch(
     sdkReadmeBoundaryBranch,
@@ -17795,6 +18574,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const offlineDocInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-doc-instruction-transaction-surface":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-redeem-lineage-selection":'),
+  );
+  const offlineDocRedeemLineageSelectionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-offline-doc-redeem-lineage-selection":'),
     guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
   );
   assert.match(
@@ -17811,6 +18594,31 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     offlineDocInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "offline Kagemusha doc instruction transaction negative control must not unconditionally pass after run_checks",
+  );
+  assert.match(
+    guard,
+    /def check_offline_doc_redeem_lineage_record_selection\(texts, errors\):[\s\S]*?Non-C# typed redeem request encoders use a different semantic-bundle rule[\s\S]*?require lineage verifier records when semantic witnesses contain prior Reserved-lineage proofs[\s\S]*?reject dangling records for init-only or absent lineage witnesses/u,
+    "offline Kagemusha doc redeem lineage-record selection guard must pin the semantic-with-witness exception",
+  );
+  assert.match(
+    offlineDocRedeemLineageSelectionBranch,
+    /Non-C# typed redeem request encoders use a[\s\S]*?different semantic-bundle rule[\s\S]*?reject lineage verifier records on all[\s\S]*?semantic final bundles before native dispatch/u,
+    "offline Kagemusha doc redeem lineage selection negative control must mutate the semantic-with-witness exception",
+  );
+  assert.match(
+    offlineDocRedeemLineageSelectionBranch,
+    /offline Kagemusha docs missing redeem lineage-record selection boundary:[\s\S]*?require lineage verifier records when semantic witnesses contain prior Reserved-lineage proofs[\s\S]*?reject dangling records for init-only or absent lineage witnesses/u,
+    "offline Kagemusha doc redeem lineage selection negative control must require the exact emitted doc diagnostics",
+  );
+  assert.match(
+    offlineDocRedeemLineageSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: offline Kagemusha redeem lineage-record doc drift was not detected"\s*\)/u,
+    "offline Kagemusha doc redeem lineage selection negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    offlineDocRedeemLineageSelectionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "offline Kagemusha doc redeem lineage selection negative control must not unconditionally pass after run_checks",
   );
   const sdkProofChainAccumulatorInputBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
@@ -18109,6 +18917,107 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /corridor_value_replacements[\s\S]*?countPrefixedFixedArrayPayload\(0x07, count: 32\)[\s\S]*?countPrefixedFixedArrayPayload\(0x0e, count: 32\)[\s\S]*?countPrefixedFixedArrayPayload\(0x14, count: 32\)[\s\S]*?countPrefixedFixedArrayPayload\(0x07, 32\)[\s\S]*?countPrefixedFixedArrayPayload\(0x0e, 32\)[\s\S]*?countPrefixedFixedArrayPayload\(0x14, 32\)[\s\S]*?countPrefixedFixedArrayPayload\(\(byte\) 0x07, 32\)[\s\S]*?countPrefixedFixedArrayPayload\(\(byte\) 0x0e, 32\)[\s\S]*?countPrefixedFixedArrayPayload\(\(byte\) 0x14, 32\)[\s\S]*?kagemushaCountPrefixedFixedArrayPayload\(0x07, 32\)[\s\S]*?kagemushaCountPrefixedFixedArrayPayload\(0x0e, 32\)[\s\S]*?kagemushaCountPrefixedFixedArrayPayload\(0x14, 32\)[\s\S]*?_count_prefixed_fixed_array_payload\(0x07, 32\)[\s\S]*?_count_prefixed_fixed_array_payload\(0x0E, 32\)[\s\S]*?_count_prefixed_fixed_array_payload\(0x14, 32\)[\s\S]*?kagemushaCountPrefixedFixedArrayPayload\(0x07, 32\)[\s\S]*?kagemushaCountPrefixedFixedArrayPayload\(0x0e, 32\)[\s\S]*?kagemushaCountPrefixedFixedArrayPayload\(0x14, 32\)/u,
     "SDK accumulator field-length vector negative control must mutate count-prefixed accumulator corridor vectors across non-C# SDKs and package dist",
   );
+  assertContainsAll(
+    sdkAccumulatorFieldLengthVectorBranch,
+    [
+      "countPrefixedFixedArrayPayload(0x08, count: 32)",
+      "countPrefixedFixedArrayPayload(0x09, count: 32)",
+      "countPrefixedFixedArrayPayload(0x0a, count: 32)",
+      "countPrefixedFixedArrayPayload(0x0b, count: 32)",
+      "countPrefixedFixedArrayPayload(0x0c, count: 32)",
+      "countPrefixedFixedArrayPayload(0x0d, count: 32)",
+      "countPrefixedFixedArrayPayload(0x08, 32)",
+      "countPrefixedFixedArrayPayload(0x09, 32)",
+      "countPrefixedFixedArrayPayload(0x0a, 32)",
+      "countPrefixedFixedArrayPayload(0x0b, 32)",
+      "countPrefixedFixedArrayPayload(0x0c, 32)",
+      "countPrefixedFixedArrayPayload(0x0d, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x08, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x09, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x0a, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x0b, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x0c, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x0d, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x08, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x09, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x0a, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x0b, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x0c, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x0d, 32)",
+      "_count_prefixed_fixed_array_payload(0x08, 32)",
+      "_count_prefixed_fixed_array_payload(0x09, 32)",
+      "_count_prefixed_fixed_array_payload(0x0A, 32)",
+      "_count_prefixed_fixed_array_payload(0x0B, 32)",
+      "_count_prefixed_fixed_array_payload(0x0C, 32)",
+      "_count_prefixed_fixed_array_payload(0x0D, 32)",
+      "bundle.accumulator.aggregation_transcript_digest",
+      "bundle.accumulator.nullifier_digest",
+      "bundle.accumulator.output_commitment_digest",
+      "bundle.accumulator.fold_digest",
+      "bundle.accumulator.recursive_proof_chain_digest",
+      "bundle.accumulator.transition_profile_binding_digest",
+    ],
+    "SDK accumulator field-length vector negative control must mutate core corridor count-prefixed vectors",
+  );
+  assertContainsAll(
+    sdkAccumulatorFieldLengthVectorBranch,
+    [
+      "countPrefixedFixedArrayPayload(0x0f, count: 32)",
+      "countPrefixedFixedArrayPayload(0x0f, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x0f, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x0f, 32)",
+      "_count_prefixed_fixed_array_payload(0x0F, 32)",
+      "bundle.accumulator.append_boundary_digest",
+    ],
+    "SDK accumulator field-length vector negative control must mutate append-boundary count-prefixed vectors",
+  );
+  assertContainsAll(
+    sdkAccumulatorFieldLengthVectorBranch,
+    [
+      "countPrefixedFixedArrayPayload(0x10, count: 32)",
+      "countPrefixedFixedArrayPayload(0x11, count: 32)",
+      "countPrefixedFixedArrayPayload(0x12, count: 32)",
+      "countPrefixedFixedArrayPayload(0x13, count: 32)",
+      "countPrefixedFixedArrayPayload(0x10, 32)",
+      "countPrefixedFixedArrayPayload(0x11, 32)",
+      "countPrefixedFixedArrayPayload(0x12, 32)",
+      "countPrefixedFixedArrayPayload(0x13, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x10, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x11, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x12, 32)",
+      "countPrefixedFixedArrayPayload((byte) 0x13, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x10, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x11, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x12, 32)",
+      "kagemushaCountPrefixedFixedArrayPayload(0x13, 32)",
+      "_count_prefixed_fixed_array_payload(0x10, 32)",
+      "_count_prefixed_fixed_array_payload(0x11, 32)",
+      "_count_prefixed_fixed_array_payload(0x12, 32)",
+      "_count_prefixed_fixed_array_payload(0x13, 32)",
+      "bundle.accumulator.verifier_params_fingerprint",
+      "bundle.accumulator.fixed_window_table_schedule_digest",
+      "bundle.accumulator.fixed_window_shared_table_manifest_digest",
+      "bundle.accumulator.fixed_window_table_base_digest",
+    ],
+    "SDK accumulator field-length vector negative control must mutate fixed-window count-prefixed vectors",
+  );
+  assertContainsAll(
+    sdkAccumulatorFieldLengthVectorBranch,
+    [
+      '(21, Data([2, 0, 0, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
+      '(21, Data([2, 0, 0]), .invalidArchive("bundle.accumulator.verifier_opening_len"))',
+      'Triple(21, byteArrayOf(2, 0, 0, 0, 0), "bundle.accumulator.verifier_opening_len")',
+      'Triple(21, byteArrayOf(2, 0, 0), "bundle.accumulator.verifier_opening_len")',
+      '{21, new byte[] {2, 0, 0, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
+      '{21, new byte[] {2, 0, 0}, "bundle.accumulator.verifier_opening_len"}',
+      '[21, Buffer.from([2, 0, 0, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+      '[21, Buffer.from([2, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+      "bytes([2, 0, 0, 0, 0])",
+      "bytes([2, 0, 0])",
+      "JavaScript package dist recursive spend bundle accumulator field-length coverage",
+    ],
+    "SDK accumulator field-length vector negative control must mutate verifier-opening raw u32 trailing-byte vectors",
+  );
   assert.match(
     sdkAccumulatorFieldLengthVectorBranch,
     /corridor_implementation_replacements[\s\S]*?offset = kagemushaRequireRecursiveSpendAccumulatorCorridor\([\s\S]*?try requireAccumulatorCorridor\(&reader, hopCount: hopCount\)[\s\S]*?requireAccumulatorCorridor\(decoder, hopCount\)[\s\S]*?cursor = _kagemusha_require_recursive_spend_accumulator_corridor\(/u,
@@ -18135,6 +19044,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'Triple(7, ByteArray(32), "bundle.accumulator.lineage_digest")',
       '{7, new byte[32], "bundle.accumulator.lineage_digest"}',
       '[9, Buffer.alloc(32), "bundle.accumulator.nullifier_digest", null]',
+      '[21, Buffer.from([2, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
+      '[21, Buffer.from([2, 0, 0, 0, 0]), "bundle.accumulator.verifier_opening_len", null]',
       '(9, Data(repeating: 0, count: 32), .invalidArchive("bundle.accumulator.nullifier_digest"))',
       '(9, bytes(32), r"bundle\\\\.accumulator\\\\.nullifier_digest")',
       'Triple(9, ByteArray(32), "bundle.accumulator.nullifier_digest")',
@@ -18142,18 +19053,35 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "offset = kagemushaRequireRecursiveSpendAccumulatorCorridor(",
       "requireAccumulatorCorridor(decoder, hopCount)",
       "cursor = _kagemusha_require_recursive_spend_accumulator_corridor(",
-      '[2, kagemushaFixedArrayPayload(0x01, 15), "asset", null]',
-      '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "asset", null]',
-      '(2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive(\\"fixedArray\\"))',
+      '[2, kagemushaFixedArrayPayload(0x01, 15), "bundle.accumulator.asset", null]',
+      '[2, kagemushaCountPrefixedFixedArrayPayload(0x01, 16), "bundle.accumulator.asset", null]',
+      '(2, Self.countPrefixedFixedArrayPayload(0x01, count: 16), .invalidArchive(\\"bundle.accumulator.asset\\"))',
       '(2, _count_prefixed_fixed_array_payload(0x01, 16), r"bundle\\\\.accumulator\\\\.asset")',
-      '[3, kagemushaFixedArrayPayload(0x02, 31), "initialRoot", null]',
-      '[3, kagemushaCountPrefixedFixedArrayPayload(0x02, 32), "initialRoot", null]',
-      '(3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive(\\"fixedArray\\"))',
+      '[3, kagemushaFixedArrayPayload(0x02, 31), "bundle.accumulator.initial_root", null]',
+      '      kagemushaCountPrefixedFixedArrayPayload(0x02, 32),\\n      "bundle.accumulator.initial_root",',
+      '(3, Self.countPrefixedFixedArrayPayload(0x02, count: 32), .invalidArchive(\\"bundle.accumulator.initial_root\\"))',
       "_count_prefixed_fixed_array_payload(0x02, 32)",
-      '[4, kagemushaFixedArrayPayload(0x03, 33), "finalRoot", null]',
-      '[4, kagemushaCountPrefixedFixedArrayPayload(0x03, 32), "finalRoot", null]',
-      '(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive(\\"fixedArray\\"))',
+      '[4, kagemushaFixedArrayPayload(0x03, 33), "bundle.accumulator.final_root", null]',
+      '      kagemushaCountPrefixedFixedArrayPayload(0x03, 32),\\n      "bundle.accumulator.final_root",',
+      '(4, Self.countPrefixedFixedArrayPayload(0x03, count: 32), .invalidArchive(\\"bundle.accumulator.final_root\\"))',
       "_count_prefixed_fixed_array_payload(0x03, 32)",
+      "truncated_accumulator_field_labels = (",
+      '(0, r"bundle\\\\.accumulator\\\\.domain")',
+      '(1, r"bundle\\\\.accumulator\\\\.chain_id")',
+      '(2, r"bundle\\\\.accumulator\\\\.asset")',
+      '(3, r"bundle\\\\.accumulator\\\\.initial_root")',
+      '(4, r"bundle\\\\.accumulator\\\\.final_root")',
+      "_kagemusha_norito_length(1)",
+      "const truncatedAccumulatorFieldLabels = [",
+      '[0, "bundle.accumulator.domain"],',
+      '[1, "bundle.accumulator.chain_id"],',
+      '[2, "bundle.accumulator.asset"],',
+      '[3, "bundle.accumulator.initial_root"],',
+      '[4, "bundle.accumulator.final_root"],',
+      "kagemushaNoritoLength(1, TEST_NORITO_COMPACT_LEN_FLAG)",
+      "const expectedMessage =",
+      "payload length mismatch",
+      "payload is truncated",
     ],
     "SDK parity guard must pin accumulator count-prefixed field-length vectors",
   );
@@ -18416,10 +19344,42 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     guard.indexOf('if mode == "--negative-control-sdk-verify-lineage-record-preflight":'),
     guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
   );
+  assertContainsAll(
+    guard,
+    [
+      "forgedVerifyLineageRecord",
+      "forgedRedeemLineageRecord",
+      "forgedRedeemLineageRecordBeforeWitness",
+    ],
+    "SDK parity guard must pin Python forged lineage-record type-preflight markers",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "val appendWrongRecordBundle = assertFailsWith<IllegalArgumentException>",
+      '"recordBundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_RECORD_BUNDLE} Norito archive"',
+    ],
+    "SDK parity guard must pin Kotlin append wrong record-bundle exact diagnostics",
+  );
+  assert.match(
+    guard,
+    /require_regex\([\s\S]*?java_test[\s\S]*?recordBundle must be a valid[\s\S]*?SCHEMA_RECORD_BUNDLE[\s\S]*?AppendSpendRequest[\s\S]*?SCHEMA_VERIFY_RESULT[\s\S]*?Android Java typed recursive spend append wrong record-bundle exact diagnostics/u,
+    "SDK parity guard must pin Android Java append wrong record-bundle exact diagnostics with a scoped regex",
+  );
   assert.match(
     sdkVerifyLineageRecordPreflightBranch,
     /"missing"[\s\S]*?IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?init_bundle[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?sharedRecursiveSpendArchive\(\\?"init_bundle\\?"\)[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?missingVerifyLineageRecord\.message[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?VerifySpendRequest[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?RecursiveSpendLineageProofCircuitIdV1[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?sharedRecursiveSpendAbi6Archive\(\\?"init_bundle\\?"\)/u,
     "SDK verify lineage-record preflight negative control must mutate every SDK missing-record vector and package dist",
+  );
+  assert.match(
+    sdkVerifyLineageRecordPreflightBranch,
+    /with pytest\.raises\(\\n[\s\S]*?match="lineage_verifier_record is required for reserved-lineage bundles"[\s\S]*?KagemushaRecursiveSpendVerifyRequest[\s\S]*?Python typed recursive spend verify lineage-record preflight tests missing match="lineage_verifier_record is required for reserved-lineage bundles",/u,
+    "SDK verify lineage-record preflight negative control must mutate the scoped Python verify request block",
+  );
+  assert.match(
+    guard,
+    /require_block_contains\([\s\S]*?wrong_bundle_schema = _synthetic_kagemusha_archive\([\s\S]*?lineage_verifier_record is required for reserved-lineage bundles[\s\S]*?Python typed recursive spend verify lineage-record preflight tests/u,
+    "SDK parity guard must scope Python verify lineage-record checks to the verify request block",
   );
   assert.match(
     sdkVerifyLineageRecordPreflightBranch,
@@ -18428,8 +19388,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkVerifyLineageRecordPreflightBranch,
-    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?elif False and self\.lineage_verifier_record is not None[\s\S]*?Python typed recursive spend verify lineage-record selection before parse[\s\S]*?optionalVerifyLineageRecord[\s\S]*?Python typed recursive spend verify lineage-record preflight tests missing danglingVerifyLineageRecord/u,
-    "SDK verify lineage-record preflight negative control must mutate Python selection-before-parse source and exact dangling-record marker",
+    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?elif False and self\.lineage_verifier_record is not None[\s\S]*?Python typed recursive spend verify lineage-record selection before parse[\s\S]*?typedVerifyLineageRecordAccepted[\s\S]*?Python typed recursive spend verify lineage-record preflight tests missing forgedVerifyLineageRecord[\s\S]*?optionalVerifyLineageRecord[\s\S]*?Python typed recursive spend verify lineage-record preflight tests missing danglingVerifyLineageRecord/u,
+    "SDK verify lineage-record preflight negative control must mutate Python selection-before-parse source plus exact forged and dangling record markers",
   );
   assert.match(
     sdkVerifyLineageRecordPreflightBranch,
@@ -18439,7 +19399,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     sdkVerifyLineageRecordPreflightBranch,
     [
+      'Kotlin typed recursive spend verify lineage-record preflight tests missing assertEquals("blockHeight must be non-negative", negativeVerifyHeight.message)',
+      'Kotlin typed recursive spend verify lineage-record preflight tests missing "bundle must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_BUNDLE} Norito archive"',
       "Kotlin typed recursive spend Pallas archive checksum diagnostics missing val corruptedPallasOpenEnvelopeArchive = assertFailsWith<IllegalArgumentException>",
+      'Kotlin typed recursive spend Pallas archive checksum diagnostics missing assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().startsWith("Checksum mismatch: expected 0x"))',
       'Kotlin typed recursive spend Pallas archive checksum diagnostics missing assertTrue(corruptedPallasOpenEnvelopeArchive.message.orEmpty().contains(" got 0x"))',
       'Kotlin typed recursive spend Pallas archive malformed diagnostics missing "pallasOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"',
       'Kotlin typed recursive spend Pallas archive malformed diagnostics missing pallasOpenEnvelopeVectorArchive(count = 0) to "pallasOpenEnvelopes requires exactly 1 envelope(s)"',
@@ -18455,8 +19418,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'Kotlin typed recursive spend Pallas archive malformed diagnostics missing pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data"',
       "Kotlin typed recursive spend Pallas archive malformed diagnostics missing assertEquals(expectedMessage, archiveError.message)",
       'Kotlin typed recursive spend lineage-key exact diagnostics missing assertEquals("lineage key artifacts are invalid for recursive spend init", wrongInitLineage.message)',
-      "Android Java typed recursive spend verify lineage-record preflight tests missing assertThrows(",
+      "Android Java typed recursive spend verify lineage-record preflight tests missing lineageVerifierRecord is required for reserved-lineage bundles",
+      "Android Java typed recursive spend verify lineage-record preflight tests missing lineageVerifierRecord is only valid for reserved-lineage bundles",
+      'Android Java typed recursive spend verify lineage-record preflight tests missing "blockHeight must be non-negative".equals(negativeVerifyHeight.getMessage())',
+      "Android Java typed recursive spend verify lineage-record preflight tests missing final String wrongBundleMessage =",
       "Android Java typed recursive spend Pallas archive checksum diagnostics missing final IllegalArgumentException corruptedPallasOpenEnvelopeArchive =",
+      'Android Java typed recursive spend Pallas archive checksum diagnostics missing .startsWith("Checksum mismatch: expected 0x")',
       'Android Java typed recursive spend Pallas archive checksum diagnostics missing .contains(" got 0x")',
       'Android Java typed recursive spend Pallas archive malformed diagnostics missing "pallasOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"',
       'Android Java typed recursive spend Pallas archive malformed diagnostics missing {pallasOpenEnvelopeVectorArchive(0), "pallasOpenEnvelopes requires exactly 1 envelope(s)"}',
@@ -18517,7 +19484,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkVerifyResultTrailingFieldVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-sdk-verify-result-redeem-aliases":'),
   );
   assert.match(
     sdkVerifyResultTrailingFieldVectorBranch,
@@ -18559,9 +19526,53 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK verify-result trailing-field vector negative control must not unconditionally pass after run_checks",
   );
+  const sdkVerifyResultRedeemAliasBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-verify-result-redeem-aliases":'),
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?lineageWitnessRequiredForRedeem: lineageWitnessRequired[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?lineageWitnessRequiredForRedeem: lineageWitnessRequired[\s\S]*?javascript\/iroha_js\/index\.d\.ts[\s\S]*?readonly lineageWitnessRequiredForRedeem: boolean/u,
+    "SDK verify-result redeem alias negative control must mutate JS source, dist, and declarations",
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?def lineage_witness_required_for_redeem\(self\) -> bool:[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?public var lineageWitnessRequiredForRedeem: Bool/u,
+    "SDK verify-result redeem alias negative control must mutate Python and Swift source aliases",
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?val lineageWitnessRequiredForRedeem: Boolean[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?public final boolean lineageWitnessRequiredForRedeem;/u,
+    "SDK verify-result redeem alias negative control must mutate Kotlin and Android Java source aliases",
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /replace_all[\s\S]*?mutated\[target\]\.replace\(old, new\) if replace_all else mutated\[target\]\.replace\(old, new, 1\)[\s\S]*?expected_labels\.append\(f"\{label\} missing \{old\}"\)[\s\S]*?run_checks\(mutated\)/u,
+    "SDK verify-result redeem alias negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK verify-result redeem alias drift was not detected for/u,
+    "SDK verify-result redeem alias negative control must require every non-C# alias drift to be reported",
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "SDK verify-result redeem alias negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    sdkVerifyResultRedeemAliasBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK verify-result redeem alias drift was not detected"\s*\)/u,
+    "SDK verify-result redeem alias negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkVerifyResultRedeemAliasBranch,
+    /csharp\//u,
+    "SDK verify-result redeem alias negative control must stay non-C#",
+  );
   const sdkLineageWitnessTrailingFieldVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
-    guard.indexOf('if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":'),
+    guard.indexOf('if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":'),
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
@@ -18617,6 +19628,138 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkLineageWitnessTrailingFieldVectorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK lineage-witness trailing-field vector negative control must not unconditionally pass after run_checks",
+  );
+  const nonCsharpLineageWitnessCountPrefixBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":'),
+    guard.indexOf(
+      'if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":',
+    ),
+  );
+  assertContainsAll(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    [
+      "JavaScript lineage-witness previous-proof count precheck decoder",
+      "JavaScript dist lineage-witness previous-proof count precheck decoder",
+      "Python lineage-witness previous-proof count precheck decoder",
+      "Swift lineage-witness previous-proof count precheck decoder",
+      "Kotlin lineage-witness previous-proof count precheck decoder",
+      "Android Java lineage-witness previous-proof count precheck decoder",
+      "JavaScript lineage-witness previous-proof count-prefix vectors",
+      "JavaScript package dist lineage-witness previous-proof count-prefix vectors",
+      "Python lineage-witness previous-proof count-prefix vectors",
+      "Swift lineage-witness previous-proof count-prefix vectors",
+      "Kotlin lineage-witness previous-proof count-prefix vectors",
+      "Android Java lineage-witness previous-proof count-prefix vectors",
+      "count > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+      "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
+      "guard count <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
+      "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+      "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(",
+      "_recursive_spend_lineage_witness_with_previous_proof_count_prefix_only(",
+      "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1",
+      "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1",
+    ],
+    "non-C# lineage-witness count-prefix negative control must mutate decoder prechecks and vectors",
+  );
+  assert.doesNotMatch(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    /csharp\//u,
+    "non-C# lineage-witness count-prefix negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    /expected_marker = old\.splitlines\(\)\[0\]\.strip\(\)[\s\S]*?expected_labels\.append\(f"\{label\} missing \{expected_marker\}"\)[\s\S]*?run_checks\(mutated\)/u,
+    "non-C# lineage-witness count-prefix negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?non-C# lineage-witness count-prefix drift was not detected for/u,
+    "non-C# lineage-witness count-prefix negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "non-C# lineage-witness count-prefix negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: non-C# lineage-witness count-prefix drift was not detected"\s*\)/u,
+    "non-C# lineage-witness count-prefix negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nonCsharpLineageWitnessCountPrefixBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "non-C# lineage-witness count-prefix negative control must not unconditionally pass after run_checks",
+  );
+  const nonCsharpRecordBundleFoldStepCountPrefixBranch = guard.slice(
+    guard.indexOf(
+      'if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":',
+    ),
+    guard.indexOf(
+      'if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":',
+    ),
+  );
+  assertContainsAll(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    [
+      "JavaScript record-bundle fold-step count precheck decoder",
+      "JavaScript dist record-bundle fold-step count precheck decoder",
+      "Python record-bundle fold-step count precheck decoder",
+      "Swift record-bundle fold-step count precheck decoder",
+      "Kotlin record-bundle fold-step count precheck decoder",
+      "Android Java record-bundle fold-step count precheck decoder",
+      "JavaScript record-bundle fold-step count-prefix vectors",
+      "JavaScript package dist record-bundle fold-step count-prefix vectors",
+      "Python record-bundle fold-step count-prefix vectors",
+      "Swift record-bundle fold-step count-prefix vectors",
+      "Kotlin record-bundle fold-step count-prefix vectors",
+      "Android Java record-bundle fold-step count-prefix vectors",
+      "function kagemushaReadVerifiedFoldStepCount(payload, flags, field)",
+      "def _kagemusha_read_verified_fold_step_count(",
+      "private static func readVerifiedFoldStepCount(",
+      "private fun readVerifiedFoldStepCount(decoder: NoritoDecoder, field: String): Int",
+      "private static int readVerifiedFoldStepCount(final NoritoDecoder decoder, final String field)",
+      "countBig > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
+      "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
+      "guard count64 <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
+      "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+      "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+      "steps_payload=_u64_le(kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
+      "Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)",
+      '"recordBundle.steps fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
+      "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
+    ],
+    "non-C# record-bundle fold-step count-prefix negative control must mutate decoder prechecks and vectors",
+  );
+  assert.doesNotMatch(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    /csharp\//u,
+    "non-C# record-bundle fold-step count-prefix negative control must leave C# for the Windows follow-up",
+  );
+  assert.match(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    /expected_labels\.append\(f"\{label\} missing \{expected_marker\}"\)[\s\S]*?run_checks\(mutated\)/u,
+    "non-C# record-bundle fold-step count-prefix negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    /missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?non-C# record-bundle fold-step count-prefix drift was not detected for/u,
+    "non-C# record-bundle fold-step count-prefix negative control must require every SDK drift to be reported",
+  );
+  assert.match(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "non-C# record-bundle fold-step count-prefix negative control must print diagnostics for every mutated surface",
+  );
+  assert.match(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected"\s*\)/u,
+    "non-C# record-bundle fold-step count-prefix negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "non-C# record-bundle fold-step count-prefix negative control must not unconditionally pass after run_checks",
   );
   const sdkCurrentNoteAmountTrailingFieldVectorBranch = guard.slice(
     guard.indexOf(
@@ -18989,6 +20132,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkBundleCurrentNoteVectorBranch,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?function kagemushaDecodedNumericU128Decimal\(value, field\)[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?function kagemushaDecodedNumericU128Decimal\(value, field\)/u,
+    "SDK bundle current-note vector negative control must mutate JS decoded Numeric diagnostics",
+  );
+  assert.match(
+    sdkBundleCurrentNoteVectorBranch,
     /def expected_bundle_current_note_label\(target, old, label\):[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?pattern def _kagemusha_read_fixed_bytes[\s\S]*?for target, \(old, new, label\) in implementation_replacements\.items\(\):[\s\S]*?expected_labels\.append\(expected_bundle_current_note_label\(target, old, label\)\)/u,
     "SDK bundle current-note vector negative control must require exact Python fixed-array decoder diagnostics",
   );
@@ -19186,24 +20334,57 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /def expected_topup_anchor_nullifier_invariant_label\(old, label\):[\s\S]*?marker = old\.splitlines\(\)\[0\][\s\S]*?expected_labels\.append\(expected_topup_anchor_nullifier_invariant_label\(old, label\)\)[\s\S]*?run_checks\(mutated\)/u,
     "SDK top-up anchor nullifier invariant negative control must require exact reported markers",
   );
+  assert.match(
+    sdkTopupAnchorNullifierInvariantBranch,
+    /_kagemusha_require_recursive_spend_topup_anchor_nullifiers\(\\n        topup_anchor_nullifiers,[\s\S]*?if cursor != len\(payload\):\\n        raise ValueError\(\\"Trailing bytes after accumulator\\"\)[\s\S]*?Python typed recursive spend top-up anchor nullifier precedence guard/u,
+    "SDK top-up anchor nullifier invariant negative control must pin Python accumulator-before-trailing precedence",
+  );
+  assertContainsAll(
+    sdkTopupAnchorNullifierInvariantBranch,
+    [
+      "JavaScript typed recursive spend top-up anchor nullifier invariant tests",
+      "JavaScript package dist recursive spend top-up anchor nullifier invariant coverage",
+      "Python typed recursive spend top-up anchor nullifier invariant tests",
+      "Swift typed recursive spend top-up anchor nullifier invariant tests",
+      "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
+      "Android Java typed recursive spend top-up anchor nullifier invariant tests",
+      "malformed proof cannot mask invalid top-up anchor nullifiers",
+      "malformed proof can mask invalid top-up anchor nullifiers",
+      "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+      "trailing accumulator can mask invalid top-up anchor nullifiers",
+    ],
+    "SDK top-up anchor nullifier invariant negative control must pin cross-SDK malformed-proof and trailing-accumulator precedence markers",
+  );
   const sdkRedeemLineagePreflightBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-preflight":'),
     guard.indexOf('if mode == "--negative-control-sdk-redeem-lineage-witness-shape":'),
   );
   assert.match(
     sdkRedeemLineagePreflightBranch,
-    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?redeemLineageVerifierRecordOptional[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?redeemLineageVerifierRecordOptional/u,
-    "SDK redeem lineage preflight negative control must mutate JS source and dist predecode gates",
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?redeemLineageVerifierRecordOptional[\s\S]*?lineageVerifierRecords\.length > 0;[\s\S]*?false;[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?redeemLineageVerifierRecordOptional[\s\S]*?lineageVerifierRecords\.length > 0;[\s\S]*?false;/u,
+    "SDK redeem lineage preflight negative control must mutate JS source and dist predecode gates including plural lineage records",
   );
   assert.match(
     sdkRedeemLineagePreflightBranch,
-    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("lineageWitness"\)[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?danglingRedeemLineageRecordOptional[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?semantic_missing_witness_redeem_proof = b"proof"[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageWitness is required for this bundle[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageWitness is required for this bundle[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?lineageWitness is required for this bundle[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?danglingRedeemLineageRecordOptional/u,
+    /IrohaSwift\/Tests\/IrohaSwiftTests\/KagemushaRecursiveSpendRequestCodecsTests\.swift[\s\S]*?assertRedeemRequestInvalidField\("lineageWitness"\)[\s\S]*?reservedMissingRecordAllowsMalformedWitness[\s\S]*?javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?danglingRedeemLineageRecordOptional[\s\S]*?reservedMissingRecordAllowsMalformedWitness[\s\S]*?typedRedeemLineageRecordBeforeWitnessAccepted[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?semantic_missing_witness_redeem_proof = b"proof"[\s\S]*?reserved_missing_record_allows_malformed_witness[\s\S]*?typedRedeemLineageRecordBeforeWitnessAccepted[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?lineageWitness is required for this bundle[\s\S]*?reservedMissingRecordAllowsMalformedWitness[\s\S]*?java\/iroha_android\/src\/test\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProverTest\.java[\s\S]*?lineageWitness is required for this bundle[\s\S]*?reservedMissingRecordAllowsMalformedWitness[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs[\s\S]*?lineageWitness is required for this bundle[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?danglingRedeemLineageRecordOptional[\s\S]*?reservedMissingRecordAllowsMalformedWitnessPackageDist[\s\S]*?typedRedeemLineageRecordBeforeWitnessPackageDistAccepted/u,
     "SDK redeem lineage preflight negative control must mutate every SDK test marker and package dist",
   );
   assert.match(
     sdkRedeemLineagePreflightBranch,
-    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?False\\n"\s*[\s\S]*?and self\.lineage_verifier_record is not None[\s\S]*?Python typed recursive spend redeem lineage-record selection before parse[\s\S]*?optionalRedeemLineageRecord[\s\S]*?Python typed recursive spend verify lineage-record preflight tests missing danglingRedeemLineageRecord/u,
-    "SDK redeem lineage preflight negative control must mutate Python selection-before-parse source and exact dangling-record marker",
+    /python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?False\\n"\s*[\s\S]*?and lineage_verifier_record_supplied[\s\S]*?Python typed recursive spend redeem lineage-record selection before parse missing pattern[\s\S]*?typedRedeemLineageRecordAccepted[\s\S]*?Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecord[\s\S]*?typedRedeemLineageRecordBeforeWitnessAccepted[\s\S]*?Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecordBeforeWitness[\s\S]*?optionalRedeemLineageRecord[\s\S]*?Python typed recursive spend redeem lineage-record preflight tests missing danglingRedeemLineageRecord[\s\S]*?optionalRedeemLineageRecords[\s\S]*?Python typed recursive spend redeem lineage-record preflight tests missing danglingRedeemLineageRecords/u,
+    "SDK redeem lineage preflight negative control must mutate Python selection-before-parse source plus exact forged and singular/plural dangling record markers",
+  );
+  assertContainsAll(
+    sdkRedeemLineagePreflightBranch,
+    [
+      "Swift redeem request constructor reserved-lineage record preflight before witness parse missing pattern",
+      "Kotlin redeem request constructor reserved-lineage record preflight before witness parse missing pattern",
+      "Android Java redeem request constructor reserved-lineage record preflight before witness parse missing pattern",
+      "lineageVerifierRecords.isEmpty",
+      "this.lineageVerifierRecords.isNotEmpty()",
+      "this.lineageVerifierRecords.isEmpty()",
+    ],
+    "SDK redeem lineage preflight negative control must mutate non-C# plural lineage-record source guards",
   );
   assert.match(
     guard,
@@ -19215,8 +20396,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "Kotlin typed recursive spend redeem lineage preflight tests missing lineageWitness is required for this bundle",
       "Android Java typed recursive spend redeem lineage preflight tests missing lineageWitness is required for this bundle",
+      "lineage_witness is required for this bundle",
+      "lineage_witness is optional for this bundle",
+      "lineage_verifier_record is required for reserved-lineage bundles",
+      "lineage_verifier_record is optional for reserved-lineage bundles",
+      "Python typed recursive spend redeem lineage preflight tests missing reserved_missing_record_masks_malformed_witness",
+      "Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecordBeforeWitness",
     ],
-    "SDK redeem lineage preflight negative control must require exact JVM/Android missing-witness diagnostics",
+    "SDK redeem lineage preflight negative control must require exact SDK diagnostics",
   );
   assert.match(
     sdkRedeemLineagePreflightBranch,
@@ -19259,7 +20446,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkRedeemLineageWitnessShapeBranch,
-    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?0x7d[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?0x9a[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?0x7C[\s\S]*?lineageWitnessWireName[\s\S]*?reserved lineage witness malformed[\s\S]*?SCHEMA_LINEAGE_WITNESS/u,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?0x7d[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?0x9a[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?0x7C[\s\S]*?lineageWitnessWireName[\s\S]*?reservedMalformedLineageWitness[\s\S]*?SCHEMA_LINEAGE_WITNESS/u,
     "SDK redeem lineage witness-shape negative control must mutate non-C# malformed reserved-witness tests",
   );
   assert.doesNotMatch(
@@ -19271,6 +20458,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkRedeemLineageWitnessShapeBranch,
     /KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,\\n\s*0x7d,[\s\S]*?def expected_redeem_lineage_witness_shape_label\(target, old, label\):[\s\S]*?" missing " in label[\s\S]*?"0x7d" in old[\s\S]*?expected_labels\.append\(expected_redeem_lineage_witness_shape_label\(target, old, label\)\)/u,
     "SDK redeem lineage witness-shape negative control must validate exact reported markers",
+  );
+  assertContainsAll(
+    sdkRedeemLineageWitnessShapeBranch,
+    [
+      'Kotlin typed recursive spend redeem lineage preflight tests missing "redeemProof must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT} Norito archive"',
+      'Kotlin typed recursive spend redeem lineage preflight tests missing "lineageWitness must be a valid ${KagemushaRecursiveSpendRequestCodecs.SCHEMA_LINEAGE_WITNESS} Norito archive"',
+      "Kotlin typed recursive spend redeem lineage preflight tests missing val reservedMalformedLineageWitness = assertFailsWith<IllegalArgumentException>",
+      "Android Java typed recursive spend redeem lineage preflight tests missing redeemProof must be a valid ",
+      "Android Java typed recursive spend redeem lineage preflight tests missing lineageWitness must be a valid ",
+    ],
+    "SDK redeem lineage witness-shape negative control must require exact JVM/Android malformed-archive diagnostics",
   );
   assert.match(
     sdkRedeemLineageWitnessShapeBranch,
@@ -19308,8 +20506,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
-    /autoInitPallasMissingLineageKey[\s\S]*?generatedInitPallasMissingLineageKey[\s\S]*?autoInitPallasWrongProfile[\s\S]*?generatedInitPallasWrongProfile/u,
-    "SDK init lineage-key auto-preflight negative control must mutate focused regression markers",
+    /autoInitPallasMissingLineageKey[\s\S]*?generatedInitPallasMissingLineageKey[\s\S]*?autoInitPallasWrongProfile[\s\S]*?generatedInitPallasWrongProfile[\s\S]*?lineage_verifier_key is required for recursive spend lineage proving/u,
+    "SDK init lineage-key auto-preflight negative control must mutate focused regression markers and Python exact diagnostics",
   );
   assert.doesNotMatch(
     sdkInitLineageKeyAutoPreflightBranch,
@@ -19320,6 +20518,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkInitLineageKeyAutoPreflightBranch,
     /def expected_init_lineage_key_auto_preflight_label\(target, old, label\):[\s\S]*?Kotlin typed recursive spend init auto Pallas lineage-key preflight[\s\S]*?Android Java typed recursive spend init typed-artifact preflight before auto Pallas[\s\S]*?missingInitLineageVerifierKey[\s\S]*?expected_labels\.append\(expected_init_lineage_key_auto_preflight_label\(target, old, label\)\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK init lineage key auto preflight drift was not detected for/u,
     "SDK init lineage-key auto-preflight negative control must require every exact JVM/Android drift marker",
+  );
+  assertContainsAll(
+    sdkInitLineageKeyAutoPreflightBranch,
+    [
+      "Python typed recursive spend request codec tests",
+      "lineage_verifier_key is required for recursive spend lineage proving",
+    ],
+    "SDK init lineage-key auto-preflight negative control must mutate the Python exact verifier-key diagnostic",
   );
   assert.match(
     sdkInitLineageKeyAutoPreflightBranch,
@@ -19465,14 +20671,36 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /javascript\/iroha_js\/src\/crypto\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?javascript\/iroha_js\/dist\/crypto\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?previous_proof_open_envelopes are optional for lineage append output/u,
     "SDK append previous-proof opening selection negative control must mutate JS and Python constructor markers",
   );
+  assertContainsAll(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    [
+      "JavaScript typed recursive spend Pallas preflight",
+      "JavaScript dist typed recursive spend Pallas preflight",
+      "appendNeedsPreviousProofOpenEnvelopes &&\\n    previousProofOpenEnvelopes === null",
+      "false &&\\n    previousProofOpenEnvelopes === null",
+      "previous_proof_open_envelopes is required for lineage append output",
+      "previousProofOpenEnvelopes is required for lineage append output",
+    ],
+    "SDK append previous-proof opening selection negative control must mutate missing-required constructor branches",
+  );
   assert.match(
     sdkAppendPreviousProofOpeningSelectionBranch,
     /IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendRequestCodecs\.swift[\s\S]*?previousProofOpenEnvelopes == nil \|\| appendNeedsPreviousProofOpenEnvelopes[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecs\.kt[\s\S]*?previousProofOpenEnvelopesArchive == null \|\| appendNeedsPreviousProofOpenEnvelopes[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendRequestCodecs\.java[\s\S]*?this\.previousProofOpenEnvelopes == null \|\| appendNeedsPreviousProofOpenEnvelopes/u,
     "SDK append previous-proof opening selection negative control must mutate Swift, Kotlin, and Android Java constructor guards",
   );
+  assertContainsAll(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    [
+      "if appendNeedsPreviousProofOpenEnvelopes, previousProofOpenEnvelopes == nil",
+      "if false, previousProofOpenEnvelopes == nil",
+      "previousProofOpenEnvelopesOptional",
+      "previousProofOpenEnvelopes: nil",
+    ],
+    "SDK append previous-proof opening selection negative control must mutate missing-required SDK regression rows",
+  );
   assert.match(
     sdkAppendPreviousProofOpeningSelectionBranch,
-    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?previous_proof_open_envelopes are optional for lineage append output[\s\S]*?previousProofOpenEnvelopesOptional[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output/u,
+    /javascript\/iroha_js\/test\/kagemushaRecursiveSpend\.test\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?javascript\/iroha_js\/test\/package_dist\.test\.js[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output[\s\S]*?python\/iroha_python\/tests\/kagemusha_test\.py[\s\S]*?previous_proof_open_envelopes are optional for lineage append output[\s\S]*?previousProofOpenEnvelopes: Self\.syntheticPallasOpenEnvelopesArchive\(count: 2\)[\s\S]*?kotlin\/core-jvm\/src\/test\/kotlin\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendRequestCodecsTest\.kt[\s\S]*?previousProofOpenEnvelopes are optional for lineage append output/u,
     "SDK append previous-proof opening selection negative control must mutate non-C# regression markers",
   );
   assertContainsAll(
@@ -21001,12 +22229,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "[privacyNoritoFrameWithPayload(0x36), /returned invalid Norito archive/]",
       "[privacyNoritoFrame(0x36), /returned empty Norito payload/]",
       "[privacyNoritoFrameWithPayload(0x36), /returned empty Norito payload/]",
+      "() => kagemushaRecursiveSpendRedeem(request)",
+      "() => kagemushaRecursiveSpendVerify(request)",
       '[Buffer.alloc(0), \\"must not be empty\\"]',
       '[Buffer.from([0]), \\"must not be empty\\"]',
       "new Uint8Array(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1)",
       "new Uint8Array(1)",
       '[Buffer.from([0x01]), \\"must be a valid Norito archive\\"]',
       '[validArchive, \\"must be a valid Norito archive\\"]',
+      '[\\"requestArchive\\", \\"bundleArchive\\"]',
+      '[\\"requestArchive\\", \\"requestArchive\\"]',
+      '[\\"previousWitnessArchive\\", \\"requestArchive\\", \\"bundleArchive\\"]',
+      '[\\"previousWitnessArchive\\", \\"requestArchive\\", \\"requestArchive\\"]',
+      "for (let fieldIndex = 0; fieldIndex < archiveNames.length; fieldIndex += 1)",
+      "for (let fieldIndex = 0; fieldIndex < 1; fieldIndex += 1)",
+      "(args) => kagemushaRecursiveSpendRedeem(args[0])",
+      "(args) => kagemushaRecursiveSpendVerify(args[0])",
       '[privacyNoritoFrame(0x35), \\"must contain a non-empty Norito payload\\"]',
       '[validArchive, \\"must contain a non-empty Norito payload\\"]',
       '[undefined, \\"must be a Buffer, string, or ArrayBuffer view\\"],',
@@ -21117,6 +22355,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "package dist Kagemusha record-backed and Pallas builders dispatch borrowed archives",
       "package dist Kagemusha record-backed and Pallas builders fail closed on invalid archives",
       "package dist Kagemusha record-backed and Pallas builders accept invalid archives",
+      "pallasOpenEnvelopesArchive ${expectedMessage}",
+      "recordBundleArchive ${expectedMessage}",
+      "native kagemushaBuildPreviousProofOpenEnvelopesArchive returned empty Norito payload",
+      "native kagemushaBuildPallasOpenEnvelopesArchive returned empty Norito payload",
       '[Buffer.alloc(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f), \\"must not exceed\\"],',
       '[Buffer.alloc(1, 0x7f), \\"must not exceed\\"],',
       '[undefined, \\"must be a Buffer, string, or ArrayBuffer view\\"],',
@@ -21880,8 +23122,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "Kotlin confidential witness codecs",
       "Android Java confidential witness codecs",
+      "Kotlin privacy proof request component validation",
+      "Android Java privacy proof request component validation",
       "Kotlin privacy confidential witness codec tests",
       "Android Java privacy confidential witness codec tests",
+      "privacyRequestTextBytes(algorithmId, \\\"algorithmId\\\")",
+      "privacyRequestComponentBytes(",
+      "PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES",
+      "PRIVACY_REQUEST_WITNESS_MAX_BYTES",
+      "CONFIDENTIAL_PROOF_MAX_BYTES",
+      "copyNonEmptyProof(proof)",
+      "proof must not exceed 33554432 bytes",
       "CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID",
       "CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID",
       "TRANSFER_PUBLIC_INPUTS_SCHEMA",
@@ -21901,8 +23152,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileConfidentialWitnessBranch,
-    /Kotlin confidential witness codecs[\s\S]*?Android Java confidential witness codecs[\s\S]*?Kotlin privacy confidential witness codec tests[\s\S]*?Android Java privacy confidential witness codec tests/u,
-    "mobile confidential witness codec negative control must require source and test labels",
+    /Kotlin confidential witness codecs[\s\S]*?Android Java confidential witness codecs[\s\S]*?Kotlin privacy proof request component validation[\s\S]*?Android Java privacy proof request component validation[\s\S]*?Kotlin privacy confidential witness codec tests[\s\S]*?Android Java privacy confidential witness codec tests/u,
+    "mobile confidential witness codec negative control must require witness, bridge validation, and test labels",
   );
   assert.match(
     mobileConfidentialWitnessBranch,
@@ -22014,18 +23265,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       '"issuer key"',
       '"issuer-key\\\\n"',
       '"issuer-key\\\\u2603"',
+      "positiveIntegerOfflineCashSnapshotNumber",
+      "positiveNativeBridgeAbiVersion",
+      'guard !value.contains("=") else {',
+      "testRejectsPaddedBase64BeforeDecoding",
+      "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64))",
+      "XCTAssertThrowsError(try OfflineIssuerPublicKey(paddedBase64URL))",
+      "guard true else {",
+      "testAllowsPaddedBase64BeforeDecoding",
+      "XCTAssertNoThrow(try OfflineIssuerPublicKey(paddedBase64))",
+      "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+      "for native_bridge_abi_version in (0, -1, 7.5, True)",
+      "package dist offline cash lifecycle rejects malformed ABI gates",
     ],
-    "offline cash issuer-key negative control must mutate every exact issuer-key adversarial literal",
+    "offline cash issuer-key negative control must mutate exact issuer-key and ABI adversarial markers",
   );
   assert.match(
     offlineCashIssuerKeyExactnessBranch,
-    /Python offline cash issuer-key exactness vectors[\s\S]*?JavaScript offline cash issuer-key exactness vectors[\s\S]*?Kotlin offline cash issuer-key exactness vectors[\s\S]*?Android Java offline cash issuer-key exactness vectors/u,
+    /Python offline cash ABI exactness guard[\s\S]*?JavaScript offline cash ABI exactness guard[\s\S]*?JavaScript package offline cash ABI exactness guard[\s\S]*?Kotlin offline cash ABI exactness guard[\s\S]*?Android Java offline cash ABI exactness guard[\s\S]*?Swift offline issuer-key parser exactness guard[\s\S]*?Swift offline issuer-key parser exactness vectors[\s\S]*?Python offline cash issuer-key exactness vectors[\s\S]*?JavaScript offline cash issuer-key exactness vectors[\s\S]*?JavaScript package offline cash ABI exactness vectors[\s\S]*?Kotlin offline cash issuer-key exactness vectors[\s\S]*?Android Java offline cash issuer-key exactness vectors/u,
     "offline cash issuer-key negative control must require all non-C# SDK exactness labels",
   );
   assert.match(
     offlineCashIssuerKeyExactnessBranch,
-    /expected_labels\.append\(f"\{label\} missing \{replacements\[0\]\[0\]\}"\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "offline cash issuer-key negative control must require exact first-literal diagnostics",
+    /expected_labels\.extend\(f"\{label\} missing \{marker\}" for marker in expected_markers\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "offline cash issuer-key negative control must require every expected marker diagnostic",
   );
   assert.match(
     offlineCashIssuerKeyExactnessBranch,
@@ -22175,7 +23438,17 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileAccountAddressBranch,
-    /Kotlin AccountAddress canonical tests[\s\S]*?Kotlin I105 canonical SPKI tests[\s\S]*?Android AccountAddress compliance tests/u,
+    /Python AccountAddress signing algorithm selector[\s\S]*?if algorithm\.strip\(\) != algorithm:[\s\S]*?Python AccountAddress signing algorithm tests[\s\S]*?test_account_address_rejects_blank_or_padded_signing_algorithm_aliases[\s\S]*?JavaScript source curve registry signing algorithm selector[\s\S]*?JavaScript package-dist curve registry signing algorithm selector[\s\S]*?JavaScript AccountAddress signing algorithm tests[\s\S]*?fromAccount rejects control and Unicode-confusable curve algorithm aliases in src and dist[\s\S]*?Swift AccountAddress signing algorithm selector[\s\S]*?guard !trimmed\.isEmpty, trimmed == algorithm else \{[\s\S]*?Swift AccountAddress signing algorithm tests[\s\S]*?func testConfusableAlgorithmAliasesRejected/u,
+    "mobile account address negative control must require Python, JavaScript, and Swift signing selector coverage",
+  );
+  assert.match(
+    mobileAccountAddressBranch,
+    /if False and algorithm\.strip\(\) != algorithm:[\s\S]*?test_account_address_allows_blank_or_padded_signing_algorithm_aliases[\s\S]*?if \(algorithm\.trim\(\) === ""\) \{[\s\S]*?fromAccount accepts control and Unicode-confusable curve algorithm aliases in src and dist[\s\S]*?guard !trimmed\.isEmpty else \{[\s\S]*?func testConfusableAlgorithmAliasesAllowed/u,
+    "mobile account address negative control must mutate Python, JavaScript, and Swift signing selector coverage",
+  );
+  assert.match(
+    mobileAccountAddressBranch,
+    /Python AccountAddress signing algorithm selector[\s\S]*?Python AccountAddress signing algorithm tests[\s\S]*?JavaScript source curve registry signing algorithm selector[\s\S]*?JavaScript package-dist curve registry signing algorithm selector[\s\S]*?JavaScript AccountAddress signing algorithm tests[\s\S]*?Swift AccountAddress signing algorithm selector[\s\S]*?Swift AccountAddress signing algorithm tests[\s\S]*?Kotlin AccountAddress canonical tests[\s\S]*?Kotlin I105 canonical SPKI tests[\s\S]*?Android AccountAddress compliance tests/u,
     "mobile account address negative control must require all account address labels",
   );
   assert.match(
@@ -22731,20 +24004,48 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     guard.indexOf('if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":'),
     guard.indexOf('if mode == "--negative-control-swift-note-amount-vectors":'),
   );
-  assert.match(
+  assertContainsAll(
     swiftInstructionTransactionBranch,
-    /func buildKagemushaRecursiveRedeem\([\s\S]*?func buildKagemushaRecursiveRedeemUnchecked\([\s\S]*?testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning[\s\S]*?testBuildKagemushaRecursiveRedeemTransactionSkipsNativeDerivationBeforeSigning/u,
-    "Swift instruction transaction builder negative control must mutate the recursive redeem builder and derivation test",
+    [
+      "func buildKagemushaRecursiveRedeem(",
+      "func buildKagemushaRecursiveRedeemUnchecked(",
+      "func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+      "func uncheckedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+      "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+      "testBuildKagemushaRecursiveRedeemTransactionSkipsNativeDerivationBeforeSigning",
+      "testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem",
+      "testKagemushaInstructionRequestsAcceptPaddedIdsBeforeArchiveOrRedeem",
+      "testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference",
+      "testNativeBridgeAcceptsPaddedAuthorityBeforeChainDiscriminantInference",
+      'XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))',
+      "XCTAssertEqual(error as? TransactionInputError, .emptyChainId)",
+      '.malformedAccountId(field: "authority", value: " \\\\(authority) ")',
+      '.malformedAccountId(field: "authority", value: authority)',
+      "XCTAssertEqual(redeemedRequests, [])",
+      "XCTAssertFalse(redeemedRequests.isEmpty)",
+    ],
+    "Swift instruction transaction builder negative control must mutate the recursive redeem builder, derivation test, and exact identifier test",
   );
   assert.match(
     swiftInstructionTransactionBranch,
-    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[source_target\]\s*=\s*mutated_source[\s\S]*?mutated_texts\[test_target\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Swift instruction transaction builder negative control must validate the mutated text snapshot",
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[source_target\]\s*=\s*mutated_source[\s\S]*?mutated_texts\[bridge_target\]\s*=\s*mutated_bridge[\s\S]*?mutated_texts\[test_target\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift instruction transaction builder negative control must validate the mutated source, bridge, and test text snapshot",
   );
-  assert.match(
+  assertContainsAll(
     swiftInstructionTransactionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem\([\s\S]*?Swift Kagemusha instruction transaction builder tests missing testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "Swift instruction transaction builder negative control must require source and test diagnostics",
+    [
+      "expected_labels = (",
+      "Swift Kagemusha instruction transaction builder missing func buildKagemushaRecursiveRedeem(",
+      "Swift Kagemusha instruction transaction builder tests missing testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+      "Swift Kagemusha instruction transaction builder tests missing testKagemushaInstructionRequestsRejectPaddedIdsBeforeArchiveOrRedeem",
+      "Swift native bridge exact authority discriminant missing func validatedAuthorityChainDiscriminant(authority: String) throws -> UInt16",
+      "Swift Kagemusha instruction transaction builder tests missing testNativeBridgeRejectsPaddedAuthorityBeforeChainDiscriminantInference",
+      'Swift Kagemusha instruction transaction builder tests missing XCTAssertEqual(error as? TransactionInputError, .invalidChainId(" chain"))',
+      'Swift Kagemusha instruction transaction builder tests missing .malformedAccountId(field: "authority", value: " \\\\(authority) ")',
+      "Swift Kagemusha instruction transaction builder tests missing XCTAssertEqual(redeemedRequests, [])",
+      "missing = [label for label in expected_labels if label not in message]",
+    ],
+    "Swift instruction transaction builder negative control must require source, derivation, and exact identifier diagnostics",
   );
   assert.match(
     swiftInstructionTransactionBranch,
@@ -22788,6 +24089,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       String.raw`Swift typed recursive spend note amount test vectors missing "7\\n"`,
       "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
       "Swift typed recursive spend note amount test vectors missing Self.u128TooManyDigits",
+      'Swift typed recursive spend public amount test vectors missing ""',
+      'Swift typed recursive spend public amount test vectors missing "0"',
       'Swift typed recursive spend public amount test vectors missing "00"',
       'Swift typed recursive spend public amount test vectors missing "01"',
       'Swift typed recursive spend public amount test vectors missing "0007"',
@@ -22811,6 +24114,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "require_block_contains",
       "KagemushaRecursiveSpendableNoteDescriptor(",
       "amount: amount",
+      "Swift typed recursive spend amount exact diagnostics",
+      "func assertTypedRequestInvalidField(",
+      "KagemushaRecursiveSpendRequestCodecError.invalidField(field)",
+      'assertTypedRequestInvalidField("amount")',
+      'assertTypedRequestInvalidField("publicAmount")',
+      "Swift typed recursive spend note digest exact diagnostics",
+      'assertTypedRequestInvalidField("noteCommitment")',
+      'assertTypedRequestInvalidField("spendNullifier")',
+      "noteCommitment: Data(repeating: 0, count: 32)",
+      "spendNullifier: Data(repeating: 0, count: 32)",
+      '""',
+      '"0"',
       '"00"',
       '"01"',
       '"0007"',
@@ -22826,6 +24141,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Self.u128TooManyDigits",
     ],
     "SDK parity guard must pin Swift malformed note amount vector inventory",
+  );
+  assert.match(
+    guard,
+    /require_regex\([\s\S]*?request_codecs_test[\s\S]*?lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?invalidField\\\("lineageVerifierKey"\\\)[\s\S]*?Swift typed recursive spend init lineage-key exact diagnostics/u,
+    "SDK parity guard must pin Swift nil init lineage-key exact diagnostics with a scoped regex",
   );
   assert.match(
     swiftNoteAmountVectorBranch,
@@ -22869,6 +24189,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       String.raw`Swift typed recursive spend note amount test vectors missing "7\\n"`,
       "Swift typed recursive spend note amount test vectors missing Self.u128MaxPlusOne",
       "Swift typed recursive spend note amount test vectors missing Self.u128TooManyDigits",
+      'Swift typed recursive spend public amount test vectors missing ""',
+      'Swift typed recursive spend public amount test vectors missing "0"',
       'Swift typed recursive spend public amount test vectors missing "00"',
       'Swift typed recursive spend public amount test vectors missing "01"',
       'Swift typed recursive spend public amount test vectors missing "0007"',
@@ -22889,6 +24211,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     guard,
     [
       "Swift typed recursive spend public amount test vectors",
+      "require_block_contains",
+      "Swift typed recursive spend amount exact diagnostics",
+      'assertTypedRequestInvalidField("publicAmount")',
+      '""',
+      '"0"',
       '"00"',
       '"01"',
       '"0007"',
@@ -23116,22 +24443,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsInstructionTransactionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":'),
-    guard.indexOf('if mode == "--negative-control-js-note-amount-vectors":'),
+    guard.indexOf('if mode == "--negative-control-jvm-kagemusha-instruction-transaction-builder":'),
   );
   assert.match(
     jsInstructionTransactionBranch,
-    /export function buildKagemushaRecursiveRedeemTransaction[\s\S]*?export function buildKagemushaRecursiveRedeemUncheckedTransaction[\s\S]*?buildKagemushaRecursiveRedeemTransaction derives instruction before signing[\s\S]*?buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing/u,
-    "JS instruction transaction builder negative control must mutate the builder and redeem-before-sign test",
+    /export function buildKagemushaRecursiveRedeemTransaction[\s\S]*?export function buildKagemushaRecursiveRedeemUncheckedTransaction[\s\S]*?authority must not contain surrounding whitespace[\s\S]*?authority may contain surrounding whitespace[\s\S]*?normalizeExactMetadataString\(chainId, "privateCreateKaigi\.chainId"\)[\s\S]*?String\(chainId \?\? ""\)\.trim\(\)[\s\S]*?buildKagemushaRecursiveRedeemTransaction derives instruction before signing[\s\S]*?buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing[\s\S]*?transaction builders reject padded authority and asset definition IDs before native dispatch[\s\S]*?transaction builders accept padded authority and asset definition IDs before native dispatch[\s\S]*?private Kaigi transaction builders reject padded identifiers before native dispatch[\s\S]*?private Kaigi transaction builders accept padded identifiers before native dispatch[\s\S]*?package dist Kagemusha transaction helpers reject padded authority before native dispatch[\s\S]*?package dist Kagemusha transaction helpers accept padded authority before native dispatch[\s\S]*?package dist private Kaigi transaction builders reject padded identifiers before native dispatch[\s\S]*?package dist private Kaigi transaction builders accept padded identifiers before native dispatch/u,
+    "JS instruction transaction builder negative control must mutate the builder, exactness source, private Kaigi source, source test, and package-dist test",
   );
   assert.match(
     jsInstructionTransactionBranch,
-    /mutated\s*=\s*dict\(texts\)[\s\S]*?mutated\[source_target\]\s*=\s*mutated_source[\s\S]*?mutated\[test_target\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated\)/u,
+    /mutated\s*=\s*dict\(texts\)[\s\S]*?dist_target\s*=\s*"javascript\/iroha_js\/dist\/transaction\.js"[\s\S]*?mutated\[source_target\]\s*=\s*mutated_source[\s\S]*?mutated\[dist_target\]\s*=\s*mutated_dist[\s\S]*?mutated\[test_target\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated\)/u,
     "JS instruction transaction builder negative control must validate the mutated text snapshot",
   );
   assert.match(
     jsInstructionTransactionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?javascript\/iroha_js\/src\/transaction\.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction[\s\S]*?JavaScript Kagemusha instruction transaction builder tests missing buildKagemushaRecursiveRedeemTransaction derives instruction before signing[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "JS instruction transaction builder negative control must require source and test diagnostics",
+    /expected_labels\s*=\s*\([\s\S]*?javascript\/iroha_js\/src\/transaction\.js Kagemusha instruction transaction builder missing buildKagemushaRecursiveRedeemTransaction[\s\S]*?javascript\/iroha_js\/src\/transaction\.js Kagemusha instruction transaction builder missing authority must not contain surrounding whitespace[\s\S]*?javascript\/iroha_js\/src\/transaction\.js private Kaigi transaction exactness missing normalizeExactMetadataString\(chainId, "privateCreateKaigi\.chainId"\)[\s\S]*?javascript\/iroha_js\/dist\/transaction\.js private Kaigi transaction exactness missing normalizeExactMetadataString\(chainId, "privateCreateKaigi\.chainId"\)[\s\S]*?JavaScript Kagemusha instruction transaction builder tests missing buildKagemushaRecursiveRedeemTransaction derives instruction before signing[\s\S]*?JavaScript Kagemusha instruction transaction builder tests missing transaction builders reject padded authority and asset definition IDs before native dispatch[\s\S]*?JavaScript Kagemusha instruction transaction builder tests missing private Kaigi transaction builders reject padded identifiers before native dispatch[\s\S]*?JavaScript package dist Kagemusha instruction transaction builder tests missing package dist Kagemusha transaction helpers copy mutable buffers before native calls[\s\S]*?JavaScript package dist Kagemusha instruction transaction builder tests missing package dist Kagemusha transaction helpers reject padded authority before native dispatch[\s\S]*?JavaScript package dist Kagemusha instruction transaction builder tests missing package dist private Kaigi transaction builders reject padded identifiers before native dispatch[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "JS instruction transaction builder negative control must require source, source-test, and package-dist diagnostics",
   );
   assert.match(
     jsInstructionTransactionBranch,
@@ -23147,6 +24474,100 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     jsInstructionTransactionBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS instruction transaction builder negative control must not unconditionally pass after run_checks",
+  );
+  const jvmInstructionTransactionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-kagemusha-instruction-transaction-builder":'),
+    guard.indexOf('if mode == "--negative-control-js-note-amount-vectors":'),
+  );
+  assertContainsAll(
+    jvmInstructionTransactionBranch,
+    [
+      'require(chainId.trim().isNotEmpty()) { "chainId must not be blank" }',
+      'require(chainId.isNotBlank()) { "chainId must not be blank" }',
+      'require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }',
+      'require(chainId.isNotBlank()) { "chainId may contain surrounding whitespace" }',
+      'requireCanonicalI105Address(authority, "authority")',
+      'require(authority.isNotBlank()) { "authority must not be blank" }',
+      'this.chainId = normalizeExact(chainId, "chainId")',
+      'this.chainId = normalize(chainId, "chainId")',
+      "private static String normalizeExact(final String value, final String field)",
+      "private static String normalizeLoose(final String value, final String field)",
+      'chainId = requireNonBlankUnpadded(chainId, "chainId")',
+      "chainId = chainId",
+      'val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+      "val exactChainId = chainId",
+      'setChainId(requireNonBlankUnpadded(chainId, "chainId"))',
+      "setChainId(chainId)",
+      'final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+      "final String exactChainId = chainId",
+      "recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation",
+      "recursiveRedeemTransactionPayload reuses redeem archive bytes after caller mutation",
+      "transactionPayload rejects padded ids before archive validation or native redeem",
+      "transactionPayload accepts padded ids before archive validation or native redeem",
+      "padded chainId throws before payload can be signed",
+      "padded chainId can be signed",
+      "authority must be exact canonical I105 before payload can be signed",
+      "authority may be non-canonical before payload can be signed",
+      "transactionPayloadRejectsPaddedIdsBeforeSigning",
+      "transactionPayloadAcceptsPaddedIdsBeforeSigning",
+      "chainId must not contain surrounding whitespace",
+      "chainId accepts surrounding whitespace",
+      "authority must not contain surrounding whitespace",
+      "authority accepts surrounding whitespace",
+      "Recursive redeem transaction archive bytes must be defensively copied",
+      "Recursive redeem transaction archive bytes may alias caller input",
+      "kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
+      "kagemushaInstructionArchivesAcceptPaddedIdsBeforeArchiveOrNativeRedeem",
+    ],
+    "JVM/Android instruction transaction builder negative control must mutate source and wrapper coverage",
+  );
+  assert.match(
+    jvmInstructionTransactionBranch,
+    /mutated\s*=\s*dict\(texts\)[\s\S]*?mutated\[kotlin_target\]\s*=\s*mutated_kotlin[\s\S]*?mutated\[java_target\]\s*=\s*mutated_java[\s\S]*?run_checks\(mutated\)/u,
+    "JVM/Android instruction transaction builder negative control must validate the mutated text snapshot",
+  );
+  assertContainsAll(
+    jvmInstructionTransactionBranch,
+    [
+      "expected_labels = (",
+      'Kotlin transaction payload validation missing require(chainId.trim().isNotEmpty())',
+      'Kotlin transaction payload validation missing require(chainId.trim() == chainId) { "chainId must not contain surrounding whitespace" }',
+      'Kotlin transaction payload validation missing requireCanonicalI105Address(authority, "authority")',
+      'Android Java transaction payload validation missing this.chainId = normalizeExact(chainId, "chainId")',
+      "Android Java transaction payload validation missing private static String normalizeExact(final String value, final String field)",
+      'Kotlin Kagemusha instruction archive transaction helper missing chainId = requireNonBlankUnpadded(chainId, "chainId")',
+      'Kotlin Kagemusha instruction archive transaction helper missing val exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+      'Android Java Kagemusha instruction archive transaction helper missing setChainId(requireNonBlankUnpadded(chainId, "chainId"))',
+      'Android Java Kagemusha instruction archive transaction helper missing final String exactChainId = requireNonBlankUnpadded(chainId, "chainId")',
+      "Kotlin transaction payload tests missing padded chainId throws before payload can be signed",
+      "Kotlin transaction payload tests missing authority must be exact canonical I105 before payload can be signed",
+      "Kotlin Kagemusha instruction archive transaction helper tests missing recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation",
+      "Kotlin Kagemusha instruction archive transaction helper tests missing transactionPayload rejects padded ids before archive validation or native redeem",
+      "Kotlin Kagemusha instruction archive transaction helper tests missing chainId must not contain surrounding whitespace",
+      "Kotlin Kagemusha instruction archive transaction helper tests missing authority must not contain surrounding whitespace",
+      "Android Java Kagemusha instruction archive transaction helper tests missing Recursive redeem transaction archive bytes must be defensively copied",
+      "Android Java Kagemusha instruction archive transaction helper tests missing kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem",
+      "Android Java transaction payload exact identifier tests missing transactionPayloadRejectsPaddedIdsBeforeSigning",
+      "Android Java Kagemusha instruction archive transaction helper tests missing chainId must not contain surrounding whitespace",
+      "Android Java Kagemusha instruction archive transaction helper tests missing authority must not contain surrounding whitespace",
+      "missing = [label for label in expected_labels if label not in message]",
+    ],
+    "JVM/Android instruction transaction builder negative control must require Kotlin, Android, source, and exactness diagnostics",
+  );
+  assert.match(
+    jvmInstructionTransactionBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JVM/Android instruction transaction builder negative control must print both detected diagnostics",
+  );
+  assert.match(
+    jvmInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JVM\/Android Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
+    "JVM/Android instruction transaction builder negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM/Android instruction transaction builder negative control must not unconditionally pass after run_checks",
   );
   const jsNoteAmountVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-note-amount-vectors":'),
@@ -23392,32 +24813,50 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     guard,
     [
+      "Swift typed recursive spend Pallas preflight tests",
+      'Self.syntheticArchive(schema: "test.PallasOpenEnvelopes")',
+      "Self.syntheticPallasOpenEnvelopesArchive(count: 2)",
+      "includeDomainTag: false",
+      "var corrupted = Self.syntheticPallasOpenEnvelopesArchive()",
+      "corrupted[corrupted.count - 1] ^= 0x01",
+      "tamperedBundle[tamperedBundle.count - 1] ^= 0x01",
+      '.invalidArchive("bundle")',
+      '.invalidField("previousProofOpenEnvelopes")',
+      '.invalidArchive("pallasOpenEnvelopes.domain_tag")',
+      '.invalidArchive("previousProofOpenEnvelopes")',
       "JavaScript dist typed recursive spend Pallas preflight tests",
       "package dist Kagemusha recursive spend typed requests reject malformed Pallas opening archives before native dispatch",
       "malformedPallasOpenEnvelopes",
       "malformedPreviousProofOpenEnvelopes",
       "previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes",
       "JavaScript dist typed recursive spend previous-proof Pallas preflight tests",
+      "malformedPallasMetadataArchives",
+      "vkCommitmentPayload: kagemushaFixedArrayPayload(0x70, 32)",
+      "publicInputsSchemaHashOptionPayload: optionRawWithUnknownTag()",
+      "domainTagOptionPayload: optionRawWithDeclaredLengthTooLong(syntheticFixed32(0x72))",
       "Buffer.from([1, 2, 3])",
       'syntheticKagemushaArchive("test::PallasOpenEnvelopes", 0x72)',
       "syntheticPallasOpenEnvelopesArchive(2)",
       "syntheticPallasOpenEnvelopesArchive(1, { includeDomainTag: false })",
+      'syntheticPallasOpenEnvelopesArchive(1, { transcriptLabel: "" })',
+      "syntheticPallasOpenEnvelopesArchive(1, { paramsGSequencePayload: u64LE(5) })",
+      "syntheticPallasOpenEnvelopesArchive(1, { proofLSequencePayload: u64LE(3) })",
     ],
     "SDK parity guard must pin package-dist malformed Pallas opening vector inventory",
   );
   assert.match(
     guard,
-    /require_block_contains\(\s*texts,\s*"javascript\/iroha_js\/test\/package_dist\.test\.js",\s*"const malformedPallasOpenEnvelopes = \[",\s*"  \];",[\s\S]*?Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(1, \{ includeDomainTag: false \}\)[\s\S]*?"JavaScript dist typed recursive spend Pallas preflight tests"/u,
+    /require_block_contains\(\s*texts,\s*"javascript\/iroha_js\/test\/package_dist\.test\.js",\s*"const malformedPallasOpenEnvelopes = \[",\s*"  \];",[\s\S]*?Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(1, \{ includeDomainTag: false \}\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(1, \{ transcriptLabel: "" \}\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(1, \{ transcriptLabel: "\\\\u00e9"\.repeat\(65\) \}\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(1, \{ paramsGSequencePayload: u64LE\(5\) \}\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(1, \{ proofLSequencePayload: u64LE\(3\) \}\)[\s\S]*?"JavaScript dist typed recursive spend Pallas preflight tests"/u,
     "SDK parity guard must pin package-dist malformed Pallas vectors inside the malformedPallasOpenEnvelopes array",
   );
   assert.match(
     jsPackageDistPallasOpeningVectorBranch,
-    /target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?includeDomainTag: false[\s\S]*?block_start_marker\s*=\s*"const malformedPallasOpenEnvelopes = \["[\s\S]*?block\s*=\s*updated\[block_start:block_end\][\s\S]*?updated\s*=\s*updated\[:block_start\]\s*\+\s*block\s*\+\s*updated\[block_end:\][\s\S]*?previous_proof_old\s*=\s*"          previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes,\\n"[\s\S]*?previous_proof_new\s*=\s*"          previousProofOpenEnvelopes,\\n"[\s\S]*?run_checks\(mutated\)/u,
-    "JS package-dist Pallas opening vector negative control must mutate every malformed Pallas vector and the previous-proof Pallas assignment before validating the mutated text snapshot",
+    /opening_vector_replacements\s*=\s*\([\s\S]*?Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?includeDomainTag: false[\s\S]*?transcriptLabel: ""[\s\S]*?repeat\(65\)[\s\S]*?paramsGSequencePayload: u64LE\(5\)[\s\S]*?proofLSequencePayload: u64LE\(3\)[\s\S]*?metadata_vector_replacements\s*=\s*\([\s\S]*?vkCommitmentPayload: kagemushaFixedArrayPayload\(0x70, 32\)[\s\S]*?publicInputsSchemaHashOptionPayload: optionRawWithUnknownTag\(\)[\s\S]*?domainTagOptionPayload: optionRawWithDeclaredLengthTooLong\(syntheticFixed32\(0x72\)\)[\s\S]*?replace_in_package_dist_vector_block[\s\S]*?const malformedPallasMetadataArchives = \[[\s\S]*?const malformedPallasOpenEnvelopes = \[[\s\S]*?previous_proof_old\s*=\s*"          previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes,\\n"[\s\S]*?previous_proof_new\s*=\s*"          previousProofOpenEnvelopes,\\n"[\s\S]*?run_checks\(mutated\)/u,
+    "JS package-dist Pallas opening vector negative control must mutate every malformed Pallas and metadata vector before validating the mutated text snapshot",
   );
   assert.match(
     jsPackageDistPallasOpeningVectorBranch,
-    /JavaScript dist typed recursive spend Pallas preflight tests missing Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?missing syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(1, \{ includeDomainTag: false \}\)[\s\S]*?expected_labels\.append\(label\)[\s\S]*?JavaScript dist typed recursive spend previous-proof Pallas preflight tests missing[\s\S]*?previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    /JavaScript dist typed recursive spend Pallas preflight tests missing Buffer\.from\(\[1, 2, 3\]\)[\s\S]*?missing syntheticKagemushaArchive\("test::PallasOpenEnvelopes", 0x72\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(2\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(1, \{ includeDomainTag: false \}\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(1, \{ transcriptLabel: "" \}\)[\s\S]*?missing syntheticPallasOpenEnvelopesArchive\(1, \{ paramsGSequencePayload: u64LE\(5\) \}\)[\s\S]*?JavaScript package dist Pallas metadata option malformed fixed-array vectors missing vkCommitmentPayload[\s\S]*?JavaScript package dist Pallas metadata option trailing-byte vectors missing vkCommitmentOptionPayload[\s\S]*?JavaScript package dist Pallas metadata option unknown-tag vectors missing publicInputsSchemaHashOptionPayload[\s\S]*?JavaScript package dist Pallas metadata option declared-length vectors missing domainTagOptionPayload[\s\S]*?expected_labels\.append\(label\)[\s\S]*?JavaScript dist typed recursive spend previous-proof Pallas preflight tests missing[\s\S]*?previousProofOpenEnvelopes: malformedPreviousProofOpenEnvelopes[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
     "JS package-dist Pallas opening vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
@@ -23447,17 +24886,24 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "package dist accepted append raw lineage proving key without verifier key",
       "package dist accepted append raw lineage verifier key without proving key",
       "package dist accepted append raw lineage key profile mismatch",
+      "JavaScript dist typed recursive spend raw lineage init proving-without-verifier input vector",
+      "JavaScript dist typed recursive spend raw lineage init verifier-without-proving input vector",
+      "JavaScript dist typed recursive spend raw lineage init wrong-circuit proving-key input vector",
+      "JavaScript dist typed recursive spend raw lineage append missing-previous-openings input vector",
+      "JavaScript dist typed recursive spend raw lineage append proving-without-verifier input vector",
+      "JavaScript dist typed recursive spend raw lineage append verifier-without-proving input vector",
+      "JavaScript dist typed recursive spend raw lineage append wrong-circuit proving-key input vector",
     ],
     "SDK parity guard must pin package-dist raw lineage key vector inventory",
   );
   assert.match(
     jsPackageDistRawLineageKeyVectorBranch,
-    /target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?package dist accepted init raw lineage proving key without verifier key[\s\S]*?package dist accepted init raw lineage verifier key without proving key[\s\S]*?package dist accepted append raw lineage keys without previous proof openings[\s\S]*?run_checks\(mutated\)/u,
-    "JS package-dist raw lineage key vector negative control must mutate every raw lineage vector and validate the mutated text snapshot",
+    /target\s*=\s*"javascript\/iroha_js\/test\/package_dist\.test\.js"[\s\S]*?message_replacements\s*=\s*\([\s\S]*?package dist accepted init raw lineage proving key without verifier key[\s\S]*?package dist accepted init raw lineage verifier key without proving key[\s\S]*?package dist accepted append raw lineage keys without previous proof openings[\s\S]*?input_replacements\s*=\s*\([\s\S]*?lineageProvingKeyArchive: initProvingKey[\s\S]*?lineageVerifierKey: initVerifierKey[\s\S]*?lineageProvingKeyArchive: appendProvingKey[\s\S]*?previousProofOpenEnvelopes,[\s\S]*?lineageVerifierKey: appendVerifierKey[\s\S]*?lineageProvingKeyArchive: appendProvingKey[\s\S]*?run_checks\(mutated\)/u,
+    "JS package-dist raw lineage key vector negative control must mutate every raw lineage message and input vector before validating the mutated text snapshot",
   );
   assert.match(
     jsPackageDistRawLineageKeyVectorBranch,
-    /JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage proving key without verifier key[\s\S]*?JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage key profile mismatch[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    /JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted init raw lineage proving key without verifier key[\s\S]*?JavaScript dist typed recursive spend raw lineage key request tests missing package dist accepted append raw lineage key profile mismatch[\s\S]*?JavaScript dist typed recursive spend raw lineage init proving-without-verifier input vector[\s\S]*?JavaScript dist typed recursive spend raw lineage append wrong-circuit proving-key input vector[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
     "JS package-dist raw lineage key vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
@@ -23477,7 +24923,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const jsPythonNativeOutputHeaderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-python-native-output-headers":'),
-    guard.indexOf('if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":'),
+    guard.indexOf('if mode == "--negative-control-js-confidential-v2-derivation-exactness":'),
   );
   assert.match(
     jsPythonNativeOutputHeaderBranch,
@@ -23509,19 +24955,127 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "JS/Python native output header negative control must not unconditionally pass after run_checks",
   );
+  const jsConfidentialV2DerivationExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-confidential-v2-derivation-exactness":'),
+    guard.indexOf('if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":'),
+  );
+  assertContainsAll(
+    jsConfidentialV2DerivationExactnessBranch,
+    [
+      "javascript/iroha_js/src/crypto.js",
+      "javascript/iroha_js/dist/crypto.js",
+      "javascript/iroha_js/src/transaction.js",
+      "javascript/iroha_js/dist/transaction.js",
+      "javascript/iroha_js/test/crypto.test.js",
+      "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+      "javascript/iroha_js/test/package_dist.test.js",
+      "javascript/iroha_js/test/transactionBuilder.test.js",
+      "if (value.trim() !== value) {",
+      "if (false) {",
+      "spendKeyHex must not contain surrounding whitespace",
+      "spendKeyHex accepts surrounding whitespace",
+      "confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+      "confidential v2 derivation helpers accept padded chain and asset IDs before native dispatch",
+      "package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+      "package dist confidential v2 derivation helpers accept padded chain and asset IDs before native dispatch",
+      "confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+      "confidential proof builders accept padded chain IDs and hex fields before native dispatch",
+      "function normalizeWholeNumberLiteral(value, context)",
+      "if (normalized.trim() !== normalized) {",
+      "javascript/iroha_js/src/transaction.js confidential proof amount exactness",
+      "javascript/iroha_js/dist/transaction.js confidential proof amount exactness",
+      "privateKaigiFeeSpend\\\\.feeAmount must not contain surrounding whitespace",
+      "privateKaigiFeeSpend\\\\.feeAmount accepts surrounding whitespace",
+      "package dist confidential proof builders reject padded amount literals before native dispatch",
+      "package dist confidential proof builders accept padded amount literals before native dispatch",
+      "JavaScript package dist confidential proof amount exactness tests",
+      "JavaScript crypto fixed32 exactness tests",
+      "JavaScript confidential proof builder exactness tests",
+      "javascript/iroha_js/src/transaction.js confidential proof fixed32 exactness",
+      "javascript/iroha_js/dist/transaction.js confidential proof fixed32 exactness",
+    ],
+    "JS confidential v2 derivation exactness negative control must mutate source, dist, source tests, package-dist tests, and proof-builder tests",
+  );
+  assert.match(
+    jsConfidentialV2DerivationExactnessBranch,
+    /mutated\s*=\s*dict\(texts\)[\s\S]*?current\s*=\s*mutated\[target\][\s\S]*?updated\s*=\s*current\.replace\(needle, replacement, 1\)[\s\S]*?mutated\[target\]\s*=\s*updated[\s\S]*?expected_labels\.append\(f"\{label\} missing \{expected_needle\}"\)[\s\S]*?run_checks\(mutated\)/u,
+    "JS confidential v2 derivation exactness negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsConfidentialV2DerivationExactnessBranch,
+    /expected_labels = \[\][\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?JS confidential v2 derivation exactness drift was not detected for/u,
+    "JS confidential v2 derivation exactness negative control must require every exact missing-marker diagnostic",
+  );
+  assert.match(
+    jsConfidentialV2DerivationExactnessBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "JS confidential v2 derivation exactness negative control must print diagnostics for every mutated label",
+  );
+  assert.match(
+    jsConfidentialV2DerivationExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS confidential v2 derivation exactness drift was not detected"\s*\)/u,
+    "JS confidential v2 derivation exactness negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsConfidentialV2DerivationExactnessBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS confidential v2 derivation exactness negative control must not unconditionally pass after run_checks",
+  );
   const pythonKagemushaInstructionTransactionBuilderBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":'),
     guard.indexOf('if mode == "--negative-control-csharp-kagemusha-instruction-transaction-builder":'),
   );
   assert.match(
     pythonKagemushaInstructionTransactionBuilderBranch,
-    /source_target\s*=\s*"python\/iroha_python\/src\/iroha_python\/kagemusha\.py"[\s\S]*?test_target\s*=\s*"python\/iroha_python\/tests\/kagemusha_test\.py"[\s\S]*?def build_kagemusha_recursive_redeem_transaction\([\s\S]*?instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?instruction = redeem_request_archive[\s\S]*?bad_request_flags\[39\] = 0x20[\s\S]*?run_checks\(mutated\)/u,
-    "Python Kagemusha instruction transaction negative control must mutate builder source and malformed-request test coverage",
+    /source_target\s*=\s*"python\/iroha_python\/src\/iroha_python\/kagemusha\.py"[\s\S]*?test_target\s*=\s*"python\/iroha_python\/tests\/kagemusha_test\.py"[\s\S]*?_kagemusha_require_non_blank_unpadded\(chain_id, "chain_id"\)[\s\S]*?chain_id = chain_id\.strip\(\)[\s\S]*?_kagemusha_require_non_blank_unpadded\(authority, "authority"\)[\s\S]*?authority = authority\.strip\(\)[\s\S]*?instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?instruction = redeem_request_archive[\s\S]*?test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing[\s\S]*?chain_id must not contain surrounding whitespace[\s\S]*?authority must not contain surrounding whitespace[\s\S]*?bad_request_flags\[39\] = 0x20[\s\S]*?run_checks\(mutated\)/u,
+    "Python Kagemusha instruction transaction negative control must mutate exact identifier preflight, builder source, and malformed-request test coverage",
+  );
+  assertContainsAll(
+    pythonKagemushaInstructionTransactionBuilderBranch,
+    [
+      'native_target = "python/iroha_python/iroha_python_rs/src/lib.rs"',
+      'require_non_blank_unpadded(chain_id, "chain_id")?',
+      "let _ = chain_id;",
+      'require_non_blank_unpadded(authority, "authority")?',
+      "let _ = authority;",
+      "transaction_builder_rejects_padded_chain_id_and_authority",
+      "transaction_builder_accepts_padded_chain_id_and_authority",
+      "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
+      "test_python_transaction_builder_accepts_padded_chain_and_authority_before_signing",
+      'client_target = "python/iroha_python/src/iroha_python/client.py"',
+      'tx_target = "python/iroha_python/src/iroha_python/tx.py"',
+      'client_test_target = "python/iroha_python/tests/client_ledger_helpers_test.py"',
+      'chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id")',
+      'chain_id=_require_non_empty_string(config.chain_id, "chain_id")',
+      'authority=_require_exact_non_empty_string(config.authority, "authority")',
+      'authority=_require_non_empty_string(config.authority, "authority")',
+      '_require_exact_non_empty_string(chain_id, "chain_id")',
+      '_require_non_empty_string(chain_id, "chain_id")',
+      '_require_exact_non_empty_string(authority, "authority")',
+      '_require_non_empty_string(authority, "authority")',
+      "test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing",
+      "test_python_transaction_draft_accepts_padded_config_and_sign_overrides_before_signing",
+      "test_transaction_draft_rejects_padded_chain_and_authority_before_signing",
+      "test_transaction_draft_accepts_padded_chain_and_authority_before_signing",
+      'Python PyO3 TransactionBuilder exact identifiers missing require_non_blank_unpadded(chain_id, "chain_id")?',
+      'Python PyO3 TransactionBuilder exact identifiers missing require_non_blank_unpadded(authority, "authority")?',
+      "Python PyO3 TransactionBuilder exact identifiers missing fn transaction_builder_rejects_padded_chain_id_and_authority()",
+      'Python Torii transaction draft exact identifiers missing effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")',
+      'Python Torii transaction draft exact identifiers missing _require_exact_non_empty_string(authority, "authority")',
+      'Python TransactionDraft config exact identifiers missing chain_id=_require_exact_non_empty_string(config.chain_id, "chain_id")',
+      'Python TransactionDraft config exact identifiers missing authority=_require_exact_non_empty_string(config.authority, "authority")',
+      'Python TransactionDraft signing override exact identifiers missing _require_exact_non_empty_string(chain_id, "chain_id")',
+      'Python TransactionDraft signing override exact identifiers missing _require_exact_non_empty_string(authority, "authority")',
+      "Python Kagemusha instruction transaction tests missing test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
+      "Python Kagemusha instruction transaction tests missing test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing",
+      "Python Torii transaction draft exact identifier tests missing test_transaction_draft_rejects_padded_chain_and_authority_before_signing",
+    ],
+    "Python Kagemusha instruction transaction negative control must mutate PyO3 TransactionBuilder exactness",
   );
   assert.match(
     pythonKagemushaInstructionTransactionBuilderBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?Python Kagemusha instruction transaction tests missing bad_request_flags\[39\] = 0x20[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "Python Kagemusha instruction transaction negative control must require source and test diagnostics",
+    /expected_labels\s*=\s*\([\s\S]*?Python Kagemusha instruction archive transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded\(chain_id, "chain_id"\)[\s\S]*?Python Kagemusha instruction archive transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded\(authority, "authority"\)[\s\S]*?Python Kagemusha recursive redeem transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded\(chain_id, "chain_id"\)[\s\S]*?Python Kagemusha recursive redeem transaction builder exact identifiers missing _kagemusha_require_non_blank_unpadded\(authority, "authority"\)[\s\S]*?Python TransactionDraft config exact identifiers missing chain_id=_require_exact_non_empty_string\(config\.chain_id, "chain_id"\)[\s\S]*?Python TransactionDraft signing override exact identifiers missing _require_exact_non_empty_string\(chain_id, "chain_id"\)[\s\S]*?Python Kagemusha instruction transaction builder missing instruction = kagemusha_recursive_redeem_instruction\(redeem_request_archive\)[\s\S]*?Python Kagemusha instruction transaction tests missing test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing[\s\S]*?Python Kagemusha instruction transaction tests missing test_python_transaction_draft_rejects_padded_config_and_sign_overrides_before_signing[\s\S]*?Python Kagemusha instruction transaction tests missing chain_id must not contain surrounding whitespace[\s\S]*?Python Kagemusha instruction transaction tests missing authority must not contain surrounding whitespace[\s\S]*?Python Kagemusha instruction transaction tests missing bad_request_flags\[39\] = 0x20[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Python Kagemusha instruction transaction negative control must require exact identifier, source, and test diagnostics",
   );
   assert.match(
     pythonKagemushaInstructionTransactionBuilderBranch,
@@ -23952,26 +25506,27 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonBlockHeightVectorBranch,
-    /old\s*=\s*\([\s\S]*?invalid_block_heights[\s\S]*?True,[\s\S]*?"18446744073709551616"[\s\S]*?1 << 64,[\s\S]*?new\s*=\s*\([\s\S]*?None,[\s\S]*?1 << 63,[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Python blockHeight vector negative control must mutate the whole invalid_block_heights tuple and validate the mutated text snapshot",
+    /old\s*=\s*\([\s\S]*?invalid_block_heights[\s\S]*?\(True, TypeError, "block_height must be an integer"\)[\s\S]*?\("18446744073709551616", TypeError, "block_height must be an integer"\)[\s\S]*?\(1 << 64, ValueError, "block_height must fit in u64"\)[\s\S]*?loop_old[\s\S]*?with pytest\.raises\(error_type, match=expected_error\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python blockHeight vector negative control must mutate the whole invalid_block_heights tuple and exact assertion",
   );
   assertContainsAll(
     pythonBlockHeightVectorBranch,
     [
-      "Python typed recursive spend blockHeight test vectors missing True",
-      "Python typed recursive spend blockHeight test vectors missing False",
-      "Python typed recursive spend blockHeight test vectors missing 1.5",
-      'Python typed recursive spend blockHeight test vectors missing "1"',
-      'Python typed recursive spend blockHeight test vectors missing "00"',
-      'Python typed recursive spend blockHeight test vectors missing "01"',
-      'Python typed recursive spend blockHeight test vectors missing "0007"',
-      'Python typed recursive spend blockHeight test vectors missing "-0"',
-      'Python typed recursive spend blockHeight test vectors missing "+7"',
-      'Python typed recursive spend blockHeight test vectors missing "7 "',
-      'Python typed recursive spend blockHeight test vectors missing " 7"',
-      'Python typed recursive spend blockHeight test vectors missing "18446744073709551616"',
-      "Python typed recursive spend blockHeight test vectors missing -1",
-      "Python typed recursive spend blockHeight test vectors missing 1 << 64",
+      'Python typed recursive spend blockHeight test vectors missing (True, TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing (False, TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing (1.5, TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("1", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("00", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("01", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("0007", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("-0", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("+7", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("7 ", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing (" 7", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing ("18446744073709551616", TypeError, "block_height must be an integer")',
+      'Python typed recursive spend blockHeight test vectors missing (-1, ValueError, "block_height must be non-negative")',
+      'Python typed recursive spend blockHeight test vectors missing (1 << 64, ValueError, "block_height must fit in u64")',
+      "Python typed recursive spend blockHeight exact diagnostics missing with pytest.raises(error_type, match=expected_error):",
     ],
     "Python blockHeight vector negative control must require every exact missing vector diagnostic",
   );
@@ -23981,26 +25536,27 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Python typed recursive spend blockHeight test vectors",
       "require_tuple_contains",
       "invalid_block_heights",
-      "True",
-      "False",
-      "1.5",
-      '"1"',
-      '"00"',
-      '"01"',
-      '"0007"',
-      '"-0"',
-      '"+7"',
-      '"7 "',
-      '" 7"',
-      '"18446744073709551616"',
-      "-1",
-      "1 << 64",
+      '(True, TypeError, "block_height must be an integer")',
+      '(False, TypeError, "block_height must be an integer")',
+      '(1.5, TypeError, "block_height must be an integer")',
+      '("1", TypeError, "block_height must be an integer")',
+      '("00", TypeError, "block_height must be an integer")',
+      '("01", TypeError, "block_height must be an integer")',
+      '("0007", TypeError, "block_height must be an integer")',
+      '("-0", TypeError, "block_height must be an integer")',
+      '("+7", TypeError, "block_height must be an integer")',
+      '("7 ", TypeError, "block_height must be an integer")',
+      '(" 7", TypeError, "block_height must be an integer")',
+      '("18446744073709551616", TypeError, "block_height must be an integer")',
+      '(-1, ValueError, "block_height must be non-negative")',
+      '(1 << 64, ValueError, "block_height must fit in u64")',
+      "with pytest.raises(error_type, match=expected_error)",
     ],
     "SDK parity guard must pin Python malformed blockHeight vector inventory",
   );
   assert.match(
     pythonBlockHeightVectorBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend blockHeight test vectors missing True[\s\S]*?Python typed recursive spend blockHeight test vectors missing 1 << 64[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend blockHeight test vectors missing \(True, TypeError, "block_height must be an integer"\)[\s\S]*?Python typed recursive spend blockHeight test vectors missing \(1 << 64, ValueError, "block_height must fit in u64"\)[\s\S]*?Python typed recursive spend blockHeight exact diagnostics missing with pytest\.raises\(error_type, match=expected_error\):[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "Python blockHeight vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
@@ -24019,27 +25575,27 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonNoteAmountVectorBranch,
-    /old\s*=\s*\([\s\S]*?invalid_amounts[\s\S]*?""[\s\S]*?str\(1 << 128\)[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?str\(1 << 127\)[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Python note amount vector negative control must mutate the whole invalid_amounts tuple and validate the mutated text snapshot",
+    /replacements\s*=\s*\([\s\S]*?\("", "amount must be a decimal integer"\)[\s\S]*?\("9" \* 40, "amount must fit in u128"\)[\s\S]*?expected_labels\s*=\s*tuple\(label for _needle, label in replacements\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python note amount vector negative control must remove each invalid_amounts tuple row and validate the mutated text snapshot",
   );
   assertContainsAll(
     pythonNoteAmountVectorBranch,
     [
-      'Python typed recursive spend note amount test vectors missing ""',
-      'Python typed recursive spend note amount test vectors missing "0"',
-      'Python typed recursive spend note amount test vectors missing "00"',
-      'Python typed recursive spend note amount test vectors missing "01"',
-      'Python typed recursive spend note amount test vectors missing "0007"',
-      'Python typed recursive spend note amount test vectors missing "-1"',
-      'Python typed recursive spend note amount test vectors missing "+1"',
-      'Python typed recursive spend note amount test vectors missing "1.0"',
-      'Python typed recursive spend note amount test vectors missing "1e3"',
-      'Python typed recursive spend note amount test vectors missing "7 "',
-      'Python typed recursive spend note amount test vectors missing " 7"',
-      String.raw`Python typed recursive spend note amount test vectors missing "\\t7"`,
-      String.raw`Python typed recursive spend note amount test vectors missing "7\\n"`,
-      "Python typed recursive spend note amount test vectors missing str(1 << 128)",
-      'Python typed recursive spend note amount test vectors missing "9" * 40',
+      'Python typed recursive spend note amount test vectors missing ("", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing ("0", "amount must be greater than zero")',
+      'Python typed recursive spend note amount test vectors missing ("00", "amount must be canonical")',
+      'Python typed recursive spend note amount test vectors missing ("01", "amount must be canonical")',
+      'Python typed recursive spend note amount test vectors missing ("0007", "amount must be canonical")',
+      'Python typed recursive spend note amount test vectors missing ("-1", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing ("+1", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing ("1.0", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing ("1e3", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing ("7 ", "amount must be a decimal integer")',
+      'Python typed recursive spend note amount test vectors missing (" 7", "amount must be a decimal integer")',
+      String.raw`Python typed recursive spend note amount test vectors missing ("\\t7", "amount must be a decimal integer")`,
+      String.raw`Python typed recursive spend note amount test vectors missing ("7\\n", "amount must be a decimal integer")`,
+      'Python typed recursive spend note amount test vectors missing (str(1 << 128), "amount must fit in u128")',
+      'Python typed recursive spend note amount test vectors missing ("9" * 40, "amount must fit in u128")',
     ],
     "Python note amount vector negative control must require every exact missing amount vector diagnostic",
   );
@@ -24049,6 +25605,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Python typed recursive spend note amount test vectors",
       "require_tuple_contains",
       "invalid_amounts",
+      "Python typed recursive spend note amount exact diagnostics",
+      'with pytest.raises(ValueError, match="amount")',
       '""',
       '"0"',
       '"00"',
@@ -24069,7 +25627,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonNoteAmountVectorBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend note amount test vectors missing ""[\s\S]*?Python typed recursive spend note amount test vectors missing str\(1 << 128\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    /replacements\s*=\s*\([\s\S]*?Python typed recursive spend note amount test vectors missing \("", "amount must be a decimal integer"\)[\s\S]*?Python typed recursive spend note amount test vectors missing \(str\(1 << 128\), "amount must fit in u128"\)[\s\S]*?expected_labels\s*=\s*tuple\(label for _needle, label in replacements\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "Python note amount vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(
@@ -24088,27 +25646,27 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRedeemPublicAmountVectorBranch,
-    /old\s*=\s*\([\s\S]*?invalid_public_amounts[\s\S]*?""[\s\S]*?str\(1 << 128\)[\s\S]*?new\s*=\s*\([\s\S]*?"ok"[\s\S]*?str\(1 << 127\)[\s\S]*?run_checks\(mutated_texts\)/u,
-    "Python public_amount vector negative control must mutate the whole invalid_public_amounts tuple and validate the mutated text snapshot",
+    /replacements\s*=\s*\([\s\S]*?\("", "public_amount must be a decimal integer"\)[\s\S]*?\("9" \* 40, "public_amount must fit in u128"\)[\s\S]*?expected_labels\s*=\s*tuple\(label for _needle, label in replacements\)[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python public_amount vector negative control must remove each invalid_public_amounts tuple row and validate the mutated text snapshot",
   );
   assertContainsAll(
     pythonRedeemPublicAmountVectorBranch,
     [
-      'Python typed recursive spend public amount test vectors missing ""',
-      'Python typed recursive spend public amount test vectors missing "0"',
-      'Python typed recursive spend public amount test vectors missing "00"',
-      'Python typed recursive spend public amount test vectors missing "01"',
-      'Python typed recursive spend public amount test vectors missing "0007"',
-      'Python typed recursive spend public amount test vectors missing "-1"',
-      'Python typed recursive spend public amount test vectors missing "+1"',
-      'Python typed recursive spend public amount test vectors missing "1.0"',
-      'Python typed recursive spend public amount test vectors missing "1e3"',
-      'Python typed recursive spend public amount test vectors missing "7 "',
-      'Python typed recursive spend public amount test vectors missing " 7"',
-      String.raw`Python typed recursive spend public amount test vectors missing "\\t7"`,
-      String.raw`Python typed recursive spend public amount test vectors missing "7\\n"`,
-      "Python typed recursive spend public amount test vectors missing str(1 << 128)",
-      'Python typed recursive spend public amount test vectors missing "9" * 40',
+      'Python typed recursive spend public amount test vectors missing ("", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing ("0", "public_amount must be greater than zero")',
+      'Python typed recursive spend public amount test vectors missing ("00", "public_amount must be canonical")',
+      'Python typed recursive spend public amount test vectors missing ("01", "public_amount must be canonical")',
+      'Python typed recursive spend public amount test vectors missing ("0007", "public_amount must be canonical")',
+      'Python typed recursive spend public amount test vectors missing ("-1", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing ("+1", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing ("1.0", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing ("1e3", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing ("7 ", "public_amount must be a decimal integer")',
+      'Python typed recursive spend public amount test vectors missing (" 7", "public_amount must be a decimal integer")',
+      String.raw`Python typed recursive spend public amount test vectors missing ("\\t7", "public_amount must be a decimal integer")`,
+      String.raw`Python typed recursive spend public amount test vectors missing ("7\\n", "public_amount must be a decimal integer")`,
+      'Python typed recursive spend public amount test vectors missing (str(1 << 128), "public_amount must fit in u128")',
+      'Python typed recursive spend public amount test vectors missing ("9" * 40, "public_amount must fit in u128")',
     ],
     "Python public_amount vector negative control must require every exact missing amount vector diagnostic",
   );
@@ -24138,7 +25696,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRedeemPublicAmountVectorBranch,
-    /expected_labels\s*=\s*\([\s\S]*?Python typed recursive spend public amount test vectors missing ""[\s\S]*?Python typed recursive spend public amount test vectors missing str\(1 << 128\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
+    /replacements\s*=\s*\([\s\S]*?Python typed recursive spend public amount test vectors missing \("", "public_amount must be a decimal integer"\)[\s\S]*?Python typed recursive spend public amount test vectors missing \(str\(1 << 128\), "public_amount must fit in u128"\)[\s\S]*?expected_labels\s*=\s*tuple\(label for _needle, label in replacements\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?first_lines_for_labels\(message, expected_labels\)/u,
     "Python public_amount vector negative control must require every exact missing vector diagnostic",
   );
   assert.match(

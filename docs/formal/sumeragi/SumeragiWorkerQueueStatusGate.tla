@@ -270,6 +270,13 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+WorkerQueueStatusExactness ==
+  Safety
+
+WorkerQueueStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerQueueStatusExactness
+
 BugVoteMapsToPayload ==
   ImplementationActions(VotesMapsCounter) = SpecActions(VotesMapsCounter)
 

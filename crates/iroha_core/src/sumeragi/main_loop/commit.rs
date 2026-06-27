@@ -10170,7 +10170,11 @@ fn collect_candidate_profiles_from_world(
             let record = record_map.get(peer).cloned();
             let stake_shares = record
                 .as_ref()
-                .and_then(|rec| share_map.get(&(rec.lane_id, rec.validator.clone())).cloned())
+                .and_then(|rec| {
+                    share_map
+                        .get(&(rec.lane_id, rec.validator.clone()))
+                        .cloned()
+                })
                 .unwrap_or_default();
             election::CandidateProfile {
                 peer_id: peer.clone(),

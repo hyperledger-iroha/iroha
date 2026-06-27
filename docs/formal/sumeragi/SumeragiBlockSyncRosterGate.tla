@@ -123,7 +123,15 @@ TypeInvariant ==
 RosterAdmissionMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == RosterAdmissionMatchesSpec
+BlockSyncRosterExactness ==
+  RosterAdmissionMatchesSpec
+
+BlockSyncRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncRosterExactness
+
+SafetyFast ==
+  BlockSyncRosterExactness
 
 RequestedStaleAllowed ==
   Matches("requested_stale")

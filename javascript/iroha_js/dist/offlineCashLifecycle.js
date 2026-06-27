@@ -55,11 +55,14 @@ export function assertOfflineCashConfigurationSnapshotUsable(
   const checkedNativeBridgeAbiVersion =
     nativeBridgeAbiVersion === null || nativeBridgeAbiVersion === undefined
       ? null
-      : finiteOfflineCashSnapshotNumber(nativeBridgeAbiVersion, "nativeBridgeAbiVersion");
+      : positiveIntegerOfflineCashSnapshotNumber(nativeBridgeAbiVersion, "nativeBridgeAbiVersion");
   const checkedRequiredNativeBridgeAbiVersion =
     requiredNativeBridgeAbiVersion === null || requiredNativeBridgeAbiVersion === undefined
       ? null
-      : finiteOfflineCashSnapshotNumber(requiredNativeBridgeAbiVersion, "requiredNativeBridgeAbiVersion");
+      : positiveIntegerOfflineCashSnapshotNumber(
+          requiredNativeBridgeAbiVersion,
+          "requiredNativeBridgeAbiVersion",
+        );
   if (
     checkedRequiredNativeBridgeAbiVersion !== null &&
     (checkedNativeBridgeAbiVersion === null || checkedNativeBridgeAbiVersion < checkedRequiredNativeBridgeAbiVersion)
@@ -84,6 +87,17 @@ function finiteOfflineCashSnapshotNumber(value, fieldName) {
     );
   }
   return value;
+}
+
+function positiveIntegerOfflineCashSnapshotNumber(value, fieldName) {
+  const checked = finiteOfflineCashSnapshotNumber(value, fieldName);
+  if (!Number.isSafeInteger(checked) || checked <= 0) {
+    throw new OfflineCashConfigurationSnapshotError(
+      "malformed_snapshot",
+      `Offline cash configuration snapshot field ${fieldName} must be a positive integer.`,
+    );
+  }
+  return checked;
 }
 
 export function offlineCashAvailableTransportKinds(capabilities = {}) {

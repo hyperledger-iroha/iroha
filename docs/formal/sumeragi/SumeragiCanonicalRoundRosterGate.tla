@@ -292,7 +292,17 @@ TypeInvariant ==
 CanonicalRoundRosterMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
 
-SafetyFast == CanonicalRoundRosterMatchesSpec
+CanonicalRoundRosterExactness ==
+  CanonicalRoundRosterMatchesSpec
+
+CanonicalRoundRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CanonicalRoundRosterExactness
+
+SafetyFast == CanonicalRoundRosterExactness
+
+Safety ==
+  CanonicalRoundRosterCorrectnessEnvelope
 
 BugAllowFutureWithoutHistory ==
   ActualActions(FutureNoHistoryEmpty) = SpecActions(FutureNoHistoryEmpty)

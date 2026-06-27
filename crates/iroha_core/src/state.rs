@@ -51,8 +51,8 @@ use iroha_data_model::{
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
-        commitment::DaCommitmentLocation,
-        pin_intent::DaPinIntentWithLocation,
+        commitment::{DaCommitmentLocation, DaCommitmentRecord},
+        pin_intent::{DaPinIntent, DaPinIntentWithLocation},
         types::{BlobDigest, StorageTicketId},
     },
     error::ParseError,
@@ -9387,16 +9387,10 @@ mod stake_snapshot_tests {
 
         assert!(public_lane_reward_record_matches_key(&reward_key, &reward));
         reward.lane_id = LaneId::new(44);
-        assert!(!public_lane_reward_record_matches_key(
-            &reward_key,
-            &reward
-        ));
+        assert!(!public_lane_reward_record_matches_key(&reward_key, &reward));
         reward.lane_id = reward_key.0;
         reward.epoch = reward_key.1 + 1;
-        assert!(!public_lane_reward_record_matches_key(
-            &reward_key,
-            &reward
-        ));
+        assert!(!public_lane_reward_record_matches_key(&reward_key, &reward));
     }
 
     #[test]
@@ -20309,6 +20303,32 @@ impl State {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         self.da_receipt_cursors.read().snapshot()
+    }
+
+    /// Snapshot already-loaded DA receipt cursors without replaying Kura.
+    ///
+    /// Proposal assembly calls this from the consensus actor lock. Forcing a
+    /// full Kura replay there can starve queue workers during frontier recovery;
+    /// validation and query paths that need authoritative DA state must keep
+    /// using the hydrating accessors.
+    pub(crate) fn da_receipt_cursor_snapshot_cached(&self) -> BTreeMap<LaneEpoch, u64> {
+        self.da_receipt_cursors.read().snapshot()
+    }
+
+    /// Check already-loaded DA commitments without forcing Kura hydration.
+    pub(crate) fn da_commitments_contains_record_identity_cached(
+        &self,
+        record: &DaCommitmentRecord,
+    ) -> bool {
+        self.da_commitments.read().contains_record_identity(record)
+    }
+
+    /// Check already-loaded DA pin intents without forcing Kura hydration.
+    pub(crate) fn da_pin_intents_contains_intent_identity_cached(
+        &self,
+        intent: &DaPinIntent,
+    ) -> bool {
+        self.da_pin_intents.read().contains_intent_identity(intent)
     }
 
     /// Access the in-memory shard cursor index derived from DA commitments.

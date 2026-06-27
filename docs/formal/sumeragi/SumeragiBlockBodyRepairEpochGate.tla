@@ -177,7 +177,14 @@ TypeInvariant ==
 RepairEpochMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == RepairEpochMatchesSpec
+BlockBodyRepairEpochExactness ==
+  RepairEpochMatchesSpec
+
+BlockBodyRepairEpochCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockBodyRepairEpochExactness
+
+SafetyFast == BlockBodyRepairEpochExactness
 
 CacheReturned ==
   Matches("cache_only")

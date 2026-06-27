@@ -325,7 +325,15 @@ TypeInvariant ==
 VoteDeferralMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == VoteDeferralMatchesSpec
+BlockSyncVoteDeferralExactness ==
+  VoteDeferralMatchesSpec
+
+BlockSyncVoteDeferralCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncVoteDeferralExactness
+
+SafetyFast ==
+  BlockSyncVoteDeferralExactness
 
 NoVotesContinue ==
   Matches("no_votes_continue")

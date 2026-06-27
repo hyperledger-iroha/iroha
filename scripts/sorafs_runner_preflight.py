@@ -44,6 +44,55 @@ def _require_runner_arg_field(field: Any) -> str:
     return field
 
 
+def _runner_path_sequence(paths: Any, errors: list[str], *, label: str) -> Sequence[Any] | None:
+    if isinstance(paths, (str, bytes, bytearray, Mapping)) or not isinstance(
+        paths, Sequence
+    ):
+        errors.append(f"{label} paths must be a sequence")
+        return None
+    return paths
+
+
+def _runner_input_identity_map(
+    seen: Any,
+    errors: list[str],
+    *,
+    label: str,
+) -> dict[Path, tuple[str, Path]] | None:
+    if seen is None:
+        return {}
+    if not isinstance(seen, dict):
+        errors.append(f"{label} identity map must be a dictionary")
+        return None
+    for identity, previous in seen.items():
+        if (
+            not isinstance(identity, Path)
+            or not isinstance(previous, tuple)
+            or len(previous) != 2
+        ):
+            errors.append(
+                f"{label} identity map entries must be path identities and "
+                "(label, path) pairs"
+            )
+            return None
+        previous_label, previous_path = previous
+        try:
+            _require_label(previous_label)
+        except ValueError:
+            errors.append(
+                f"{label} identity map entries must be path identities and "
+                "(label, path) pairs"
+            )
+            return None
+        if not isinstance(previous_path, Path):
+            errors.append(
+                f"{label} identity map entries must be path identities and "
+                "(label, path) pairs"
+            )
+            return None
+    return seen
+
+
 def inspect_runner_path_exists(
     path: Path,
     errors: list[str],
@@ -392,10 +441,15 @@ def require_existing_files(
     """Validate existing runner input files and reject repeated path identities."""
 
     errors: list[str] = []
-    if seen is None:
-        seen = {}
-    for path in paths:
-        path_exists = inspect_runner_path_exists(path, errors, label=label)
+    path_label = _require_label(label)
+    path_items = _runner_path_sequence(paths, errors, label=path_label)
+    if path_items is None:
+        return errors
+    seen_map = _runner_input_identity_map(seen, errors, label=path_label)
+    if seen_map is None:
+        return errors
+    for path in path_items:
+        path_exists = inspect_runner_path_exists(path, errors, label=path_label)
         if path_exists is None:
             continue
         path_is_symlink = False
@@ -403,32 +457,32 @@ def require_existing_files(
             inspected_symlink = inspect_runner_path_is_symlink(
                 path,
                 errors,
-                label=label,
+                label=path_label,
             )
             if inspected_symlink is None:
                 continue
             path_is_symlink = inspected_symlink
         if not path_exists and not path_is_symlink:
-            errors.append(f"{label} `{path}` must exist and be a file")
+            errors.append(f"{path_label} `{path}` must exist and be a file")
             continue
         resolved = resolve_runner_input_file(path, errors)
         if resolved is None:
             continue
-        path_is_file = inspect_runner_path_is_file(path, errors, label=label)
+        path_is_file = inspect_runner_path_is_file(path, errors, label=path_label)
         if path_is_file is None:
             continue
         if not path_is_file:
-            errors.append(f"{label} `{path}` must exist and be a file")
+            errors.append(f"{path_label} `{path}` must exist and be a file")
             continue
-        previous = seen.get(resolved)
+        previous = seen_map.get(resolved)
         if previous is not None:
             previous_label, previous_path = previous
             errors.append(
-                f"duplicate {label} input `{path}` matches "
+                f"duplicate {path_label} input `{path}` matches "
                 f"{previous_label} `{previous_path}`"
             )
             continue
-        seen[resolved] = (label, path)
+        seen_map[resolved] = (path_label, path)
     return errors
 
 
@@ -441,10 +495,15 @@ def require_existing_dirs(
     """Validate existing runner input directories and reject repeated identities."""
 
     errors: list[str] = []
-    if seen is None:
-        seen = {}
-    for path in paths:
-        path_exists = inspect_runner_path_exists(path, errors, label=label)
+    path_label = _require_label(label)
+    path_items = _runner_path_sequence(paths, errors, label=path_label)
+    if path_items is None:
+        return errors
+    seen_map = _runner_input_identity_map(seen, errors, label=path_label)
+    if seen_map is None:
+        return errors
+    for path in path_items:
+        path_exists = inspect_runner_path_exists(path, errors, label=path_label)
         if path_exists is None:
             continue
         path_is_symlink = False
@@ -452,32 +511,32 @@ def require_existing_dirs(
             inspected_symlink = inspect_runner_path_is_symlink(
                 path,
                 errors,
-                label=label,
+                label=path_label,
             )
             if inspected_symlink is None:
                 continue
             path_is_symlink = inspected_symlink
         if not path_exists and not path_is_symlink:
-            errors.append(f"{label} `{path}` must exist and be a directory")
+            errors.append(f"{path_label} `{path}` must exist and be a directory")
             continue
         resolved = resolve_runner_input_file(path, errors)
         if resolved is None:
             continue
-        path_is_dir = inspect_runner_path_is_dir(path, errors, label=label)
+        path_is_dir = inspect_runner_path_is_dir(path, errors, label=path_label)
         if path_is_dir is None:
             continue
         if not path_is_dir:
-            errors.append(f"{label} `{path}` must exist and be a directory")
+            errors.append(f"{path_label} `{path}` must exist and be a directory")
             continue
-        previous = seen.get(resolved)
+        previous = seen_map.get(resolved)
         if previous is not None:
             previous_label, previous_path = previous
             errors.append(
-                f"duplicate {label} directory `{path}` matches "
+                f"duplicate {path_label} directory `{path}` matches "
                 f"{previous_label} `{previous_path}`"
             )
             continue
-        seen[resolved] = (label, path)
+        seen_map[resolved] = (path_label, path)
     return errors
 
 

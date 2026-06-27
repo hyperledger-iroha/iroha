@@ -548,7 +548,7 @@ def _sccp_proof_request_bundle_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP proof-request bundle/source-proof gate source inventory "
             "cannot run release-bundle verifier helper"
@@ -566,7 +566,7 @@ def _sccp_phase_evidence_source_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP phase evidence duplicate-input source inventory "
             "cannot run release-bundle verifier helper"
@@ -587,7 +587,7 @@ def _release_corridor_phase_transcript_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release corridor phase-transcript source inventory "
             "cannot run release-bundle verifier helper"
@@ -605,7 +605,7 @@ def _sccp_release_bundle_source_copy_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release bundle source-copy source inventory "
             "cannot run release-bundle verifier helper"
@@ -623,7 +623,7 @@ def _sccp_release_bundle_output_path_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release bundle output-path source inventory "
             "cannot run release-bundle verifier helper"
@@ -641,7 +641,7 @@ def _sccp_release_artifact_path_text_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release artifact path text source inventory "
             "cannot run release-bundle verifier helper"
@@ -662,7 +662,7 @@ def _sccp_release_input_provenance_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release input-provenance schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -683,7 +683,7 @@ def _sccp_release_public_json_root_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release public JSON-root schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -704,7 +704,7 @@ def _sccp_release_public_markdown_text_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release public Markdown text schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -725,7 +725,7 @@ def _sccp_release_public_crypto_evidence_binding_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release public cryptographic-evidence binding source inventory "
             "cannot run release-bundle verifier helper"
@@ -746,7 +746,7 @@ def _sccp_release_public_submission_surface_binding_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release public submission-surface binding source inventory "
             "cannot run release-bundle verifier helper"
@@ -767,7 +767,7 @@ def _sccp_release_manifest_readiness_flags_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release manifest readiness-flags source inventory "
             "cannot run release-bundle verifier helper"
@@ -788,7 +788,7 @@ def _sccp_route_allowlist_canary_summary_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP route allowlist canary summary source inventory "
             "cannot run release-bundle verifier helper"
@@ -809,7 +809,7 @@ def _sccp_transparent_openverify_summary_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP transparent OpenVerify summary source inventory "
             "cannot run release-bundle verifier helper"
@@ -830,7 +830,7 @@ def _sccp_release_manifest_artifact_set_order_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release manifest artifact-set/order source inventory "
             "cannot run release-bundle verifier helper"
@@ -851,7 +851,7 @@ def _sccp_release_public_blocker_list_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release public blocker-list schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -872,7 +872,7 @@ def _sccp_release_public_scalar_text_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release public scalar-text schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -893,7 +893,7 @@ def _sccp_release_notes_attachment_invariants_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release-notes attachment invariants source inventory "
             "cannot run release-bundle verifier helper"
@@ -914,7 +914,7 @@ def _sccp_readiness_markdown_invariants_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP readiness Markdown invariants source inventory "
             "cannot run release-bundle verifier helper"
@@ -932,7 +932,7 @@ def _sccp_retired_network_surface_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP retired network-surface guard source inventory "
             "cannot run release-bundle verifier helper"
@@ -950,7 +950,7 @@ def _sccp_launch_scope_constant_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP launch-scope constants source inventory "
             "cannot run release-bundle verifier helper"
@@ -968,7 +968,7 @@ def _ethereum_launch_policy_selector_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet launch-policy selector source inventory "
             "cannot run release-bundle verifier helper"
@@ -990,7 +990,7 @@ def _ethereum_launch_policy_documentation_gate_inventory_errors(
         if inventory is None and forbidden_markers is None:
             return list(helper())
         return list(helper(inventory, forbidden_markers))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet launch-policy documentation source inventory "
             "cannot run release-bundle verifier helper"
@@ -1012,7 +1012,7 @@ def _sccp_public_discovery_documentation_gate_inventory_errors(
         if inventory is None and forbidden_markers is None:
             return list(helper())
         return list(helper(inventory, forbidden_markers))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP public discovery documentation source inventory "
             "cannot run release-bundle verifier helper"
@@ -1033,7 +1033,7 @@ def _bsc_groth16_material_documentation_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "BSC Groth16 material documentation source inventory "
             "cannot run release-bundle verifier helper"
@@ -1054,7 +1054,7 @@ def _bsc_groth16_material_evidence_guard_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "BSC Groth16 material evidence guard source inventory "
             "cannot run release-bundle verifier helper"
@@ -1072,7 +1072,7 @@ def _ethereum_data_collection_no_proxy_gate_inventory_errors(
         if regions is None:
             return list(helper())
         return list(helper(regions))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet no-proxy data-collection source inventory "
             "cannot run release-bundle verifier helper"
@@ -1093,7 +1093,7 @@ def _ethereum_inbound_adversarial_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet inbound adversarial source inventory "
             "cannot run release-bundle verifier helper"
@@ -1114,7 +1114,7 @@ def _bsc_inbound_adversarial_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "BSC mainnet inbound adversarial source inventory "
             "cannot run release-bundle verifier helper"
@@ -1135,7 +1135,7 @@ def _tron_inbound_adversarial_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "TRON mainnet inbound adversarial source inventory "
             "cannot run release-bundle verifier helper"
@@ -1156,7 +1156,7 @@ def _bsc_route_config_canonical_manifest_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP BSC route-config canonical-manifest source inventory "
             "cannot run release-bundle verifier helper"
@@ -1177,7 +1177,7 @@ def _tron_route_config_canonical_manifest_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP TRON route-config canonical-manifest source inventory "
             "cannot run release-bundle verifier helper"
@@ -1195,7 +1195,7 @@ def _tron_runtime_route_manifest_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP TRON runtime route-manifest source inventory "
             "cannot run release-bundle verifier helper"
@@ -1216,7 +1216,7 @@ def _all_lanes_route_canary_scalar_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP all-lanes route-canary scalar source inventory "
             "cannot run release-bundle verifier helper"
@@ -1237,7 +1237,7 @@ def _all_lanes_evidence_root_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP all-lanes evidence-root schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -1258,7 +1258,7 @@ def _all_lanes_governed_blocker_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP all-lanes governed blocker schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -1279,7 +1279,7 @@ def _all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP all-lanes release-checklist exact-boolean source inventory "
             "cannot run release-bundle verifier helper"
@@ -1300,7 +1300,7 @@ def _active_launch_checklist_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP active-launch checklist schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -1321,7 +1321,7 @@ def _ethereum_outbound_precallback_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet outbound pre-callback source inventory "
             "cannot run release-bundle verifier helper"
@@ -1342,7 +1342,7 @@ def _ethereum_outbound_provider_validation_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet outbound provider validation source inventory "
             "cannot run release-bundle verifier helper"
@@ -1363,7 +1363,7 @@ def _ethereum_local_admission_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet local-admission source inventory "
             "cannot run release-bundle verifier helper"
@@ -1384,7 +1384,7 @@ def _ethereum_receipt_root_zero_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet receipt-root zero source inventory "
             "cannot run release-bundle verifier helper"
@@ -1405,7 +1405,7 @@ def _ethereum_receipt_rlp_zero_topic_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet receipt RLP zero-topic source inventory "
             "cannot run release-bundle verifier helper"
@@ -1426,7 +1426,7 @@ def _ethereum_receipt_rlp_zero_address_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet receipt RLP zero-address source inventory "
             "cannot run release-bundle verifier helper"
@@ -1447,7 +1447,7 @@ def _ethereum_receipt_source_event_context_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet source-event context source inventory "
             "cannot run release-bundle verifier helper"
@@ -1468,7 +1468,7 @@ def _ethereum_receipt_source_event_mode_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet source-event evidence mode source inventory "
             "cannot run release-bundle verifier helper"
@@ -1489,7 +1489,7 @@ def _ethereum_receipt_source_event_zero_digest_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet source-event zero digest source inventory "
             "cannot run release-bundle verifier helper"
@@ -1510,7 +1510,7 @@ def _ethereum_receipt_rpc_duplicate_json_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet receipt RPC duplicate JSON source inventory "
             "cannot run release-bundle verifier helper"
@@ -1531,7 +1531,7 @@ def _ethereum_receipt_block_transaction_hash_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet block receipt transactionHash source inventory "
             "cannot run release-bundle verifier helper"
@@ -1552,7 +1552,7 @@ def _ethereum_js_receipt_admission_guard_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet JS receipt admission source inventory "
             "cannot run release-bundle verifier helper"
@@ -1573,7 +1573,7 @@ def _ethereum_sdk_receipt_metadata_guard_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet SDK receipt metadata source inventory "
             "cannot run release-bundle verifier helper"
@@ -1594,7 +1594,7 @@ def _ethereum_native_receipt_finality_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet native receipt finality source inventory "
             "cannot run release-bundle verifier helper"
@@ -1612,7 +1612,7 @@ def _ethereum_noncanonical_chain_id_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet noncanonical chain id source inventory "
             "cannot run release-bundle verifier helper"
@@ -1633,7 +1633,7 @@ def _ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet Beacon REST finalized-header shape source inventory "
             "cannot run release-bundle verifier helper"
@@ -1654,7 +1654,7 @@ def _ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet Beacon REST execution payload binding source inventory "
             "cannot run release-bundle verifier helper"
@@ -1672,7 +1672,7 @@ def _ethereum_sync_committee_roster_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet sync-committee roster source inventory "
             "cannot run release-bundle verifier helper"
@@ -1694,7 +1694,7 @@ def _sccp_unready_transparent_proof_config_gate_inventory_errors(
         if inventory is None and forbidden_paths is None:
             return list(helper())
         return list(helper(inventory, forbidden_paths))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP unready transparent-proof config-only source inventory "
             "cannot run release-bundle verifier helper"
@@ -1712,7 +1712,7 @@ def _tron_deploy_operator_boolean_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP TRON deploy operator boolean source inventory "
             "cannot run release-bundle verifier helper"
@@ -1730,7 +1730,7 @@ def _ethereum_source_bridge_config_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet source-bridge config source inventory "
             "cannot run release-bundle verifier helper"
@@ -1751,7 +1751,7 @@ def _sccp_source_material_template_rejection_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP source-material template rejection source inventory "
             "cannot run release-bundle verifier helper"
@@ -1772,7 +1772,7 @@ def _sccp_source_material_role_validation_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP source-material role validation source inventory "
             "cannot run release-bundle verifier helper"
@@ -1793,7 +1793,7 @@ def _ethereum_evm_source_adapter_deployment_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet EVM source-adapter deployment gate source inventory "
             "cannot run release-bundle verifier helper"
@@ -1814,7 +1814,7 @@ def _contract_smoke_eth_mainnet_network_id_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "EVM contract smoke Ethereum mainnet network id source inventory "
             "cannot run release-bundle verifier helper"
@@ -1835,7 +1835,7 @@ def _contract_smoke_evm_production_surface_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "EVM contract smoke production surface source inventory "
             "cannot run release-bundle verifier helper"
@@ -1856,7 +1856,7 @@ def _ethereum_core_range_finality_binding_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet SCCP range finality binding source inventory "
             "cannot run release-bundle verifier helper"
@@ -1877,7 +1877,7 @@ def _ethereum_core_message_replay_guard_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet SCCP message replay guard source inventory "
             "cannot run release-bundle verifier helper"
@@ -1898,7 +1898,7 @@ def _ethereum_torii_pinned_message_proof_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet Torii pinned message proof source inventory "
             "cannot run release-bundle verifier helper"
@@ -1919,7 +1919,7 @@ def _ethereum_evm_source_live_production_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet live EVM source production source inventory "
             "cannot run release-bundle verifier helper"
@@ -1940,7 +1940,7 @@ def _ethereum_evm_live_destination_production_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet live EVM destination production source inventory "
             "cannot run release-bundle verifier helper"
@@ -1961,7 +1961,7 @@ def _ethereum_route_canary_finalized_receipt_block_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet route-canary finalized receipt block source inventory "
             "cannot run release-bundle verifier helper"
@@ -1979,7 +1979,7 @@ def _ethereum_evm_block_tag_metadata_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "Ethereum mainnet EVM block-tag metadata source inventory "
             "cannot run release-bundle verifier helper"
@@ -1997,7 +1997,7 @@ def _native_sccp_no_wasm_readiness_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "native SCCP no-WASM/no-remote readiness source inventory "
             "cannot run release-bundle verifier helper"
@@ -2018,7 +2018,7 @@ def _sccp_release_native_prover_bundle_schema_gate_inventory_errors(
         if inventory is None:
             return list(helper())
         return list(helper(inventory))
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "SCCP release native-prover bundle schema source inventory "
             "cannot run release-bundle verifier helper"
@@ -3176,6 +3176,54 @@ def _is_nonzero_hex32(value: Any) -> bool:
     except (SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw) and value == f"0x{raw.hex()}"
+
+
+def _source_adapter_gate_template_hashes(domain: Any) -> tuple[bytes, ...]:
+    if type(domain) is not int:
+        return ()
+    all_lanes = _load_all_lanes_module()
+    profile = all_lanes.LANE_PROFILES.get(domain)
+    if profile is None:
+        return ()
+    return tuple(all_lanes._source_material_template_hashes(profile).values())
+
+
+def _public_cryptographic_source_adapter_gate_template_hash_errors(
+    row_label: str,
+    domain: Any,
+    gate_hash: Any,
+    audit_hashes: dict[str, Any],
+) -> list[str]:
+    """Return public-row blockers when source-gate hashes replay templates."""
+
+    if type(domain) is not int:
+        return []
+    template_hashes = _source_adapter_gate_template_hashes(domain)
+    if not template_hashes:
+        return []
+    errors: list[str] = []
+    if _is_nonzero_hex32(gate_hash):
+        assert isinstance(gate_hash, str)
+        if bytes.fromhex(gate_hash[2:]) in template_hashes:
+            errors.append(
+                f"{row_label} source_adapter_gate_hash must be deployed gate "
+                "evidence, not built-in template material"
+            )
+    expected_audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
+        domain,
+        frozenset(),
+    )
+    for audit_field in sorted(expected_audit_keys):
+        audit_hash = audit_hashes.get(audit_field)
+        if not _is_nonzero_hex32(audit_hash):
+            continue
+        assert isinstance(audit_hash, str)
+        if bytes.fromhex(audit_hash[2:]) in template_hashes:
+            errors.append(
+                f"{row_label} source_adapter_gate_audit_hashes {audit_field} "
+                "must be deployed audit evidence, not built-in template material"
+            )
+    return errors
 
 
 def _is_canonical_sha256_text(value: Any) -> bool:
@@ -6279,7 +6327,7 @@ def _phase_transcript_errors(phase: str, artifact: Any) -> list[str]:
                     f"evidence artifact {outside_window_error}: "
                     f"{_phase_diagnostic_fragment(fragment)}"
                 )
-            elif phase != EVM_NATIVE_DOTNET_PHASE:
+            else:
                 success_positions = _phase_block_output_fragment_line_indices(
                     phase_block,
                     fragment,
@@ -9534,7 +9582,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` emitted after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a numeric unit duration, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, names `Hyperledger.Iroha.Sdk.Tests.dll`, is at most 16777216 bytes, contains no DTD or entity declarations, uses unique TRX `UnitTest` and `Execution` ids, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose names or classes contain an exact `Sccp...` test token, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, when present `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token, SCCP TRX test definition/result names used for binding must be unpadded and control-character-free, contains at least one passed SCCP `UnitTestResult`, and contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, and tab/control-whitespace separators remain forged evidence. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
             f"- {SCCP_NOT_REMAINING_WORK_SCOPE_NOTE}",
@@ -9549,7 +9597,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
-            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
@@ -9736,6 +9784,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, SystemExit):
+        return fallback
     if isinstance(exc, OSError) and (
         getattr(exc, "filename", None) is not None
         or getattr(exc, "filename2", None) is not None
@@ -10007,7 +10057,7 @@ def _public_corridor_errors(value: Any) -> list[str]:
     else:
         try:
             known_phases = _corridor_phases()
-        except Exception:  # pragma: no cover - exercised through blocker text.
+        except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
             errors.append(
                 "readiness report corridor phase inventory cannot run corridor helper"
             )
@@ -10467,7 +10517,7 @@ def _public_embedded_evidence_errors(value: Any) -> list[str]:
     try:
         all_lanes = _load_all_lanes_module()
         public_summary = all_lanes._public_summary_payload(value)
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
             "readiness report evidence cannot run all-lanes public summary validator"
         ]
@@ -10600,7 +10650,7 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
     required_gates = frozenset()
     try:
         required_gates = _source_inventory_required_public_gates()
-    except Exception:  # pragma: no cover - exercised through blocker text.
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         errors.append(
             "readiness report source_inventory required gate inventory cannot run "
             "release-bundle verifier helper"
@@ -11122,6 +11172,14 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
                 semantic_audit_hashes,
             )
         )
+        errors.extend(
+            _public_cryptographic_source_adapter_gate_template_hash_errors(
+                row_label,
+                domain,
+                row.get("source_adapter_gate_hash"),
+                semantic_audit_hashes,
+            )
+        )
 
         gate_required = row.get("source_adapter_gate_required")
         expected_audit_keys = (
@@ -11500,11 +11558,12 @@ def main(argv: list[str] | None = None) -> int:
             native_evm_prover_bundle=args.native_evm_prover_bundle,
         )
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

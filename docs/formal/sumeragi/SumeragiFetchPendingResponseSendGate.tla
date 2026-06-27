@@ -290,8 +290,15 @@ TypeInvariant ==
 FetchPendingResponseSendMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast ==
+FetchPendingResponseSendExactness ==
   FetchPendingResponseSendMatchesSpec
+
+FetchPendingResponseSendCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FetchPendingResponseSendExactness
+
+SafetyFast ==
+  FetchPendingResponseSendExactness
 
 HintlessRequiresRosterProof ==
   Matches("hintless_no_roster")

@@ -263,6 +263,12 @@ RbcPayloadChunkingCoreSafety ==
   /\ FullChunksBeforeLast
   /\ PayloadCoverageMatchesLength
 
-Safety == RbcPayloadChunkingCoreSafety
+RbcPayloadChunkingExactness == RbcPayloadChunkingCoreSafety
+
+RbcPayloadChunkingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcPayloadChunkingExactness
+
+Safety == RbcPayloadChunkingExactness
 
 ====

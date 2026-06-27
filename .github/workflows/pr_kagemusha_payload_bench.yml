@@ -35,12 +35,20 @@ on:
       - "scripts/run_local_swarm.sh"
       - "scripts/training_script_2.sh"
       - "scripts/run_100tps_profile_localnet.sh"
+      - "scripts/android_sample_env.sh"
+      - "scripts/ios_demo/start.sh"
+      - "scripts/kaigi_demo.sh"
+      - "scripts/mochi_local_sandbox.sh"
       - "scripts/tests/check_android_device_lab_slot_test.py"
       - "scripts/tests/kagemusha_production_readiness_test.py"
       - "scripts/tests/deploy_localnet_test.py"
       - "scripts/tests/run_local_swarm_test.py"
       - "scripts/tests/training_script_2_test.py"
       - "scripts/tests/run_100tps_profile_localnet_test.py"
+      - "scripts/tests/android_sample_env_test.py"
+      - "scripts/tests/ios_demo_start_test.py"
+      - "scripts/tests/kaigi_demo_test.py"
+      - "scripts/tests/mochi_local_sandbox_test.py"
       - "fixtures/android/device_lab/**"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "fixtures/kagemusha_recursive_spend_abi7/**"
@@ -61,6 +69,7 @@ on:
       - "crates/connect_norito_bridge/src/lib.rs"
       - "crates/iroha_js_host/Cargo.toml"
       - "crates/iroha_js_host/src/lib.rs"
+      - "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift"
       - "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift"
       - "IrohaSwift/Sources/IrohaSwift/Crypto.swift"
       - "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift"
@@ -148,6 +157,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
@@ -644,6 +654,7 @@ on:
       - "javascript/iroha_js/test/connectRetryPolicy.test.js"
       - "javascript/iroha_js/test/connectSession.test.js"
       - "javascript/iroha_js/test/connectWebSocket.test.js"
+      - "javascript/iroha_js/test/crypto.test.js"
       - "javascript/iroha_js/test/crypto.browser.test.js"
       - "javascript/iroha_js/test/instructionBuilders.test.js"
       - "javascript/iroha_js/test/transactionBuilder.test.js"
@@ -719,6 +730,7 @@ jobs:
           cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_witness_ffi_rejects_invalid_inputs_without_output --lib -- --test-threads=1
           cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_append_boundary_ffi_rejects_semantic_profile_archives --lib -- --test-threads=1
           cargo test -p iroha_js_host kagemusha_recursive_spend_lineage_append_boundary_rejects_duplicate_current_outputs --lib -- --test-threads=1
+          cargo test -p iroha_js_host kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes --lib -- --test-threads=1
           cargo test -p connect_norito_bridge kagemusha_compact_ffi_rejects_oversized_lengths_without_output --lib -- --test-threads=1
           cargo test -p connect_norito_bridge kagemusha_verified_compact_token_ffi_rejects --lib -- --test-threads=1
           cargo test -p connect_norito_bridge kagemusha_unanchored_compact_token_ffi_rejects_valid_bundle_without_records --lib -- --test-threads=1
@@ -790,7 +802,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Python recursive spend PyO3 host tests
-        run: cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs --lib -- --test-threads=1
+        run: |
+          cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs --lib -- --test-threads=1
+          cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_forged_result_hashes --lib -- --test-threads=1
       - name: Python recursive spend SDK tests
         run: ci/check_kagemusha_recursive_spend_python_sdk.sh
 
@@ -826,12 +840,14 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-append-lineage-key-boundary
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-artifact-request-object
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-note-amount-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-redeem-public-amount-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-block-height-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-pallas-opening-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-raw-lineage-key-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-confidential-v2-derivation-exactness
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-instruction-transaction-builder
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-kagemusha-recursive-redeem-builder-metadata
@@ -862,6 +878,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-metadata-option-shape
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-sequence-count-prechecks
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-pallas-transcript-label-byte-limit
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-pallas-transcript-label-byte-limit
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-pallas-transcript-label-byte-limit
@@ -877,6 +894,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-localnet-lifecycle-release-evidence
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-pallas-builder-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-redeem-lineage-selection
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-material-inputs
@@ -888,8 +906,11 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-asset-uuid-boundary-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-summary-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-trailing-field-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-redeem-aliases
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-lineage-record-preflight
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-lineage-witness-trailing-field-vectors
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-record-bundle-fold-step-count-prechecks
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-current-note-amount-trailing-field-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-circuit-vectors
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-proof-backend-vectors
@@ -987,6 +1008,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-runner-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-cache-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-js-host-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-windowed-record-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-needs-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-job-workflow
@@ -1035,6 +1057,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-frozen-copy
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-host-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-host-test-order-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-needs-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-job-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-runner-workflow
@@ -1181,6 +1204,10 @@ jobs:
           python3 -m unittest discover -s scripts/tests -p run_local_swarm_test.py
           python3 -m unittest discover -s scripts/tests -p training_script_2_test.py
           python3 -m unittest discover -s scripts/tests -p run_100tps_profile_localnet_test.py
+          python3 -m unittest discover -s scripts/tests -p android_sample_env_test.py
+          python3 -m unittest discover -s scripts/tests -p ios_demo_start_test.py
+          python3 -m unittest discover -s scripts/tests -p kaigi_demo_test.py
+          python3 -m unittest discover -s scripts/tests -p mochi_local_sandbox_test.py
       - name: Kagemusha production readiness negative controls
         run: |
           ci/check_kagemusha_production_readiness.sh --negative-control-doc-route
@@ -1301,6 +1328,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-local-swarm-pid-safety-test
           ci/check_kagemusha_production_readiness.sh --negative-control-training-script-pid-safety-test
           ci/check_kagemusha_production_readiness.sh --negative-control-100tps-profile-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-sample-env-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-ios-demo-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-kaigi-demo-pid-safety-test
+          ci/check_kagemusha_production_readiness.sh --negative-control-mochi-local-sandbox-pid-safety-test
           ci/check_kagemusha_production_readiness.sh --negative-control-kagami-localnet-stop-script-pid-safety
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-path-component-whitespace
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-signer-input-preflight
@@ -2159,6 +2190,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-zero-prehash-hash-guard
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-previous-topup-anchors
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-resulting-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-semantic-proof-append-opening
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-public-input-one-hop-append-opening
@@ -2177,9 +2210,11 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-readiness-section-consistency
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-current-profile-staleness
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-proof-chain-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fixed-window-table-base-accumulator
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-shared-table-identity-base-selection
@@ -2236,18 +2271,21 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-pallas-metadata
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-vk-hash
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-previous-proof-opening-output-clear
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-append-boundary-forged-result-hashes
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-vk-hash
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-pallas-count
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-pallas-metadata
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-public-instance-shape
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-kagemusha-archive-cap
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-append-boundary-current-output-set
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-append-boundary-forged-result-hashes
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-vk-hash
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-pallas-count
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-pallas-metadata
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-public-instance-shape
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-kagemusha-archive-cap
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-append-boundary-current-output-set
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-append-boundary-forged-result-hashes
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-fixed-window-manifest-digest-splice
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-package-dist-workflow

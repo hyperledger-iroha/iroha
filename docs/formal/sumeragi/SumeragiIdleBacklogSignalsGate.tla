@@ -249,6 +249,10 @@ IdleBacklogSignalsExactness ==
   /\ IdleBacklogDerivedSignalExact
   /\ IdleBacklogGateExact
 
+IdleBacklogSignalsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ IdleBacklogSignalsExactness
+
 SafetyFast ==
   IdleBacklogSignalsExactness
 

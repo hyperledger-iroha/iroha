@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-26
+Last updated: 2026-06-27
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -362,6 +362,18 @@ All canonical `.NET` SCCP marker lines must use a single literal space after
 the colon; VSTest summary label/value and number/unit separators must be
 present, padding must use ordinary spaces only, and tab/control-whitespace
 separators remain forged evidence.
+TRON route-config production manifests now follow the BSC handoff-placeholder
+boundary: production-ready route manifests reject `todo`, `example`,
+`replace-me`, `changeme`, `sample`, `stub`, `test-only`, and `your-*`
+placeholder material in both string values and field names before TOML
+rendering, and the strict release/source-inventory gates pin the implementation
+plus direct adversarial tests.
+TRON route-config handoff also rejects duplicate camelCase/snake_case aliases
+for required route-manifest containers and scalars, including production flags,
+post-deploy evidence, destination rollout/binding domains and hashes, fixed
+TRON addresses, burn-record VK/artifact/hash material, destination verifier
+aliases, and settlement route/submit aliases; release inventory pins those
+adversarial cases before production evidence can pass.
 Future SCCP SDK route-canary helpers must be added to the same release
 source-inventory marker set before they are advertised as production-ready.
 Future SCCP source-verifier material families must also join the
@@ -394,13 +406,29 @@ readiness replay blocks reordered compact trust DER proofs. Schema-critical inte
 metadata such as versions, receipt status codes, and notary record counts reject
 JSON boolean aliases before evidence can be archived. Receipt status codes are
 also bounded to the HTTP 100-599 range before success-policy checks, while live
-rail/notary adapters normalize non-standard remote statuses into
-transport-failed receipts with `status_code=null` instead of archiving invalid
-HTTP evidence, evidence/readiness replay accepts those null-status entries only
-as failed receipts without response-body digests, and bounded child-process
-output byte caps reject boolean aliases before verifier subprocesses run.
+rail/notary adapters accept only real integer upstream status values, reject
+boolean or string aliases before coercion, and normalize non-standard remote
+statuses into transport-failed receipts with `status_code=null` instead of
+archiving invalid HTTP evidence. Their URL/transport-error receipt strings now
+record fixed rail/notary labels instead of OS/library reason text, and the
+receipt verifier rejects archived receipt `error` strings that reintroduce local
+paths. Evidence/readiness
+replay accepts those null-status entries only as failed receipts without
+response-body digests, and bounded child-process output byte caps reject boolean
+aliases before verifier subprocesses run.
 Regular-file and rail payload byte caps now also reject boolean or non-integer
 aliases before filesystem metadata is inspected.
+Pending XSD source probes now reserve `reachable` for real 2xx/3xx responses
+with positive bounded samples that start with a namespace-bound XML Schema root
+opening tag, not just an XML declaration or embedded schema-looking text;
+non-XSD 1xx/2xx/3xx samples are recorded and replayed as
+`unexpected` evidence instead, and malformed
+status metadata, zero-byte success responses, malformed non-byte read output,
+or stream read failures become `NetworkError` evidence without retained sample
+bytes. Bytes-like read outputs are sliced to the configured bounded window by
+byte length before digesting or classification even if a response object
+over-returns or returns a wide-format `memoryview`, while `truncated` still
+records cap overflow.
 Archived child-command evidence rejects value-taking flags whose separate or
 equals-form values are empty or another flag token, keeping canary command
 evidence unambiguous before production archiving.
@@ -414,10 +442,87 @@ evidence cannot be planned or replayed into release archives. Evidence and
 readiness replay also reject compact canary/trust summary paths reused as canary
 config paths, canary-stage receipt paths, direct receipt-verification paths, or
 trust-bundle paths, including across relabelled evidence summaries.
-Final readiness output now emits top-level XSD/evidence summary references,
-blockers/reviewed-gap warnings, and nested diagnostic entries in canonical order
-before computing the readiness summary digest, so diagnostic archives do not
-depend on input traversal order.
+Final readiness output now emits top-level XSD, evidence, and pending-probe
+summary references, blockers/reviewed-gap warnings, and nested diagnostic
+entries in canonical order before computing the readiness summary digest, so
+diagnostic archives do not depend on input traversal order. Verified XSD,
+evidence, and pending-probe summaries are also canonicalized before
+cross-summary blockers are generated, so duplicate/replay diagnostics choose
+stable labels and paths. Receipt-summary entry order is checked independently
+of receipt-digest shape, so malformed `receipt_sha256` values cannot hide
+noncanonical canary or archive receipt replay order. Unsupported receipt kinds
+and unsupported or malformed rail `message_type`, `profile`, `rail_message_id`,
+and `source_path` values are also scrubbed from the normalized readiness output
+as `"unsupported"` while blockers keep label-only diagnostics.
+Unsupported summary `version` values in XSD, pending-probe, canary, receipt, and
+trust summaries are similarly normalized to `"unsupported"` in final readiness
+output.
+Archived evidence policy, canary, and trust profile provider/environment context
+values that drift from the release CLI context are also normalized to
+`"unsupported"` in final readiness output.
+Release and archived freshness budgets are capped at 36,500 days; over-ceiling
+CLI, evidence policy, or compact trust source values fail without echoing the
+submitted number, and weaker archived budgets normalize to `"unsupported"` in
+final readiness output.
+Blocked compact trust verifier override flags and receipt verifier `allow_*`
+policy flags also normalize to `"unsupported"` in final readiness output, as
+does `require_source_files=false`.
+Receipt entries that preserve local-only legacy rail message types or
+default-profile fallback `profile=null` values, or
+`endpoint_requires_insecure_http=true` markers, are likewise normalized to
+`"unsupported"` in public readiness summaries after their policy blockers are
+emitted.
+Diagnostic trust-source URLs that require `allow_insecure_source_url=true`,
+including `http://` and local/private endpoints, are likewise normalized to
+`"unsupported"` in public readiness trust profiles after their override blocker
+is emitted.
+Missing compact trust source objects (`source=null`) are also normalized to
+`"unsupported"` in public readiness trust profiles after source-missing blockers
+are emitted.
+Blocked canary `plan_only=true`, `require_explicit_policy=false`, per-stage
+`stage_dry_run=true`, and compact trust `profile_json_emitted=false` /
+`profile_json_emittable=false` states are also normalized to `"unsupported"` in
+final readiness output. Compact trust `max_source_age_days=null` is likewise
+normalized to `"unsupported"` when profile JSON is not emittable after trust
+source blockers are emitted.
+Failed pending-XSD probe `ok=false` and per-probe `looks_like_xsd=false` states
+are likewise normalized to `"unsupported"` in public readiness summaries and
+unreachable-probe blocker entries.
+For non-success pending-XSD probes, public readiness output also normalizes
+remote response/sample fields (`http_status`, `content_type`,
+`downloaded_bytes`, `sample_sha256`, `truncated`, and `error_kind`) to
+`"unsupported"` after the existing unreachable-probe blocker is emitted.
+XSD strictness proof flags that remain `false` after replay,
+`require_schema_backed_fixtures`, `require_fixture_for_schema`,
+`require_profile_schema_backed_versions`, and `validate_xml_schema`, are also
+normalized to `"unsupported"` in public readiness summaries after their existing
+blockers or warnings are emitted.
+Failed or malformed receipt entry `ok` values are likewise normalized to
+`"unsupported"` in public readiness summaries after receipt status blockers are
+emitted.
+Receipt response metadata triplets (`ok`, `status_code`, and
+`response_body_sha256`) are preserved only when they are internally coherent
+successful proofs: `ok=true`, a 2xx integer HTTP status, and a canonical
+nonzero response digest. Any failed, mismatched, incomplete, or malformed
+triplet is normalized to `"unsupported"` in public readiness output after the
+existing blocker is emitted.
+Final readiness also accepts digest-bound pending-XSD probe summaries and
+requires them when reviewed pending-source gaps are allowed, rechecking official
+ISO URL metadata, freshness, counts, bounded sample digest shape,
+`downloaded_bytes <= max_bytes`, the helper's 65,536-byte maximum sample cap,
+the helper's 300-second maximum timeout cap, truncation consistency, and
+failed-probe zero-byte/non-XSD-looking status shape, timeout/network-error null
+`content_type` shape, HTTP-error 4xx/5xx status codes, failed-probe
+`error_kind` role shape including exact `NetworkError` for network failures,
+`unexpected` status shape as a real 1xx/2xx/3xx HTTP response with positive
+sampled bytes and `looks_like_xsd=false`, plus reachable XSD-looking probe status without
+importing the restricted schema bytes. Probe
+summaries supplied without
+matching pending official source gaps are now blocked as unreferenced evidence,
+including extra probe rows when only a subset of official source gaps remains.
+Probe-summary paths and summary digests are also blocked from replay under XSD
+or operator-evidence artifact roles, preserving the separation between public
+reachability evidence and schema-backed or live-evidence proof material.
 Archived canary child commands now also must keep the runner-emitted shape:
 Python interpreter, expected stage script path, then supported flags and their
 values. Interpreter version suffixes are ASCII-only, so Unicode digit
@@ -444,6 +549,21 @@ Direct XSD fixture and trust-bundle policy flags likewise must be real booleans
 before manifest or bundle loading, so programmatic callers cannot use truthy
 strings, integers, nulls, or containers to loosen strict fixture or trust
 verification.
+`scripts/iso_pending_xsd_source_probe.py` now provides bounded, digest-stamped
+reachability evidence for the official ISO pending XSD download URLs, including
+`sample_sha256` over only the capped downloaded byte sample and `null` when no
+bytes are fetched, without importing schema bytes. It rejects malformed
+repeatable selectors plus non-ASCII, padded, or non-canonical numeric
+timeout/byte-cap values, such as
+`.5`, `01`, `1e01`, `1.`, `000512`, `+512`, or `512.0`, before network work.
+`--timeout-secs` is capped at 300 seconds, and raw secret-looking CLI arguments
+plus malformed `--summary-out` path tokens are also rejected before argparse can
+echo them. This keeps the remaining official-package blocker explicit and
+reproducible for operators. The
+`2026-06-26T10:38:15+00:00` bounded live recheck with
+`--timeout-secs 3 --max-bytes 512` still timed out across all eight recorded
+official download URLs with `0` downloaded bytes and summary digest
+`43b0786d772fd045d645160308ac20ed95aa3c5e9bcdea5625d4d31fe5798448`.
 Direct operator-canary, rail-gateway, and audit-notary policy flags must also
 be real booleans before canary config, rail inbox, or audit export loading, so
 programmatic callers cannot use non-boolean values to alter plan-only,
@@ -506,14 +626,27 @@ receipt blockers report only receipt indexes and mismatch classes for missing,
 unreferenced, relabelled, or metadata-drifted receipt digests, without printing
 raw `receipt_sha256` values.
 Live rail-gateway `--torii-base-url` and audit-notary `--endpoint` flags now
-also reject missing, empty, or flag-looking URL values before argparse parsing.
+also reject missing, empty, flag-looking, or leading-dash URL values before
+argparse parsing.
 Those URL value preflights also reject raw control characters, Unicode
 characters, surrounding whitespace, and non-URL-shaped secret-looking material
 before unrelated required file or directory inputs can mask the bad URL.
 Direct ISO numeric CLI preflights now reject malformed, empty, flag-looking, or
 secret-looking numeric values before argparse can echo operator-provided input.
 They also require printable ASCII before Python's numeric parsers can accept
-Unicode digit confusables as operator budgets, timeouts, or byte limits.
+Unicode digit confusables as operator budgets, timeouts, or byte limits, and
+they now require canonical decimal spellings before argparse conversion, so
+`.5`, `01`, `1e01`, `1.`, `+1`, `000512`, `512.0`, signed-zero aliases, and
+overflow exponents cannot be accepted as operator timeout, freshness-budget, or
+byte-cap values. The pending XSD source probe applies the same raw preflight
+for timeout and byte-limit flags before argparse can reinterpret negative
+numeric spellings as options.
+Pending XSD source probe summaries also omit unsafe remote `Content-Type`
+metadata before evidence emission and only record real integer 100-599 HTTP
+status values, so hostile headers or Python boolean/int aliases cannot become
+digest-bound operator evidence.
+Network failures in those probe summaries now use a stable `NetworkError` role
+instead of raw Python exception class names.
 All ISO operator entry points now also reject secret-looking raw CLI tokens
 before argparse can echo unknown arguments; the scanner covers bearer tokens,
 private keys, passwords/passphrases, API/access/session keys, client secrets,
@@ -538,7 +671,15 @@ zero-width-obfuscated, combining-mark-obfuscated, fullwidth/compatibility-form,
 or repeated/collapsed whitespace, dot, underscore, hyphen, slash, and backslash
 secret-looking material is rejected in CLI paths, unknown JSON keys, recursive
 JSON values, compact summary paths, and remote response previews/errors without
-echoing the decoded material.
+echoing the decoded material. Live rail/notary successful response bodies now
+fail before receipt write when their preview would contain invalid UTF-8 or
+non-ASCII text, while failed-response preview emission remains
+printable-ASCII-only, folds accepted newline/tab text to one line, and
+preserves the exact response-body digest; archived receipt replay rejects
+multiline or non-ASCII preview/error text. URL transport receipts now
+record fixed rail/notary error labels instead of upstream reason strings, and
+archived failed receipt errors must match those labels or the matching
+`HTTP <status>` response label.
 ISO URL path validators now also reject secret-looking key/value material in
 literal, percent-encoded, or double-encoded path segments before live network
 delivery, archived evidence ingestion, or readiness rollup.
@@ -598,8 +739,13 @@ format controls, and non-ASCII material before schema-validation errors are
 reported.
 Direct evidence receipt-verifier diagnostics now redact key/value and
 identifier-style secret-looking stderr plus unsafe control characters before
-reporting child verifier failures. ISO JSON unknown-key scanners now also hide
-control-bearing key names, including names with Unicode format controls, across
+reporting child verifier failures. ISO input readers and summary/receipt
+writers sanitize raw OS `strerror` text before diagnostics, preserving ordinary
+short ASCII errors while collapsing path-like, secret-looking, control-bearing,
+non-ASCII, or oversized error text to `I/O error`. Archived receipt
+previews/errors now also reject non-ASCII text before replay. ISO JSON
+unknown-key scanners now also hide control-bearing key names, including names
+with Unicode format controls, across
 live adapters, operator receipts, trust bundles, XSD manifests/catalogs, and
 archive rollups, while recursive archive/operator JSON scans and receipt
 source-sidecar replay reject unsafe control characters, including Unicode format
@@ -608,7 +754,12 @@ Timestamp helpers for direct trust-bundle `source.retrieved_at`, operator
 evidence `verified_at`/canary/trust-source windows, receipt `submitted_at` and
 `published_at`, and final readiness compact timestamps also reject Unicode
 format controls locally, so timestamp parsing cannot preserve bidi or zero-width
-text even if validator call order changes.
+text even if validator call order changes. Parseable timezone-aware timestamps
+must also use the canonical evidence shape
+`YYYY-MM-DDTHH:MM:SS[.ffffff](Z|+HH:MM|-HH:MM)`, rejecting space separators,
+lowercase separators, comma fractions, compact offsets, and the unknown-offset
+`-00:00` spelling while preserving the existing malformed/missing-timezone
+diagnostics.
 Trust-bundle, XSD fixture, operator-evidence, and final production-readiness
 required/optional string helpers now also reject Unicode format controls in
 direct source, source URL, policy, trust-material label, manifest,
@@ -627,6 +778,30 @@ format controls at the raw guard layer.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
+ISO JSON and XML parser failures now likewise report category-only diagnostics
+without appending parser location text across trust bundles, XSD manifests and
+profile catalogs, rail/notary source files, canary runbooks, receipts,
+evidence summaries, and readiness summaries.
+Accepted printable external diagnostics from XSD `xmllint` and direct
+receipt-verifier stderr are folded to one line before stderr composition, after
+the existing secret, path, control, and non-ASCII redaction checks.
+Archived executed rail/notary canary stdout previews must parse as live adapter
+summary JSON with zero failures, stage-scoped receipt paths, and counts matching
+submitted messages or published anchors/endpoints; rail stdout must report a
+single submitted message when the command used explicit `--message`, notary
+stdout `endpoint_count` must match the executed command's repeated `--endpoint`
+flags, and `published_anchors` must stay at one unless the command used
+`--all`, so printable logs, dry-run summaries, inflated endpoint counts, forged
+multi-message claims, or forged multi-anchor publication claims cannot stand in
+for production child-stage evidence.
+Canary verify-stage receipt-verifier stdout must also keep receipt paths covered
+by the verify command's `--receipt-dir`/`--receipt` selectors, with explicit
+`--receipt` files present in the captured summary, before archive replay can use
+the receipt metadata.
+Executed rail/notary adapter stdout receipt path sets must match the
+receipt-verifier summary paths for the same receipt kind, preventing a canary
+from proving one producer output set and replaying a different verifier output
+set under the same receipt directory.
 Notary and receipt replay clean metadata strings from audit indexes, persisted
 records, nullable context/metadata/history fields, and rail sidecars are capped
 at 4096 characters with label-only diagnostics before mismatch, source replay,
@@ -686,7 +861,22 @@ blockers that no longer print the unexpected archived kind. Unsupported canary
 stage-name diagnostics are also label-only and no longer echo the unexpected
 stage label. Direct evidence replay and final readiness trust blockers now keep
 non-production or unsupported embedded-signature policy values out of
-diagnostics as well. Direct evidence replay also rejects unsupported or
+diagnostics as well, and final readiness normalized trust profile output scrubs
+non-production/unsupported policies plus placeholder trust-source
+authority/version/URL values to `"unsupported"` before emitting release JSON.
+Unsupported summary `version` values in XSD, pending-probe, canary, receipt, and
+trust summaries are similarly normalized to `"unsupported"` before final
+readiness JSON is emitted.
+Archived provider/environment context values from evidence policy, canary, and
+trust profile summaries are likewise normalized to `"unsupported"` when they do
+not match the release context.
+Release and archived freshness budgets are capped at 36,500 days, and weaker
+archived evidence/trust source budgets are normalized to `"unsupported"` in
+final readiness JSON.
+Blocked compact trust verifier override flags, receipt verifier `allow_*`
+policy flags, and `require_source_files=false` are also normalized to
+`"unsupported"` in final readiness JSON.
+Direct evidence replay also rejects unsupported or
 local-only child command flags without echoing the archived flag text.
 Operator evidence verification now rejects canary summaries whose
 `config_path` still points at checked-in
@@ -765,7 +955,19 @@ and arrays before receipt semantics are evaluated.
 All ISO JSON duplicate-key hooks now report only that a duplicate key exists,
 without echoing the repeated key name.
 ISO JSON non-finite numeric constant hooks likewise report only the constant
-class without echoing `NaN`/`Infinity` spellings.
+class without echoing `NaN`/`Infinity` spellings. XSD manifests/profile
+catalogs, rail sidecars, notary anchors/indexes/record sources, direct receipt
+files, trust bundles, canary runbook, operator-evidence summary/stdout, and
+final readiness input JSON number tokens now reject non-canonical numeric
+spellings, including exponent-normalized floats, negative-zero integers/floats,
+and overflow exponents that would parse as non-finite floats, before Python can
+normalize fixture metadata, live adapter metadata,
+notary material, receipt, trust-material, stage-budget,
+receipt-verifier-summary, or release-summary values.
+All ISO canonical digest encoders and summary/receipt/profile JSON writers now
+serialize with `allow_nan=false`, so internal non-finite `NaN`/`Infinity`
+values fail before any digest-stamped evidence or stdout summary can be
+emitted.
 Unknown JSON field names are rejected with label-only unknown-key diagnostics,
 including ordinary unknown-field typos, secret-looking markers, non-ASCII,
 overlong, too numerous, or collectively oversized names. This prevents
@@ -774,10 +976,12 @@ Direct ISO boolean CLI flags reject attached `--flag=value` spellings and
 separate non-option values before argparse can echo the value or reinterpret
 the option.
 Evidence and production-readiness context flags reject missing, empty,
-flag-looking, secret-looking, or non-ASCII provider/environment values before
-argparse, summary loading, or mismatch diagnostics can reflect them. Expected
-provider/environment mismatch diagnostics now stay label-only and do not print
-observed or expected context values.
+flag-looking, leading-dash, secret-looking, or non-ASCII
+provider/environment values before argparse, summary loading, or mismatch
+diagnostics can reflect them. The evidence gate also rejects leading-dash
+`--default-rail-profile` values before argparse can reinterpret them as
+options. Expected provider/environment mismatch diagnostics now stay label-only
+and do not print observed or expected context values.
 Canary runbook provider/environment labels now reject non-ASCII and
 secret-looking identifier-style strings before plan-only output or executed
 summaries can preserve them.
@@ -932,7 +1136,12 @@ receipt persistence, redact failed remote response previews and receipt errors
 when upstreams return those markers or unsafe control characters, cap transport
 error strings at 4096 printable ASCII characters before receipt emission,
 normalize non-standard, malformed, or oversized remote HTTP statuses into failed
-receipts, and convert transport-open exceptions/failures, normal/HTTP-error response close
+receipts with `status_code=null` and label-only invalid-status errors, and
+normalize byte-like response bodies by byte length before hashing or previewing
+so wide-format `memoryview` responses cannot bypass configured response caps.
+Non-byte response bodies still become stable transport-failed receipts without
+echoing the value. The adapters also convert transport-open exceptions/failures,
+normal/HTTP-error response close
 failures, normal/HTTP-error response-body read exceptions/failures, and
 malformed non-byte remote response bodies into bounded failed receipts with
 stable messages. The
@@ -988,7 +1197,39 @@ redistributable schemas, and official trust/revocation bundles.
   derivation, and full-bootstrap sample-extraction switch-key derivation now use
   exact/bounded mode-separated deterministic RNG streams so same-seed artifacts
   do not reuse public limbs, ephemeral masks, or refresh-round seeds across
-  modes.
+  modes, including same-public-key exact/bounded bootstrap refresh derivations
+  that are accepted only by their matching transcript validators, transcript
+  digests, and transcript-bound proof statements; crypto regressions now pin
+  the bootstrap round seed preimage to `domain || key_id || max_rounds || seed
+  || round_index` and prove it is distinct from rotation seed derivation. The
+  Soracloud bootstrap-key proof public-input schema now advertises those
+  exact/bounded rotation and bootstrap refresh-round seed-derivation domains,
+  with its regression parsing seed-domain, statement-domain,
+  refresh-transcript-domain, refresh-material, and proof-statement-material
+  objects and binding their fields to the authoritative `iroha_crypto`
+  constants. The full-bootstrap material/execution schema regressions also
+  parse proof-key commitment-domain objects and bind material/pair fields to
+  the same crypto constants, and structurally parse release-audit evidence,
+  signoff, record, manifest, and package metadata so
+  versions, field counts, digest domains, manifest scope, reviewer-id bounds,
+  and audit byte bounds stay tied to crypto constants. The execution schema
+  regression now also parses the execution witness, arithmetic trace, arithmetic
+  AIR, native AIR envelope, artifact bundle, and release-prover input sections
+  so row-shape constants, composition challenge layout, and verifier-obligation
+  flags stay tied to `iroha_crypto`; the material schema regression parses
+  `material_proof_input` so its proof-input material layout and required
+  material/artifact/statement obligations are structurally pinned too. The
+  input-admission and public-key schema regressions now parse their small
+  bound/domain/material objects so exact/bounded proof domains and statement
+  material layouts stay tied to the same constants. The typed crypto proof
+  public-input schema artifact now carries the same release-prover digest-domain
+  labels, proof-key material/pair commitment domains, and explicit
+  separated-domain flags, with adversarial validation rejecting
+  placeholder/canonical drift before those domains can diverge from the
+  Soracloud execution schema. Release-audit proof-profile records now mirror
+  those release-prover digest-domain and proof-key commitment-domain labels,
+  advertise field count `53`, and reject stale, placeholder, or non-separated
+  domain metadata before release evidence can be digested or accepted.
   Parameter validation now also requires enough ciphertext-modulus
   headroom to keep the configured positive and negative plaintext-multiple
   error representatives distinct. Secret-key diagnostics now expose the exact
@@ -1028,12 +1269,16 @@ redistributable schemas, and official trust/revocation bundles.
   bootstrap-key zero-refresh proof statement digests that bind parameters,
   public key, evaluation-key digest, refresh-transcript digest, bootstrap
   transcript seed/key id/round capacity, and every public refresh ciphertext
-  under mode-separated domains. Crypto now also exposes exact-lift and
+  under mode-separated domains. Raw bootstrap-key zero-refresh statement
+  regressions also pin exact and bounded domain constants to the same typed
+  bootstrap-key material. Crypto now also exposes exact-lift and
   bounded-noise ciphertext proof statement digests that bind parameters,
   public key material, public-key digest, ciphertext bytes, a non-inert
   ciphertext digest, and the declared residual/noise bound under
-  mode-separated domains, rejecting all-zero ciphertext sentinels before a
-  verifier-facing statement hash can be emitted. Exact ciphertext statement
+  mode-separated domains, with regressions pinning both exact and bounded
+  domains to the same typed Norito statement material, rejecting all-zero
+  ciphertext sentinels before a verifier-facing statement hash can be emitted.
+  Exact ciphertext statement
   hashing now also runs the exact seeded-encryption residual headroom preflight,
   matching exact public-key statement admission so structurally valid but
   non-admissible exact profiles cannot emit verifier-facing ciphertext
@@ -1189,13 +1434,36 @@ redistributable schemas, and official trust/revocation bundles.
   id, registered parameter profile digests, maximum bootstrap depth,
   statement-hash layout, and governed schema digest while rejecting opaque
   schema/key bytes, profile/depth drift, empty or all-zero key material, and
-  duplicate prover/verifier key material. Crypto now also
+  duplicate prover/verifier key material; schema artifact regressions pin the
+  canonical proof public-input schema payload digest to exact typed Norito
+  schema bytes and the artifact digest to the governed registered-profile
+  envelope carrying those bytes. Arithmetic trace profile, AIR contract, and
+  native proof-circuit fingerprint regressions pin the encoded self-describing
+  Norito material under their dedicated digest domains. Crypto now also
   hashes full-bootstrap artifact bundles through a typed digest material with
   version, artifact-digest count, and per-role artifact hashes, and pins valid
   alternate-artifact regressions for every mutable artifact role that can vary
-  under the first-release profile. Crypto now also pins exact and bounded
+  under the first-release profile; circuit-material, evaluator-artifact-set,
+  and artifact-bundle digest regressions also pin the encoded self-describing
+  Norito material under the dedicated governance digest domains. Proof-key pair
+  and individual material-commitment regressions also pin the dedicated
+  domain-separated transcripts over proof-profile metadata, role labels,
+  verifier-obligation flags, and backend-native key bytes. The material/execution
+  Soracloud public schemas now also advertise their statement digest domains
+  plus the circuit-material, evaluator-artifact-set, and artifact-bundle digest
+  domains used by the governed artifact transcripts, with regressions binding
+  those fields to the authoritative crypto constants. The execution schema now
+  also advertises the release-prover proof-input, prover-input, AIR-evaluation,
+  trace-material, and AIR-constraint-system digest domains, again bound to the
+  authoritative crypto constants. Crypto now also
+  pins exact and bounded
   full-bootstrap execution statement digest goldens for that typed artifact
-  bundle layout. Crypto now also
+  bundle layout, currently
+  `1873c39ab7a25d5194a05ac36636726501fe5f0f86e11ca06ff899f91dd961bb`
+  for exact residual mode and
+  `0ec1100aec78f541235d0fa74c8934497074dedf72491002803931b203d6b88b`
+  for bounded-noise mode, with both modes checked against self-describing
+  Norito statement material. Crypto now also
   declares and validates the v1 statement-material and per-slot claim layout,
   requiring parameter, public-key, bootstrap-key, material, artifact-bundle,
   slot-index, ciphertext, proof-mode, and residual/noise-bound commitments
@@ -1205,7 +1473,10 @@ redistributable schemas, and official trust/revocation bundles.
   and prover-key material commitment digest
   `80afd2b32d2e19d57f10b6af6806b7eedd4a4e96e041f7faaa63694f926ad40d`,
   with native Merkle/FRI replay and AIR-root FRI query binding flags included
-  in the schema and proof-circuit fingerprint material.
+  in the schema and proof-circuit fingerprint material. The material/execution
+  Soracloud public schemas now advertise the proof-key material and proof-key
+  pair commitment domains used by those transcripts, plus the artifact digest
+  domains bound by release-audit evidence.
   Data-model tests pin the Soracloud FHE public-input schema hashes that Core
   verifier records use for input admission, bootstrap-key proof,
   full-bootstrap material proof, and full-bootstrap execution proof gates.
@@ -1222,12 +1493,15 @@ redistributable schemas, and official trust/revocation bundles.
 	  suffixed-label alias rejection, and Core rejects wrong-circuit STARK verifier
 	  keys in both canonical and native metadata payload layouts; release-audit
 	  evidence now exposes those
-	  replay-policy guarantees in its proof-profile record with field count 44,
-	  native proof-circuit fingerprint material binds the same guarantees with
-	  field count 45, generated circuit bodies carry them with field count 46,
+	  replay-policy guarantees in its proof-profile record with field count 53,
+	  including release-prover digest domains and proof-key material/pair
+	  commitment domains; native proof-circuit fingerprint material binds the
+	  same guarantees with field count 45, generated circuit bodies carry them
+	  with field count 46,
 		  deterministic release-audit report/archive inventories label the proof-profile
-		  field count and canonical/suffixed transcript-label obligations,
-		  release-audit packages validate those proof-profile markers plus
+		  field count, canonical/suffixed transcript-label obligations, and
+		  release-prover/proof-key domain contract, release-audit packages validate
+		  those proof-profile markers plus
 		  generated-body byte length/hex, native
 		  prover/verifier payload hex, governed prover/verifier artifact hex, and
 	  same-field signed commitment containment with standalone label tokens,
@@ -1268,8 +1542,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  plus machine-generated and separator-obfuscated machine-generated
 		  audit-body rejection,
 		  and the current material/execution schema hashes are
-			  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f`
-			  and `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+			  `8d5cac1304e7b20ad05ebe4c9825af1d1d14231a3422e9d911d5698cf2a07df5`
+			  and `bcc5709f96a74c5f8606cb3c6b7093abac7f1645422fb1fea2c1a341acb93009`.
 		  The registered bounded-noise compatibility wrappers for
 		  multiplication, Galois switching, outer-slot rotation, packed rotation,
 		  and bootstrap refresh now delegate to the registered target-limb
@@ -1480,7 +1754,8 @@ redistributable schemas, and official trust/revocation bundles.
   signed generated-circuit-body digest, native circuit fingerprint,
 	  proof-key pair commitment, individual prover/verifier key digests, and the
 	  release-audit proof-profile field count plus canonical base transcript-label
-	  enforcement and suffixed-label alias rejection before a package validates.
+	  enforcement, suffixed-label alias rejection, release-prover digest domains,
+	  and proof-key material/pair commitment domains before a package validates.
   Native proof-key payload shape validation now rejects blank payload bytes and
   known direct/delayed placeholder or inert native payload sentinels before
   Norito decoding, so raw prover/verifier payload validators and material
@@ -1710,7 +1985,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  including governed full-bootstrap material, public-key, evaluation-key,
 	  concrete artifact-bundle, statement-hash, and material proof input package
 	  digest-domain bindings. Crypto now exposes a domain-separated Norito digest
-	  helper for that typed material proof input package. Public proof input
+	  helper for that typed material proof input package, with regressions pinning
+	  the digest to the encoded self-describing Norito proof-input material.
+	  Public proof input
 	  material validation also rejects zero statement hashes, malformed public-key shapes, and material
 	  prover artifact bundles that do not match governed material before release
 	  prover tooling can hand typed material to the future arithmetic backend, and
@@ -1724,15 +2001,23 @@ redistributable schemas, and official trust/revocation bundles.
 		  release prover input package, the execution proof input package digest
 		  domain, release-prover AIR constraint-system digest/artifact binding,
 		  release audit package caller-pinned digest enforcement with zero and
-		  placeholder pinned-digest rejection, and release prover
-		  verifier-key binding. The typed crypto schema validates those AIR
+		  placeholder pinned-digest rejection, and execution proof-input package
+		  digesting now pins the encoded self-describing Norito proof-input
+		  material under its dedicated domain before release prover
+		  verifier-key binding. The arithmetic trace material, AIR evaluation
+		  material, and proof-key-bound execution prover-input package digests
+		  are likewise pinned to encoded self-describing Norito material under
+		  their dedicated domains before verifier-key binding. The typed crypto
+		  schema validates those AIR
 		  contract, release-prover, execution proof input package digest-domain,
 		  artifact-bound prover-input validation, stale Galois-key-set replay
 		  rejection, and stale proof-key artifact replay rejection terms directly;
 				  release-audit proof-profile evidence now also advertises those replay
 					  policy and AIR evaluation material layout/digest/zero-composition
 					  terms, native proof-circuit fingerprint material binds the replay-policy
-					  terms with field count 45, and the
+					  terms with field count 45, and native payload regressions pin the
+					  generated circuit body raw SHA-256 digest to canonical body bytes plus
+					  embedded canonical AIR material bytes, and the
 			  AIR constraint-system digest is now bound through the typed public schema,
 		  native prover/verifier payloads, proof-key material envelope, native
 		  proof-key material, and native proof-circuit fingerprint. The AIR
@@ -1904,7 +2189,11 @@ redistributable schemas, and official trust/revocation bundles.
 			  digest, prover/verifier pair commitment, native payload digests, native
 			  circuit fingerprint, and proof-profile field counts before the bundle
 			  can be published, with a public validator for release tooling to reject
-			  forged evidence records before digesting them. Release tooling can also
+			  forged evidence records before digesting them. Evidence, record,
+			  manifest, and package digest regressions now pin encoded
+			  self-describing Norito payloads under their dedicated release-audit
+			  digest domains instead of relying only on canonical roundtrip
+			  stability. Release tooling can also
 			  sign that evidence together with the external audit report and archive
 			  digests, so stale reviewer identities, reused audit hashes, wrong
 			  reviewer keys, tampered payloads, evidence drift, and artifact drift
@@ -1916,7 +2205,8 @@ redistributable schemas, and official trust/revocation bundles.
 			  object and reject stale record headers or mismatched evidence/signoff
 			  pairs. The release audit package now carries the external report and
 			  evidence archive bytes themselves, hashes them against the signed
-			  record, enforces bounded report/archive sizes, and rejects empty,
+			  record with digests pinned to canonical headered artifact bytes rather
+			  than body-only hashes, enforces bounded report/archive sizes, and rejects empty,
 			  all-zero, unheadered, header-only, whitespace-prefixed nested-header,
 			  blank-body, sub-64-byte, zero-body, delayed placeholder-body,
 			  tampered, or missing audit artifacts before publication. It also carries a
@@ -2138,9 +2428,9 @@ redistributable schemas, and official trust/revocation bundles.
 						  prose, duplicate or conflicting reviewer-id labels, case-drifted
 						  or separator-alias reviewer labels, and padded-colon marker
 						  aliases under the pinned material
-							  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f`
+							  `8d5cac1304e7b20ad05ebe4c9825af1d1d14231a3422e9d911d5698cf2a07df5`
 							  and execution
-							  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`
+							  `bcc5709f96a74c5f8606cb3c6b7093abac7f1645422fb1fea2c1a341acb93009`
 							  schema hashes. Crypto now also exposes release-audit-gated
 						  exact and bounded artifact-aware execution and bound helpers,
 						  requiring the caller-trusted reviewer id/key and caller-pinned
@@ -2196,6 +2486,9 @@ redistributable schemas, and official trust/revocation bundles.
 							  prefix execution, so inert all-zero trace material, invalid propagated
 							  bounds, stale witness packages, or placeholder ciphertext inputs cannot
 							  bypass the executable crypto boundary.
+							  Release-prover input regressions now also pin all-zero
+							  arithmetic trace material and arithmetic AIR contract digest
+							  sentinel rejection before stale digest comparisons.
 		  Remaining production work is the audited full-bootstrap arithmetic
 		  proof-producing backend plus release-grade
 		  prover/verifier artifacts and independent audit report/archive production
@@ -2207,7 +2500,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  AIR contract material/digest/artifact binding,
 		  proof-key evaluator artifact-set binding,
 		  native circuit-fingerprint and generated circuit-body proof
-		  public-input schema-payload digest binding,
+		  public-input schema-payload digest binding, generated-body
+		  SHA-256 placeholder digest preflight, release-audit placeholder-scan first-byte prefilter,
+		  native payload archive hex syntax preflight,
 		  native AIR envelope construction/replay validation,
 		  raw native proof-key payload placeholder preflight,
 		  proof attachment finalization, and statement-recomputation validation,
@@ -2685,7 +2980,10 @@ redistributable schemas, and official trust/revocation bundles.
   payloads, and release-audit manifests so stale source-role metadata is
   rejected before artifact or audit acceptance, and caller-pinned package
   digest alias checks reject attempts to reuse the signed source-chain digest as
-  the package digest. Soracloud material/execution public-input schemas now
+  the package digest. The target-limb multiply helper now also rejects
+  structurally valid centered scale-round source chains that are not evaluator
+  prefixes before malformed relinearization-key or ciphertext payloads.
+  Soracloud material/execution public-input schemas now
   advertise the matching release-audit field counts, source-chain binding flags,
   external-audit signed-commitment distinctness, and caller-pinned
   signed-commitment package-digest alias rejection, plus package audit-body
@@ -4538,7 +4836,11 @@ redistributable schemas, and official trust/revocation bundles.
 	  summary path is accepted,
 	  live rail/notary response previews and archived receipt previews reject the
 	  same separator-obfuscated secret labels plus regex-only bearer whitespace
-	  forms before receipt evidence can be written or replayed,
+	  forms, while successful live previews reject invalid UTF-8 or non-ASCII
+	  text before receipt write and failed live previews redact that text before
+	  receipt evidence is archived, with accepted newline/tab text folded to one
+	  line before archival; archived receipt previews/errors reject multiline or
+	  non-ASCII text before replay,
 	  the manifest must explicitly record `blocked_schema_sources` as an array even
   when no reviewed restricted source candidates are present, and blocked-source
   records must match a current missing-schema fixture gap or, with a profile
@@ -4832,7 +5134,8 @@ redistributable schemas, and official trust/revocation bundles.
 			  positive integer `--response-limit-bytes`, and writes bounded
 			  per-endpoint receipts without persisting token material, rejecting
 			  secret-looking or control-bearing successful remote response bodies
-				  before receipt persistence, normalizing non-standard, malformed, or oversized
+				  before receipt persistence, rejecting boolean or string status
+				  aliases before coercion, normalizing non-standard, malformed, or oversized
 					  remote HTTP statuses into transport-failed receipts with `status_code=null`, and
 				  redacting failed remote response previews or transport errors before
 				  persistence, with transport error strings capped at 4096 printable
@@ -5272,13 +5575,16 @@ redistributable schemas, and official trust/revocation bundles.
   caps untrusted XSD manifest/profile-catalog, evidence-summary, and
   readiness-summary JSON arrays at 8192 items before semantic replay,
   caps direct receipt-verifier stdout/stderr at 4 MiB before JSON parsing,
-  redacts key/value, identifier-style secret-looking, and control-bearing direct
-  receipt-verifier stderr before reporting failed child verifier diagnostics,
+  redacts key/value, identifier-style secret-looking, control-bearing,
+  non-ASCII, and local-path-shaped direct receipt-verifier stderr before
+  reporting failed child verifier diagnostics,
   reports XSD `xmllint`, canary child-stage, and direct receipt-verifier startup
   failures with stage labels instead of argv, local paths, or raw
   process-launch exception text or chained traceback causes,
   reports their stdout/stderr pipe read or close failures as label-only
-  stage-output read errors,
+  stage-output read errors, and requires child-output pipe chunks to be
+  byte-like values capped by byte length before preview decoding so
+  wide-format `memoryview` chunks cannot bypass output limits,
 		  rejects receipt,
 		  summary, and emitted profile-override output paths when they contain
 	  control characters, whitespace, leading-dash segments, backslashes,
@@ -5309,8 +5615,9 @@ redistributable schemas, and official trust/revocation bundles.
   `--allow-missing-record-sources` diagnostic override, unsupported child
   command flags outside the expected rail/notary/receipt-verifier CLI surfaces,
   duplicate singleton child command flags, boolean child command flags using
-  attached or separate values, non-positive or non-finite numeric child command
-  flag values, non-canonical child command path values, control-bearing or
+  attached or separate values, non-positive, non-finite, or non-canonical
+  numeric child command flag values, leading-dash archived rail/notary endpoint
+  URL or bearer-token-file values, non-canonical child command path values, control-bearing or
   whitespace-padded child command entries, missing required child command
   inputs, whitespace-padded strings or paths, non-canonical canary
   rail/notary `receipt_dir` values,

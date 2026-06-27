@@ -490,6 +490,10 @@ ActorGatePriorityExactness ==
   /\ ActorGateEntryStreakExactness
   /\ ActorGateDropExactness
 
+ActorGatePriorityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ActorGatePriorityExactness
+
 Safety ==
   ActorGatePriorityExactness
 

@@ -91,7 +91,7 @@ public final class TransactionPayload {
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
 
     public Builder setChainId(final String chainId) {
-      this.chainId = normalize(chainId, "chainId");
+      this.chainId = normalizeExact(chainId, "chainId");
       return this;
     }
 
@@ -191,6 +191,14 @@ public final class TransactionPayload {
         throw new IllegalArgumentException(field + " must not be blank");
       }
       return value;
+    }
+
+    private static String normalizeExact(final String value, final String field) {
+      final String normalized = normalize(value, field);
+      if (!normalized.trim().equals(normalized)) {
+        throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+      }
+      return normalized;
     }
 
     private static String buildDefaultAuthority() {

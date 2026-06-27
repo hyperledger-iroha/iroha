@@ -446,8 +446,15 @@ ProposalBudgetMatchesSpec ==
   /\ \A c \in GasCases: ActualGasOutput(c) = SpecGasOutput(c)
   /\ \A c \in StaleCases: ActualStaleOutput(c) = SpecStaleOutput(c)
 
-SafetyFast ==
+ProposalBudgetExactness ==
   ProposalBudgetMatchesSpec
+
+ProposalBudgetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalBudgetExactness
+
+SafetyFast ==
+  ProposalBudgetExactness
 
 BugQueueZeroBlockCapAllows ==
   ActualQueueOutput("queue_block_cap_floor") =

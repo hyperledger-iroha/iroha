@@ -6732,6 +6732,25 @@ def _source_adapter_gate_release_metadata_blockers(
     audit_hashes = source_adapter_gate.get("audit_hashes", {})
     gate_ready = source_adapter_gate.get("ready")
     gate_blockers = source_adapter_gate.get("blockers", [])
+    if expected_audit_fields and gate_required is not True:
+        blockers.extend(
+            _source_adapter_gate_template_hash_blockers(
+                lane_label,
+                lane.get("domain"),
+                field_label="source adapter gate hash",
+                value=gate_hash,
+            )
+        )
+        if isinstance(audit_hashes, dict):
+            for field in expected_audit_fields:
+                blockers.extend(
+                    _source_adapter_gate_template_hash_blockers(
+                        lane_label,
+                        lane.get("domain"),
+                        field_label=f"source adapter gate audit hashes {field}",
+                        value=audit_hashes.get(field),
+                    )
+                )
     if gate_required is not True:
         if gate_hash not in ("", None):
             blockers.append(
@@ -7509,7 +7528,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -7716,6 +7735,41 @@ def _public_lane_source_record_template_hash_errors(
             errors.append(
                 f"{label}.{field} must be deployed evidence, "
                 "not built-in template material"
+            )
+    return errors
+
+
+def _public_lane_source_adapter_gate_template_hash_errors(
+    value: Any,
+    lane_label: str,
+    domain: Any,
+) -> list[str]:
+    """Return errors for copied source-gate hashes replaying templates."""
+
+    if not isinstance(value, dict) or not isinstance(domain, int):
+        return []
+    _gate_field, audit_fields = _source_adapter_gate_requirements(domain)
+    if not audit_fields:
+        return []
+    errors: list[str] = []
+    errors.extend(
+        _source_adapter_gate_template_hash_blockers(
+            lane_label,
+            domain,
+            field_label="source adapter gate hash",
+            value=value.get("gate_hash"),
+        )
+    )
+    audit_hashes = value.get("audit_hashes")
+    if isinstance(audit_hashes, dict):
+        for field in audit_fields:
+            errors.extend(
+                _source_adapter_gate_template_hash_blockers(
+                    lane_label,
+                    domain,
+                    field_label=f"source adapter gate audit hashes {field}",
+                    value=audit_hashes.get(field),
+                )
             )
     return errors
 
@@ -8979,6 +9033,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     ("gate_hash",),
                 )
             )
+            if type(gate_required) is not bool or type(gate_ready) is not bool:
+                errors.extend(
+                    _public_lane_source_adapter_gate_template_hash_errors(
+                        source_adapter_gate,
+                        lane_label,
+                        domain,
+                    )
+                )
             gate_blockers, gate_blocker_errors = _canonical_blocker_list(
                 source_adapter_gate.get("blockers", []),
                 f"{lane_label}.source_adapter_gate",
@@ -10078,7 +10140,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         records = load_evidence_bundle(args.toml)
         summary = validate_evidence_bundle(records)
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+    except (
+        argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP all-lanes evidence validation failed",

@@ -473,9 +473,11 @@ runtime authority, get repaired into a live row during account rekey, or map a
 consensus offender to a mismatched validator slot.
 The Torii public-lane validator app endpoint uses the same key/record filter
 before returning staking-backed rows, preserving manifest fallback only when the
-requested lane has no valid staking rows. Torii stake-share and reward app
+requested lane has no valid staking rows. Public-lane reward-claim, commit
+election profile, multisig account-rekey, and Torii stake-share/reward app
 endpoints apply the matching exact-key filter for `(lane_id, validator, staker)`
-and `(lane_id, epoch)` economic rows before serializing account-facing state.
+and `(lane_id, epoch)` economic rows before consuming or serializing
+account-facing state.
 Public-lane stake-share rows, reward records, and reward-claim cursors are live
 economic indices rather than audit history; the same reset paths delete
 reset-owned rows (by storage key or embedded lane where present) and clear

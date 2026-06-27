@@ -81,6 +81,29 @@ SECRET_VALUE_PATTERNS = [
 ]
 SAFE_OUTPUT_CONTROL_CHARS = {"\t", "\n", "\r"}
 SCRIPT_DIR = Path(__file__).resolve().parent
+CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CLI_NONFINITE_NUMBER_TEXTS = {
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
+    "nan",
+    "+nan",
+    "-nan",
+}
+
+
+def _is_negative_zero_number_text(value: str) -> bool:
+    if not value.startswith("-"):
+        return False
+    mantissa = re.split(r"[eE]", value[1:], maxsplit=1)[0]
+    return all(ch in {"0", "."} for ch in mantissa)
 
 
 def _secret_scan_values(raw: str) -> tuple[str, ...]:
@@ -177,10 +200,40 @@ def sha256_hex(data: bytes) -> str:
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    detail = getattr(error, "strerror", None)
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
 
 
 def _read_regular_file(
@@ -227,7 +280,8 @@ def _read_regular_file(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise CanaryError(f"{label} must not be a symlink") from error
-        raise CanaryError(f"cannot open {label} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise CanaryError(f"cannot open {label} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -402,10 +456,25 @@ def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None
         raise CanaryError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise CanaryError(f"{flag} must use printable ASCII")
+    if integer:
+        canonical = CLI_CANONICAL_INT_RE.fullmatch(raw) is not None
+    else:
+        canonical = (
+            raw.lower() in CLI_NONFINITE_NUMBER_TEXTS
+            or CLI_CANONICAL_NUMBER_RE.fullmatch(raw) is not None
+        )
+    if not canonical or _is_negative_zero_number_text(raw):
+        raise CanaryError(f"{flag} must be a numeric value")
     try:
-        int(raw, 10) if integer else float(raw)
+        parsed = int(raw, 10) if integer else float(raw)
     except ValueError as error:
         raise CanaryError(f"{flag} must be a numeric value") from error
+    if (
+        not integer
+        and raw.lower() not in CLI_NONFINITE_NUMBER_TEXTS
+        and not math.isfinite(parsed)
+    ):
+        raise CanaryError(f"{flag} must be a numeric value")
 
 
 def _preflight_numeric_cli_values(
@@ -573,8 +642,9 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
         except OSError as error:
             if error.errno == errno.ELOOP:
                 raise CanaryError(f"{label} temp file must not be a symlink") from error
+            detail = _safe_os_error_detail(error)
             raise CanaryError(
-                f"cannot open temporary output for {label}: {error.strerror}"
+                f"cannot open temporary output for {label}: {detail}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
@@ -618,10 +688,12 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise CanaryError(f"{label} is not valid JSON: {error}") from error
+        raise CanaryError(f"{label} is not valid JSON") from error
     except RecursionError as error:
         raise CanaryError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
@@ -647,6 +719,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise CanaryError("JSON contains non-finite numeric constant")
+
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise CanaryError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise CanaryError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise CanaryError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise CanaryError("JSON contains non-canonical numeric value")
+    return parsed
 
 
 def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
@@ -1851,12 +1940,25 @@ def _preflight_verify_policy_covers_generated_receipts(
             )
 
 
+def _pipe_chunk_bytes(chunk: Any) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk
+    if isinstance(chunk, bytearray):
+        return bytes(chunk)
+    if isinstance(chunk, memoryview):
+        try:
+            return chunk.cast("B").tobytes()
+        except (TypeError, ValueError):
+            raise OSError("child output stream returned invalid bytes") from None
+    raise OSError("child output stream returned non-byte data")
+
+
 def _read_limited_pipe(pipe: Any, limit_bytes: int) -> tuple[bytes, bool]:
     chunks: list[bytes] = []
     remaining = limit_bytes
     truncated = False
     while True:
-        chunk = pipe.read(8192)
+        chunk = _pipe_chunk_bytes(pipe.read(8192))
         if not chunk:
             break
         if remaining > 0:
@@ -2360,7 +2462,7 @@ def run(args: argparse.Namespace) -> int:
             "planned_stages": planned_stages,
         }
         summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
-        text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+        text = json.dumps(summary, allow_nan=False, indent=2, sort_keys=True) + "\n"
         if args.summary_out is not None:
             _write_text_output(args.summary_out, text, display_label="summary_out")
         print(text, end="")
@@ -2419,7 +2521,7 @@ def run(args: argparse.Namespace) -> int:
         "stages": [_result_to_json(result) for result in results],
     }
     summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
-    text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(summary, allow_nan=False, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
         _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")

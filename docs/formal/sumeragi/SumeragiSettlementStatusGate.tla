@@ -314,6 +314,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+SettlementStatusExactness ==
+  Safety
+
+SettlementStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SettlementStatusExactness
+
 BugResetKeepsDvp ==
   ImplementationActions(ResetClearsDvp) = SpecActions(ResetClearsDvp)
 

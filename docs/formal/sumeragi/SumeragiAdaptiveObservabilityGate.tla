@@ -350,10 +350,17 @@ ActionsMatchSpec ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant ==
+AdaptiveObservabilityExactness ==
   ActionsMatchSpec
 
-SafetyFast == NoBugInvariant
+AdaptiveObservabilityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ AdaptiveObservabilityExactness
+
+NoBugInvariant ==
+  AdaptiveObservabilityExactness
+
+SafetyFast == AdaptiveObservabilityExactness
 
 BugDisabledAppliesWithoutResilience == NoBugInvariant
 BugDisabledSkipsReset == NoBugInvariant

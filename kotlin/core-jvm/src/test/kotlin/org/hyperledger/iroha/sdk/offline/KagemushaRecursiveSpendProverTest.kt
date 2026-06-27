@@ -1718,6 +1718,7 @@ class KagemushaRecursiveSpendProverTest {
         assertContains(archives, "\"name\": \"lineage_witness\"")
         assertContains(archives, "\"name\": \"change_output\"")
         assertContains(archives, "\"name\": \"block_height\"")
+        assertContains(archives, "\"name\": \"lineage_verifier_records\"")
         assertContains(archives, "\"type\": \"Option<u64>\"")
         assertContains(archives, "\"norito_default\": true")
         assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"")

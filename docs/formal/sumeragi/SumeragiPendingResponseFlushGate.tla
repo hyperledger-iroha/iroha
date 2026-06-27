@@ -310,8 +310,15 @@ TypeInvariant ==
 PendingResponseFlushMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast ==
+PendingResponseFlushExactness ==
   PendingResponseFlushMatchesSpec
+
+PendingResponseFlushCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingResponseFlushExactness
+
+SafetyFast ==
+  PendingResponseFlushExactness
 
 FetchAbsentReturnsFalse ==
   Matches("fetch_absent")

@@ -644,6 +644,44 @@ def test_input_file_rejects_non_path_without_traceback() -> None:
     assert errors == ["--evidence `evidence.json` must be a path"]
 
 
+def test_input_file_rejects_scalar_and_mapping_path_collections() -> None:
+    for paths in ("evidence.json", b"evidence.json", {"path": "evidence.json"}):
+        errors = require_existing_files(paths, "--evidence")
+
+        assert errors == ["--evidence paths must be a sequence"]
+
+
+def test_input_file_rejects_malformed_label(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence.json"
+
+    for label in ("", " --evidence", "--evidence ", "--evidence\npath", 7):
+        try:
+            require_existing_files([evidence], label)
+        except ValueError as error:
+            assert "runner preflight label must be a non-empty canonical string" in str(
+                error
+            )
+        else:
+            raise AssertionError(f"accepted malformed label {label!r}")
+
+
+def test_input_file_rejects_malformed_seen_identity_map(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    for seen in (
+        "seen",
+        {tmp_path: "not-a-pair"},
+        {"not-a-path": ("--previous", evidence)},
+        {tmp_path: (" previous", evidence)},
+        {tmp_path: ("--previous", "evidence.json")},
+    ):
+        errors = require_existing_files([evidence], "--evidence", seen=seen)
+
+        assert len(errors) == 1
+        assert "--evidence identity map" in errors[0]
+
+
 def test_input_file_inspection_failure_is_reported(
     tmp_path: Path,
     monkeypatch,
@@ -711,6 +749,44 @@ def test_input_directory_rejects_non_path_without_traceback() -> None:
     errors = require_existing_dirs(["bundle"], "--bundle")
 
     assert errors == ["--bundle `bundle` must be a path"]
+
+
+def test_input_directory_rejects_scalar_and_mapping_path_collections() -> None:
+    for paths in ("bundle", b"bundle", {"path": "bundle"}):
+        errors = require_existing_dirs(paths, "--bundle")
+
+        assert errors == ["--bundle paths must be a sequence"]
+
+
+def test_input_directory_rejects_malformed_label(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+
+    for label in ("", " --bundle", "--bundle ", "--bundle\npath", 7):
+        try:
+            require_existing_dirs([bundle], label)
+        except ValueError as error:
+            assert "runner preflight label must be a non-empty canonical string" in str(
+                error
+            )
+        else:
+            raise AssertionError(f"accepted malformed label {label!r}")
+
+
+def test_input_directory_rejects_malformed_seen_identity_map(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+
+    for seen in (
+        "seen",
+        {tmp_path: "not-a-pair"},
+        {"not-a-path": ("--previous", bundle)},
+        {tmp_path: (" previous", bundle)},
+        {tmp_path: ("--previous", "bundle")},
+    ):
+        errors = require_existing_dirs([bundle], "--bundle", seen=seen)
+
+        assert len(errors) == 1
+        assert "--bundle identity map" in errors[0]
 
 
 def test_input_directory_type_inspection_failure_is_reported(

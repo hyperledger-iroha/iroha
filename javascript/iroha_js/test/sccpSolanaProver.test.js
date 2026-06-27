@@ -16964,6 +16964,12 @@ test("builds a TAIRA XOR burn-record contract payload and ZK IVM request", () =>
     contract.payload.record_instruction,
     contract.record_instruction_hex,
   );
+  const settlementContract = buildTairaXorSccpBurnRecordContractPayload({
+    ...input,
+    settlementAmount: "0.025",
+  });
+  assert.equal(settlementContract.descriptor.payload.amount, input.amount);
+  assert.equal(settlementContract.payload.amount, "0.025");
   const descriptorContract = buildTairaXorSccpBurnRecordContractPayload({
     descriptor: contract.descriptor,
     settlementAssetDefinitionId: input.settlementAssetDefinitionId,
@@ -17020,6 +17026,12 @@ test("builds a TAIRA XOR BSC burn-record contract payload and ZK IVM request", (
     contract.payload.record_instruction,
     contract.record_instruction_hex,
   );
+  const settlementContract = buildTairaXorBscSccpBurnRecordContractPayload({
+    ...input,
+    settlementAmount: "0.025",
+  });
+  assert.equal(settlementContract.descriptor.payload.amount, input.amount);
+  assert.equal(settlementContract.payload.amount, "0.025");
   const descriptorContract = buildTairaXorBscSccpBurnRecordContractPayload({
     descriptor: contract.descriptor,
     settlementAssetDefinitionId: input.settlementAssetDefinitionId,
@@ -17109,6 +17121,16 @@ test("rejects unsafe TAIRA XOR burn-record ZK request bindings", () => {
       }),
     /gasLimit must be greater than zero/,
   );
+  for (const settlementAmount of ["0", "0.0", "abc"]) {
+    assert.throws(
+      () =>
+        buildTairaXorSccpBurnRecordContractPayload({
+          ...input,
+          settlementAmount,
+        }),
+      /settlementAmount/,
+    );
+  }
 });
 
 test("rejects unsafe TAIRA XOR BSC burn-record ZK request bindings", () => {
@@ -17170,6 +17192,16 @@ test("rejects unsafe TAIRA XOR BSC burn-record ZK request bindings", () => {
       }),
     /gasLimit must be greater than zero/,
   );
+  for (const settlementAmount of ["0", "0.0", "abc"]) {
+    assert.throws(
+      () =>
+        buildTairaXorBscSccpBurnRecordContractPayload({
+          ...input,
+          settlementAmount,
+        }),
+      /settlementAmount/,
+    );
+  }
   const tronDescriptor = buildTairaXorSccpRecordDescriptor({
     ...input,
     recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",

@@ -123,6 +123,8 @@ const DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN =
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
+const PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN =
+  /(?:change[\s._-]*me|replace[\s._-]*(?:me|before[\s._-]*production)|to[\s._-]*do|todo|example|sample|stub|test[\s._-]*only|your[\s._-]+[a-z0-9_-]+)/iu;
 
 const textEncoder = new TextEncoder();
 
@@ -2827,6 +2829,40 @@ function postDeployLiveEvidenceProductionBlockers(record) {
   return blockers;
 }
 
+function productionHandoffPlaceholderReason(value, path = "route manifest", seen = new WeakSet()) {
+  if (typeof value === "string") {
+    return PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(value) ? path : null;
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return null;
+    seen.add(value);
+    for (let index = 0; index < value.length; index += 1) {
+      const reason = productionHandoffPlaceholderReason(
+        value[index],
+        `${path}[${index}]`,
+        seen,
+      );
+      if (reason) return reason;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+  for (const [key, child] of Object.entries(value)) {
+    if (PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(key)) {
+      return `${path}.${key}`;
+    }
+    const reason = productionHandoffPlaceholderReason(
+      child,
+      `${path}.${key}`,
+      seen,
+    );
+    if (reason) return reason;
+  }
+  return null;
+}
+
 function normalizeLiveEvidenceForRoute(liveEvidence, expected) {
   const profile = expected.profile ?? expected.addresses?.profile ?? TRON_NETWORK_PROFILES.mainnet;
   const summary = requireJsonObject(liveEvidence, "live evidence");
@@ -3412,31 +3448,65 @@ function routeConfigRequiredRecord(value, label) {
   return value;
 }
 
+function routeManifestValue(record, keys, label, { required = true } = {}) {
+  const present = keys.filter((key) => Object.prototype.hasOwnProperty.call(record, key));
+  if (present.length > 1) {
+    throw new Error(`${label} must not use multiple aliases: ${present.join(", ")}`);
+  }
+  if (present.length === 0) {
+    if (required) {
+      throw new Error(`${label} is required`);
+    }
+    return undefined;
+  }
+  return record[present[0]];
+}
+
+function routeManifestRecord(record, keys, label, parentLabel) {
+  return routeConfigRequiredRecord(
+    routeManifestValue(record, keys, `${label} in ${parentLabel}`),
+    label,
+  );
+}
+
 function normalizeRouteManifestForConfig(manifest) {
   const record = routeConfigRequiredRecord(manifest, "route manifest");
   if (record.schema !== ROUTE_MANIFEST_SCHEMA) {
     throw new Error(`route manifest schema must be ${ROUTE_MANIFEST_SCHEMA}`);
   }
   assertNoSecretLikeDeploymentArtifactFields(record);
-  const destinationRollout = routeConfigRequiredRecord(
-    record.destinationRollout,
+  const destinationRollout = routeManifestRecord(
+    record,
+    ["destinationRollout", "destination_rollout"],
     "route manifest destinationRollout",
+    "route manifest",
   );
-  const burnRecord = routeConfigRequiredRecord(
-    record.tairaXorBurnRecord,
+  const burnRecord = routeManifestRecord(
+    record,
+    ["tairaXorBurnRecord", "taira_xor_burn_record"],
+    "route manifest tairaXorBurnRecord",
+    "route manifest",
+  );
+  const vkRef = routeManifestRecord(
+    burnRecord,
+    ["vkRef", "vk_ref"],
+    "route manifest tairaXorBurnRecord.vkRef",
     "route manifest tairaXorBurnRecord",
   );
-  const vkRef = routeConfigRequiredRecord(
-    burnRecord.vkRef,
-    "route manifest tairaXorBurnRecord.vkRef",
-  );
   const settlement = routeConfigRequiredRecord(record.settlement, "route manifest settlement");
-  const destinationBinding = routeConfigRequiredRecord(
-    record.destinationBinding,
+  const destinationBinding = routeManifestRecord(
+    record,
+    ["destinationBinding", "destination_binding"],
     "route manifest destinationBinding",
+    "route manifest",
   );
-  const productionReady = record.productionReady === true;
-  if (record.productionReady !== true && record.productionReady !== false) {
+  const productionReadyValue = routeManifestValue(
+    record,
+    ["productionReady", "production_ready"],
+    "route manifest productionReady",
+  );
+  const productionReady = productionReadyValue === true;
+  if (productionReadyValue !== true && productionReadyValue !== false) {
     throw new Error("route manifest productionReady must be true or false");
   }
   const disabledReason = readOptionalCanonicalManifestText(
@@ -3453,26 +3523,19 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest productionReady cannot be true when disabledReason is set",
     );
   }
-  const hasPostDeployReadbackChecked =
-    record.postDeployReadbackChecked !== undefined &&
-    record.postDeployReadbackChecked !== null;
-  const hasPostDeployReadbackCheckedSnake =
-    record.post_deploy_readback_checked !== undefined &&
-    record.post_deploy_readback_checked !== null;
-  if (
-    hasPostDeployReadbackChecked &&
-    hasPostDeployReadbackCheckedSnake &&
-    record.postDeployReadbackChecked !== record.post_deploy_readback_checked
-  ) {
+  const handoffPlaceholderReason = productionHandoffPlaceholderReason(record);
+  if (productionReady && handoffPlaceholderReason) {
     throw new Error(
-      "route manifest postDeployReadbackChecked and post_deploy_readback_checked must match",
+      `route manifest productionReady cannot be true with placeholder handoff material at ${handoffPlaceholderReason}`,
     );
   }
-  const postDeployReadbackChecked = hasPostDeployReadbackChecked
-    ? record.postDeployReadbackChecked
-    : hasPostDeployReadbackCheckedSnake
-      ? record.post_deploy_readback_checked
-      : null;
+  const postDeployReadbackChecked =
+    routeManifestValue(
+      record,
+      ["postDeployReadbackChecked", "post_deploy_readback_checked"],
+      "route manifest postDeployReadbackChecked",
+      { required: false },
+    ) ?? null;
   if (
     postDeployReadbackChecked !== null &&
     postDeployReadbackChecked !== true &&
@@ -3485,22 +3548,35 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest productionReady requires postDeployReadbackChecked true",
     );
   }
-  const routeId = normalizeNonEmptyText(record.routeId, "route manifest routeId");
+  const routeId = normalizeNonEmptyText(
+    routeManifestValue(record, ["routeId", "route_id"], "route manifest routeId"),
+    "route manifest routeId",
+  );
   if (routeId !== ROUTE_ID) {
     throw new Error(`route manifest routeId must be ${ROUTE_ID}`);
   }
-  const assetKey = normalizeNonEmptyText(record.assetKey, "route manifest assetKey");
+  const assetKey = normalizeNonEmptyText(
+    routeManifestValue(record, ["assetKey", "asset_key"], "route manifest assetKey"),
+    "route manifest assetKey",
+  );
   if (assetKey !== ASSET_KEY) {
     throw new Error(`route manifest assetKey must be ${ASSET_KEY}`);
   }
   const counterpartyDomain = normalizeUint32(
-    record.counterpartyDomain,
+    routeManifestValue(
+      record,
+      ["counterpartyDomain", "counterparty_domain"],
+      "route manifest counterpartyDomain",
+    ),
     "route manifest counterpartyDomain",
   );
   if (counterpartyDomain !== SCCP_DOMAIN_TRON) {
     throw new Error("route manifest counterpartyDomain must be TRON domain 5");
   }
-  const tronNetworkText = normalizeNonEmptyText(record.tronNetwork, "route manifest tronNetwork");
+  const tronNetworkText = normalizeNonEmptyText(
+    routeManifestValue(record, ["tronNetwork", "tron_network"], "route manifest tronNetwork"),
+    "route manifest tronNetwork",
+  );
   if (tronNetworkText !== tronNetworkText.toLowerCase() || tronNetworkText.includes("_")) {
     throw new Error("route manifest tronNetwork must be canonical lowercase text");
   }
@@ -3516,31 +3592,51 @@ function normalizeRouteManifestForConfig(manifest) {
   if (chain !== tronProfile.network) {
     throw new Error("route manifest chain must match tronNetwork");
   }
-  const chainIdHex = normalizeNonEmptyText(record.chainIdHex, "route manifest chainIdHex");
+  const chainIdHex = normalizeNonEmptyText(
+    routeManifestValue(record, ["chainIdHex", "chain_id_hex"], "route manifest chainIdHex"),
+    "route manifest chainIdHex",
+  );
   if (/^0X/u.test(chainIdHex) || /[A-F]/u.test(chainIdHex.replace(/^0x/u, ""))) {
     throw new Error("route manifest chainIdHex must be canonical lowercase hex");
   }
   if (chainIdHex !== tronProfile.chainIdHex) {
     throw new Error("route manifest chainIdHex must match tronNetwork");
   }
-  const networkIdHex = normalizeBytes32(record.networkIdHex, "route manifest networkIdHex");
+  const networkIdHex = normalizeBytes32(
+    routeManifestValue(record, ["networkIdHex", "network_id_hex"], "route manifest networkIdHex"),
+    "route manifest networkIdHex",
+  );
   if (networkIdHex !== tronProfile.networkIdHex) {
     throw new Error("route manifest networkIdHex must match tronNetwork");
   }
   const verifierTarget = normalizeNonEmptyText(
-    record.verifierTarget,
+    routeManifestValue(
+      record,
+      ["verifierTarget", "verifier_target"],
+      "route manifest verifierTarget",
+    ),
     "route manifest verifierTarget",
   );
   if (verifierTarget !== "TronContract") {
     throw new Error("route manifest verifierTarget must be TronContract");
   }
   const gasLimit = normalizePositiveSafeInteger(
-    burnRecord.gasLimit,
+    routeManifestValue(
+      burnRecord,
+      ["gasLimit", "gas_limit"],
+      "route manifest burn-record gasLimit",
+    ),
     "route manifest burn-record gasLimit",
   );
-  const postDeployLiveEvidence = record.postDeployLiveEvidence
+  const postDeployLiveEvidenceValue = routeManifestValue(
+    record,
+    ["postDeployLiveEvidence", "post_deploy_live_evidence"],
+    "route manifest postDeployLiveEvidence",
+    { required: false },
+  );
+  const postDeployLiveEvidence = postDeployLiveEvidenceValue
     ? routeConfigRequiredRecord(
-        record.postDeployLiveEvidence,
+        postDeployLiveEvidenceValue,
         "route manifest postDeployLiveEvidence",
       )
     : null;
@@ -3549,17 +3645,33 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest productionReady requires postDeployLiveEvidence",
     );
   }
+  const postDeployFullTomlReady = postDeployLiveEvidence
+    ? routeManifestValue(
+        postDeployLiveEvidence,
+        ["fullTomlReady", "full_toml_ready"],
+        "route manifest postDeployLiveEvidence.fullTomlReady",
+        { required: false },
+      )
+    : undefined;
+  const postDeployOfflineFullTomlSha256 = postDeployLiveEvidence
+    ? routeManifestValue(
+        postDeployLiveEvidence,
+        ["offlineFullTomlSha256", "offline_full_toml_sha256"],
+        "route manifest postDeployLiveEvidence.offlineFullTomlSha256",
+        { required: false },
+      )
+    : undefined;
   if (
     postDeployLiveEvidence &&
-    postDeployLiveEvidence.fullTomlReady !== undefined &&
-    postDeployLiveEvidence.fullTomlReady !== null &&
-    typeof postDeployLiveEvidence.fullTomlReady !== "boolean"
+    postDeployFullTomlReady !== undefined &&
+    postDeployFullTomlReady !== null &&
+    typeof postDeployFullTomlReady !== "boolean"
   ) {
     throw new Error(
       "route manifest postDeployLiveEvidence.fullTomlReady must be true or false",
     );
   }
-  if (productionReady && postDeployLiveEvidence.fullTomlReady !== true) {
+  if (productionReady && postDeployFullTomlReady !== true) {
     throw new Error(
       "route manifest productionReady requires postDeployLiveEvidence.fullTomlReady true",
     );
@@ -3575,8 +3687,8 @@ function normalizeRouteManifestForConfig(manifest) {
   }
   if (
     productionReady &&
-    (postDeployLiveEvidence.offlineFullTomlSha256 === undefined ||
-      postDeployLiveEvidence.offlineFullTomlSha256 === null)
+    (postDeployOfflineFullTomlSha256 === undefined ||
+      postDeployOfflineFullTomlSha256 === null)
   ) {
     throw new Error(
       "route manifest productionReady requires postDeployLiveEvidence.offlineFullTomlSha256",
@@ -3587,24 +3699,43 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest version must be 1");
   }
   const tairaXorTokenAddress = normalizeTronBase58Address(
-    record.tairaXorTokenAddress,
+    routeManifestValue(
+      record,
+      ["tairaXorTokenAddress", "taira_xor_token_address"],
+      "route manifest tairaXorTokenAddress",
+    ),
     "route manifest tairaXorTokenAddress",
   ).base58;
   const tairaXorBridgeAddress = normalizeTronBase58Address(
-    record.tairaXorBridgeAddress,
+    routeManifestValue(
+      record,
+      ["tairaXorBridgeAddress", "taira_xor_bridge_address"],
+      "route manifest tairaXorBridgeAddress",
+    ),
     "route manifest tairaXorBridgeAddress",
   ).base58;
   const sccpTronSourceBridgeAddress = normalizeTronBase58Address(
-    record.sccpTronSourceBridgeAddress,
+    routeManifestValue(
+      record,
+      ["sccpTronSourceBridgeAddress", "sccp_tron_source_bridge_address"],
+      "route manifest sccpTronSourceBridgeAddress",
+    ),
     "route manifest sccpTronSourceBridgeAddress",
   ).base58;
   const tronVerifierAddress = normalizeTronBase58Address(
-    record.tronVerifierAddress,
+    routeManifestValue(
+      record,
+      ["tronVerifierAddress", "tron_verifier_address"],
+      "route manifest tronVerifierAddress",
+    ),
     "route manifest tronVerifierAddress",
   ).base58;
-  const destinationVerifierAlias =
-    record.sccpTronDestinationVerifierAddress ??
-    record.sccp_tron_destination_verifier_address;
+  const destinationVerifierAlias = routeManifestValue(
+    record,
+    ["sccpTronDestinationVerifierAddress", "sccp_tron_destination_verifier_address"],
+    "route manifest sccpTronDestinationVerifierAddress",
+    { required: false },
+  );
   if (destinationVerifierAlias !== undefined && destinationVerifierAlias !== null) {
     const normalizedDestinationVerifierAlias = normalizeTronBase58Address(
       destinationVerifierAlias,
@@ -3629,25 +3760,41 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
   const verifierBackend = normalizeNonEmptyText(
-    destinationRollout.verifierBackend ?? destinationRollout.verifier_backend,
+    routeManifestValue(
+      destinationRollout,
+      ["verifierBackend", "verifier_backend"],
+      "route manifest destinationRollout.verifierBackend",
+    ),
     "route manifest destinationRollout.verifierBackend",
   );
   if (verifierBackend !== TRON_GROTH16_BACKEND) {
     throw new Error(`route manifest verifier backend must be ${TRON_GROTH16_BACKEND}`);
   }
   const proofFamily = normalizeNonEmptyText(
-    destinationRollout.proofFamily ?? destinationRollout.proof_family,
+    routeManifestValue(
+      destinationRollout,
+      ["proofFamily", "proof_family"],
+      "route manifest destinationRollout.proofFamily",
+    ),
     "route manifest destinationRollout.proofFamily",
   );
   if (proofFamily !== SCCP_PROOF_FAMILY_STARK_FRI) {
     throw new Error(`route manifest proof family must be ${SCCP_PROOF_FAMILY_STARK_FRI}`);
   }
   const verifierCodeHash = normalizeBytes32(
-    destinationRollout.verifierCodeHash,
+    routeManifestValue(
+      destinationRollout,
+      ["verifierCodeHash", "verifier_code_hash"],
+      "route manifest destinationRollout.verifierCodeHash",
+    ),
     "route manifest destinationRollout.verifierCodeHash",
   );
   const verifierKeyHash = normalizeBytes32(
-    destinationRollout.verifierKeyHash,
+    routeManifestValue(
+      destinationRollout,
+      ["verifierKeyHash", "verifier_key_hash"],
+      "route manifest destinationRollout.verifierKeyHash",
+    ),
     "route manifest destinationRollout.verifierKeyHash",
   );
   const destinationRolloutVersion = normalizeUint32(
@@ -3658,25 +3805,41 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest destinationRollout.version must be 1");
   }
   const destinationNetworkId = normalizeBytes32(
-    destinationRollout.destinationNetworkId ?? destinationRollout.destination_network_id,
+    routeManifestValue(
+      destinationRollout,
+      ["destinationNetworkId", "destination_network_id"],
+      "route manifest destinationRollout.destinationNetworkId",
+    ),
     "route manifest destinationRollout.destinationNetworkId",
   );
   if (destinationNetworkId !== networkIdHex) {
     throw new Error("route manifest destinationRollout.destinationNetworkId must match networkIdHex");
   }
   const verifierIdentity = normalizeTronBase58Address(
-    destinationRollout.verifierIdentity ?? destinationRollout.verifier_identity,
+    routeManifestValue(
+      destinationRollout,
+      ["verifierIdentity", "verifier_identity"],
+      "route manifest destinationRollout.verifierIdentity",
+    ),
     "route manifest destinationRollout.verifierIdentity",
   ).base58;
   if (verifierIdentity !== tronVerifierAddress) {
     throw new Error("route manifest destinationRollout.verifierIdentity must match tronVerifierAddress");
   }
   const destinationSourceDomain = normalizeUint32(
-    destinationRollout.sourceDomain,
+    routeManifestValue(
+      destinationRollout,
+      ["sourceDomain", "source_domain"],
+      "route manifest destinationRollout.sourceDomain",
+    ),
     "route manifest destinationRollout.sourceDomain",
   );
   const destinationTargetDomain = normalizeUint32(
-    destinationRollout.targetDomain,
+    routeManifestValue(
+      destinationRollout,
+      ["targetDomain", "target_domain"],
+      "route manifest destinationRollout.targetDomain",
+    ),
     "route manifest destinationRollout.targetDomain",
   );
   if (
@@ -3686,7 +3849,11 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest destinationRollout must be SORA -> TRON");
   }
   const bindingSourceDomain = normalizeUint32(
-    destinationBinding.sourceDomain,
+    routeManifestValue(
+      destinationBinding,
+      ["sourceDomain", "source_domain"],
+      "route manifest destinationBinding.sourceDomain",
+    ),
     "route manifest destinationBinding.sourceDomain",
   );
   const destinationBindingVersion = normalizeUint32(
@@ -3697,7 +3864,11 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest destinationBinding.version must be 1");
   }
   const bindingTargetDomain = normalizeUint32(
-    destinationBinding.targetDomain,
+    routeManifestValue(
+      destinationBinding,
+      ["targetDomain", "target_domain"],
+      "route manifest destinationBinding.targetDomain",
+    ),
     "route manifest destinationBinding.targetDomain",
   );
   if (
@@ -3707,7 +3878,11 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest destinationBinding must be SORA -> TRON");
   }
   const bindingNetworkIdHex = normalizeBytes32(
-    destinationBinding.networkIdHex,
+    routeManifestValue(
+      destinationBinding,
+      ["networkIdHex", "network_id_hex"],
+      "route manifest destinationBinding.networkIdHex",
+    ),
     "route manifest destinationBinding.networkIdHex",
   );
   if (bindingNetworkIdHex !== networkIdHex) {
@@ -3720,7 +3895,11 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierKeyHash,
   });
   const destinationBindingKey = normalizeNonEmptyText(
-    destinationRollout.destinationBindingKey,
+    routeManifestValue(
+      destinationRollout,
+      ["destinationBindingKey", "destination_binding_key"],
+      "route manifest destinationRollout.destinationBindingKey",
+    ),
     "route manifest destinationRollout.destinationBindingKey",
   );
   if (destinationBindingKey !== expectedDestinationBindingKey) {
@@ -3729,7 +3908,11 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
   const declaredDestinationBindingKey = normalizeNonEmptyText(
-    destinationBinding.key,
+    routeManifestValue(
+      destinationBinding,
+      ["key", "destinationBindingKey", "destination_binding_key"],
+      "route manifest destinationBinding.key",
+    ),
     "route manifest destinationBinding.key",
   );
   if (declaredDestinationBindingKey !== destinationBindingKey) {
@@ -3742,7 +3925,11 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierKeyHash,
   });
   const destinationBindingHash = normalizeBytes32(
-    destinationRollout.destinationBindingHash,
+    routeManifestValue(
+      destinationRollout,
+      ["destinationBindingHash", "destination_binding_hash"],
+      "route manifest destinationRollout.destinationBindingHash",
+    ),
     "route manifest destinationRollout.destinationBindingHash",
   );
   if (destinationBindingHash !== expectedDestinationBindingHash) {
@@ -3751,7 +3938,11 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
   const declaredDestinationBindingHash = normalizeBytes32(
-    destinationBinding.bindingHash,
+    routeManifestValue(
+      destinationBinding,
+      ["bindingHash", "binding_hash"],
+      "route manifest destinationBinding.bindingHash",
+    ),
     "route manifest destinationBinding.bindingHash",
   );
   if (declaredDestinationBindingHash !== destinationBindingHash) {
@@ -3760,12 +3951,20 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
   const contractArtifact = normalizeStrictBase64(
-    burnRecord.contractArtifactB64,
+    routeManifestValue(
+      burnRecord,
+      ["contractArtifactB64", "artifact_b64"],
+      "route manifest tairaXorBurnRecord.contractArtifactB64",
+    ),
     "route manifest tairaXorBurnRecord.contractArtifactB64",
   );
   const artifactSha256 = bytesToHex(sha256(new Uint8Array(contractArtifact.bytes)));
   const declaredArtifactSha256 = normalizeBytes32(
-    burnRecord.artifactSha256,
+    routeManifestValue(
+      burnRecord,
+      ["artifactSha256", "artifact_sha256"],
+      "route manifest tairaXorBurnRecord.artifactSha256",
+    ),
     "route manifest tairaXorBurnRecord.artifactSha256",
   );
   if (declaredArtifactSha256 !== artifactSha256) {
@@ -3773,7 +3972,12 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest TAIRA burn-record artifact sha256 does not match artifact bytes",
     );
   }
-  const settlementRouteId = settlement.routeId ?? settlement.route_id;
+  const settlementRouteId = routeManifestValue(
+    settlement,
+    ["routeId", "route_id"],
+    "route manifest settlement.routeId",
+    { required: false },
+  );
   if (settlementRouteId !== undefined && settlementRouteId !== null) {
     const normalizedSettlementRouteId = normalizeNonEmptyText(
       settlementRouteId,
@@ -3783,7 +3987,12 @@ function normalizeRouteManifestForConfig(manifest) {
       throw new Error(`route manifest settlement.routeId must be ${ROUTE_ID}`);
     }
   }
-  const settlementAssetKey = settlement.assetKey ?? settlement.asset_key;
+  const settlementAssetKey = routeManifestValue(
+    settlement,
+    ["assetKey", "asset_key"],
+    "route manifest settlement.assetKey",
+    { required: false },
+  );
   if (settlementAssetKey !== undefined && settlementAssetKey !== null) {
     const normalizedSettlementAssetKey = normalizeNonEmptyText(
       settlementAssetKey,
@@ -3794,7 +4003,11 @@ function normalizeRouteManifestForConfig(manifest) {
     }
   }
   const settlementSubmitPath = normalizeNonEmptyText(
-    settlement.submitPath ?? settlement.submit_path,
+    routeManifestValue(
+      settlement,
+      ["submitPath", "submit_path"],
+      "route manifest settlement.submitPath",
+    ),
     "route manifest settlement.submitPath",
   );
   if (settlementSubmitPath !== "/v1/bridge/messages") {
@@ -3829,13 +4042,21 @@ function normalizeRouteManifestForConfig(manifest) {
     destinationBindingKey,
     destinationBindingHash,
     settlementAssetDefinitionId: normalizeCanonicalAssetDefinitionId(
-      burnRecord.settlementAssetDefinitionId,
+      routeManifestValue(
+        burnRecord,
+        ["settlementAssetDefinitionId", "settlement_asset_definition_id"],
+        "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
+      ),
       "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
     ),
     contractArtifactB64: contractArtifact.text,
     artifactSha256: declaredArtifactSha256,
     codeHash: normalizeBytes32(
-      burnRecord.codeHash,
+      routeManifestValue(
+        burnRecord,
+        ["codeHash", "code_hash"],
+        "route manifest tairaXorBurnRecord.codeHash",
+      ),
       "route manifest tairaXorBurnRecord.codeHash",
     ),
     vkBackend: normalizeVerifierKeyRefText(
@@ -3861,29 +4082,45 @@ function normalizeRouteManifestForConfig(manifest) {
     ),
     postDeployLiveEvidence: postDeployLiveEvidence
       ? {
-          fullTomlReady: postDeployLiveEvidence.fullTomlReady === true,
+          fullTomlReady: postDeployFullTomlReady === true,
           sourceBridgeConfigHash: normalizeBytes32(
-            postDeployLiveEvidence.sourceBridgeConfigHash,
+            routeManifestValue(
+              postDeployLiveEvidence,
+              ["sourceBridgeConfigHash", "source_bridge_config_hash"],
+              "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
+            ),
             "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
           ),
           sourceEventTransactionId: normalizeBytes32(
-            postDeployLiveEvidence.sourceEventTransactionId,
+            routeManifestValue(
+              postDeployLiveEvidence,
+              ["sourceEventTransactionId", "source_event_transaction_id"],
+              "route manifest postDeployLiveEvidence.sourceEventTransactionId",
+            ),
             "route manifest postDeployLiveEvidence.sourceEventTransactionId",
           ),
           routeCanaryEvidenceHash: normalizeBytes32(
-            postDeployLiveEvidence.routeCanaryEvidenceHash,
+            routeManifestValue(
+              postDeployLiveEvidence,
+              ["routeCanaryEvidenceHash", "route_canary_evidence_hash"],
+              "route manifest postDeployLiveEvidence.routeCanaryEvidenceHash",
+            ),
             "route manifest postDeployLiveEvidence.routeCanaryEvidenceHash",
           ),
           routeCanaryTransactionId: normalizeBytes32(
-            postDeployLiveEvidence.routeCanaryTransactionId,
+            routeManifestValue(
+              postDeployLiveEvidence,
+              ["routeCanaryTransactionId", "route_canary_transaction_id"],
+              "route manifest postDeployLiveEvidence.routeCanaryTransactionId",
+            ),
             "route manifest postDeployLiveEvidence.routeCanaryTransactionId",
           ),
           offlineFullTomlSha256:
-            postDeployLiveEvidence.offlineFullTomlSha256 === undefined ||
-            postDeployLiveEvidence.offlineFullTomlSha256 === null
+            postDeployOfflineFullTomlSha256 === undefined ||
+            postDeployOfflineFullTomlSha256 === null
               ? null
               : normalizeBytes32(
-                  postDeployLiveEvidence.offlineFullTomlSha256,
+                  postDeployOfflineFullTomlSha256,
                   "route manifest postDeployLiveEvidence.offlineFullTomlSha256",
                 ),
         }

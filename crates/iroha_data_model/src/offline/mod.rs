@@ -89,7 +89,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: &s
     "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
 /// Canonical verifier-witness profile for reserved Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
-    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
+    "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1";
 /// Canonical circuit id for proof-carrying Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-aggregation-v1";
@@ -666,6 +666,11 @@ pub enum KagemushaFoldError {
         /// Zero-based hop index where the zero entry was detected.
         hop_index: usize,
     },
+    /// A folded-hop proof hash is the canonical zero-prehash sentinel.
+    ZeroProofHash {
+        /// Zero-based hop index where the zero proof hash was detected.
+        hop_index: usize,
+    },
     /// A folded-hop proof public-input digest is all-zero.
     ZeroProofPublicInputsDigest {
         /// Zero-based hop index where the zero digest was detected.
@@ -995,6 +1000,9 @@ impl core::fmt::Display for KagemushaFoldError {
                 f,
                 "Kagemusha fold hop {hop_index} has a zero output commitment"
             ),
+            Self::ZeroProofHash { hop_index } => {
+                write!(f, "Kagemusha fold hop {hop_index} has a zero proof hash")
+            }
             Self::ZeroProofPublicInputsDigest { hop_index } => write!(
                 f,
                 "Kagemusha fold hop {hop_index} has a zero proof public-input digest"
@@ -2024,6 +2032,13 @@ mod model {
         pub previous_final_root: Option<[u8; 32]>,
         /// Previous spendable note descriptor, absent for the initial hop.
         pub previous_current_note: Option<KagemushaSpendableNoteDescriptorV1>,
+        /// Previous top-up anchor nullifiers carried unchanged by append hops.
+        #[norito(default)]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::vec")
+        )]
+        pub previous_topup_anchor_nullifiers: Vec<[u8; 32]>,
         /// Previous streaming lineage digest, absent for the initial hop.
         #[cfg_attr(
             feature = "json",
@@ -2616,6 +2631,15 @@ mod model {
         /// lineage witnesses and reserved-lineage final proofs.
         #[norito(default)]
         pub block_height: Option<u64>,
+        /// Additional active verifier records for Reserved-lineage recursive spend proofs.
+        ///
+        /// The legacy `lineage_verifier_record` field remains the single-record
+        /// fast path. Multi-hop record-backed histories may contain both
+        /// one-hop and append Reserved-lineage proof profiles, so newer SDKs can
+        /// attach every required profile here while older archives decode with
+        /// an empty list.
+        #[norito(default)]
+        pub lineage_verifier_records: Vec<VerifyingKeyRecord>,
     }
 
     /// One private hop folded into a compact Kagemusha payment token.
@@ -3635,10 +3659,14 @@ fn validate_kagemusha_canonical_set_order(
 
 fn validate_kagemusha_step_digest_bindings(
     hop_index: usize,
+    proof_hash: Hash,
     proof_public_inputs_digest: [u8; Hash::LENGTH],
     verifier_key_commitment: [u8; Hash::LENGTH],
     verifier_key_poseidon_digest: [u8; Hash::LENGTH],
 ) -> Result<(), KagemushaFoldError> {
+    if is_zero_prehash_hash(proof_hash) {
+        return Err(KagemushaFoldError::ZeroProofHash { hop_index });
+    }
     if proof_public_inputs_digest == [0u8; Hash::LENGTH] {
         return Err(KagemushaFoldError::ZeroProofPublicInputsDigest { hop_index });
     }
@@ -3786,6 +3814,7 @@ fn validate_kagemusha_aggregation_transcript_statement_shape(
         )?;
         validate_kagemusha_step_digest_bindings(
             hop_index,
+            step.proof_hash,
             step.proof_public_inputs_digest,
             step.verifier_key_commitment,
             step.verifier_key_poseidon_digest,
@@ -4283,20 +4312,24 @@ fn validate_kagemusha_recursive_spend_note(
 fn validate_kagemusha_recursive_spend_topup_anchor_nullifiers(
     nullifiers: &[[u8; Hash::LENGTH]],
 ) -> Result<(), KagemushaFoldError> {
+    validate_kagemusha_recursive_spend_topup_anchor_nullifiers_field(
+        nullifiers,
+        "topup_anchor_nullifiers",
+    )
+}
+
+fn validate_kagemusha_recursive_spend_topup_anchor_nullifiers_field(
+    nullifiers: &[[u8; Hash::LENGTH]],
+    field: &'static str,
+) -> Result<(), KagemushaFoldError> {
     if nullifiers.is_empty() || nullifiers.len() > KAGEMUSHA_FOLD_STEP_MAX_INPUTS {
-        return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
-            field: "topup_anchor_nullifiers",
-        });
+        return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor { field });
     }
     if nullifiers.contains(&[0u8; Hash::LENGTH]) {
-        return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
-            field: "topup_anchor_nullifiers",
-        });
+        return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor { field });
     }
     if nullifiers.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
-            field: "topup_anchor_nullifiers",
-        });
+        return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor { field });
     }
     Ok(())
 }
@@ -4322,6 +4355,7 @@ fn kagemusha_recursive_spend_step_statement(
     )?;
     validate_kagemusha_step_digest_bindings(
         hop_index_usize,
+        step.proof_hash,
         step.proof_public_inputs_digest,
         step.verifier_key_commitment,
         step.verifier_key_poseidon_digest,
@@ -5384,7 +5418,7 @@ fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_digest_part
             field: "append_opening_preflight_digest",
         });
     }
-    let profile = KagemushaRecursiveSpendTransitionProfileV1 {
+    let mut profile = KagemushaRecursiveSpendTransitionProfileV1 {
         domain: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN.to_owned(),
         chain_id: accumulator.chain_id.clone(),
         asset: accumulator.asset.clone(),
@@ -5394,6 +5428,9 @@ fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_digest_part
         previous_initial_root: previous.map(|previous| previous.initial_root),
         previous_final_root: previous.map(|previous| previous.final_root),
         previous_current_note: previous.map(|previous| previous.current_note.clone()),
+        previous_topup_anchor_nullifiers: previous
+            .map(|previous| previous.topup_anchor_nullifiers.clone())
+            .unwrap_or_default(),
         previous_lineage_digest: previous.map(|previous| previous.lineage_digest),
         previous_recursive_proof_chain_digest: previous
             .map(|previous| previous.recursive_proof_chain_digest),
@@ -5428,10 +5465,26 @@ fn kagemusha_recursive_spend_transition_profile_from_accumulator_and_digest_part
         resulting_nullifier_digest: accumulator.nullifier_digest,
         resulting_output_commitment_digest: accumulator.output_commitment_digest,
         resulting_fold_digest: accumulator.fold_digest,
-        resulting_accumulator_digest: kagemusha_recursive_spend_accumulator_digest(accumulator)?,
-        resulting_public_inputs_hash:
-            kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(accumulator)?,
+        resulting_accumulator_digest: [0u8; Hash::LENGTH],
+        resulting_public_inputs_hash: Hash::prehashed([0u8; Hash::LENGTH]),
     };
+    let transition_profile_binding_digest =
+        kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(&profile)?;
+    if accumulator.transition_profile_binding_digest
+        != KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_PENDING
+        && accumulator.transition_profile_binding_digest != transition_profile_binding_digest
+    {
+        return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+            field: "transition_profile_binding_digest",
+        });
+    }
+    let mut resulting_accumulator = accumulator.clone();
+    resulting_accumulator.transition_profile_binding_digest = transition_profile_binding_digest;
+    resulting_accumulator.append_boundary_digest = [0u8; Hash::LENGTH];
+    profile.resulting_accumulator_digest =
+        kagemusha_recursive_spend_accumulator_digest(&resulting_accumulator)?;
+    profile.resulting_public_inputs_hash =
+        kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&resulting_accumulator)?;
     profile.validate_context()?;
     Ok(profile)
 }
@@ -5597,16 +5650,7 @@ pub fn kagemusha_recursive_spend_transition_profile_binding_digest(
     profile: &KagemushaRecursiveSpendTransitionProfileV1,
 ) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
     profile.validate_context()?;
-    let mut binding_profile = profile.clone();
-    binding_profile.previous_recursive_proof_open_envelopes_archive_digest = None;
-    binding_profile.append_opening_preflight_digest = None;
-    binding_profile.append_opening_preflight = None;
-    binding_profile.resulting_accumulator_digest = [0u8; Hash::LENGTH];
-    binding_profile.resulting_public_inputs_hash = Hash::prehashed([0u8; Hash::LENGTH]);
-    kagemusha_poseidon_preimage(&KagemushaRecursiveSpendTransitionProfileDigestPreimage {
-        domain: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN.to_owned(),
-        profile: binding_profile,
-    })
+    kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(profile)
 }
 
 /// Return the canonical digest of previous recursive proof opening archive bytes.
@@ -5975,6 +6019,73 @@ fn kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked(
     )
 }
 
+fn kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(
+    profile: &KagemushaRecursiveSpendTransitionProfileV1,
+) -> Result<[u8; Hash::LENGTH], KagemushaFoldError> {
+    let mut binding_profile = profile.clone();
+    binding_profile.previous_recursive_proof_open_envelopes_archive_digest = None;
+    binding_profile.append_opening_preflight_digest = None;
+    binding_profile.append_opening_preflight = None;
+    binding_profile.resulting_accumulator_digest = [0u8; Hash::LENGTH];
+    binding_profile.resulting_public_inputs_hash = Hash::prehashed([0u8; Hash::LENGTH]);
+    kagemusha_poseidon_preimage(&KagemushaRecursiveSpendTransitionProfileDigestPreimage {
+        domain: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN.to_owned(),
+        profile: binding_profile,
+    })
+}
+
+fn validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(
+    profile: &KagemushaRecursiveSpendTransitionProfileV1,
+) -> Result<(), KagemushaFoldError> {
+    let topup_anchor_nullifiers = if profile.hop_index == 0 {
+        profile.current_hop_statement.input_nullifiers.clone()
+    } else {
+        profile.previous_topup_anchor_nullifiers.clone()
+    };
+    let expected_accumulator = KagemushaRecursiveSpendAccumulatorV1 {
+        domain: KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN.to_owned(),
+        chain_id: profile.chain_id.clone(),
+        asset: profile.asset.clone(),
+        initial_root: profile.resulting_initial_root,
+        final_root: profile.resulting_final_root,
+        topup_anchor_nullifiers,
+        hop_count: profile.hop_count,
+        lineage_digest: profile.resulting_lineage_digest,
+        aggregation_transcript_digest: profile.resulting_lineage_digest,
+        nullifier_digest: profile.resulting_nullifier_digest,
+        output_commitment_digest: profile.resulting_output_commitment_digest,
+        fold_digest: profile.resulting_fold_digest,
+        recursive_proof_chain_digest: profile.resulting_recursive_proof_chain_digest,
+        transition_profile_binding_digest:
+            kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(profile)?,
+        append_opening_preflight_digest: profile.resulting_append_opening_preflight_digest,
+        append_boundary_digest: [0u8; Hash::LENGTH],
+        verifier_params_fingerprint: profile.verifier_params_fingerprint,
+        fixed_window_table_schedule_digest: profile.fixed_window_table_schedule_digest,
+        fixed_window_shared_table_manifest_digest: profile
+            .fixed_window_shared_table_manifest_digest,
+        fixed_window_table_base_digest: profile.resulting_fixed_window_table_base_digest,
+        verifier_witness_batch_digest: profile.resulting_verifier_witness_batch_digest,
+        verifier_opening_len: profile.verifier_opening_len,
+        current_note: profile.current_note.clone(),
+    };
+    if profile.resulting_accumulator_digest
+        != kagemusha_recursive_spend_accumulator_digest(&expected_accumulator)?
+    {
+        return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+            field: "resulting_accumulator_digest",
+        });
+    }
+    if profile.resulting_public_inputs_hash
+        != kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&expected_accumulator)?
+    {
+        return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+            field: "resulting_public_inputs_hash",
+        });
+    }
+    Ok(())
+}
+
 /// Return the canonical Poseidon2 digest for a compact Reserved-lineage append boundary.
 ///
 /// # Errors
@@ -6276,6 +6387,16 @@ impl KagemushaRecursiveSpendTransitionProfileV1 {
         if !has_previous && self.append_opening_preflight.is_some() {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "append_opening_preflight",
+            });
+        }
+        if has_previous {
+            validate_kagemusha_recursive_spend_topup_anchor_nullifiers_field(
+                &self.previous_topup_anchor_nullifiers,
+                "previous_topup_anchor_nullifiers",
+            )?;
+        } else if !self.previous_topup_anchor_nullifiers.is_empty() {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                field: "previous_topup_anchor_nullifiers",
             });
         }
         if has_previous {
@@ -6641,7 +6762,29 @@ impl KagemushaRecursiveSpendTransitionProfileV1 {
                     field: "output_commitments",
                 });
             }
+            if self
+                .current_hop_statement
+                .output_commitments
+                .iter()
+                .any(|commitment| self.previous_topup_anchor_nullifiers.contains(commitment))
+            {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                    field: "output_commitments",
+                });
+            }
+            if self
+                .previous_topup_anchor_nullifiers
+                .contains(&self.current_note.spend_nullifier)
+                || self
+                    .previous_topup_anchor_nullifiers
+                    .contains(&self.current_note.note_commitment)
+            {
+                return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                    field: "previous_topup_anchor_nullifiers",
+                });
+            }
         }
+        validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;
         Ok(())
     }
 
@@ -8953,8 +9096,12 @@ fn validate_kagemusha_recursive_spend_redeem_lineage_record_selection(
     bundle: &KagemushaRecursiveSpendBundleV1,
     lineage_witness: Option<&KagemushaRecursiveSpendLineageWitnessV1>,
     lineage_verifier_record: Option<&VerifyingKeyRecord>,
+    lineage_verifier_records: &[VerifyingKeyRecord],
 ) -> Result<(), KagemushaFoldError> {
-    let fields = KagemushaRecursiveSpendLineageRecordFieldNames::LINEAGE_VERIFIER_RECORD;
+    let lineage_records = kagemusha_recursive_spend_redeem_lineage_record_set(
+        lineage_verifier_record,
+        lineage_verifier_records,
+    )?;
     let final_circuit =
         kagemusha_recursive_spend_proof_circuit(&bundle.recursive_proof.verifier_key_id)?;
     let witness_has_reserved_previous = lineage_witness
@@ -8973,38 +9120,27 @@ fn validate_kagemusha_recursive_spend_redeem_lineage_record_selection(
                     field: "lineage_witness",
                 });
             }
-            let record = lineage_verifier_record
-                .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })?;
-            validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(record, fields)?;
-            if record.circuit_id != bundle.recursive_proof.verifier_key_id.name {
-                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                    field: fields.circuit_id,
-                });
-            }
+            require_kagemusha_recursive_spend_redeem_lineage_record(
+                &lineage_records,
+                &bundle.recursive_proof.verifier_key_id.name,
+            )?;
+            require_kagemusha_recursive_spend_redeem_previous_lineage_records(
+                &lineage_records,
+                lineage_witness,
+            )?;
             Ok(())
         }
         KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {
             if witness_has_reserved_previous {
-                let record = lineage_verifier_record
-                    .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })?;
-                validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
-                    record, fields,
+                require_kagemusha_recursive_spend_redeem_previous_lineage_records(
+                    &lineage_records,
+                    lineage_witness,
                 )?;
-                if let Some(witness) = lineage_witness {
-                    for previous_proof in &witness.previous_recursive_proofs {
-                        if is_kagemusha_recursive_spend_lineage_proof_circuit_id(
-                            &previous_proof.verifier_key_id.name,
-                        ) && record.circuit_id != previous_proof.verifier_key_id.name
-                        {
-                            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                                field: fields.circuit_id,
-                            });
-                        }
-                    }
-                }
                 Ok(())
-            } else if lineage_verifier_record.is_some() {
-                Err(KagemushaFoldError::InvalidRecursiveSpendProof { field: fields.root })
+            } else if !lineage_records.is_empty() {
+                Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "lineage_verifier_record",
+                })
             } else {
                 Ok(())
             }
@@ -9060,6 +9196,22 @@ impl KagemushaRecursiveSpendLineageRecordFieldNames {
         key_backend: "lineage_verifier_record.key.backend",
         key_bytes: "lineage_verifier_record.key.bytes",
         vk_len: "lineage_verifier_record.vk_len",
+    };
+
+    const LINEAGE_VERIFIER_RECORDS: Self = Self {
+        root: "lineage_verifier_records",
+        status: "lineage_verifier_records.status",
+        namespace: "lineage_verifier_records.namespace",
+        backend: "lineage_verifier_records.backend",
+        curve: "lineage_verifier_records.curve",
+        circuit_id: "lineage_verifier_records.circuit_id",
+        public_inputs_schema_hash: "lineage_verifier_records.public_inputs_schema_hash",
+        commitment: "lineage_verifier_records.commitment",
+        max_proof_bytes: "lineage_verifier_records.max_proof_bytes",
+        key: "lineage_verifier_records.key",
+        key_backend: "lineage_verifier_records.key.backend",
+        key_bytes: "lineage_verifier_records.key.bytes",
+        vk_len: "lineage_verifier_records.vk_len",
     };
 }
 
@@ -9131,6 +9283,67 @@ fn validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
         return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
             field: fields.commitment,
         });
+    }
+    Ok(())
+}
+
+fn kagemusha_recursive_spend_redeem_lineage_record_set<'record>(
+    lineage_verifier_record: Option<&'record VerifyingKeyRecord>,
+    lineage_verifier_records: &'record [VerifyingKeyRecord],
+) -> Result<std::collections::BTreeMap<&'record str, &'record VerifyingKeyRecord>, KagemushaFoldError>
+{
+    let mut records = std::collections::BTreeMap::new();
+    if let Some(record) = lineage_verifier_record {
+        validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
+            record,
+            KagemushaRecursiveSpendLineageRecordFieldNames::LINEAGE_VERIFIER_RECORD,
+        )?;
+        records.insert(record.circuit_id.as_str(), record);
+    }
+    for record in lineage_verifier_records {
+        validate_kagemusha_recursive_spend_lineage_verifier_record_metadata(
+            record,
+            KagemushaRecursiveSpendLineageRecordFieldNames::LINEAGE_VERIFIER_RECORDS,
+        )?;
+        if records.insert(record.circuit_id.as_str(), record).is_some() {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_records",
+            });
+        }
+    }
+    Ok(records)
+}
+
+fn require_kagemusha_recursive_spend_redeem_lineage_record(
+    records: &std::collections::BTreeMap<&str, &VerifyingKeyRecord>,
+    circuit_id: &str,
+) -> Result<(), KagemushaFoldError> {
+    if records.contains_key(circuit_id) {
+        return Ok(());
+    }
+    if records.is_empty() {
+        Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "lineage_verifier_record",
+        })
+    } else {
+        Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "lineage_verifier_record.circuit_id",
+        })
+    }
+}
+
+fn require_kagemusha_recursive_spend_redeem_previous_lineage_records(
+    records: &std::collections::BTreeMap<&str, &VerifyingKeyRecord>,
+    witness: Option<&KagemushaRecursiveSpendLineageWitnessV1>,
+) -> Result<(), KagemushaFoldError> {
+    let Some(witness) = witness else {
+        return Ok(());
+    };
+    for previous_proof in &witness.previous_recursive_proofs {
+        let circuit_id = previous_proof.verifier_key_id.name.as_str();
+        if is_kagemusha_recursive_spend_lineage_proof_circuit_id(circuit_id) {
+            require_kagemusha_recursive_spend_redeem_lineage_record(records, circuit_id)?;
+        }
     }
     Ok(())
 }
@@ -9503,6 +9716,36 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
         lineage_verifier_record: Option<VerifyingKeyRecord>,
         change_output: Option<[u8; 32]>,
     ) -> Result<Self, KagemushaFoldError> {
+        Self::new_with_lineage_witness_change_and_records(
+            bundle,
+            recipient,
+            public_amount,
+            redeem_proof,
+            lineage_witness,
+            lineage_verifier_record,
+            change_output,
+            Vec::new(),
+        )
+    }
+
+    /// Build and validate a recursive spend redeem request with additional
+    /// Reserved-lineage verifier records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the recursive bundle, final redeem
+    /// proof, public amount, lineage witness, lineage verifier selection, or
+    /// change commitment is malformed.
+    pub fn new_with_lineage_witness_change_and_records(
+        bundle: KagemushaRecursiveSpendBundleV1,
+        recipient: AccountId,
+        public_amount: u128,
+        redeem_proof: ProofAttachment,
+        lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+        lineage_verifier_record: Option<VerifyingKeyRecord>,
+        change_output: Option<[u8; 32]>,
+        lineage_verifier_records: Vec<VerifyingKeyRecord>,
+    ) -> Result<Self, KagemushaFoldError> {
         let request = Self {
             bundle,
             recipient,
@@ -9512,9 +9755,26 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
             change_output,
             lineage_verifier_record,
             block_height: None,
+            lineage_verifier_records,
         };
         request.validate_public_binding()?;
         Ok(request)
+    }
+
+    /// Attach additional Reserved-lineage verifier records for record-backed redemption.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the resulting request no longer
+    /// satisfies its public binding or when the supplied records do not cover
+    /// the required Reserved-lineage proof profiles.
+    pub fn with_lineage_verifier_records(
+        mut self,
+        lineage_verifier_records: Vec<VerifyingKeyRecord>,
+    ) -> Result<Self, KagemushaFoldError> {
+        self.lineage_verifier_records = lineage_verifier_records;
+        self.validate_public_binding()?;
+        Ok(self)
     }
 
     /// Validate wallet-side public bindings before producing a redeem instruction.
@@ -9574,6 +9834,7 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
             &self.bundle,
             self.lineage_witness.as_ref(),
             self.lineage_verifier_record.as_ref(),
+            &self.lineage_verifier_records,
         )?;
         Ok(())
     }
@@ -9621,6 +9882,7 @@ fn kagemusha_canonical_fold_parts(
         )?;
         validate_kagemusha_step_digest_bindings(
             hop_index,
+            step.proof_hash,
             step.proof_public_inputs_digest,
             step.verifier_key_commitment,
             step.verifier_key_poseidon_digest,
@@ -10505,7 +10767,8 @@ mod offline_note_tests {
             "        {\"name\": \"lineage_witness\", \"type\": \"Option<KagemushaRecursiveSpendLineageWitnessV1>\", \"norito_default\": false},\n",
             "        {\"name\": \"change_output\", \"type\": \"Option<[u8; 32]>\", \"norito_default\": false, \"semantics\": \"private_change_commitment_for_partial_redeem\"},\n",
             "        {\"name\": \"lineage_verifier_record\", \"type\": \"Option<VerifyingKeyRecord>\", \"norito_default\": true},\n",
-            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"}\n",
+            "        {\"name\": \"block_height\", \"type\": \"Option<u64>\", \"norito_default\": true, \"semantics\": \"verifier_record_activation_height\"},\n",
+            "        {\"name\": \"lineage_verifier_records\", \"type\": \"Vec<VerifyingKeyRecord>\", \"norito_default\": true, \"semantics\": \"additional_reserved_lineage_verifier_records\"}\n",
             "      ]\n",
             "    }\n",
             "  ]"
@@ -15260,6 +15523,29 @@ mod offline_note_tests {
         append_boundary
             .validate_against_transition_profile(&profile_with_append_opening_contract)
             .expect("append boundary matches its source transition profile");
+        let mut forged_profile_resulting_accumulator_digest =
+            profile_with_append_opening_contract.clone();
+        forged_profile_resulting_accumulator_digest.resulting_accumulator_digest[0] ^= 0x01;
+        assert!(matches!(
+            kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile(
+                &forged_profile_resulting_accumulator_digest
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_accumulator_digest"
+            })
+        ));
+        let mut forged_profile_resulting_public_inputs_hash =
+            profile_with_append_opening_contract.clone();
+        forged_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =
+            Hash::new(b"forged-profile-resulting-public-inputs");
+        assert!(matches!(
+            kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile(
+                &forged_profile_resulting_public_inputs_hash
+            ),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_public_inputs_hash"
+            })
+        ));
 
         fn refresh_append_boundary_digest(
             boundary: &mut KagemushaRecursiveSpendLineageAppendBoundaryV1,
@@ -15994,15 +16280,32 @@ mod offline_note_tests {
                 field: "resulting_fold_digest"
             })
         ));
+        let mut forged_resulting_accumulator_digest = profile.clone();
+        forged_resulting_accumulator_digest.resulting_accumulator_digest[0] ^= 0x01;
+        assert!(matches!(
+            forged_resulting_accumulator_digest.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_accumulator_digest"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
-            profile.clone(),
+            forged_resulting_accumulator_digest,
             original_digest,
-            |profile| profile.resulting_accumulator_digest[0] ^= 0x01,
+            |_| {},
         );
+        let mut forged_resulting_public_inputs_hash = profile.clone();
+        forged_resulting_public_inputs_hash.resulting_public_inputs_hash =
+            Hash::new(b"forged-public-inputs");
+        assert!(matches!(
+            forged_resulting_public_inputs_hash.validate_context(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "resulting_public_inputs_hash"
+            })
+        ));
         assert_transition_profile_mutation_changes_or_rejects(
-            profile.clone(),
+            forged_resulting_public_inputs_hash,
             original_digest,
-            |profile| profile.resulting_public_inputs_hash = Hash::new(b"forged-public-inputs"),
+            |_| {},
         );
         let mut zero_profile_resulting_public_inputs_hash = profile;
         zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =
@@ -16024,6 +16327,7 @@ mod offline_note_tests {
         let root0 = fixed_hash(b"kagemusha-recursive-spend-lineage-root-0");
         let root1 = fixed_hash(b"kagemusha-recursive-spend-lineage-root-1");
         let root2 = fixed_hash(b"kagemusha-recursive-spend-lineage-root-2");
+        let root3 = fixed_hash(b"kagemusha-recursive-spend-lineage-root-3");
 
         let step0 = kagemusha_step(root0, root1, 0x20, 0x40, b"recursive-lineage-hop-0");
         let note0 = KagemushaSpendableNoteDescriptorV1 {
@@ -16274,8 +16578,8 @@ mod offline_note_tests {
             })
         ));
         let append_record_bundle = kagemusha_recursive_spend_record_bundle_for_step(
-            chain_id,
-            asset,
+            chain_id.clone(),
+            asset.clone(),
             &step1,
             "kagemusha-recursive-lineage-hop-1",
             b"recursive-lineage-proof-hop-1",
@@ -16933,6 +17237,120 @@ mod offline_note_tests {
             .validate_public_binding()
             .expect("multi-hop Reserved-lineage redeem is structurally admissible with record-backed lineage witness");
 
+        let mut step2 = kagemusha_step(root2, root3, 0x90, 0xA0, b"recursive-lineage-hop-2");
+        step2.input_nullifiers = vec![note1.spend_nullifier];
+        let note2 = KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: step2.output_commitments[0],
+            spend_nullifier: fixed_hash(b"recursive-lineage-note-2-nullifier"),
+            amount: Numeric::new(42, 0),
+        };
+        let mut lineage_one_hop_previous_proof = kagemusha_recursive_spend_lineage_proof(
+            &bundle0.accumulator,
+            b"recursive-lineage-previous-one-hop-profile-scalar",
+        );
+        lineage_one_hop_previous_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
+        let mut lineage_append_previous_proof = kagemusha_recursive_spend_lineage_proof(
+            &bundle1.accumulator,
+            b"recursive-lineage-previous-append-profile-scalar",
+        );
+        lineage_append_previous_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
+        let evidence2 = kagemusha_recursive_spend_one_hop_evidence(
+            &chain_id,
+            &asset,
+            step2.clone(),
+            b"recursive-lineage-witness-hop-2",
+        );
+        let accumulator2 = kagemusha_recursive_spend_accumulator_append_evidence(
+            &bundle1.accumulator,
+            &lineage_append_previous_proof,
+            &evidence2,
+            &note2,
+        )
+        .expect("third-hop recursive spend accumulator");
+        let bundle2 = kagemusha_recursive_spend_bundle(accumulator2);
+        let third_record_bundle = kagemusha_recursive_spend_record_bundle_for_step(
+            chain_id.clone(),
+            asset.clone(),
+            &step2,
+            "kagemusha-recursive-lineage-hop-2",
+            b"recursive-lineage-proof-hop-2",
+        );
+        let third_pallas_open_envelopes_archive =
+            kagemusha_recursive_spend_lineage_pallas_open_envelope_archive(
+                &third_record_bundle,
+                0x61,
+            );
+        let mut multi_profile_steps = init_record_bundle.bundle.steps.clone();
+        multi_profile_steps.extend(append_record_bundle.bundle.steps.clone());
+        multi_profile_steps.extend(third_record_bundle.bundle.steps.clone());
+        let mut multi_profile_records = init_record_bundle.verifier_records.clone();
+        multi_profile_records.extend(append_record_bundle.verifier_records.clone());
+        multi_profile_records.extend(third_record_bundle.verifier_records.clone());
+        let mut multi_profile_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&init_request.pallas_open_envelopes_archive)
+                .expect("decode init lineage envelope archive");
+        let append_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&append_request.pallas_open_envelopes_archive)
+                .expect("decode append lineage envelope archive");
+        let third_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&third_pallas_open_envelopes_archive)
+                .expect("decode third lineage envelope archive");
+        multi_profile_envelopes.extend(append_envelopes);
+        multi_profile_envelopes.extend(third_envelopes);
+        let multi_profile_lineage_witness = KagemushaRecursiveSpendLineageWitnessV1 {
+            record_bundle: KagemushaVerifiedFoldRecordBundle {
+                bundle: KagemushaVerifiedFoldBundle {
+                    chain_id: chain_id.clone(),
+                    asset: asset.clone(),
+                    steps: multi_profile_steps,
+                },
+                verifier_records: multi_profile_records,
+            },
+            pallas_open_envelopes_archive: to_bytes(&multi_profile_envelopes)
+                .expect("encode multi-profile lineage envelope archive"),
+            current_notes: vec![note0.clone(), note1.clone(), note2],
+            previous_recursive_proofs: vec![
+                lineage_one_hop_previous_proof,
+                lineage_append_previous_proof,
+            ],
+        };
+        let mut one_hop_lineage_record = kagemusha_recursive_spend_active_lineage_verifier_record();
+        one_hop_lineage_record.circuit_id =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.to_owned();
+        let mut append_lineage_record = kagemusha_recursive_spend_active_lineage_verifier_record();
+        append_lineage_record.circuit_id =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
+        let mut multi_profile_redeem = KagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: bundle2,
+            recipient: sample_account(0xB5, "offline"),
+            public_amount: 42,
+            redeem_proof: redeem_proof.clone(),
+            lineage_witness: Some(multi_profile_lineage_witness),
+            change_output: None,
+            lineage_verifier_record: Some(one_hop_lineage_record.clone()),
+            block_height: None,
+            lineage_verifier_records: Vec::new(),
+        };
+        assert!(matches!(
+            multi_profile_redeem.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_record.circuit_id"
+            })
+        ));
+        multi_profile_redeem.lineage_verifier_records = vec![append_lineage_record.clone()];
+        multi_profile_redeem
+            .validate_public_binding()
+            .expect("semantic redeem witness accepts multiple Reserved-lineage verifier profiles");
+        let mut vector_only_multi_profile_redeem = multi_profile_redeem.clone();
+        vector_only_multi_profile_redeem.lineage_verifier_record = None;
+        vector_only_multi_profile_redeem.lineage_verifier_records =
+            vec![one_hop_lineage_record, append_lineage_record];
+        vector_only_multi_profile_redeem
+            .validate_public_binding()
+            .expect("semantic redeem witness accepts vector-only lineage verifier profiles");
+
         let semantic_verify_request = KagemushaRecursiveSpendVerifyRequestV1::new(bundle1.clone())
             .expect("semantic verify request validates without lineage record");
         assert!(semantic_verify_request.lineage_verifier_record.is_none());
@@ -17393,6 +17811,23 @@ mod offline_note_tests {
             kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence0, &note0)
                 .expect("initial recursive spend accumulator");
         let previous_proof0 = kagemusha_recursive_spend_proof(&accumulator0);
+        let init_transition_profile =
+            kagemusha_recursive_spend_transition_profile_from_initial_evidence(&evidence0, &note0)
+                .expect("initial transition profile");
+        assert!(
+            init_transition_profile
+                .previous_topup_anchor_nullifiers
+                .is_empty()
+        );
+        let mut initial_profile_with_previous_anchors = init_transition_profile.clone();
+        initial_profile_with_previous_anchors.previous_topup_anchor_nullifiers =
+            accumulator0.topup_anchor_nullifiers.clone();
+        assert!(matches!(
+            initial_profile_with_previous_anchors.validate_context(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                field: "previous_topup_anchor_nullifiers"
+            })
+        ));
         let mut missing_topup_anchor = accumulator0.clone();
         missing_topup_anchor.topup_anchor_nullifiers.clear();
         assert!(matches!(
@@ -17608,6 +18043,61 @@ mod offline_note_tests {
             &note1,
         )
         .expect("valid append evidence");
+        let append_transition_profile =
+            kagemusha_recursive_spend_transition_profile_append_evidence(
+                &accumulator0,
+                &previous_proof0,
+                &append_evidence,
+                &note1,
+            )
+            .expect("append transition profile");
+        assert_eq!(
+            append_transition_profile.previous_topup_anchor_nullifiers,
+            accumulator0.topup_anchor_nullifiers
+        );
+        let mut missing_previous_topup_anchors = append_transition_profile.clone();
+        missing_previous_topup_anchors
+            .previous_topup_anchor_nullifiers
+            .clear();
+        assert!(matches!(
+            missing_previous_topup_anchors.validate_context(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                field: "previous_topup_anchor_nullifiers"
+            })
+        ));
+        let mut zero_previous_topup_anchor = append_transition_profile.clone();
+        zero_previous_topup_anchor.previous_topup_anchor_nullifiers[0] = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            zero_previous_topup_anchor.validate_context(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                field: "previous_topup_anchor_nullifiers"
+            })
+        ));
+        let mut topup_anchor_as_append_output = append_transition_profile.clone();
+        let mut topup_anchor_output_step = step1.clone();
+        topup_anchor_output_step.output_commitments[1] = accumulator0.topup_anchor_nullifiers[0];
+        topup_anchor_as_append_output.current_hop_statement =
+            kagemusha_recursive_spend_step_statement(
+                topup_anchor_as_append_output.hop_index,
+                &topup_anchor_output_step,
+            )
+            .expect("forged top-up-anchor output statement remains structurally canonical");
+        assert!(matches!(
+            topup_anchor_as_append_output.validate_context(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                field: "output_commitments"
+            })
+        ));
+        let mut topup_anchor_as_current_nullifier = append_transition_profile.clone();
+        topup_anchor_as_current_nullifier
+            .current_note
+            .spend_nullifier = accumulator0.topup_anchor_nullifiers[0];
+        assert!(matches!(
+            topup_anchor_as_current_nullifier.validate_context(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
+                field: "previous_topup_anchor_nullifiers"
+            })
+        ));
         let mut previous_public_input_splice = previous_proof0.clone();
         previous_public_input_splice.public_inputs.evidence_digest[0] ^= 0x01;
         previous_public_input_splice.public_inputs_hash = previous_public_input_splice
@@ -18255,6 +18745,7 @@ mod offline_note_tests {
             change_output: None,
             lineage_verifier_record: None,
             block_height: None,
+            lineage_verifier_records: Vec::new(),
         };
         valid
             .validate_public_binding()
@@ -18945,6 +19436,7 @@ mod offline_note_tests {
             change_output: None,
             lineage_verifier_record: None,
             block_height: None,
+            lineage_verifier_records: Vec::new(),
         };
         assert!(matches!(
             wrong_amount.validate_public_binding(),
@@ -19038,6 +19530,7 @@ mod offline_note_tests {
             change_output: None,
             lineage_verifier_record: None,
             block_height: None,
+            lineage_verifier_records: Vec::new(),
         };
         assert!(matches!(
             zero_amount.validate_public_binding(),
@@ -19416,6 +19909,13 @@ mod offline_note_tests {
         assert!(matches!(
             kagemusha_poseidon_aggregation_transcript_digest(&zero_output),
             Err(KagemushaFoldError::ZeroOutputCommitment { hop_index: 0 })
+        ));
+
+        let mut zero_proof_hash = statement.clone();
+        zero_proof_hash.steps[0].proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_digest(&zero_proof_hash),
+            Err(KagemushaFoldError::ZeroProofHash { hop_index: 0 })
         ));
 
         let mut zero_proof_inputs = statement.clone();
@@ -20783,15 +21283,18 @@ mod offline_note_tests {
         );
         redeem_proof.vk_commitment = Some(fixed_hash(b"kagemusha-recursive-spend-abi-redeem-vk"));
         let recipient = sample_account(0xAB, "offline");
-        let redeem = KagemushaRecursiveSpendRedeemRequestV1::new_with_lineage_witness(
-            appended_bundle.clone(),
-            recipient.clone(),
-            7,
-            redeem_proof.clone(),
-            Some(witness1.clone()),
-            Some(final_lineage_verifier_record),
-        )
-        .expect("ABI redeem request validates with lineage witness");
+        let redeem =
+            KagemushaRecursiveSpendRedeemRequestV1::new_with_lineage_witness_change_and_records(
+                appended_bundle.clone(),
+                recipient.clone(),
+                7,
+                redeem_proof.clone(),
+                Some(witness1.clone()),
+                Some(final_lineage_verifier_record),
+                None,
+                vec![previous_lineage_verifier_record.clone()],
+            )
+            .expect("ABI redeem request validates with lineage witness records");
         let redeem_bytes = to_bytes(&redeem).expect("encode recursive spend redeem request");
         let decoded_redeem: KagemushaRecursiveSpendRedeemRequestV1 =
             norito::decode_from_bytes(&redeem_bytes)
@@ -21097,6 +21600,22 @@ mod offline_note_tests {
                 &zero_output_steps
             ),
             Err(KagemushaFoldError::ZeroOutputCommitment { hop_index: 0 })
+        ));
+
+        let mut zero_proof_hash = step0.clone();
+        zero_proof_hash.proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);
+        let zero_proof_hash_steps = [zero_proof_hash];
+        assert!(matches!(
+            kagemusha_folded_public_inputs(&chain_id, &asset, &zero_proof_hash_steps),
+            Err(KagemushaFoldError::ZeroProofHash { hop_index: 0 })
+        ));
+        assert!(matches!(
+            kagemusha_poseidon_aggregation_transcript_statement(
+                &chain_id,
+                &asset,
+                &zero_proof_hash_steps
+            ),
+            Err(KagemushaFoldError::ZeroProofHash { hop_index: 0 })
         ));
 
         let mut zero_proof_inputs = step0.clone();

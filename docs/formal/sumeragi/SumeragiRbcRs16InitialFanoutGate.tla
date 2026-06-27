@@ -309,6 +309,12 @@ RbcRs16InitialFanoutCoreSafety ==
   /\ ReducedFanoutIsReconstructable
   /\ TotalSelectionWithinChunkRange
 
-Safety == RbcRs16InitialFanoutCoreSafety
+RbcRs16InitialFanoutExactness == RbcRs16InitialFanoutCoreSafety
+
+RbcRs16InitialFanoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcRs16InitialFanoutExactness
+
+Safety == RbcRs16InitialFanoutExactness
 
 ====

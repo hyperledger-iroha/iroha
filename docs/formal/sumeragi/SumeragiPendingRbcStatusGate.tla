@@ -272,6 +272,13 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+PendingRbcStatusExactness ==
+  Safety
+
+PendingRbcStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingRbcStatusExactness
+
 BugResetKeepsSnapshot ==
   ImplementationActions(ResetClearsSnapshot) = SpecActions(ResetClearsSnapshot)
 

@@ -55,6 +55,39 @@ def oversized_json_bytes(limit):
 
 
 class IsoOperatorReceiptVerifyTest(unittest.TestCase):
+    def test_os_error_detail_redacts_unsafe_strerror_without_echo(self):
+        self.assertEqual(
+            VERIFIER._safe_os_error_detail(OSError(5, "Permission denied")),
+            "Permission denied",
+        )
+        unsafe_values = (
+            "token=/tmp/receipt-hidden-secret",
+            "open /tmp/receipt-hidden-path",
+            "bad\ncontrol",
+            "nonascii-\u2603",
+            "x" * 129,
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                detail = VERIFIER._safe_os_error_detail(OSError(5, value))
+                self.assertEqual(detail, "I/O error")
+                self.assertNotIn("receipt-hidden", detail)
+
+    def test_canonical_json_bytes_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    VERIFIER._canonical_json_bytes({"value": value})
+                with self.assertRaises(ValueError):
+                    VERIFIER._canonical_summary_json_bytes({"value": value})
+
+    def test_json_float_parser_rejects_overflow_and_negative_zero(self):
+        for value in ("1e9999", "-1e9999", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._parse_canonical_json_float(value)
+                self.assertNotIn(value, str(caught.exception))
+
     def test_persisted_record_sources_require_records_array(self):
         with self.assertRaisesRegex(
             VERIFIER.ReceiptError,
@@ -1674,6 +1707,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(expected, stderr)
                     self.assertIn("receipt[0]", stderr)
+                    self.assertNotIn("line 1 column", stderr)
+                    self.assertNotIn("(char ", stderr)
                     self.assertNotIn(str(receipt), stderr)
                     self.assertNotIn(hidden_dir.name, stderr)
 
@@ -2066,6 +2101,22 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("non-finite numeric constant", stderr)
             self.assertNotIn("NaN", stderr)
+
+    def test_noncanonical_receipt_json_numbers_are_rejected(self):
+        for value in ("1e01", "-0", "-0.0", "-0e0"):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    receipt = Path(raw_root) / "receipt.json"
+                    receipt.write_text(f'{{"version":{value}}}\n', encoding="utf-8")
+
+                    rc, stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("non-canonical numeric value", stderr)
+                    self.assertNotIn(value, stderr)
 
     def test_boolean_receipt_version_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2611,6 +2662,18 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "contains unsafe control characters",
             ),
             (
+                "multiline_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "upstream\nerror: forged diagnostic"}
+                ),
+                "response_body_preview must be single-line text",
+            ),
+            (
+                "non_ascii_preview",
+                lambda body: body.update({"response_body_preview": "upstream caf\u00e9"}),
+                "response_body_preview contains non-ASCII text",
+            ),
+            (
                 "bearer_preview",
                 lambda body: body.update(
                     {"response_body_preview": "Authorization: Bearer abc"}
@@ -2702,6 +2765,32 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "error contains secret-looking material",
             ),
             (
+                "non_ascii_error",
+                lambda body: body.update({"error": "HTTP caf\u00e9"}),
+                "error contains non-ASCII text",
+            ),
+            (
+                "local_path_error",
+                lambda body: body.update(
+                    {"error": "upstream /tmp/receipt-verify.sock"}
+                ),
+                "error contains local path material",
+            ),
+            (
+                "relative_path_error",
+                lambda body: body.update(
+                    {"error": "upstream ../target/receipt-verify.sock"}
+                ),
+                "error contains local path material",
+            ),
+            (
+                "windows_path_error",
+                lambda body: body.update(
+                    {"error": "upstream C:\\Users\\operator\\receipt.sock"}
+                ),
+                "error contains local path material",
+            ),
+            (
                 "naive_timestamp",
                 lambda body: body.update({"submitted_at": "2026-06-05T00:00:00"}),
                 "submitted_at must include a timezone offset",
@@ -2715,6 +2804,28 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "timestamp_control",
                 lambda body: body.update({"submitted_at": body["submitted_at"] + "\n"}),
                 "submitted_at must not contain control characters",
+            ),
+            (
+                "timestamp_space_separator",
+                lambda body: body.update({"submitted_at": "2026-06-05 00:00:00+00:00"}),
+                "submitted_at must use a canonical ISO timestamp",
+            ),
+            (
+                "timestamp_compact_offset",
+                lambda body: body.update({"submitted_at": "2026-06-05T00:00:00+0000"}),
+                "submitted_at must use a canonical ISO timestamp",
+            ),
+            (
+                "timestamp_comma_fraction",
+                lambda body: body.update(
+                    {"submitted_at": "2026-06-05T00:00:00,000+00:00"}
+                ),
+                "submitted_at must use a canonical ISO timestamp",
+            ),
+            (
+                "timestamp_unknown_offset",
+                lambda body: body.update({"submitted_at": "2026-06-05T00:00:00-00:00"}),
+                "submitted_at must use a canonical ISO timestamp",
             ),
         ]
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2748,6 +2859,103 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
 
+    def test_failed_receipt_error_labels_are_bounded_without_echo(self):
+        hidden = "connection refused diagnostic"
+        cases = (
+            (
+                "transport_error_label",
+                lambda body: body.update(
+                    {
+                        "ok": False,
+                        "status_code": None,
+                        "response_body_sha256": None,
+                        "response_body_preview": None,
+                        "error": hidden,
+                    }
+                ),
+                "failed receipt error is unsupported",
+            ),
+            (
+                "http_error_label_mismatch",
+                lambda body: body.update(
+                    {
+                        "ok": False,
+                        "status_code": 503,
+                        "error": "HTTP 500",
+                    }
+                ),
+                "failed receipt error must match status_code",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original = receipt.read_bytes()
+
+            for name, mutate, expected in cases:
+                with self.subTest(name=name):
+                    receipt.write_bytes(original)
+                    rewrite_receipt(receipt, mutate)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--allow-failed",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_receipt_error_local_path_material_is_rejected_without_echo(self):
+        hidden_path = "/tmp/receipt-verify-hidden.sock"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update({"error": f"upstream {hidden_path}"}),
+            )
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("error contains local path material", stderr)
+            self.assertNotIn(hidden_path, stderr)
+
     def test_timestamp_helper_rejects_unicode_format_controls_without_echo(self):
         hidden = "\u202ereceipt-timestamp-leak"
 
@@ -2762,6 +2970,27 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
         self.assertIn("control characters", message)
         self.assertNotIn(hidden, message)
         self.assertNotIn("receipt-timestamp-leak", message)
+
+    def test_timestamp_helper_rejects_noncanonical_spellings_without_echo(self):
+        cases = (
+            "2026-06-05 00:00:00+00:00",
+            "2026-06-05t00:00:00+00:00",
+            "2026-06-05T00:00:00+0000",
+            "2026-06-05T00:00:00,000+00:00",
+            "2026-06-05T00:00:00-00:00",
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._check_timestamp(
+                        {"submitted_at": value},
+                        "submitted_at",
+                        Path("receipt.json"),
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("canonical ISO timestamp", message)
+                self.assertNotIn(value, message)
 
     def test_redacted_failed_response_preview_is_verifier_acceptable(self):
         body = b'{"error":"token=rail-secret"}'
@@ -2908,7 +3137,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         "ok": False,
                         "response_body_sha256": None,
                         "response_body_preview": None,
-                        "error": "invalid HTTP status 700",
+                        "error": "invalid HTTP status",
                     }
                 ),
             )
@@ -3106,6 +3335,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertEqual(stdout, "")
                 self.assertIn(expected, stderr)
+                self.assertNotIn("line 1 column", stderr)
+                self.assertNotIn("(char ", stderr)
                 self.assertNotIn(str(hidden_dir), stderr)
                 self.assertNotIn(hidden, stderr)
 
@@ -4837,6 +5068,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertEqual(stdout, "")
                 self.assertIn(expected, stderr)
+                self.assertNotIn("line 1 column", stderr)
+                self.assertNotIn("(char ", stderr)
                 self.assertNotIn(hidden, stderr)
                 self.assertNotIn(str(source_path), stderr)
 

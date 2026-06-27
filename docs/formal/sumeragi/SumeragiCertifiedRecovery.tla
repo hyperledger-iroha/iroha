@@ -178,4 +178,21 @@ NoMismatchedPayloadAccepted ==
 NoConflictingFinality ==
   Cardinality(committedSubjects) <= 1
 
+CertifiedRecoveryExactness ==
+  /\ PendingFinalityRequiresCommitQc
+  /\ CommitRequiresCommitQc
+  /\ NoCommitWithoutPayload
+  /\ CommitRequiresMatchingPayload
+  /\ NoMismatchedPayloadAccepted
+  /\ NoConflictingFinality
+
+CertifiedRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CertifiedRecoveryExactness
+
+SafetyFast == CertifiedRecoveryExactness
+
+Safety ==
+  CertifiedRecoveryCorrectnessEnvelope
+
 ====

@@ -208,9 +208,19 @@ NewViewStatsCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == NewViewStatsCoreSafety
+NewViewStatsExactness ==
+  NewViewStatsCoreSafety
 
-SafetyFast == NewViewStatsCoreSafety
+NewViewStatsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NewViewStatsExactness
+
+NoBugInvariant == NewViewStatsExactness
+
+SafetyFast == NewViewStatsExactness
+
+Safety ==
+  NewViewStatsCorrectnessEnvelope
 
 BugEmptySnapshotNonzero == NoBugInvariant
 BugDuplicateSenderIncrements == NoBugInvariant

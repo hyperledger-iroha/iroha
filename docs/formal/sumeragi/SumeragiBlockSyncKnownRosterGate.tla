@@ -363,7 +363,15 @@ TypeInvariant ==
 KnownRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == KnownRosterMatchesSpec
+BlockSyncKnownRosterExactness ==
+  KnownRosterMatchesSpec
+
+BlockSyncKnownRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncKnownRosterExactness
+
+SafetyFast ==
+  BlockSyncKnownRosterExactness
 
 KnownSelectedRosterBookkeeping ==
   Matches("known_selection_qc")

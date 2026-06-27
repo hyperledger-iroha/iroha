@@ -331,6 +331,10 @@ test("deriveConfidentialKeyset matches canonical vectors", () => {
 
 test("deriveConfidentialKeyset validates input", () => {
   assert.throws(() => deriveConfidentialKeyset(Buffer.alloc(2)), /32 bytes/);
+  assert.throws(
+    () => deriveConfidentialKeysetFromHex(` ${"42".repeat(32)}`),
+    /spendKeyHex must not contain surrounding whitespace/,
+  );
   assert.throws(() => deriveConfidentialKeysetFromHex("ab"), /64 hex characters/);
   assert.throws(() => deriveConfidentialKeysetFromHex("zz".repeat(32)), /valid hex/);
 });

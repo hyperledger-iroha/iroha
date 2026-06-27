@@ -377,6 +377,10 @@ FrontierGapRealignExactness ==
   /\ FrontierGapWindowExact
   /\ FrontierGapRecoveryMetadataExact
 
+FrontierGapRealignCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierGapRealignExactness
+
 Safety ==
   FrontierGapRealignExactness
 

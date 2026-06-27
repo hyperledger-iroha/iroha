@@ -498,7 +498,14 @@ CanonicalFrontierReanchorSafetyAnchors ==
   /\ RangePullAnchors
   /\ ViewSuppressionAnchors
 
-Safety ==
+CanonicalFrontierReanchorExactness ==
   CanonicalFrontierReanchorSafetyAnchors
+
+CanonicalFrontierReanchorCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CanonicalFrontierReanchorExactness
+
+Safety ==
+  CanonicalFrontierReanchorCorrectnessEnvelope
 
 ====

@@ -249,7 +249,15 @@ NoBugInvariant ==
   /\ StrayPriorityPreserved
   /\ WorldOnlinePreferencePreserved
 
-SafetyFast == NoBugInvariant
+BlockSyncUpdateTargetsExactness ==
+  NoBugInvariant
+
+BlockSyncUpdateTargetsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncUpdateTargetsExactness
+
+SafetyFast ==
+  BlockSyncUpdateTargetsExactness
 
 BugZeroLimitNonempty == NoBugInvariant
 BugNoPeersNonempty == NoBugInvariant

@@ -119,45 +119,67 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertFalse(OfflineNoteV2TypeNames.redeemInstruction.hasSuffix("V2"))
         XCTAssertFalse(OfflineNoteV2TypeNames.auditInstruction.hasSuffix("V2"))
 
-        let issueWirePayload = Self.instructionWirePayload(
-            typeName: OfflineNoteV2TypeNames.issueInstruction,
-            modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
-        )
-        let issueEnvelope = Self.rawInstructionPair(
+        let issueInstruction = ParsedOfflineNoteV2Instruction(
             wireName: OfflineNoteV2TypeNames.issueInstruction,
-            wirePayload: issueWirePayload
+            archive: Self.instructionWirePayload(
+                typeName: OfflineNoteV2TypeNames.issueInstruction,
+                modelPayload: try OfflineNoteV2Encoding.encodeIssue(issue)
+            )
+        )
+        XCTAssertFalse(issueInstruction.wireName.hasSuffix("V2"))
+        let issueEnvelope = Self.rawInstructionPair(
+            wireName: issueInstruction.wireName,
+            wirePayload: issueInstruction.archive
         )
         XCTAssertEqual(
             try OfflineNoteV2Decoding.decodeIssueInstruction(issueEnvelope).noritoEncoded().base64EncodedString(),
             try issue.noritoEncoded().base64EncodedString()
         )
         XCTAssertEqual(
-            try OfflineNoteV2Decoding.decodeIssueInstruction(issueWirePayload).noritoEncoded().base64EncodedString(),
+            try OfflineNoteV2Decoding.decodeIssueInstruction(issueInstruction.archive).noritoEncoded().base64EncodedString(),
             try issue.noritoEncoded().base64EncodedString()
         )
 
-        let auditEnvelope = Self.rawInstructionPair(
+        let auditInstruction = ParsedOfflineNoteV2Instruction(
             wireName: OfflineNoteV2TypeNames.auditInstruction,
-            wirePayload: Self.instructionWirePayload(
+            archive: Self.instructionWirePayload(
                 typeName: OfflineNoteV2TypeNames.auditInstruction,
                 modelPayload: try OfflineNoteV2Encoding.encodeAudit(audit)
-            ),
+            )
+        )
+        XCTAssertFalse(auditInstruction.wireName.hasSuffix("V2"))
+        let auditEnvelope = Self.rawInstructionPair(
+            wireName: auditInstruction.wireName,
+            wirePayload: auditInstruction.archive,
             compact: false
         )
         XCTAssertEqual(
             try OfflineNoteV2Decoding.decodeAuditInstruction(auditEnvelope).noritoEncoded().base64EncodedString(),
             try audit.noritoEncoded().base64EncodedString()
         )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeAuditInstruction(auditInstruction.archive).noritoEncoded().base64EncodedString(),
+            try audit.noritoEncoded().base64EncodedString()
+        )
 
-        let redeemEnvelope = Self.rawInstructionPair(
+        let redeemInstruction = ParsedOfflineNoteV2Instruction(
             wireName: OfflineNoteV2TypeNames.redeemInstruction,
-            wirePayload: Self.instructionWirePayload(
+            archive: Self.instructionWirePayload(
                 typeName: OfflineNoteV2TypeNames.redeemInstruction,
                 modelPayload: try OfflineNoteV2Encoding.encodeRedeem(redeem)
             )
         )
+        XCTAssertFalse(redeemInstruction.wireName.hasSuffix("V2"))
+        let redeemEnvelope = Self.rawInstructionPair(
+            wireName: redeemInstruction.wireName,
+            wirePayload: redeemInstruction.archive
+        )
         XCTAssertEqual(
             try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemEnvelope).noritoEncoded().base64EncodedString(),
+            try redeem.noritoEncoded().base64EncodedString()
+        )
+        XCTAssertEqual(
+            try OfflineNoteV2Decoding.decodeRedeemInstruction(redeemInstruction.archive).noritoEncoded().base64EncodedString(),
             try redeem.noritoEncoded().base64EncodedString()
         )
     }

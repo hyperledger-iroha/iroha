@@ -53,6 +53,38 @@ TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIE
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
+CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
+CLI_CANONICAL_NUMBER_RE = re.compile(
+    r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
+)
+CANONICAL_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?"
+    r"(?:Z|[+-][0-9]{2}:[0-9]{2})"
+)
+CLI_NONFINITE_NUMBER_TEXTS = {
+    "inf",
+    "+inf",
+    "-inf",
+    "infinity",
+    "+infinity",
+    "-infinity",
+    "nan",
+    "+nan",
+    "-nan",
+}
+
+
+def _is_negative_zero_number_text(value: str) -> bool:
+    if not value.startswith("-"):
+        return False
+    mantissa = re.split(r"[eE]", value[1:], maxsplit=1)[0]
+    return all(ch in {"0", "."} for ch in mantissa)
+LOCAL_PATH_ERROR_RE = re.compile(
+    r"(?:^|[\s'\"(<:=])(?:[A-Za-z]:[\\/]|/[^/\s'\"<>]+|\.{1,2}/|~/)"
+)
 KNOWN_RAILS = {
     "generic-iso20022",
     "swift-cbpr-plus",
@@ -352,6 +384,8 @@ CANARY_STAGE_KEYS = {
     "skipped",
     "reason",
 }
+RAIL_STAGE_STDOUT_KEYS = {"submitted_messages", "receipts", "failures"}
+NOTARY_STAGE_STDOUT_KEYS = {"published_anchors", "endpoint_count", "receipts", "failures"}
 CANARY_PLANNED_STAGE_KEYS = {"name", "command", "receipt_dir", "dry_run"}
 RECEIPT_SUMMARY_KEYS = {
     "version",
@@ -641,9 +675,25 @@ def _receipt_verifier_stderr_detail(stderr: str) -> str:
         return ""
     if _contains_secret_material(detail) or _contains_secret_identifier_material(detail):
         return "[receipt verifier stderr redacted: secret-looking material]"
+    if not detail.isascii():
+        return "[receipt verifier stderr redacted: non-ASCII material]"
+    if _contains_local_path_material(detail):
+        return "[receipt verifier stderr redacted: local path material]"
     if _contains_unsafe_diagnostic_control(detail):
         return "[receipt verifier stderr redacted: control characters]"
-    return detail[:4096]
+    return _single_line_diagnostic_detail(detail)[:4096]
+
+
+def _single_line_diagnostic_detail(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _contains_local_path_material(value: str) -> bool:
+    return (
+        "\\" in value
+        or "file:" in value.casefold()
+        or LOCAL_PATH_ERROR_RE.search(value) is not None
+    )
 
 
 def _contains_unsafe_diagnostic_control(value: str) -> bool:
@@ -684,10 +734,40 @@ def sha256_hex(data: bytes) -> str:
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _safe_os_error_detail(error: OSError) -> str:
+    detail = getattr(error, "strerror", None)
+    if not isinstance(detail, str) or not detail.strip():
+        return "I/O error"
+    if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
+        return "I/O error"
+    lowered = detail.casefold()
+    secret_markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private",
+        "password",
+        "passphrase",
+        "api key",
+        "access key",
+        "session key",
+        "client secret",
+        "cookie",
+        "x-iroha-signature",
+    )
+    if "\\" in detail or "/" in detail or "file:" in lowered:
+        return "I/O error"
+    if any(marker in lowered for marker in secret_markers):
+        return "I/O error"
+    return detail
 
 
 def _read_regular_file(
@@ -734,7 +814,8 @@ def _read_regular_file(
     except OSError as error:
         if error.errno == errno.ELOOP:
             raise EvidenceError(f"{label} must not be a symlink") from error
-        raise EvidenceError(f"cannot open {label} for reading: {error.strerror}") from error
+        detail = _safe_os_error_detail(error)
+        raise EvidenceError(f"cannot open {label} for reading: {detail}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -919,7 +1000,7 @@ def _preflight_required_cli_values(
                 if index + 1 >= len(raw_args):
                     raise EvidenceError(f"{flag} requires a {value_name} value")
                 value = raw_args[index + 1]
-                if not value or value.startswith("--"):
+                if not value or value.startswith("-"):
                     raise EvidenceError(f"{flag} requires a {value_name} value")
                 if value_name == "context":
                     _reject_raw_context_cli_value(value, flag)
@@ -931,7 +1012,7 @@ def _preflight_required_cli_values(
             prefix = f"{flag}="
             if arg.startswith(prefix):
                 value = arg[len(prefix) :]
-                if not value or value.startswith("--"):
+                if not value or value.startswith("-"):
                     raise EvidenceError(f"{flag} requires a {value_name} value")
                 if value_name == "context":
                     _reject_raw_context_cli_value(value, flag)
@@ -983,10 +1064,25 @@ def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None
         raise EvidenceError(f"{flag} must be a numeric value")
     if any(ord(ch) > 0x7E for ch in raw):
         raise EvidenceError(f"{flag} must use printable ASCII")
+    if integer:
+        canonical = CLI_CANONICAL_INT_RE.fullmatch(raw) is not None
+    else:
+        canonical = (
+            raw.lower() in CLI_NONFINITE_NUMBER_TEXTS
+            or CLI_CANONICAL_NUMBER_RE.fullmatch(raw) is not None
+        )
+    if not canonical or _is_negative_zero_number_text(raw):
+        raise EvidenceError(f"{flag} must be a numeric value")
     try:
-        int(raw, 10) if integer else float(raw)
+        parsed = int(raw, 10) if integer else float(raw)
     except ValueError as error:
         raise EvidenceError(f"{flag} must be a numeric value") from error
+    if (
+        not integer
+        and raw.lower() not in CLI_NONFINITE_NUMBER_TEXTS
+        and not math.isfinite(parsed)
+    ):
+        raise EvidenceError(f"{flag} must be a numeric value")
 
 
 def _preflight_numeric_cli_values(
@@ -1133,8 +1229,9 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
         except OSError as error:
             if error.errno == errno.ELOOP:
                 raise EvidenceError(f"{label} temp file must not be a symlink") from error
+            detail = _safe_os_error_detail(error)
             raise EvidenceError(
-                f"cannot open temporary output for {label}: {error.strerror}"
+                f"cannot open temporary output for {label}: {detail}"
             ) from error
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
@@ -1198,10 +1295,12 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
-        raise EvidenceError(f"{label} is not valid JSON: {error}") from error
+        raise EvidenceError(f"{label} is not valid JSON") from error
     except RecursionError as error:
         raise EvidenceError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
@@ -1210,12 +1309,25 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
     return value
 
 
+def _pipe_chunk_bytes(chunk: Any) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk
+    if isinstance(chunk, bytearray):
+        return bytes(chunk)
+    if isinstance(chunk, memoryview):
+        try:
+            return chunk.cast("B").tobytes()
+        except (TypeError, ValueError):
+            raise OSError("child output stream returned invalid bytes") from None
+    raise OSError("child output stream returned non-byte data")
+
+
 def _read_limited_pipe(pipe: Any, limit_bytes: int) -> tuple[bytes, bool]:
     chunks: list[bytes] = []
     remaining = limit_bytes
     truncated = False
     while True:
-        chunk = pipe.read(8192)
+        chunk = _pipe_chunk_bytes(pipe.read(8192))
         if not chunk:
             break
         if remaining > 0:
@@ -1320,6 +1432,22 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_json_constant(value: str) -> None:
     raise EvidenceError("JSON contains non-finite numeric constant")
+
+def _parse_canonical_json_int(value: str) -> int:
+    if JSON_CANONICAL_INT_RE.fullmatch(value) is None:
+        raise EvidenceError("JSON contains non-canonical numeric value")
+    return int(value, 10)
+
+
+def _parse_canonical_json_float(value: str) -> float:
+    if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+        raise EvidenceError("JSON contains non-canonical numeric value")
+    parsed = float(value)
+    if parsed == float("inf") or parsed == float("-inf"):
+        raise EvidenceError("JSON contains non-finite numeric constant")
+    if parsed == 0.0 and value.startswith("-"):
+        raise EvidenceError("JSON contains non-canonical numeric value")
+    return parsed
 
 
 def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
@@ -2807,6 +2935,10 @@ def _check_numeric_command_flags(stage_name: str, command: list[str], label: str
                 raise EvidenceError(
                     f"{label}.command[{offset}] {flag} must be a positive finite number"
                 )
+            if CLI_CANONICAL_NUMBER_RE.fullmatch(value) is None:
+                raise EvidenceError(
+                    f"{label}.command[{offset}] {flag} must be a positive finite number"
+                )
             try:
                 parsed = float(value)
             except ValueError as error:
@@ -2926,7 +3058,7 @@ def _check_command_urls(
         if item in COMMAND_URL_FLAGS:
             if offset + 1 >= len(command):
                 raise EvidenceError(f"{label}.command has {item} without a value")
-            if command[offset + 1].startswith("--"):
+            if command[offset + 1].startswith("-"):
                 raise EvidenceError(f"{label}.command has {item} without a value")
             _check_clean_http_url(
                 command[offset + 1],
@@ -2939,7 +3071,7 @@ def _check_command_urls(
             prefix = flag + "="
             if item.startswith(prefix):
                 value = item[len(prefix):]
-                if not value or value.startswith("--"):
+                if not value or value.startswith("-"):
                     raise EvidenceError(f"{label}.command has {flag} without a value")
                 _check_clean_http_url(
                     value,
@@ -2977,7 +3109,7 @@ def _check_redacted_bearer_files(command: list[str], label: str) -> None:
         if item == "--bearer-token-file":
             if offset + 1 >= len(command):
                 raise EvidenceError(f"{label} has --bearer-token-file without a value")
-            if command[offset + 1].startswith("--"):
+            if command[offset + 1].startswith("-"):
                 raise EvidenceError(f"{label} has --bearer-token-file without a value")
             if command[offset + 1] != "<runtime-token-file>":
                 raise EvidenceError(f"{label} contains an unredacted bearer-token file path")
@@ -2985,7 +3117,7 @@ def _check_redacted_bearer_files(command: list[str], label: str) -> None:
         prefix = "--bearer-token-file="
         if item.startswith(prefix):
             value = item[len(prefix) :]
-            if not value or value.startswith("--"):
+            if not value or value.startswith("-"):
                 raise EvidenceError(f"{label} has --bearer-token-file without a value")
             if value != "<runtime-token-file>":
                 raise EvidenceError(f"{label} contains an unredacted bearer-token file path")
@@ -3175,6 +3307,8 @@ def _verify_receipt_stdout(
         receipt_summary = json.loads(
             stdout,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
@@ -3275,6 +3409,31 @@ def _check_receipt_stdout_policy_binding(
             )
 
 
+def _check_receipt_stdout_selector_binding(
+    receipt_dirs: list[str],
+    receipt_files: list[str],
+    receipt_summary: dict[str, Any],
+    label: str,
+) -> None:
+    selected_dirs = set(receipt_dirs)
+    selected_files = set(receipt_files)
+    receipt_paths = [receipt["path"] for receipt in receipt_summary["receipts"]]
+    for offset, receipt_path in enumerate(receipt_paths):
+        if (
+            receipt_path not in selected_files
+            and _receipt_parent_dir(receipt_path) not in selected_dirs
+        ):
+            raise EvidenceError(
+                f"{label}.stdout_preview.receipts[{offset}].path must be covered "
+                "by verify command receipt selectors"
+            )
+    if selected_files - set(receipt_paths):
+        raise EvidenceError(
+            f"{label}.stdout_preview.receipts must include every verify command "
+            "--receipt file"
+        )
+
+
 def _check_stage_output_not_truncated(stage: dict[str, Any], label: str) -> None:
     if _required_bool(stage, "stdout_truncated", label):
         raise EvidenceError(f"{label}.stdout_preview is truncated")
@@ -3292,6 +3451,113 @@ def _required_stage_preview(stage: dict[str, Any], key: str, label: str) -> str:
     if _contains_secret_material(preview) or _contains_secret_identifier_material(preview):
         raise EvidenceError(f"{preview_label} contains secret-looking material")
     return preview
+
+
+def _stage_stdout_object(stage: dict[str, Any], label: str) -> dict[str, Any]:
+    stdout = _required_stage_preview(stage, "stdout_preview", label)
+    if not stdout.strip():
+        raise EvidenceError(f"{label}.stdout_preview must contain adapter summary JSON")
+    try:
+        summary = json.loads(
+            stdout,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
+            parse_constant=_reject_json_constant,
+        )
+    except json.JSONDecodeError as error:
+        raise EvidenceError(
+            f"{label}.stdout_preview is not valid adapter summary JSON"
+        ) from error
+    except RecursionError as error:
+        raise EvidenceError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
+    _reject_json_surrogates(summary)
+    return _require_object(summary, f"{label}.stdout_preview")
+
+
+def _stage_stdout_receipts(
+    summary: dict[str, Any],
+    label: str,
+    receipt_dir: str,
+) -> list[str]:
+    receipt_values = _require_list(
+        summary.get("receipts"),
+        f"{label}.stdout_preview.receipts",
+    )
+    receipts: list[str] = []
+    seen: set[str] = set()
+    for offset, raw in enumerate(receipt_values):
+        receipt_label = f"{label}.stdout_preview.receipts[{offset}]"
+        if not isinstance(raw, str) or not raw.strip():
+            raise EvidenceError(f"{receipt_label} must be a non-empty receipt path")
+        receipt_path = _validate_receipt_path(raw, receipt_label)
+        if _receipt_parent_dir(receipt_path) != receipt_dir:
+            raise EvidenceError(f"{receipt_label} must be under stage receipt_dir")
+        if receipt_path in seen:
+            raise EvidenceError(f"{receipt_label} duplicates an earlier receipt path")
+        seen.add(receipt_path)
+        receipts.append(receipt_path)
+    return receipts
+
+
+def _check_stage_adapter_stdout(
+    stage_name: str,
+    stage: dict[str, Any],
+    label: str,
+    receipt_dir: str,
+    command: list[str],
+) -> list[str]:
+    summary = _stage_stdout_object(stage, label)
+    summary_label = f"{label}.stdout_preview"
+    _reject_unknown_keys(
+        summary,
+        RAIL_STAGE_STDOUT_KEYS if stage_name == "rail" else NOTARY_STAGE_STDOUT_KEYS,
+        summary_label,
+    )
+    failures = _required_nonnegative_int(summary, "failures", summary_label)
+    if failures != 0:
+        raise EvidenceError(f"{summary_label}.failures must be zero")
+    receipts = _stage_stdout_receipts(summary, label, receipt_dir)
+    if stage_name == "rail":
+        submitted_messages = _required_positive_int_field(
+            summary,
+            "submitted_messages",
+            summary_label,
+        )
+        if len(receipts) != submitted_messages:
+            raise EvidenceError(
+                f"{summary_label}.receipts must match submitted_messages"
+            )
+        if _command_has_flag(command, "--message") and submitted_messages != 1:
+            raise EvidenceError(
+                f"{summary_label}.submitted_messages must be one when command uses --message"
+            )
+        return receipts
+    published_anchors = _required_positive_int_field(
+        summary,
+        "published_anchors",
+        summary_label,
+    )
+    endpoint_count = _required_positive_int_field(
+        summary,
+        "endpoint_count",
+        summary_label,
+    )
+    if endpoint_count != _command_flag_count(command, "--endpoint"):
+        raise EvidenceError(
+            f"{summary_label}.endpoint_count does not match command --endpoint count"
+        )
+    if len(receipts) != published_anchors * endpoint_count:
+        raise EvidenceError(
+            f"{summary_label}.receipts must match published_anchors and endpoint_count"
+        )
+    if not _command_has_flag(command, "--all") and published_anchors != 1:
+        raise EvidenceError(
+            f"{summary_label}.published_anchors must be one unless command uses --all"
+        )
+    return receipts
 
 
 def _stage_summary(
@@ -3344,11 +3610,16 @@ def _stage_summary(
     command_uses_insecure_http = _command_uses_insecure_http_policy(command, label)
     _check_stage_script(name, command, label)
     _check_stage_receipt_dir_scope(stage, name, label)
+    validated_receipt_dir = None
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
+        validated_receipt_dir = _validate_artifact_path(
+            receipt_dir,
+            f"{label}.receipt_dir",
+        )
     _check_stage_command_flags(name, command, label)
     _check_stage_command_repository_fixture_paths(name, command, label)
     if name == "verify":
@@ -3396,11 +3667,10 @@ def _stage_summary(
         if command_uses_insecure_http
         else None,
         "_uses_failed_receipt_policy": False,
+        "_command": command,
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
-        "receipt_dir": _validate_artifact_path(receipt_dir, f"{label}.receipt_dir")
-        if name in {"rail", "notary"}
-        else None,
+        "receipt_dir": validated_receipt_dir,
     }
 
 
@@ -3501,6 +3771,27 @@ def _check_stage_receipt_kind_binding(
         raise EvidenceError(
             f"{path}.receipt_summary contains receipt kinds for stages not executed"
         )
+
+
+def _check_stage_adapter_receipt_path_binding(
+    path: str,
+    stage_stdout_receipts: dict[str, list[str]],
+    receipt_summary: dict[str, Any] | None,
+) -> None:
+    if receipt_summary is None:
+        return
+    for stage_name, adapter_paths in stage_stdout_receipts.items():
+        receipt_kind = STAGE_RECEIPT_KINDS[stage_name]
+        verifier_paths = [
+            receipt["path"]
+            for receipt in receipt_summary["receipts"]
+            if receipt["receipt_kind"] == receipt_kind
+        ]
+        if sorted(adapter_paths) != sorted(verifier_paths):
+            raise EvidenceError(
+                f"{path}.receipt_summary {stage_name} receipt paths do not match "
+                f"{stage_name} stage stdout"
+            )
 
 
 def _check_verify_receipt_dir_scope(
@@ -3717,6 +4008,7 @@ def verify_canary_summary(
         raise EvidenceError(f"{label} was not produced with --require-explicit-policy")
 
     stage_results: list[dict[str, Any]] = []
+    executed_stage_objects: list[dict[str, Any]] = []
     if plan_only:
         if "stages" in summary:
             raise EvidenceError(f"{label}.stages must be omitted for plan-only evidence")
@@ -3734,15 +4026,19 @@ def verify_canary_summary(
         if "planned_stages" in summary:
             raise EvidenceError(f"{label}.planned_stages must be omitted for executed evidence")
         stages = _require_list(summary.get("stages"), f"{label}.stages")
+        executed_stage_objects = [
+            _require_object(stage, f"{label}.stages[{offset}]")
+            for offset, stage in enumerate(stages)
+        ]
         stage_results = [
             _stage_summary(
-                _require_object(stage, f"{label}.stages[{offset}]"),
+                stage,
                 f"{label}.stages[{offset}]",
                 args,
                 canary_started_at=started_at,
                 canary_finished_at=finished_at,
             )
-            for offset, stage in enumerate(stages)
+            for offset, stage in enumerate(executed_stage_objects)
         ]
         stage_names = [stage["name"] for stage in stage_results]
 
@@ -3785,6 +4081,27 @@ def verify_canary_summary(
         stage_results_for_receipts,
         branch_label=stage_branch_label,
     )
+    stage_stdout_receipts: dict[str, list[str]] = {}
+    for offset, (stage, stage_result) in enumerate(
+        zip(executed_stage_objects, stage_results)
+    ):
+        if stage_result["name"] in {"rail", "notary"} and not stage_result.get("_dry_run"):
+            receipt_dir = stage_result.get("receipt_dir")
+            if receipt_dir is not None:
+                stage_stdout_receipts[stage_result["name"]] = _check_stage_adapter_stdout(
+                    stage_result["name"],
+                    stage,
+                    f"{label}.stages[{offset}]",
+                    receipt_dir,
+                    stage_result["_command"],
+                )
+        elif stage_result["name"] == "verify" and "receipt_summary" in stage_result:
+            _check_receipt_stdout_selector_binding(
+                stage_result["_receipt_dirs"],
+                stage_result["_receipt_files"],
+                stage_result["receipt_summary"],
+                f"{label}.stages[{offset}]",
+            )
     receipt_summary = next(
         (
             stage["receipt_summary"]
@@ -3809,6 +4126,11 @@ def verify_canary_summary(
             + ", ".join(missing_endpoint_evidence_kinds)
         )
     _check_stage_receipt_kind_binding(label, stage_results, receipt_summary)
+    _check_stage_adapter_receipt_path_binding(
+        label,
+        stage_stdout_receipts,
+        receipt_summary,
+    )
     _check_rail_receipt_policy_binding(label, stage_results, receipt_summary)
     policy_stage_results = planned_stage_results if plan_only else stage_results
 
@@ -4154,6 +4476,8 @@ def _parse_timestamp(value: Any, label: str) -> dt.datetime:
         raise EvidenceError(f"{label} must be an ISO 8601 timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise EvidenceError(f"{label} must include a timezone offset")
+    if CANONICAL_TIMESTAMP_RE.fullmatch(text) is None or text.endswith("-00:00"):
+        raise EvidenceError(f"{label} must use a canonical ISO 8601 timestamp")
     parsed_utc = parsed.astimezone(dt.UTC)
     if parsed_utc > dt.datetime.now(dt.UTC):
         raise EvidenceError(f"{label} must not be in the future")
@@ -4753,7 +5077,9 @@ def verify_trust_summary(
         )
     if profile_json_emitted:
         profile_config = [bundle["profile_overrides"] for bundle in bundle_objects]
-        expected_profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
+        expected_profile_text = (
+            json.dumps(profile_config, allow_nan=False, indent=2, sort_keys=True) + "\n"
+        )
         expected_profile_sha256 = sha256_hex(expected_profile_text.encode("utf-8"))
         if profile_json_sha256 != expected_profile_sha256:
             raise EvidenceError(
@@ -4893,6 +5219,8 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         receipt_summary = json.loads(
             stdout,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_int=_parse_canonical_json_int,
+            parse_float=_parse_canonical_json_float,
             parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
@@ -5546,7 +5874,7 @@ def run(args: argparse.Namespace) -> int:
         },
     }
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
-    text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(output, allow_nan=False, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
         _write_text_output(args.summary_out, text, display_label="summary_out")
     print(text, end="")

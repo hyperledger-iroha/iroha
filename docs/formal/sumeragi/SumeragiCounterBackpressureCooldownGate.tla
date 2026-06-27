@@ -236,9 +236,16 @@ CounterBackpressureCooldownCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == CounterBackpressureCooldownCoreSafety
+CounterBackpressureCooldownExactness ==
+  CounterBackpressureCooldownCoreSafety
 
-SafetyFast == CounterBackpressureCooldownCoreSafety
+CounterBackpressureCooldownCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CounterBackpressureCooldownExactness
+
+NoBugInvariant == CounterBackpressureCooldownExactness
+
+SafetyFast == CounterBackpressureCooldownExactness
 
 BugInitNotSnapshotted == NoBugInvariant
 BugNoIncreaseActive == NoBugInvariant

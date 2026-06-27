@@ -226,7 +226,15 @@ TypeInvariant ==
 CommitQcOnlyFetchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == CommitQcOnlyFetchMatchesSpec
+CommitQcOnlyFetchExactness ==
+  CommitQcOnlyFetchMatchesSpec
+
+CommitQcOnlyFetchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitQcOnlyFetchExactness
+
+SafetyFast ==
+  CommitQcOnlyFetchExactness
 
 DirectQcCompanionSent ==
   Matches("direct_qc_without_certified_response")

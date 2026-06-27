@@ -4377,6 +4377,18 @@ mod tests {
         let valid_lane = iroha_data_model::nexus::LaneId::new(8);
         let malformed_lane = iroha_data_model::nexus::LaneId::new(9);
         let active = iroha_data_model::nexus::PublicLaneValidatorStatus::Active;
+        let reward_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("multisig", "universal").expect("reward asset domain"),
+            "reward".parse().expect("reward asset name"),
+        );
+        let old_reward_asset = iroha_data_model::asset::AssetId::new(
+            reward_asset_definition.clone(),
+            old_account.clone(),
+        );
+        let new_reward_asset = iroha_data_model::asset::AssetId::new(
+            reward_asset_definition.clone(),
+            new_account.clone(),
+        );
 
         state_transaction.world.public_lane_validators.insert(
             (valid_lane, old_account.clone()),
@@ -4410,6 +4422,58 @@ mod tests {
                 last_reward_epoch: None,
             },
         );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (valid_lane, old_account.clone(), old_account.clone()),
+            iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: valid_lane,
+                validator: old_account.clone(),
+                staker: old_account.clone(),
+                bonded: iroha_primitives::numeric::Numeric::new(3, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (malformed_lane, old_account.clone(), old_account.clone()),
+            iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: malformed_lane,
+                validator: new_account.clone(),
+                staker: old_account.clone(),
+                bonded: iroha_primitives::numeric::Numeric::new(4, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        state_transaction.world.public_lane_rewards.insert(
+            (valid_lane, 2),
+            iroha_data_model::nexus::PublicLaneRewardRecord {
+                lane_id: valid_lane,
+                epoch: 2,
+                asset: old_reward_asset.clone(),
+                total_reward: iroha_primitives::numeric::Numeric::new(5, 0),
+                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                    account: old_account.clone(),
+                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                    amount: iroha_primitives::numeric::Numeric::new(5, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        state_transaction.world.public_lane_rewards.insert(
+            (malformed_lane, 3),
+            iroha_data_model::nexus::PublicLaneRewardRecord {
+                lane_id: malformed_lane,
+                epoch: 4,
+                asset: old_reward_asset.clone(),
+                total_reward: iroha_primitives::numeric::Numeric::new(6, 0),
+                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                    account: old_account.clone(),
+                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                    amount: iroha_primitives::numeric::Numeric::new(6, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
 
         replace_account_id_in_public_lane(&mut state_transaction, &old_account, &new_account);
 
@@ -4439,6 +4503,58 @@ mod tests {
             "mismatched row must not be repaired into a live matching validator"
         );
         assert_eq!(malformed.stake_account, old_account);
+
+        assert!(
+            state_transaction
+                .world
+                .public_lane_stake_shares
+                .get(&(valid_lane, old_account.clone(), old_account.clone()))
+                .is_none(),
+            "matching stake-share row should move away from the old key"
+        );
+        let moved_share = state_transaction
+            .world
+            .public_lane_stake_shares
+            .get(&(valid_lane, new_account.clone(), new_account.clone()))
+            .expect("matching stake-share row should move to the new key");
+        assert_eq!(moved_share.validator, new_account);
+        assert_eq!(moved_share.staker, new_account);
+        let malformed_share = state_transaction
+            .world
+            .public_lane_stake_shares
+            .get(&(malformed_lane, old_account.clone(), old_account.clone()))
+            .expect("malformed stake-share row should remain on its old key");
+        assert_eq!(
+            malformed_share.validator, new_account,
+            "mismatched stake-share validator must not be rewritten through key repair"
+        );
+        assert_eq!(malformed_share.staker, old_account);
+        assert!(
+            state_transaction
+                .world
+                .public_lane_stake_shares
+                .get(&(malformed_lane, new_account.clone(), new_account.clone()))
+                .is_none(),
+            "malformed stake-share row must not be moved into a live matching key"
+        );
+
+        let moved_reward = state_transaction
+            .world
+            .public_lane_rewards
+            .get(&(valid_lane, 2))
+            .expect("matching reward row should remain present");
+        assert_eq!(moved_reward.asset, new_reward_asset);
+        assert_eq!(moved_reward.shares[0].account, new_account);
+        let malformed_reward = state_transaction
+            .world
+            .public_lane_rewards
+            .get(&(malformed_lane, 3))
+            .expect("malformed reward row should remain present");
+        assert_eq!(
+            malformed_reward.asset, old_reward_asset,
+            "mismatched reward row asset must not be rewritten"
+        );
+        assert_eq!(malformed_reward.shares[0].account, old_account);
     }
 
     #[test]

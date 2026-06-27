@@ -307,7 +307,13 @@ RbcPayloadLayoutCoreSafety ==
   /\ EncodedPayloadIndicesRoundTrip
   /\ ExpectedLengthsMatchLayout
 
+RbcPayloadLayoutExactness == RbcPayloadLayoutCoreSafety
+
+RbcPayloadLayoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcPayloadLayoutExactness
+
 SafetyFast ==
-  RbcPayloadLayoutCoreSafety
+  RbcPayloadLayoutExactness
 
 ====

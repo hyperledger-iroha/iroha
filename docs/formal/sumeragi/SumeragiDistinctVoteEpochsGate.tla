@@ -165,7 +165,14 @@ DistinctVoteEpochsMatchesSpec ==
   /\ \A c \in Cases:
        ActualReplayCount(c) = SpecReplayCount(c)
 
-SafetyFast == DistinctVoteEpochsMatchesSpec
+DistinctVoteEpochsExactness ==
+  DistinctVoteEpochsMatchesSpec
+
+DistinctVoteEpochsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DistinctVoteEpochsExactness
+
+SafetyFast == DistinctVoteEpochsExactness
 
 BugIncludeWrongPhase ==
   ActualEpochs("wrong_phase_only") = SpecEpochs("wrong_phase_only")

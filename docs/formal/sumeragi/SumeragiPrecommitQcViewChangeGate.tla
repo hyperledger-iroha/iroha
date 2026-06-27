@@ -271,6 +271,10 @@ PrecommitQcViewChangeExactness ==
   /\ PrecommitQcFilterFallbackExact
   /\ PrecommitQcOrderingExact
 
+PrecommitQcViewChangeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrecommitQcViewChangeExactness
+
 Safety ==
   PrecommitQcViewChangeExactness
 

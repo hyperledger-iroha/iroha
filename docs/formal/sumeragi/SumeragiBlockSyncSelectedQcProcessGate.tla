@@ -368,13 +368,20 @@ WrapperCache ==
   /\ ActualWrapperReturnsErr("creation_error_no_cache")
        = SpecWrapperReturnsErr("creation_error_no_cache")
 
-SafetyFast ==
+BlockSyncSelectedQcProcessExactness ==
   /\ TallySource
   /\ TallyResult
   /\ ProcessArgs
   /\ ProcessOutcome
   /\ CommitApply
   /\ WrapperCache
+
+BlockSyncSelectedQcProcessCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedQcProcessExactness
+
+SafetyFast ==
+  BlockSyncSelectedQcProcessExactness
 
 =============================================================================
 ====

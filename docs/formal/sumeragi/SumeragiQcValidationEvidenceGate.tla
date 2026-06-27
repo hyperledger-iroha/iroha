@@ -213,8 +213,15 @@ TypeInvariant ==
 QcValidationEvidenceMatchesSpec ==
   \A c \in AllCases: Matches(c)
 
-SafetyFast ==
+QcValidationEvidenceExactness ==
   QcValidationEvidenceMatchesSpec
+
+QcValidationEvidenceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcValidationEvidenceExactness
+
+SafetyFast ==
+  QcValidationEvidenceExactness
 
 BugBitmapLengthNoEvidence ==
   Matches(BitmapLengthMismatch)

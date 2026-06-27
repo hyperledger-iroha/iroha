@@ -219,8 +219,15 @@ HighestQcFetchBodyKnownCoreSafety ==
   /\ DeferredHashOnlyAndAbsentBodiesStillFetch
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == HighestQcFetchBodyKnownCoreSafety
+HighestQcFetchBodyKnownExactness ==
+  HighestQcFetchBodyKnownCoreSafety
 
-SafetyFast == HighestQcFetchBodyKnownCoreSafety
+HighestQcFetchBodyKnownCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HighestQcFetchBodyKnownExactness
+
+NoBugInvariant == HighestQcFetchBodyKnownExactness
+
+SafetyFast == HighestQcFetchBodyKnownExactness
 
 ====

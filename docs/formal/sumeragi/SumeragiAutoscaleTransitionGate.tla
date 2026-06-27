@@ -121,7 +121,14 @@ TypeInvariant ==
 TransitionMatchesSpec ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
 
-SafetyFast == TransitionMatchesSpec
+AutoscaleTransitionExactness ==
+  TransitionMatchesSpec
+
+AutoscaleTransitionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ AutoscaleTransitionExactness
+
+SafetyFast == AutoscaleTransitionExactness
 
 BugSkipMatchingTransition ==
   ActualCase("enabled_matching_success") = SpecCase("enabled_matching_success")

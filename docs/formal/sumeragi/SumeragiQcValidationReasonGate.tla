@@ -213,8 +213,15 @@ TypeInvariant ==
 QcValidationReasonMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast ==
+QcValidationReasonExactness ==
   QcValidationReasonMatchesSpec
+
+QcValidationReasonCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcValidationReasonExactness
+
+SafetyFast ==
+  QcValidationReasonExactness
 
 BugBitmapLengthLabelWrong ==
   Matches(BitmapLengthMismatch)

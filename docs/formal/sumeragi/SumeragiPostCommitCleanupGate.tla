@@ -407,6 +407,10 @@ PostCommitCleanupExactness ==
   /\ PostCommitRecoveryFrontierExactness
   /\ PostCommitValidationInflightExactness
 
+PostCommitCleanupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PostCommitCleanupExactness
+
 Safety ==
   PostCommitCleanupExactness
 

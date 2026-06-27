@@ -306,6 +306,10 @@ ProposalParentResolutionExactness ==
   /\ ProposalParentLookupExact
   /\ ProposalBackupTransportExact
 
+ProposalParentResolutionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalParentResolutionExactness
+
 Safety ==
   ProposalParentResolutionExactness
 

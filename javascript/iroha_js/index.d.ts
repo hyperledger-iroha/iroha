@@ -1197,6 +1197,10 @@ export interface TairaXorSccpBurnRecordInput
   settlement_asset_definition_id?: string;
   settlementAsset?: string;
   settlement_asset?: string;
+  settlementAmount?: string;
+  settlement_amount?: string;
+  burnAmount?: string;
+  burn_amount?: string;
   authority?: string;
 }
 
@@ -1209,6 +1213,10 @@ export interface TairaXorBscSccpBurnRecordInput
   settlement_asset_definition_id?: string;
   settlementAsset?: string;
   settlement_asset?: string;
+  settlementAmount?: string;
+  settlement_amount?: string;
+  burnAmount?: string;
+  burn_amount?: string;
   authority?: string;
 }
 
@@ -19519,6 +19527,8 @@ export interface KagemushaRecursiveSpendRedeemRequestInput {
   readonly change_output?: BinaryLike | null;
   readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
+  readonly lineageVerifierRecords?: readonly KagemushaRecursiveSpendVerifierRecordRefInput[] | null;
+  readonly lineage_verifier_records?: readonly KagemushaRecursiveSpendVerifierRecordRefInput[] | null;
   readonly blockHeight?: number | bigint | string | null;
   readonly block_height?: number | bigint | string | null;
 }
@@ -19537,6 +19547,8 @@ export interface KagemushaRecursiveSpendVerifyResult {
   readonly witnessless_redeem_supported: boolean;
   readonly lineageWitnessRequired: boolean;
   readonly lineage_witness_required: boolean;
+  readonly lineageWitnessRequiredForRedeem: boolean;
+  readonly lineage_witness_required_for_redeem: boolean;
 }
 export interface KagemushaRecursiveSpendBundleSummary {
   readonly hopCount: number;

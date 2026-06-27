@@ -522,10 +522,11 @@ LaneConfigEntry {
   runtime authority, or redirect penalties through a mismatched peer binding.
   Torii's public-lane validator app API applies the same exact-key filter before
   serializing staking rows, falling back to manifest validator bindings only
-  when no valid staking rows exist for the requested lane. Torii stake-share and
-  reward app APIs likewise serialize only rows whose storage keys exactly match
-  the embedded `(lane_id, validator, staker)` or `(lane_id, epoch)` economic
-  record fields.
+  when no valid staking rows exist for the requested lane. Public-lane
+  reward-claim, commit election profile, multisig account-rekey, and Torii
+  stake-share/reward app API paths likewise consume or serialize only rows whose
+  storage keys exactly match the embedded `(lane_id, validator, staker)` or
+  `(lane_id, epoch)` economic record fields.
   When a lane reset retires or rebinds a lane, `set_nexus`, lifecycle plans,
   and autoscale scale-in terminalize
   revivable public-validator records (`PendingActivation`, `Active`, or

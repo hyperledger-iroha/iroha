@@ -8941,6 +8941,42 @@ fn kagemusha_recursive_spend_verify_from_request_archive(
     .map_err(|_| BridgeError::KagemushaProve)
 }
 
+fn kagemusha_recursive_spend_request_lineage_record_for<'request>(
+    request: &'request iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+    id: &iroha_data_model::proof::VerifyingKeyId,
+) -> Option<&'request iroha_data_model::proof::VerifyingKeyRecord> {
+    if id.backend != iroha_core::zk::ZK_BACKEND_HALO2_IPA {
+        return None;
+    }
+    request
+        .lineage_verifier_record
+        .as_ref()
+        .filter(|record| record.circuit_id == id.name)
+        .or_else(|| {
+            request
+                .lineage_verifier_records
+                .iter()
+                .find(|record| record.circuit_id == id.name)
+        })
+}
+
+fn kagemusha_recursive_spend_request_required_lineage_record<'request>(
+    request: &'request iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+    circuit_id: &str,
+) -> BridgeResult<&'request iroha_data_model::proof::VerifyingKeyRecord> {
+    request
+        .lineage_verifier_record
+        .as_ref()
+        .filter(|record| record.circuit_id == circuit_id)
+        .or_else(|| {
+            request
+                .lineage_verifier_records
+                .iter()
+                .find(|record| record.circuit_id == circuit_id)
+        })
+        .ok_or(BridgeError::KagemushaProve)
+}
+
 /// Prepare an online recursive Kagemusha redeem instruction.
 ///
 /// Input is Norito archive bytes of
@@ -8972,7 +9008,7 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
     request_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::isi::offline::RedeemKagemushaRecursive> {
     use iroha_core::zk::{
-        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
         ensure_kagemusha_recursive_spend_chain_admission_proves_lineage,
         kagemusha_recursive_aggregation_proof_vk_box,
         preverify_kagemusha_recursive_spend_bundle_with_record,
@@ -9000,13 +9036,11 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
             KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
                 let vk_box = kagemusha_recursive_aggregation_proof_vk_box()
                     .map_err(|_| BridgeError::KagemushaProve)?;
-                if let Some(record) = request.lineage_verifier_record.as_ref() {
+                if request.lineage_verifier_record.is_some()
+                    || !request.lineage_verifier_records.is_empty()
+                {
                     let resolver = |id: &iroha_data_model::proof::VerifyingKeyId| {
-                        if id.backend == ZK_BACKEND_HALO2_IPA && id.name == record.circuit_id {
-                            Some(record)
-                        } else {
-                            None
-                        }
+                        kagemusha_recursive_spend_request_lineage_record_for(&request, id)
                     };
                     match request.block_height {
                         Some(block_height) => {
@@ -9043,16 +9077,10 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
                     circuit_id,
                 ) =>
             {
-                let record = request
-                    .lineage_verifier_record
-                    .as_ref()
-                    .ok_or(BridgeError::KagemushaProve)?;
+                let record =
+                    kagemusha_recursive_spend_request_required_lineage_record(&request, circuit_id)?;
                 let resolver = |id: &iroha_data_model::proof::VerifyingKeyId| {
-                    if id.backend == ZK_BACKEND_HALO2_IPA && id.name == record.circuit_id {
-                        Some(record)
-                    } else {
-                        None
-                    }
+                    kagemusha_recursive_spend_request_lineage_record_for(&request, id)
                 };
                 match request.block_height {
                     Some(block_height) => {
@@ -9083,10 +9111,10 @@ fn kagemusha_recursive_spend_redeem_from_request_archive(
         if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_proof_circuit_id(
             &request.bundle.recursive_proof.verifier_key_id.name,
         ) {
-            let record = request
-                .lineage_verifier_record
-                .as_ref()
-                .ok_or(BridgeError::KagemushaProve)?;
+            let record = kagemusha_recursive_spend_request_required_lineage_record(
+                &request,
+                &request.bundle.recursive_proof.verifier_key_id.name,
+            )?;
             match request.block_height {
                 Some(block_height) => {
                     preverify_kagemusha_recursive_spend_bundle_with_record_at_height(
@@ -9516,6 +9544,7 @@ mod offline_note_prover_tests {
             change_output: None,
             lineage_verifier_record: None,
             block_height: None,
+            lineage_verifier_records: Vec::new(),
         }
     }
 
@@ -13186,6 +13215,31 @@ mod offline_note_prover_tests {
         assert_eq!(
             status, ERR_KAGEMUSHA_PROVE,
             "append-boundary FFI must reject profiles with duplicate current-hop outputs"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let (_, mut forged_resulting_accumulator_profile) =
+            sample_recursive_spend_append_transition_profile_with_opening_contract();
+        forged_resulting_accumulator_profile.resulting_accumulator_digest[0] ^= 0x01;
+        let (status, out_ptr, out_len) =
+            call_append_boundary_ffi(&forged_resulting_accumulator_profile);
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "append-boundary FFI must reject profiles with forged resulting accumulator digest"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let (_, mut forged_resulting_public_inputs_profile) =
+            sample_recursive_spend_append_transition_profile_with_opening_contract();
+        forged_resulting_public_inputs_profile.resulting_public_inputs_hash =
+            Hash::new(b"bridge-forged-resulting-public-inputs-hash");
+        let (status, out_ptr, out_len) =
+            call_append_boundary_ffi(&forged_resulting_public_inputs_profile);
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "append-boundary FFI must reject profiles with forged resulting public-input hash"
         );
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);

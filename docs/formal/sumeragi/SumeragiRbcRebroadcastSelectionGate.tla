@@ -256,6 +256,12 @@ RbcRebroadcastSelectionCoreSafety ==
   /\ SelectionNeverExceedsRoster
   /\ MissingLocalQueryReturnsFalse
 
-Safety == RbcRebroadcastSelectionCoreSafety
+RbcRebroadcastSelectionExactness == RbcRebroadcastSelectionCoreSafety
+
+RbcRebroadcastSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcRebroadcastSelectionExactness
+
+Safety == RbcRebroadcastSelectionExactness
 
 ====

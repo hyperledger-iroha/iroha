@@ -467,6 +467,10 @@ FrontierSlotHelpersExactness ==
   /\ FrontierSlotNestedStateExact
   /\ FrontierSlotBodyAvailableExact
 
+FrontierSlotHelpersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierSlotHelpersExactness
+
 Safety ==
   FrontierSlotHelpersExactness
 

@@ -188,6 +188,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+QcRebuildStatusExactness ==
+  Safety
+
+QcRebuildStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcRebuildStatusExactness
+
 BugResetEmptyKeepsAttempts ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

@@ -390,7 +390,15 @@ MatchesSpec ==
   /\ debugLog = SpecDebugLog(candidate)
   /\ removeBeforeApply = SpecRemoveBeforeApply(candidate)
 
-SafetyFast == MatchesSpec
+KnownBlockQcDrainExactness ==
+  MatchesSpec
+
+KnownBlockQcDrainCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KnownBlockQcDrainExactness
+
+SafetyFast ==
+  KnownBlockQcDrainExactness
 
 BugEmptyReturnsTrue ==
   ~ActualReturnProgress("empty_queue")

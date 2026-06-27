@@ -50,15 +50,37 @@ class OfflineCashConfigurationSnapshot(
                 "Offline cash configuration snapshot expired at $expiresAtMs.",
             )
         }
-        if (requiredNativeBridgeAbiVersion != null &&
-            (nativeBridgeAbiVersion == null || nativeBridgeAbiVersion < requiredNativeBridgeAbiVersion)
+        val checkedNativeBridgeAbiVersion = positiveNativeBridgeAbiVersion(
+            nativeBridgeAbiVersion,
+            "nativeBridgeAbiVersion",
+        )
+        val checkedRequiredNativeBridgeAbiVersion = positiveNativeBridgeAbiVersion(
+            requiredNativeBridgeAbiVersion,
+            "requiredNativeBridgeAbiVersion",
+        )
+        if (checkedRequiredNativeBridgeAbiVersion != null &&
+            (
+                checkedNativeBridgeAbiVersion == null ||
+                    checkedNativeBridgeAbiVersion < checkedRequiredNativeBridgeAbiVersion
+                )
         ) {
             throw OfflineCashConfigurationSnapshotException(
                 "unsupported_native_bridge_abi",
-                "Offline cash requires native bridge ABI $requiredNativeBridgeAbiVersion.",
+                "Offline cash requires native bridge ABI $checkedRequiredNativeBridgeAbiVersion.",
             )
         }
     }
+}
+
+private fun positiveNativeBridgeAbiVersion(value: Int?, fieldName: String): Int? {
+    if (value == null) return null
+    if (value <= 0) {
+        throw OfflineCashConfigurationSnapshotException(
+            "malformed_snapshot",
+            "Offline cash configuration snapshot field $fieldName must be a positive integer.",
+        )
+    }
+    return value
 }
 
 private fun isCanonicalOfflineCashSnapshotText(value: String?): Boolean =

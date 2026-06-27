@@ -20337,6 +20337,60 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_lineage_append_boundary_rejects_forged_result_hashes() {
+        let request =
+            sample_kagemusha_recursive_spend_transition_profile_append_request_for_js_host();
+        let profile_archive =
+            kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+                norito::to_bytes(&request)
+                    .expect("encode JS host append transition-profile request"),
+            ))
+            .expect("JS host append transition profile should build");
+        let profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(profile_archive.as_ref())
+                .expect("decode JS host append transition profile");
+
+        let mut forged_accumulator = profile.clone();
+        forged_accumulator.resulting_accumulator_digest[0] ^= 0x01;
+        let forged_accumulator_archive = norito::to_bytes(&forged_accumulator)
+            .expect("encode JS host profile with forged resulting accumulator digest");
+        let err = match kagemusha_recursive_spend_lineage_append_boundary(Uint8Array::from(
+            forged_accumulator_archive,
+        )) {
+            Ok(_) => {
+                panic!(
+                    "JS host append-boundary helper must reject forged resulting accumulator digest"
+                )
+            }
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("resulting_accumulator_digest"),
+            "JS host forged accumulator append-boundary error lost context: {err}"
+        );
+
+        let mut forged_public_inputs = profile;
+        forged_public_inputs.resulting_public_inputs_hash =
+            Hash::new(b"js-host-forged-resulting-public-inputs-hash");
+        let forged_public_inputs_archive = norito::to_bytes(&forged_public_inputs)
+            .expect("encode JS host profile with forged resulting public-input hash");
+        let err = match kagemusha_recursive_spend_lineage_append_boundary(Uint8Array::from(
+            forged_public_inputs_archive,
+        )) {
+            Ok(_) => {
+                panic!(
+                    "JS host append-boundary helper must reject forged resulting public-input hash"
+                )
+            }
+            Err(err) => err,
+        };
+        assert!(
+            err.reason.contains("resulting_public_inputs_hash"),
+            "JS host forged public-input append-boundary error lost context: {err}"
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_redeem_instruction_rejects_semantic_profile_after_public_binding()
     {
         let request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);

@@ -169,13 +169,31 @@ public final class OfflineCashLifecycle {
             "expired",
             "Offline cash configuration snapshot expired at " + expiresAtMs + ".");
       }
-      if (requiredNativeBridgeAbiVersion != null
-          && (nativeBridgeAbiVersion == null || nativeBridgeAbiVersion < requiredNativeBridgeAbiVersion)) {
+      final Integer checkedNativeBridgeAbiVersion =
+          positiveNativeBridgeAbiVersion(nativeBridgeAbiVersion, "nativeBridgeAbiVersion");
+      final Integer checkedRequiredNativeBridgeAbiVersion =
+          positiveNativeBridgeAbiVersion(
+              requiredNativeBridgeAbiVersion, "requiredNativeBridgeAbiVersion");
+      if (checkedRequiredNativeBridgeAbiVersion != null
+          && (checkedNativeBridgeAbiVersion == null
+              || checkedNativeBridgeAbiVersion < checkedRequiredNativeBridgeAbiVersion)) {
         throw new ConfigurationSnapshotException(
             "unsupported_native_bridge_abi",
-            "Offline cash requires native bridge ABI " + requiredNativeBridgeAbiVersion + ".");
+            "Offline cash requires native bridge ABI " + checkedRequiredNativeBridgeAbiVersion + ".");
       }
     }
+  }
+
+  private static Integer positiveNativeBridgeAbiVersion(final Integer value, final String fieldName) {
+    if (value == null) {
+      return null;
+    }
+    if (value.intValue() <= 0) {
+      throw new ConfigurationSnapshotException(
+          "malformed_snapshot",
+          "Offline cash configuration snapshot field " + fieldName + " must be a positive integer.");
+    }
+    return value;
   }
 
   private static boolean isCanonicalSnapshotText(final String value) {

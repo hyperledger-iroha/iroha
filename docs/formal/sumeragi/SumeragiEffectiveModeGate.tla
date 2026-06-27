@@ -179,9 +179,19 @@ EffectiveModeCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == EffectiveModeCoreSafety
+EffectiveModeExactness ==
+  EffectiveModeCoreSafety
 
-SafetyFast == EffectiveModeCoreSafety
+EffectiveModeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EffectiveModeExactness
+
+NoBugInvariant == EffectiveModeExactness
+
+SafetyFast == EffectiveModeExactness
+
+Safety ==
+  EffectiveModeCorrectnessEnvelope
 
 BugNoNextIgnoresFallback == NoBugInvariant
 BugNoNextDropsActivationStatus == NoBugInvariant

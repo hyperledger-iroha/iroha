@@ -1338,8 +1338,13 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     helper_test = read(RUNNER_PREFLIGHT_TEST)
     assert "def _require_error_list" in helper
     assert "def _require_label" in helper
+    assert "def _runner_path_sequence" in helper
+    assert "def _runner_input_identity_map" in helper
     assert "runner preflight errors must be a list of strings" in helper
     assert "runner preflight label must be a non-empty canonical string" in helper
+    assert "paths must be a sequence" in helper
+    assert "identity map must be a dictionary" in helper
+    assert "identity map entries must be path identities and " in helper
     assert "def inspect_runner_path_exists" in helper
     assert "def inspect_runner_path_is_symlink" in helper
     assert "def inspect_runner_path_is_file" in helper
@@ -1369,6 +1374,17 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
         in helper_test
     )
     assert "test_runner_path_inspectors_reject_malformed_labels" in helper_test
+    assert "test_input_file_rejects_scalar_and_mapping_path_collections" in helper_test
+    assert "test_input_file_rejects_malformed_label" in helper_test
+    assert "test_input_file_rejects_malformed_seen_identity_map" in helper_test
+    assert (
+        "test_input_directory_rejects_scalar_and_mapping_path_collections"
+        in helper_test
+    )
+    assert "test_input_directory_rejects_malformed_label" in helper_test
+    assert (
+        "test_input_directory_rejects_malformed_seen_identity_map" in helper_test
+    )
     assert (
         "test_validate_runner_output_parent_rejects_malformed_error_container"
         in helper_test

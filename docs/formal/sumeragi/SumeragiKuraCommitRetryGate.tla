@@ -307,6 +307,10 @@ KuraCommitRetryExactness ==
   /\ KuraCommitEligibilityExact
   /\ KuraPersistenceQcExact
 
+KuraCommitRetryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KuraCommitRetryExactness
+
 Safety ==
   KuraCommitRetryExactness
 

@@ -509,6 +509,13 @@ ProposalCacheCoreSafety ==
   /\ PruneKeepsFutureEntries
   /\ PruneNoopLeavesFutureEntries
 
-Safety == ProposalCacheCoreSafety
+ProposalCacheExactness ==
+  ProposalCacheCoreSafety
+
+ProposalCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalCacheExactness
+
+Safety == ProposalCacheExactness
 
 ====

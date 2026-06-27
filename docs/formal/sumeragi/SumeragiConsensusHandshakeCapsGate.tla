@@ -224,8 +224,16 @@ ConsensusHandshakeCapsCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
+ConsensusHandshakeCapsExactness ==
+  ConsensusHandshakeCapsCoreSafety
+
+ConsensusHandshakeCapsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ConsensusHandshakeCapsExactness
+
 NoBugInvariant == ConsensusHandshakeCapsCoreSafety
 
-SafetyFast == ConsensusHandshakeCapsCoreSafety
+SafetyFast ==
+  ConsensusHandshakeCapsExactness
 
 ====

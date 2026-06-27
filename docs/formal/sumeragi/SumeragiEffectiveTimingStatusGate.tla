@@ -268,6 +268,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+EffectiveTimingStatusExactness ==
+  Safety
+
+EffectiveTimingStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EffectiveTimingStatusExactness
+
 BugInitialScalarNonzero ==
   ImplementationActions(InitialZero) = SpecActions(InitialZero)
 

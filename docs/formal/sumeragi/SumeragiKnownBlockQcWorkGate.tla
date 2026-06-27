@@ -258,7 +258,15 @@ KnownBlockQcWorkCoreSafety ==
 
 NoBugInvariant == KnownBlockQcWorkCoreSafety
 
-SafetyFast == KnownBlockQcWorkCoreSafety
+KnownBlockQcWorkExactness ==
+  KnownBlockQcWorkCoreSafety
+
+KnownBlockQcWorkCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KnownBlockQcWorkExactness
+
+SafetyFast ==
+  KnownBlockQcWorkExactness
 
 BugEmptyTopologyReturnsWork == NoBugInvariant
 BugEmptyTopologySkipsRecovery == NoBugInvariant

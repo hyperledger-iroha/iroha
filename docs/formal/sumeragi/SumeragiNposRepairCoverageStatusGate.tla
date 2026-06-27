@@ -170,6 +170,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+NposRepairCoverageStatusExactness ==
+  Safety
+
+NposRepairCoverageStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NposRepairCoverageStatusExactness
+
 BugResetEmptyKeepsSet ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

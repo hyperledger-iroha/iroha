@@ -272,6 +272,13 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+RoundTraceStatusExactness ==
+  Safety
+
+RoundTraceStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RoundTraceStatusExactness
+
 BugTransitionNewKeyReturnsPrevious ==
   ImplementationActions(TransitionNewKeyNoPrevious) =
     SpecActions(TransitionNewKeyNoPrevious)

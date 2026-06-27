@@ -214,7 +214,7 @@ LookupShapeMatchesShortCircuit ==
                        HashOnlyProcessing}:
        CheckKura \in ImplementationActions(c)
 
-NoBugInvariant ==
+BlockKnownLocallyCoreSafety ==
   /\ ActionsMatchSpec
   /\ PendingEntriesAreKnownUnlessAborted
   /\ InflightEntriesAreKnownUnlessAborted
@@ -222,6 +222,15 @@ NoBugInvariant ==
   /\ DeferredOnlyAndAbsentDoNotCountAsKnown
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+BlockKnownLocallyExactness ==
+  BlockKnownLocallyCoreSafety
+
+BlockKnownLocallyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockKnownLocallyExactness
+
+NoBugInvariant == BlockKnownLocallyExactness
+
+SafetyFast == BlockKnownLocallyExactness
 
 ====

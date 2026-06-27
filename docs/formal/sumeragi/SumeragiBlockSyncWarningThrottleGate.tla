@@ -217,9 +217,15 @@ Next ==
 TypeInvariant ==
   checked \in 0..19
 
-Safety ==
+BlockSyncWarningThrottleExactness ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+BlockSyncWarningThrottleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncWarningThrottleExactness
+
+Safety == BlockSyncWarningThrottleExactness
 
 BugFirstSuppressed ==
   ImplementationActions(FirstWarningLogs) = SpecActions(FirstWarningLogs)

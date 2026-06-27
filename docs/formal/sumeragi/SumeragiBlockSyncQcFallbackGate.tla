@@ -161,7 +161,14 @@ QcFallbackMatchesSpec ==
   /\ \A e \in ClassifierCases: RetryableMatches(e)
   /\ \A c \in FallbackCases: FallbackMatches(c)
 
-SafetyFast == QcFallbackMatchesSpec
+BlockSyncQcFallbackExactness ==
+  QcFallbackMatchesSpec
+
+BlockSyncQcFallbackCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncQcFallbackExactness
+
+SafetyFast == BlockSyncQcFallbackExactness
 
 BugMissingVotesNotRetryable ==
   RetryableMatches(MissingVotesErr)

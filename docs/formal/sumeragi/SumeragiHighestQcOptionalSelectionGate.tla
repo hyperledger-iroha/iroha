@@ -226,6 +226,13 @@ HighestQcOptionalSelectionCoreSafety ==
   /\ MaxCandidateSelected
   /\ IgnoredEvidenceCannotClearSelection
 
-Safety == HighestQcOptionalSelectionCoreSafety
+HighestQcOptionalSelectionExactness ==
+  HighestQcOptionalSelectionCoreSafety
+
+HighestQcOptionalSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HighestQcOptionalSelectionExactness
+
+Safety == HighestQcOptionalSelectionExactness
 
 ====

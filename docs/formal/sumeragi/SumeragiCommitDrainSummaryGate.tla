@@ -134,7 +134,15 @@ ActualOutput ==
 CommitDrainSummaryMatchesSpec ==
   ActualOutput = SpecOutput
 
-SafetyFast == CommitDrainSummaryMatchesSpec
+CommitDrainSummaryExactness ==
+  CommitDrainSummaryMatchesSpec
+
+CommitDrainSummaryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitDrainSummaryExactness
+
+SafetyFast ==
+  CommitDrainSummaryExactness
 
 BugResultsIncremented ==
   ActualNoTimings = SpecNoTimings
