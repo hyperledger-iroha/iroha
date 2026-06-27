@@ -49,10 +49,22 @@ public sealed class SccpBscTestnetTests
             BscTestnetSccp.DestinationBinding(
                 "0X" + new string('1', 40).ToUpperInvariant(),
                 "0X" + new string('2', 40).ToUpperInvariant(),
-                "0X" + new string('b', 64).ToUpperInvariant(),
-                "0X" + new string('c', 64).ToUpperInvariant(),
+                "0x" + new string('b', 64),
+                "0x" + new string('c', 64),
                 expectedBindingHash: binding.BindingHash,
                 expectedKey: binding.Key).BindingHash);
+        Assert.Throws<ArgumentException>(
+            () => BscTestnetSccp.DestinationBinding(
+                "0x" + new string('1', 40),
+                "0x" + new string('2', 40),
+                "0X" + new string('b', 64).ToUpperInvariant(),
+                "0x" + new string('c', 64)));
+        Assert.Throws<ArgumentException>(
+            () => BscTestnetSccp.DestinationBinding(
+                "0x" + new string('1', 40),
+                "0x" + new string('2', 40),
+                "0x" + new string('b', 64),
+                "0X" + new string('c', 64).ToUpperInvariant()));
 
         Assert.Throws<ArgumentOutOfRangeException>(
             () => BscTestnetSccp.RequireTestnetChainId(56));

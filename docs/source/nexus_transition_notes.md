@@ -107,13 +107,15 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   corrupted in-memory policy bypasses config validation. Malformed lifecycle
   plans that repeat addition ids, repeat addition aliases, or repeat the same
   retired lane id are rejected before catalog mutation; Kura/tiered storage
-  reconciliation failures also leave the catalog unchanged. The helpers prune
-  cached lane relays for retired lanes so merge-ledger synthesis does not reuse
-  stale proofs. Merge-candidate synthesis and `State::commit_merge_entry` also
-  revalidate cached relay snapshots against the active Nexus lane/dataspace
-  catalog, so stale relays for removed lanes, rebound dataspaces, or dataspace
-  entries missing from the active catalog are ignored or rejected even if cache
-  state was populated
+  reconciliation failures also leave the catalog unchanged. Alias relabels fail
+  before catalog or tiered-state changes when the target Kura segment is already
+  occupied, so storage cannot remain under the old slug while the catalog
+  advances. The helpers prune cached lane relays for retired lanes so
+  merge-ledger synthesis does not reuse stale proofs. Merge-candidate synthesis
+  and `State::commit_merge_entry` also revalidate cached relay snapshots against
+  the active Nexus lane/dataspace catalog, so stale relays for removed lanes,
+  rebound dataspaces, or dataspace entries missing from the active catalog are
+  ignored or rejected even if cache state was populated
   outside the normal relay-admission path. State keeps a latest-snapshot index
   per `(lane_id, dataspace_id)` across active-only merge entries. Candidate
   synthesis uses that index to avoid reintroducing unchanged lanes that were
@@ -206,7 +208,32 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   enabled-autoscale sharding path.
   Block autoscale application also requires both enabled Nexus and enabled
   autoscale, so corrupted actual state with either gate disabled cannot create
-  or retire elastic lanes.
+  or retire elastic lanes. Autoscale catalog changes are staged inside the
+  block scope and published to committed Nexus state and lane storage geometry
+  only during `StateBlock::commit()` after transaction-height validation, so a
+  height-mismatch validation failure cannot leak a lane addition, retirement,
+  runtime reset, or cooldown marker. DA commitment, shard/receipt cursor,
+  confidential-compute receipt, and pin-intent indexes prepared during block
+  application are staged behind the same commit validation boundary, so a block
+  that fails height validation cannot partially publish those runtime or world
+  indexes either. The commit path runs the fallible autoscale lifecycle
+  preparation before publishing staged DA indexes, so storage errors during
+  elastic-lane geometry reconciliation cannot leak DA runtime, query state, or
+  block-local WSV cleanup from an uncommitted block. Operator-driven lifecycle
+  and config-swap retirements use the same preflight barrier: Kura or tiered
+  retire conflicts preserve the committed emergency overrides, AXT replay
+  entries, verified relay state, public-lane validator activity, and
+  public-lane economic rows that would otherwise be reset. State-level lane
+  geometry reconciliation dry-runs
+  both Kura block/merge storage and tiered-state snapshot geometry before
+  either backend is mutated, then prepares tiered-state storage before Kura
+  block/merge provisioning, so a Kura path conflict, tiered path conflict,
+  occupied relabel target, retired archive-root conflict, or bad tiered cold
+  root fails lane creation/relabel/retirement before the other storage backend
+  creates new lane artifacts. Deterministic autoscale scale-out and scale-in
+  use that same ordering at commit time, and staged DA indexes remain behind
+  the failure boundary when a new or retiring elastic lane hits a Kura or tiered
+  conflict.
   State-free router fast paths defer unmatched no-target default traffic to the
   live Nexus route even when unrelated policy rules are present, so unmatched
   rules cannot bypass the autoscale elastic range. Corrupted managed lanes
@@ -216,12 +243,34 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   before returning a route or routing plan.
 - Autoscale scale-in runs through the block-local lifecycle path during block
   application, so retiring a managed elastic lane also prunes lane-scoped relay
-  state, merge-history checkpoints, DA receipt cursors, DA shard cursors owned
-  only by the retired lane, and emergency-validator state in the same committed
-  state transition. The same block-local path refreshes AXT policy caches after
-  the lane catalog changes, retargeting Space Directory-derived entries when
-  directory data is present and pruning explicit cache entries whose target lane
-  no longer exists. Scale-in also requires a resolvable default route, default
+  state, verified relay contract-state records, merge-history checkpoints, DA
+  commitment, confidential-compute, pin-intent, DA receipt cursor, and DA shard
+  cursor indexes owned only by the retired lane, plus emergency-validator state
+  in the same committed state transition. Verified relay cleanup is exact-keyed
+  to the canonical relay state key and its matching contract-map key for the
+  decoded record. Undecodable lowercase exact canonical relay keys are parsed
+  by key lane and pruned when they name a reset lane, while arbitrary prefixed
+  siblings, uppercase digest variants, and malformed contract-map rows remain
+  inert because their lane cannot be safely inferred. Hydration from
+  contract-visible state also scans only lowercase exact canonical relay keys
+  before decode, so arbitrary prefixed state cannot drive relay-cache admission
+  attempts. Block-local resets also drop any verified relay records staged
+  earlier in the block for reset lanes before commit-time hydration, treating
+  either the public relay reference lane or the embedded envelope lane as reset
+  ownership. The same reset prunes AXT replay ledger entries keyed by a retired
+  handle target lane while
+  preserving cross-lane replay guards whose handles target surviving lanes.
+  Public-lane stake-share rows and reward records keyed by or carrying the
+  reset lane, plus reward-claim cursors keyed by the reset lane, are removed as
+  live economic indices so a recreated lane id cannot inherit stale reward
+  epochs or claim cursors. Operator staking status snapshots for reset lanes are
+  cleared with the same reset, preventing stale bonded or slash totals from
+  surviving lane-id reuse in status surfaces.
+  The block-local path refreshes AXT policy caches after the lane catalog
+  changes, retargeting Space Directory-derived entries when directory data is
+  present and pruning explicit cache entries whose target lane no longer exists.
+  Scale-in also requires a
+  resolvable default route, default
   route autoscale capacity strictly above `autoscale.min_lanes`, and a complete
   historical sample window before any managed elastic lane can be retired, so
   unrelated manual lanes cannot make scale-in eligible.
@@ -231,9 +280,12 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   before the node came back up, then the autoscaler recreates the same lane id
   at a lower local height. Lifecycle plans that retire and add the same lane id
   in one transaction are treated as a fresh lane incarnation too, so merge
-  history, lane relays, DA receipts, pin intents, and persisted DA shard cursors
-  are reset even when the replacement keeps the same dataspace and runtime
-  geometry.
+  history, lane relays, verified relay contract-state records, DA receipts, pin
+  intents, persisted DA shard cursors, and operator staking status are reset
+  even when the replacement keeps the same dataspace and runtime geometry.
+  Contract-state cleanup only removes the exact verified relay keys owned by
+  the old incarnation, so
+  noncanonical prefixed state cannot be mistaken for reset-owned evidence.
 - Autoscale utilization counts committed fragments, not just external
   transaction envelopes. The active block uses the in-flight execution counter,
   while historical window samples read the persisted committed-fragment total
@@ -273,10 +325,12 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   `max_lanes`, non-finite ratios, zero or sub-permille ratios, or thresholds
   whose effective permille hysteresis has collapsed. A future
   `last_transition_height` is treated as an active cooldown and suppresses
-  create/retire transitions without overwriting the marker. When configured
-  windows conflict, a hot longer scale-out window takes precedence over a cold
-  shorter scale-in window so capacity is added rather than retired in the same
-  block.
+  create/retire transitions without overwriting the marker. If the internal
+  lifecycle helper rejects an add/retire plan after a hot/cold decision, the
+  catalog remains unchanged and `last_transition_height` is not advanced, so
+  failed autoscale attempts cannot pin cooldown. When configured windows
+  conflict, a hot longer scale-out window takes precedence over a cold shorter
+  scale-in window so capacity is added rather than retired in the same block.
 - Native AMX control-plane ingress now rejects votes whose envelope phase does
   not match the signed attestation body, votes transported by a different
   `PeerId` than the signer, non-BLS-normal signer identities, or malformed
@@ -402,8 +456,33 @@ public-lane validator records are retained for lifecycle/audit history, but
 they must not constrain recovery candidates or active topology selection after
 lane retirement, rebinding, or autoscale scale-in. Lane reset paths also mark
 revivable `PendingActivation`, `Active`, and `Jailed` records for the reset
-lane as `Exited`, so a retired lane cannot promote stale pending validators or
-carry stale active validators into a future incarnation of the same lane id.
+lane as `Exited`, treating either the storage key lane or embedded record lane
+as reset ownership, so a retired lane cannot promote stale pending validators
+or carry stale active validators into a future incarnation of the same lane id.
+Live topology, stake snapshot, validator-election profile, due-activation,
+released-exit sweeping, penalty-locator, staking-admission, direct staking
+mutations, reward bookkeeping, slash handling, peer/account cleanup guards,
+multisig account-rekey rewrites, Soracloud runtime-authority, and host-finance
+stake-accounting derivations also require each public-lane validator row's
+storage key `(lane_id, validator)` to match the embedded
+`PublicLaneValidatorRecord`, so a malformed stale row cannot inflate quorum
+weight, auto-promote to active, exit-finalize, mutate bonded stake, receive
+reward epochs, enter a live roster, reserve validator capacity or peer
+bindings, block account cleanup, get force-exited by peer cleanup, grant
+runtime authority, get repaired into a live row during account rekey, or map a
+consensus offender to a mismatched validator slot.
+The Torii public-lane validator app endpoint uses the same key/record filter
+before returning staking-backed rows, preserving manifest fallback only when the
+requested lane has no valid staking rows. Torii stake-share and reward app
+endpoints apply the matching exact-key filter for `(lane_id, validator, staker)`
+and `(lane_id, epoch)` economic rows before serializing account-facing state.
+Public-lane stake-share rows, reward records, and reward-claim cursors are live
+economic indices rather than audit history; the same reset paths delete
+reset-owned rows (by storage key or embedded lane where present) and clear
+operator staking status for reset lanes while leaving unchanged-lane economic
+state and status intact. Failed lane-retirement
+preflight leaves those rows and the reset-lane validator/emergency/AXT/relay
+state committed until storage geometry can move atomically.
 Authoritative lane validator and peer resolution additionally rejects any lane
 absent from the active derived lane config, or whose dataspace is absent from
 the active dataspace catalog, so stale manifest bindings or active public
@@ -420,6 +499,11 @@ higher stale unknown-lane stake record from overriding a validator's active-lane
 weight. State-backed QC and block-sync validation fallback paths now thread the
 same active-lane set into missing-snapshot recomputation, so quorum checks cannot
 fall back to stale unknown-lane stake when cached stake snapshots are absent.
+Live NPoS commit quorum checks, commit-root signer selection, NEW_VIEW
+aggregation, and repair fanout/coverage telemetry use the same active-lane set
+for world-backed stake quorum and coverage calculations, closing the last
+state-backed quorum path where stale unknown-lane stake could skew signed-stake
+math.
 
 ```bash
 cargo test -p integration_tests sumeragi_npos_performance -- --nocapture

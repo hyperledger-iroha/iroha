@@ -366,6 +366,10 @@ CommitRootConsistencyExactness ==
   /\ CommitRootQuorumExact
   /\ CommitRootValidationExact
 
+CommitRootConsistencyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitRootConsistencyExactness
+
 TlcWitnessState ==
   \/ Init
   \/ /\ validators = 4

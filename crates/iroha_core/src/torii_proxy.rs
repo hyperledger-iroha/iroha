@@ -428,6 +428,8 @@ pub enum ToriiReadEndpointV1 {
     MusubiPackageVersions,
     /// `GET /v1/musubi/aliases/{alias}`
     MusubiAliasResolve,
+    /// `GET /v1/accounts/{account_id}/history`
+    AccountHistoryGet,
 }
 
 /// Canonical routed read executed on an authoritative Torii peer.
@@ -473,6 +475,8 @@ pub enum ToriiReadFanoutMergeV1 {
     Singleton,
     /// Merge account-detail responses while preserving the requested response format.
     Account,
+    /// Merge account-history responses with global ordering and pagination.
+    AccountHistory,
     /// Merge account portfolio responses.
     Portfolio,
     /// Merge dataspace account summary responses.
@@ -625,6 +629,36 @@ pub struct ToriiProxyResponseV1 {
 mod tests {
     use super::*;
     use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
+
+    fn torii_read_endpoint_wire_index(endpoint: ToriiReadEndpointV1) -> u32 {
+        let encoded = norito::codec::Encode::encode(&endpoint);
+        assert_eq!(
+            encoded.len(),
+            4,
+            "ToriiReadEndpointV1 should encode as a u32 variant index"
+        );
+        u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
+    }
+
+    #[test]
+    fn torii_read_endpoint_wire_indexes_are_append_only() {
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountTransactionsGet),
+            5
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountTransactionsQuery),
+            6
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::MusubiAliasResolve),
+            44
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountHistoryGet),
+            45
+        );
+    }
 
     #[test]
     fn torii_routing_plan_hint_roundtrips_single_and_native_amx_plans() {

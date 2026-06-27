@@ -15,7 +15,7 @@ use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
 
 use crate::{
-    state::{State, StateView, WorldReadOnly},
+    state::{State, StateView, WorldReadOnly, public_lane_validator_record_matches_key},
     sumeragi::{WsvEpochRosterAdapter, consensus::ValidatorIndex, epoch::EpochManager},
 };
 
@@ -605,7 +605,10 @@ fn stake_active_validator_roster_from_world_with_lane_scope(
     active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Vec<PeerId> {
     let mut roster = BTreeSet::new();
-    for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+    for (key, record) in world.public_lane_validators().iter() {
+        if !public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
         if active_lane_ids.is_some_and(|scope| !scope.contains(&record.lane_id)) {
             continue;
         }
@@ -1387,9 +1390,12 @@ mod tests {
 
         let keypair_active = checked_bls_keypair();
         let keypair_pending = checked_bls_keypair();
+        let keypair_mismatched = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let account_pending = AccountId::new(keypair_pending.public_key().clone());
+        let account_mismatched = AccountId::new(keypair_mismatched.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_mismatched = PeerId::new(keypair_mismatched.public_key().clone());
 
         {
             let mut block = state.world.public_lane_validators.block();
@@ -1425,9 +1431,25 @@ mod tests {
                     last_reward_epoch: None,
                 },
             );
+            block.insert(
+                (LaneId::new(3), account_mismatched.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: account_mismatched.clone(),
+                    peer_id: peer_mismatched.clone(),
+                    stake_account: account_mismatched,
+                    total_stake: Numeric::new(50, 0),
+                    self_stake: Numeric::new(50, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
             block.commit();
         }
-        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active, &keypair_mismatched]);
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: Peer::new(
@@ -1442,6 +1464,10 @@ mod tests {
             derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
 
         assert_eq!(roster, vec![peer_active]);
+        assert!(
+            !roster.contains(&peer_mismatched),
+            "mismatched key/record lane rows must not enter the NPoS active roster"
+        );
     }
 
     #[test]

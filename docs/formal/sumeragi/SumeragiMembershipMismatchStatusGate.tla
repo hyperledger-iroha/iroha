@@ -448,4 +448,8 @@ MembershipMismatchStatusExactness ==
   /\ MembershipMismatchClearExact
   /\ MembershipMismatchResetExact
 
+MembershipMismatchStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MembershipMismatchStatusExactness
+
 ====

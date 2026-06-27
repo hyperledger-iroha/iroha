@@ -443,7 +443,7 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             roster_digest = fingerprint.get("roster_digest_hex")

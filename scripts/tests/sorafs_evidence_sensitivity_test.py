@@ -124,6 +124,49 @@ def test_inclusion_markers_reject_non_false_values() -> None:
     ]
 
 
+def test_non_string_payload_keys_fail_closed_and_still_scan_children() -> None:
+    errors: list[str] = []
+    payload = {
+        7: {
+            "privateKey": "runtime-only-private-key",
+        },
+    }
+
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys={"private_key"},
+    )
+
+    assert errors == [
+        "7 key must be a string",
+        "7.privateKey must not be present in rollout evidence",
+    ]
+
+
+def test_malformed_sensitive_key_configuration_fails_closed() -> None:
+    cases = (
+        "payload",
+        b"payload",
+        ("payload", 7),
+        ("payload", ""),
+    )
+
+    for sensitive_keys in cases:
+        errors: list[str] = []
+        visit_sensitive_fields(
+            {"payloadIncluded": True},
+            "",
+            errors,
+            sensitive_keys=sensitive_keys,
+        )
+        assert errors in (
+            ["sensitive keys must be a sequence of strings"],
+            ["sensitive keys must be non-empty strings"],
+        )
+
+
 def test_overly_deep_sensitive_scan_fails_closed_without_recursion_error() -> None:
     errors: list[str] = []
     payload: dict = {}

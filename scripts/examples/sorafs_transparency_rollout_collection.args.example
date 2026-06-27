@@ -17,6 +17,10 @@ target/debug/iroha
 /runtime/sorafs-transparency-client.toml
 --torii-url
 https://torii.example.invalid
+--deployment-id
+transparency-staging-a
+--environment
+staging
 --out-dir
 artifacts/sorafs/transparency/staged
 --summary-out

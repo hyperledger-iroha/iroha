@@ -375,4 +375,9 @@ ExecWitnessRootSafetyAnchors ==
 
 SafetyFast == Safety
 
+ExecWitnessRootProjectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ ExecWitnessRootSafetyAnchors
+
 ====

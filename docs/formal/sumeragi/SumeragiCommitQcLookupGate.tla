@@ -194,8 +194,6 @@ NoHistoryFromInvalidCases ==
 CommitQcLookupSourceMatchesSpec ==
   \A c \in Cases: ActualSource(c) = SpecSource(c)
 
-SafetyFast == CommitQcLookupSourceMatchesSpec
-
 CommitQcLookupCachePriorityExact ==
   \A c \in CacheCases:
     ActualSource(c) = SpecSource(c)
@@ -227,6 +225,14 @@ CommitQcLookupExactness ==
   /\ CommitQcLookupHistoryContextExact
   /\ CommitQcLookupHistoryAggregateExact
   /\ CommitQcLookupAbsentHistoryExact
+
+CommitQcLookupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitQcLookupExactness
+
+SafetyFast ==
+  /\ CommitQcLookupSourceMatchesSpec
+  /\ CommitQcLookupCorrectnessEnvelope
 
 BugIgnoreCachePriority ==
   ActualSource("cache_over_history") = SpecSource("cache_over_history")

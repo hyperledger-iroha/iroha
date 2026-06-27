@@ -239,11 +239,25 @@ class TronSccpProverTest {
         assertTrue(paddedPayload.message?.contains("payloadHash") == true)
         assertTrue(paddedPayload.message?.contains("canonical hex") == true)
 
+        val uppercasePayload = assertFailsWith<IllegalArgumentException> {
+            SccpTron.buildProofRequest(
+                sampleProofRequestInput(publicInputs = samplePublicInputs(payloadHash = "0x" + "AA".repeat(32))),
+            )
+        }
+        assertTrue(uppercasePayload.message?.contains("payloadHash") == true)
+        assertTrue(uppercasePayload.message?.contains("canonical hex") == true)
+
         val paddedStatement = assertFailsWith<IllegalArgumentException> {
             SccpTron.buildProofRequest(sampleProofRequestInput(statementHash = "56".repeat(32) + " "))
         }
         assertTrue(paddedStatement.message?.contains("statementHash") == true)
         assertTrue(paddedStatement.message?.contains("canonical hex") == true)
+
+        val uppercaseStatement = assertFailsWith<IllegalArgumentException> {
+            SccpTron.buildProofRequest(sampleProofRequestInput(statementHash = "0X" + "56".repeat(32)))
+        }
+        assertTrue(uppercaseStatement.message?.contains("statementHash") == true)
+        assertTrue(uppercaseStatement.message?.contains("canonical hex") == true)
 
         for (finalityHeight in listOf("019", "0x13", "+19", " 19", "19 ")) {
             val invalidFinalityHeight = assertFailsWith<IllegalArgumentException> {

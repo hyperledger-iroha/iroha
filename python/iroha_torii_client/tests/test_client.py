@@ -5525,9 +5525,53 @@ def test_get_offline_readiness_parses_payload() -> None:
     session.queue(
         StubResponse(
             payload={
+                "offline_telemetry": True,
+                "offline_kagemusha_abi7": True,
+                "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+                "offline_kagemusha_abi7_bridge_abi_version": 7,
+                "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+                "offline_kagemusha_abi7_artifacts": True,
+                "offline_kagemusha_recursive_compact_available": True,
+                "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
+                "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
+                "offline_kagemusha_recursive_compact_artifacts_available": True,
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    readiness = client.get_offline_readiness()
+
+    assert readiness.offline_kagemusha_abi7 is True
+    assert readiness.offline_kagemusha_abi7_mode == "recursive_compact_v1"
+    assert readiness.offline_kagemusha_abi7_bridge_abi_version == 7
+    assert readiness.offline_kagemusha_abi7_circuit_id == "kagemusha-recursive-compact-v1"
+    assert readiness.offline_kagemusha_abi7_artifacts is True
+    assert readiness.offline_kagemusha_recursive_compact_available is True
+    assert readiness.offline_kagemusha_recursive_compact_mode == "recursive_compact_v1"
+    assert readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version == 7
+    assert readiness.offline_kagemusha_recursive_compact_circuit_id == "kagemusha-recursive-compact-v1"
+    assert readiness.offline_kagemusha_recursive_compact_artifacts_available is True
+    assert readiness.offline_telemetry is True
+    assert readiness.offline_note is None
+    assert readiness.offline_one_use_keys is None
+    assert readiness.offline_recursive_note_proof is None
+    assert readiness.offline_fountain_qr is None
+    assert readiness.offline_sync_optional is None
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith("/v1/offline/readiness")
+
+
+def test_get_offline_readiness_rejects_legacy_only_payload() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
                 "offline_note": True,
                 "offline_one_use_keys": True,
-                "offline_recursive_note_proof": False,
+                "offline_recursive_note_proof": True,
                 "offline_fountain_qr": True,
                 "offline_sync_optional": True,
                 "offline_telemetry": True,
@@ -5536,17 +5580,8 @@ def test_get_offline_readiness_parses_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    readiness = client.get_offline_readiness()
-
-    assert readiness.offline_note is True
-    assert readiness.offline_one_use_keys is True
-    assert readiness.offline_recursive_note_proof is False
-    assert readiness.offline_fountain_qr is True
-    assert readiness.offline_sync_optional is True
-    assert readiness.offline_telemetry is True
-    call = session.calls[0]
-    assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/offline/readiness")
+    with pytest.raises(RuntimeError, match="offline_kagemusha_abi7"):
+        client.get_offline_readiness()
 
 
 def test_status_snapshot_parses_mode_and_consensus_caps() -> None:

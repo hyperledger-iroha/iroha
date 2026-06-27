@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import re
 import shlex
 import shutil
@@ -23,8 +22,10 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_lines,
     render_checker_summary,
     resolve_checker_preflight_path,
+    validate_checker_summary_output,
     write_checker_summary,
 )
+from sorafs_evidence_json import load_evidence_json_with_sha256  # noqa: E402
 
 
 REPO_ROOT = SCRIPT_DIR.parent
@@ -169,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
 
     errors: list[str] = []
     manifest_path = args.manifest
-    manifest = load_manifest(manifest_path, errors)
+    manifest, manifest_sha256 = load_manifest(manifest_path, errors)
     entries = validate_manifest(manifest, errors)
     checked_entries: list[dict[str, Any]] = []
     manifest_valid = not errors
@@ -191,7 +192,6 @@ def main(argv: list[str] | None = None) -> int:
     else:
         checked_entries = not_checked_entries(entries)
 
-    manifest_sha256 = file_sha256(manifest_path, errors, "manifest")
     status = "ok" if not errors else "blocked"
     summary = {
         "schema": SUMMARY_SCHEMA,
@@ -226,13 +226,8 @@ def validate_fixture_manifest_preflight(args: argparse.Namespace) -> list[str]:
         return errors
     if not isinstance(summary_out, Path):
         return [f"--summary-out `{summary_out}` must be a path"]
-    if summary_out.exists() and summary_out.is_dir():
-        return [f"--summary-out `{summary_out}` must not be a directory"]
-    parent = summary_out.parent
-    if parent.exists() and not parent.is_dir():
-        errors.append(
-            f"--summary-out parent `{parent}` must be a directory when it exists"
-        )
+    if not validate_checker_summary_output(summary_out, errors):
+        return errors
     manifest_identity = None
     if isinstance(manifest, Path):
         manifest_identity = resolve_checker_preflight_path(
@@ -314,30 +309,22 @@ def read_file_bytes(
         return None
 
 
-def load_manifest(path: Path, errors: list[str]) -> dict[str, Any]:
-    """Load a manifest JSON object."""
+def load_manifest(path: Path, errors: list[str]) -> tuple[dict[str, Any], str | None]:
+    """Load a manifest JSON object and digest the same bytes."""
 
     is_file = inspect_regular_file(path, "manifest", errors)
     if is_file is None:
-        return {}
+        return {}, None
     if not is_file:
         errors.append(f"manifest does not exist: {path}")
-        return {}
-    raw = read_file_bytes(path, "manifest", errors)
-    if raw is None:
-        return {}
-    if len(raw) > MAX_JSON_BYTES:
-        errors.append(f"manifest exceeds {MAX_JSON_BYTES} bytes: {path}")
-        return {}
+        return {}, None
     try:
-        value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        errors.append(f"manifest is not valid UTF-8 JSON: {error}")
-        return {}
-    if not isinstance(value, dict):
-        errors.append("manifest root must be an object")
-        return {}
-    return value
+        return load_evidence_json_with_sha256(path, MAX_JSON_BYTES)
+    except (OSError, RuntimeError) as error:
+        errors.append(f"failed to read manifest `{path}`: {error}")
+    except (UnicodeDecodeError, ValueError) as error:
+        errors.append(f"manifest is not valid bounded JSON object: {error}")
+    return {}, None
 
 
 def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[str, Any]]:
@@ -543,20 +530,13 @@ def validate_generated_entry(
     json_path = REPO_ROOT / json_rel_path
 
     norito_bytes = read_generated_bytes(norito_path, MAX_NORITO_BYTES, "Norito", errors)
-    json_bytes = read_generated_bytes(json_path, MAX_JSON_BYTES, "JSON", errors)
-    if norito_bytes is None or json_bytes is None:
+    json_loaded = load_generated_json_sidecar(json_path, errors)
+    if norito_bytes is None or json_loaded is None:
         return result
+    json_value, json_sha256 = json_loaded
     result["norito_sha256"] = hashlib.sha256(norito_bytes).hexdigest()
-    result["json_sha256"] = hashlib.sha256(json_bytes).hexdigest()
+    result["json_sha256"] = json_sha256
 
-    try:
-        json_value = json.loads(json_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        errors.append(f"{json_path} is not valid UTF-8 JSON: {error}")
-        return result
-    if not isinstance(json_value, dict):
-        errors.append(f"{json_path} root must be an object")
-        return result
     norito_hex = json_value.get("norito_bytes_hex")
     if (
         not isinstance(norito_hex, str)
@@ -586,6 +566,28 @@ def validate_generated_entry(
         errors,
     )
     return result
+
+
+def load_generated_json_sidecar(
+    path: Path,
+    errors: list[str],
+) -> tuple[dict[str, Any], str] | None:
+    """Load a generated JSON sidecar and digest the same bytes."""
+
+    file_label = "generated JSON fixture"
+    is_file = inspect_regular_file(path, file_label, errors)
+    if is_file is None:
+        return None
+    if not is_file:
+        errors.append(f"missing {file_label}: {path}")
+        return None
+    try:
+        return load_evidence_json_with_sha256(path, MAX_JSON_BYTES)
+    except (OSError, RuntimeError) as error:
+        errors.append(f"failed to read {file_label} `{path}`: {error}")
+    except (UnicodeDecodeError, ValueError) as error:
+        errors.append(f"{path} is not a valid bounded JSON object: {error}")
+    return None
 
 
 def validate_json_sidecar(
@@ -1243,18 +1245,6 @@ def read_generated_bytes(
         errors.append(f"generated {label} fixture exceeds {max_bytes} bytes: {path}")
         return None
     return raw
-
-
-def file_sha256(path: Path, errors: list[str], label: str) -> str | None:
-    """Return the SHA-256 digest for a file, or record filesystem errors."""
-
-    is_file = inspect_regular_file(path, label, errors)
-    if not is_file:
-        return None
-    raw = read_file_bytes(path, f"{label} for SHA-256", errors)
-    if raw is None:
-        return None
-    return hashlib.sha256(raw).hexdigest()
 
 
 if __name__ == "__main__":

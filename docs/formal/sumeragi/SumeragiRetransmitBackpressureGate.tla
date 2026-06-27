@@ -394,6 +394,10 @@ RetransmitBackpressurePacingExactness ==
   /\ RetransmitBackoffExact
   /\ RetransmitTimeoutClampExact
 
+RetransmitBackpressureCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RetransmitBackpressurePacingExactness
+
 BugCapacityZeroUsesDepth ==
   ActualOutput("capacity_zero") = SpecOutput("capacity_zero")
 

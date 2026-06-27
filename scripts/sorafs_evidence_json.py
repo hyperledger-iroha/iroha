@@ -10,15 +10,43 @@ from typing import Any
 CHUNK_BYTES = 1024 * 1024
 
 
+def _require_error_list(errors: Any) -> list[str]:
+    if not isinstance(errors, list):
+        raise ValueError("evidence JSON errors must be a list of strings")
+    for error in errors:
+        if not isinstance(error, str):
+            raise ValueError("evidence JSON errors must be a list of strings")
+    return errors
+
+
 def reject_non_standard_json_constant(value: str) -> None:
     """Reject Python JSON extensions such as NaN and Infinity."""
 
     raise ValueError(f"non-standard JSON constant `{value}` is not allowed")
 
 
+def json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while rejecting duplicate keys."""
+
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"evidence JSON object contains duplicate key `{key}`")
+        payload[key] = value
+    return payload
+
+
 def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
     """Read bounded evidence bytes from disk."""
 
+    if not isinstance(path, Path):
+        raise ValueError(f"evidence path `{path}` must be a path")
+    if (
+        not isinstance(max_bytes, int)
+        or isinstance(max_bytes, bool)
+        or max_bytes <= 0
+    ):
+        raise ValueError("evidence byte limit must be positive")
     chunks: list[bytes] = []
     size = 0
     with path.open("rb") as handle:
@@ -33,9 +61,12 @@ def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
 def decode_evidence_json(raw: bytes) -> dict[str, Any]:
     """Decode evidence bytes as a JSON object."""
 
+    if not isinstance(raw, (bytes, bytearray)):
+        raise ValueError("evidence JSON bytes must be bytes")
     payload = json.loads(
         raw.decode("utf-8"),
         parse_constant=reject_non_standard_json_constant,
+        object_pairs_hook=json_object_without_duplicate_keys,
     )
     if not isinstance(payload, dict):
         raise ValueError("evidence root must be a JSON object")
@@ -64,6 +95,7 @@ def load_evidence_json_with_sha256_or_record_error(
 ) -> tuple[dict[str, Any], str] | None:
     """Load evidence JSON and append the standard path-qualified error on failure."""
 
+    error_list = _require_error_list(errors)
     try:
         return load_evidence_json_with_sha256(path, max_bytes)
     except (
@@ -73,5 +105,5 @@ def load_evidence_json_with_sha256_or_record_error(
         json.JSONDecodeError,
         ValueError,
     ) as error:
-        errors.append(f"{path}: failed to load evidence JSON: {error}")
+        error_list.append(f"{path}: failed to load evidence JSON: {error}")
         return None

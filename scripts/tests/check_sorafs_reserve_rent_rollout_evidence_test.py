@@ -321,7 +321,14 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "ledger_digest_hex": LEDGER_DIGEST,
         }
     ]
-    assert len(payload["valid_provider_bakes"]) == 1
+    assert payload["valid_provider_bakes"] == [
+        {
+            "bake_id": "reserve-bake-001",
+            "started_at_unix": GENERATED_AT - 3_600,
+            "completed_at_unix": GENERATED_AT,
+            "provider_count": 3,
+        }
+    ]
 
 
 def test_missing_signed_routes_fails(tmp_path: Path) -> None:

@@ -452,6 +452,10 @@ CommitJobDispatchExactness ==
   /\ CommitJobDispatchScenarioExact
   /\ CommitJobDispatchStructuralExact
 
+CommitJobDispatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitJobDispatchExactness
+
 Safety ==
   CommitJobDispatchExactness
 

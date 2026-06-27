@@ -241,20 +241,83 @@ def test_summary_out_directory_fails_before_write(
     assert captured.out == ""
 
 
+def test_summary_out_symlink_fails_before_manifest_read(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", base_manifest())
+    target = tmp_path / "actual-summary.json"
+    target.write_text("old", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.symlink_to(target)
+    original_open = Path.open
+
+    def open_path(path: Path, *args, **kwargs):
+        if path == manifest:
+            raise AssertionError("manifest should not be read after summary preflight fails")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_path)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--manifest-only",
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 2
+    assert target.read_text(encoding="utf-8") == "old"
+    captured = capsys.readouterr()
+    assert "must not be a symlink" in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_parent_chain_symlink_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", base_manifest())
+    target_parent = tmp_path / "actual-parent"
+    target_parent.mkdir()
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target_parent, target_is_directory=True)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--manifest-only",
+            "--summary-out",
+            str(parent / "nested" / "summary.json"),
+        ]
+    )
+
+    assert rc == 2
+    assert not (target_parent / "nested").exists()
+    captured = capsys.readouterr()
+    assert "must not be a symlink" in captured.err
+    assert captured.out == ""
+
+
 def test_manifest_read_error_writes_blocked_summary_without_traceback(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     manifest = write_manifest(tmp_path / "fixture_manifest.json", base_manifest())
     summary = tmp_path / "summary.json"
-    original_read_bytes = Path.read_bytes
+    original_open = Path.open
 
-    def read_bytes(path: Path) -> bytes:
+    def open_path(path: Path, *args, **kwargs):
         if path == manifest:
             raise OSError("manifest read denied")
-        return original_read_bytes(path)
+        return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(Path, "open", open_path)
 
     rc = MODULE.main(
         [
@@ -274,6 +337,30 @@ def test_manifest_read_error_writes_blocked_summary_without_traceback(
         "failed to read manifest" in error and "manifest read denied" in error
         for error in result["errors"]
     )
+
+
+def test_manifest_rejects_non_standard_json_constants(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "fixture_manifest.json"
+    manifest.write_text('{"schema_version": NaN}', encoding="utf-8")
+    summary = tmp_path / "summary.json"
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--manifest-only",
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["status"] == "blocked"
+    assert result["manifest_sha256"] is None
+    assert any("non-standard JSON constant `NaN`" in error for error in result["errors"])
 
 
 def test_default_mode_fails_closed_when_generated_bytes_are_missing(
@@ -700,6 +787,40 @@ def test_full_mode_rejects_malformed_json_sidecar(
     assert result["status"] == "blocked"
     assert any(
         "missing required JSON sidecar fields" in error
+        for error in result["errors"]
+    )
+
+
+def test_full_mode_rejects_non_object_json_sidecar_with_shared_loader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    sidecar_path = repo_root / payload["fixtures"][0]["json_path"]
+    sidecar_path.write_text("[]", encoding="utf-8")
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["status"] == "blocked"
+    assert any(
+        "evidence root must be a JSON object" in error
         for error in result["errors"]
     )
 

@@ -238,4 +238,9 @@ BlockMessageHeightViewExactness ==
 
 Safety == BlockMessageHeightViewExactness
 
+BlockMessageHeightViewCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ BlockMessageHeightViewSafetyAnchors
+
 ====

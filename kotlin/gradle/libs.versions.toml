@@ -6,6 +6,7 @@ junitPlatform = "1.11.4"
 zstd = "1.5.7-7"
 bouncycastle = "1.78.1"
 serializationJson = "1.10.0"
+desugarJdkLibs = "2.1.5"
 
 [libraries]
 junit-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
@@ -14,6 +15,7 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
 bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serializationJson" }
+desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

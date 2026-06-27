@@ -14,6 +14,12 @@ python3 scripts/iso_trust_bundle_verify.py \
   --summary-out /tmp/swift-cbpr-plus-trust-summary.json
 ```
 
+Summary and profile output targets are preflighted without creating missing
+parent directories before bundle validation: they must not point under checked-in
+`fixtures/iso20022/` artifacts, reuse or hardlink bundle inputs, alias each
+other, use symlinked existing ancestors, or reuse symlink, hardlinked, or
+non-regular leaves.
+
 Before production use, replace the example source metadata, trust-anchor DER or
 pins, CRL material, OCSP material, and policy OIDs with the current rail
 package, keep an explicit `embedded_signature_policy`, record every

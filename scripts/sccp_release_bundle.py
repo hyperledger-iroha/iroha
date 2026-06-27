@@ -101,18 +101,37 @@ NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
 )
 NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "passphrase",
     "bearer",
     "authorization",
+    "access key",
     "access-key",
     "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
     "session",
     "token",
 )
@@ -183,6 +202,8 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
             "release artifact path contains control character "
             f"{control_character}"
         )
+    if not artifact_path.isascii():
+        raise ValueError("release artifact path contains non-ASCII character")
     markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
     if markdown_unsafe_character is not None:
         raise ValueError(
@@ -194,6 +215,11 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
         raise ValueError(
             "release artifact path contains percent-encoded traversal segment"
         )
+    if any(
+        marker in artifact_path.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        raise ValueError("release artifact path contains sensitive name")
     payload = path.read_bytes()
     return {
         "path": artifact_path,
@@ -216,6 +242,10 @@ def _safe_name(path: Path, index: int) -> str:
         raise ValueError(
             "release bundle copied filename must not contain surrounding whitespace"
         )
+    if not name.isascii():
+        raise ValueError(
+            "release bundle copied filename contains non-ASCII character"
+        )
     if _path_percent_encoded_traversal(name) is not None:
         raise ValueError(
             "release bundle copied filename contains percent-encoded traversal segment"
@@ -226,6 +256,11 @@ def _safe_name(path: Path, index: int) -> str:
             "release bundle copied filename contains Markdown-unsafe character "
             f"{markdown_unsafe_character}"
         )
+    if any(
+        marker in name.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        raise ValueError("release bundle copied filename contains sensitive name")
     return f"{index:02d}-{name}"
 
 
@@ -253,7 +288,88 @@ def _parse_phase_evidence_arg(raw: str) -> tuple[str, Path]:
         raise argparse.ArgumentTypeError(phase_name_error)
     if not path_text:
         raise argparse.ArgumentTypeError("phase evidence path must not be empty")
+    path_error = _phase_evidence_path_error(path_text)
+    if path_error is not None:
+        raise argparse.ArgumentTypeError(path_error)
     return name, Path(path_text)
+
+
+def _phase_evidence_path_error(path_text: str) -> str | None:
+    # Source-inventory markers:
+    # - phase evidence path must not contain surrounding whitespace
+    # - phase evidence path contains control character
+    # - phase evidence path contains non-ASCII character
+    # - phase evidence path contains Markdown-unsafe character
+    # - phase evidence path contains sensitive name
+    # - phase evidence path contains percent-encoded traversal segment
+    if path_text.strip() != path_text:
+        return "phase evidence path must not contain surrounding whitespace"
+    if _path_control_character(path_text) is not None:
+        return "phase evidence path contains control character"
+    if not path_text.isascii():
+        return "phase evidence path contains non-ASCII character"
+    if _path_markdown_unsafe_character(path_text) is not None:
+        return "phase evidence path contains Markdown-unsafe character"
+    if any(
+        marker in path_text.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return "phase evidence path contains sensitive name"
+    if _path_percent_encoded_traversal(path_text) is not None:
+        return "phase evidence path contains percent-encoded traversal segment"
+    return None
+
+
+def _phase_evidence_directory_path_error(path_text: str) -> str | None:
+    # Source-inventory markers:
+    # - phase evidence directory path must not contain surrounding whitespace
+    # - phase evidence directory path contains control character
+    # - phase evidence directory path contains non-ASCII character
+    # - phase evidence directory path contains Markdown-unsafe character
+    # - phase evidence directory path contains sensitive name
+    # - phase evidence directory path contains percent-encoded traversal segment
+    if path_text.strip() != path_text:
+        return "phase evidence directory path must not contain surrounding whitespace"
+    if _path_control_character(path_text) is not None:
+        return "phase evidence directory path contains control character"
+    if not path_text.isascii():
+        return "phase evidence directory path contains non-ASCII character"
+    if _path_markdown_unsafe_character(path_text) is not None:
+        return "phase evidence directory path contains Markdown-unsafe character"
+    if any(
+        marker in path_text.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return "phase evidence directory path contains sensitive name"
+    if _path_percent_encoded_traversal(path_text) is not None:
+        return "phase evidence directory path contains percent-encoded traversal segment"
+    return None
+
+
+def _output_directory_path_error(path_text: str) -> str | None:
+    # Source-inventory markers:
+    # - release bundle output directory path must not contain surrounding whitespace
+    # - release bundle output directory path contains control character
+    # - release bundle output directory path contains non-ASCII character
+    # - release bundle output directory path contains Markdown-unsafe character
+    # - release bundle output directory path contains sensitive name
+    # - release bundle output directory path contains percent-encoded traversal segment
+    if path_text.strip() != path_text:
+        return "release bundle output directory path must not contain surrounding whitespace"
+    if _path_control_character(path_text) is not None:
+        return "release bundle output directory path contains control character"
+    if not path_text.isascii():
+        return "release bundle output directory path contains non-ASCII character"
+    if _path_markdown_unsafe_character(path_text) is not None:
+        return "release bundle output directory path contains Markdown-unsafe character"
+    if any(
+        marker in path_text.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return "release bundle output directory path contains sensitive name"
+    if _path_percent_encoded_traversal(path_text) is not None:
+        return "release bundle output directory path contains percent-encoded traversal segment"
+    return None
 
 
 def _phase_evidence_source_label(name: str) -> str:
@@ -294,6 +410,9 @@ def _phase_evidence_sources(
         source_labels[phase] = label
 
     if phase_evidence_dir is not None:
+        dir_error = _phase_evidence_directory_path_error(str(phase_evidence_dir))
+        if dir_error is not None:
+            raise argparse.ArgumentTypeError(dir_error)
         for phase in phases:
             assign(
                 phase,
@@ -352,6 +471,11 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
             "native EVM Groth16 prover bundle "
             f"{label} path contains control character {control_character}"
         )
+    if not value.isascii():
+        raise ValueError(
+            "native EVM Groth16 prover bundle "
+            f"{label} path contains non-ASCII character"
+        )
     markdown_unsafe_character = _path_markdown_unsafe_character(value)
     if markdown_unsafe_character is not None:
         raise ValueError(
@@ -379,6 +503,14 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
             raise ValueError(
                 f"native EVM Groth16 prover bundle {label} path contains forbidden prover dependency marker: {marker}"
             )
+    if any(
+        marker in normalized_value
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        raise ValueError(
+            "native EVM Groth16 prover bundle "
+            f"{label} path contains sensitive name"
+        )
     path = PurePosixPath(value)
     if (
         path.is_absolute()
@@ -524,6 +656,19 @@ CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS = (
     "route_canary_evidence_hash",
     "route_canary_evidence_source",
     "route_canary_evidence_bound",
+    "route_canary_message_proof_used",
+    "route_canary_raw_data_owner_matches_transaction",
+    "route_canary_signature_recovers_to_owner",
+    "route_canary_log_index",
+    "route_canary_target_domain",
+    "route_canary_proof_version",
+    "route_canary_proof_source_domain",
+    "route_canary_call_data_sha256",
+    "route_canary_payload_hash",
+    "route_canary_statement_hash",
+    "route_canary_commitment_root",
+    "route_canary_finality_height",
+    "route_canary_finality_block_hash",
     "route_canary_transaction_hash",
     "route_canary_receipt_block_number",
     "route_canary_receipt_block_hash",
@@ -638,6 +783,9 @@ _NATIVE_EVM_PROVER_BUNDLE_SCHEMA: str | None = None
 _NATIVE_EVM_PROVER_BUNDLE_ID: str | None = None
 _ACTIVE_LAUNCH_CHAIN: str | None = None
 _ACTIVE_LAUNCH_DOMAIN: int | None = None
+_ALL_LANES_REQUIRED_DOMAINS: tuple[int, ...] | None = None
+_ALL_LANES_SUPPORTED_LAUNCH_DOMAINS: tuple[int, ...] | None = None
+_ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS: tuple[int, ...] | None = None
 _SCCP_DOMAIN_ETH: int | None = None
 _ALL_LANES_EVM_DESTINATION_DOMAINS: frozenset[int] | None = None
 _ROUTE_CANARY_SOURCE_BY_DOMAIN: dict[int, str] | None = None
@@ -772,6 +920,36 @@ def _active_launch_domain() -> int:
     return _ACTIVE_LAUNCH_DOMAIN
 
 
+def _all_lanes_required_domains() -> tuple[int, ...]:
+    global _ALL_LANES_REQUIRED_DOMAINS
+    if _ALL_LANES_REQUIRED_DOMAINS is None:
+        verifier = _verify_module()
+        _ALL_LANES_REQUIRED_DOMAINS = tuple(
+            int(domain) for domain in verifier.ALL_LANES_REQUIRED_DOMAINS
+        )
+    return _ALL_LANES_REQUIRED_DOMAINS
+
+
+def _all_lanes_supported_launch_domains() -> tuple[int, ...]:
+    global _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
+    if _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS is None:
+        verifier = _verify_module()
+        _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = tuple(
+            int(domain) for domain in verifier.ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
+        )
+    return _ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
+
+
+def _all_lanes_unsupported_launch_domains() -> tuple[int, ...]:
+    global _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
+    if _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS is None:
+        verifier = _verify_module()
+        _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = tuple(
+            int(domain) for domain in verifier.ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
+        )
+    return _ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
+
+
 def _sccp_domain_eth() -> int:
     global _SCCP_DOMAIN_ETH
     if _SCCP_DOMAIN_ETH is None:
@@ -845,8 +1023,6 @@ def _source_adapter_gate_template_hashes(
 ) -> tuple[bytes, ...]:
     if type(domain) is not int:
         return ()
-    if domain not in (_sccp_domain_sol(), _sccp_domain_ton()):
-        return ()
     all_lanes = _all_lanes_module()
     profile = all_lanes.LANE_PROFILES.get(domain)
     if profile is None:
@@ -878,11 +1054,8 @@ def _source_adapter_gate_template_audit_errors(
     if type(domain) is not int or not isinstance(audit_hashes, dict):
         return []
     all_lanes = _all_lanes_module()
-    if domain == _sccp_domain_sol():
-        audit_fields = all_lanes.SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
-    elif domain == _sccp_domain_ton():
-        audit_fields = all_lanes.TON_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
-    else:
+    _gate_field, audit_fields = all_lanes._source_adapter_gate_requirements(domain)
+    if not audit_fields:
         return []
     template_hashes = _source_adapter_gate_template_hashes(domain)
     errors: list[str] = []
@@ -893,6 +1066,32 @@ def _source_adapter_gate_template_audit_errors(
         if bytes.fromhex(audit_hash[2:]) in template_hashes:
             errors.append(
                 f"{label} {audit_field} must be deployed audit evidence, "
+                "not built-in template material"
+            )
+    return errors
+
+
+def _source_record_template_hash_errors(
+    label: str,
+    domain: Any,
+    source_hashes: Any,
+) -> list[str]:
+    """Return errors for copied source-record hashes that replay templates."""
+
+    if type(domain) is not int or not isinstance(source_hashes, dict):
+        return []
+    template_hashes = _source_adapter_gate_template_hashes(domain)
+    errors: list[str] = []
+    for field in (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+    ):
+        source_hash = source_hashes.get(field)
+        if not _is_canonical_bytes32_hex_text(source_hash):
+            continue
+        if bytes.fromhex(source_hash[2:]) in template_hashes:
+            errors.append(
+                f"{label} {field} must be deployed evidence, "
                 "not built-in template material"
             )
     return errors
@@ -972,7 +1171,7 @@ def _is_canonical_solana_pubkey_text(value: Any) -> bool:
     verifier = _verify_module()
     try:
         raw = verifier._decode_solana_base58(value)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return False
     return len(raw) == 32 and any(raw)
 
@@ -1096,6 +1295,60 @@ def _source_adapter_gate_semantic_errors(
                 audit_label,
                 domain,
                 semantic_audit_hashes,
+            )
+        )
+        role_fields: list[tuple[str, Any]] = []
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            role_fields.extend(
+                (
+                    (field, source_hashes.get(field))
+                    for field in (
+                        "source_verifier_material_hash",
+                        "source_adapter_engine_deployment_hash",
+                    )
+                )
+            )
+        destination_binding = lane.get("destination_binding")
+        if isinstance(destination_binding, dict):
+            role_fields.append(
+                (
+                    "destination_binding_hash",
+                    destination_binding.get("destination_binding_hash"),
+                )
+            )
+        route_allowlist = lane.get("route_allowlist")
+        if isinstance(route_allowlist, dict):
+            role_fields.append(
+                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+            )
+            route_canary = route_allowlist.get("route_canary")
+            if isinstance(route_canary, dict):
+                role_fields.append(
+                    (
+                        "route_canary_evidence_hash",
+                        route_canary.get("evidence_hash"),
+                    )
+                )
+                # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
+                for field in sorted(_all_lanes_route_canary_fields(domain)):
+                    if field in {
+                        "destination_binding_hash",
+                        "evidence_hash",
+                        "route_allowlist_hash",
+                    }:
+                        continue
+                    role_fields.append(
+                        (f"route_canary.{field}", route_canary.get(field))
+                    )
+        role_fields.extend(
+            (f"audit_hashes.{field}", value)
+            for field, value in sorted(semantic_audit_hashes.items())
+        )
+        errors.extend(
+            _distinct_nonzero_bytes32_field_errors(
+                f"{label}.source_adapter_gate hash role",
+                tuple(role_fields),
             )
         )
     if type(ready) is bool and not ready:
@@ -1238,6 +1491,17 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
         ("destination_binding_hash", payload.get("destination_binding_hash")),
         ("route_allowlist_hash", payload.get("route_allowlist_hash")),
         ("route_canary_evidence_hash", payload.get("route_canary_evidence_hash")),
+        # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
+        ("route_canary_transaction_hash", payload.get("route_canary_transaction_hash")),
+        (
+            "route_canary_receipt_block_hash",
+            payload.get("route_canary_receipt_block_hash"),
+        ),
+        (
+            "route_canary_block_receipts_root",
+            payload.get("route_canary_block_receipts_root"),
+        ),
+        ("route_canary_message_id", payload.get("route_canary_message_id")),
     ]
     for audit_key, audit_hash in sorted(audit_hashes.items(), key=lambda item: str(item[0])):
         if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
@@ -1246,6 +1510,36 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
     return _distinct_nonzero_bytes32_field_errors(
         f"{label} source_adapter_gate hash role",
         tuple(fields),
+    )
+
+
+def _cryptographic_evidence_route_canary_hash_role_errors(
+    label: str,
+    payload: dict[str, Any],
+) -> list[str]:
+    """Return copied crypto-row blockers for route-canary transcript replay."""
+
+    return _distinct_nonzero_bytes32_field_errors(
+        f"{label} route_canary hash role",
+        (
+            (
+                "route_canary_transaction_hash",
+                payload.get("route_canary_transaction_hash"),
+            ),
+            (
+                "route_canary_receipt_block_hash",
+                payload.get("route_canary_receipt_block_hash"),
+            ),
+            (
+                "route_canary_block_receipts_root",
+                payload.get("route_canary_block_receipts_root"),
+            ),
+            ("route_canary_message_id", payload.get("route_canary_message_id")),
+            (
+                "route_canary_evidence_hash",
+                payload.get("route_canary_evidence_hash"),
+            ),
+        ),
     )
 
 
@@ -1779,6 +2073,18 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
             if _is_nonzero_bytes32_hex_text(value):
                 assert isinstance(value, str)
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
+            route_canary = route_allowlist.get("route_canary")
+            if isinstance(route_canary, dict):
+                for field in sorted(_all_lanes_route_canary_fields(lane.get("domain"))):
+                    if field == "evidence_hash":
+                        continue
+                    canary_value = route_canary.get(field)
+                    if _is_nonzero_bytes32_hex_text(canary_value):
+                        assert isinstance(canary_value, str)
+                        governed_hashes.setdefault(
+                            canary_value,
+                            (lane_label, f"route_canary.{field}"),
+                        )
         for field, value in _source_adapter_gate_hash_role_fields(lane_label, lane):
             if _is_nonzero_bytes32_hex_text(value):
                 assert isinstance(value, str)
@@ -2281,12 +2587,73 @@ def _integer_list_field_errors(
     return errors
 
 
+def _launch_domain_list_bundle_errors(label: str, payload: dict[str, Any]) -> list[str]:
+    """Return pre-render errors for copied launch-domain summary drift."""
+
+    # Source-inventory marker: supported_launch_domains must be the supported launch remote domains
+    # Source-inventory marker: unsupported_launch_domains must be the diagnostic unsupported remote domains
+    expected_lists = (
+        (
+            "required_domains",
+            _all_lanes_required_domains(),
+            "must be the production remote domains",
+        ),
+        (
+            "supported_launch_domains",
+            _all_lanes_supported_launch_domains(),
+            "must be the supported launch remote domains",
+        ),
+        (
+            "unsupported_launch_domains",
+            _all_lanes_unsupported_launch_domains(),
+            "must be the diagnostic unsupported remote domains",
+        ),
+    )
+    errors: list[str] = []
+    parsed: dict[str, list[int]] = {}
+    for field, expected, detail in expected_lists:
+        value = payload.get(field)
+        if isinstance(value, list) and all(type(domain) is int for domain in value):
+            parsed[field] = value
+            if value != list(expected):
+                errors.append(f"{label} {field} {detail}")
+
+    supported = parsed.get("supported_launch_domains")
+    unsupported = parsed.get("unsupported_launch_domains")
+    required = parsed.get("required_domains")
+    if supported is not None and unsupported is not None:
+        if set(supported).intersection(unsupported):
+            errors.append(
+                f"{label} supported_launch_domains and "
+                "unsupported_launch_domains must be disjoint"
+            )
+    if supported is not None and unsupported is not None and required is not None:
+        if sorted(supported + unsupported) != sorted(required):
+            errors.append(
+                f"{label} supported_launch_domains plus "
+                "unsupported_launch_domains must match required_domains"
+            )
+    return errors
+
+
 def _is_canonical_sha256_text(value: Any) -> bool:
     return (
         isinstance(value, str)
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _is_nonzero_canonical_sha256_text(value: Any) -> bool:
+    return _is_canonical_sha256_text(value) and any(character != "0" for character in value)
+
+
+def _sha256_text_errors(label: str, value: Any) -> list[str]:
+    if not _is_canonical_sha256_text(value):
+        return [f"{label} sha256 must be a canonical SHA-256 hex string"]
+    if not _is_nonzero_canonical_sha256_text(value):
+        return [f"{label} sha256 must be a non-zero canonical SHA-256 hex string"]
+    return []
 
 
 def _is_canonical_bytes32_hex_text(value: Any) -> bool:
@@ -2300,6 +2667,21 @@ def _is_canonical_bytes32_hex_text(value: Any) -> bool:
 
 def _is_nonzero_bytes32_hex_text(value: Any) -> bool:
     return _is_canonical_bytes32_hex_text(value) and any(
+        character != "0" for character in value[2:]
+    )
+
+
+def _is_canonical_fixed_hex_text(value: Any, *, byte_length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 2 + (byte_length * 2)
+        and value.startswith("0x")
+        and all(character in "0123456789abcdef" for character in value[2:])
+    )
+
+
+def _is_nonzero_fixed_hex_text(value: Any, *, byte_length: int) -> bool:
+    return _is_canonical_fixed_hex_text(value, byte_length=byte_length) and any(
         character != "0" for character in value[2:]
     )
 
@@ -2470,6 +2852,37 @@ def _optional_nonzero_bytes32_field_errors(
     return []
 
 
+def _nonzero_bytes32_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+) -> list[str]:
+    if field not in payload:
+        return []
+    if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+        return [
+            f"{label} {field} must be a non-zero canonical bytes32 hex string"
+        ]
+    return []
+
+
+def _nonzero_fixed_hex_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    byte_length: int,
+    type_label: str,
+) -> list[str]:
+    if field not in payload:
+        return []
+    if not _is_nonzero_fixed_hex_text(payload.get(field), byte_length=byte_length):
+        return [
+            f"{label} {field} must be a non-zero canonical {type_label} hex string"
+        ]
+    return []
+
+
 def _optional_integer_field_errors(
     label: str,
     payload: dict[str, Any],
@@ -2616,6 +3029,8 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
                 f"{label} path contains control character "
                 f"{control_character}"
             )
+        if not artifact_path.isascii():
+            errors.append(f"{label} path contains non-ASCII character")
         markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
         if markdown_unsafe_character is not None:
             errors.append(
@@ -2625,6 +3040,11 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
         percent_traversal = _path_percent_encoded_traversal(artifact_path)
         if percent_traversal is not None:
             errors.append(f"{label} path contains percent-encoded traversal segment")
+        if any(
+            marker in artifact_path.lower()
+            for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+        ):
+            errors.append(f"{label} path contains sensitive name")
         if require_bundle_relative_path:
             path = PurePosixPath(artifact_path)
             if (
@@ -2637,8 +3057,7 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
     bytes_value = artifact.get("bytes")
     if type(bytes_value) is not int or bytes_value <= 0:
         errors.append(f"{label} bytes must be a positive integer")
-    if not _is_canonical_sha256_text(artifact.get("sha256")):
-        errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
+    errors.extend(_sha256_text_errors(label, artifact.get("sha256")))
     return errors
 
 
@@ -2662,6 +3081,8 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
                 f"{label} path contains control character "
                 f"{control_character}"
             )
+        if not artifact_path.isascii():
+            errors.append(f"{label} path contains non-ASCII character")
         markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
         if markdown_unsafe_character is not None:
             errors.append(
@@ -2671,6 +3092,11 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
         percent_traversal = _path_percent_encoded_traversal(artifact_path)
         if percent_traversal is not None:
             errors.append(f"{label} path contains percent-encoded traversal segment")
+        if any(
+            marker in artifact_path.lower()
+            for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+        ):
+            errors.append(f"{label} path contains sensitive name")
         if require_bundle_relative_path:
             path = PurePosixPath(artifact_path)
             if (
@@ -2683,8 +3109,7 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
     bytes_value = artifact.get("bytes")
     if type(bytes_value) is not int or bytes_value <= 0:
         errors.append(f"{label} bytes must be a positive integer")
-    if not _is_canonical_sha256_text(artifact.get("sha256")):
-        errors.append(f"{label} sha256 must be a canonical SHA-256 hex string")
+    errors.extend(_sha256_text_errors(label, artifact.get("sha256")))
     return errors
 
 
@@ -2700,7 +3125,7 @@ def _native_evm_artifact_hash_binding_errors(
         return []
     artifact_hash = artifact.get("sha256")
     if (
-        _is_canonical_sha256_text(artifact_hash)
+        _is_nonzero_canonical_sha256_text(artifact_hash)
         and isinstance(expected_hash, str)
         and f"0x{artifact_hash}" != expected_hash
     ):
@@ -2749,8 +3174,13 @@ def _native_evm_summary_path_role_errors(
         if (
             artifact_path.strip() != artifact_path
             or _path_control_character(artifact_path) is not None
+            or not artifact_path.isascii()
             or _path_markdown_unsafe_character(artifact_path) is not None
             or _path_percent_encoded_traversal(artifact_path) is not None
+            or any(
+                marker in artifact_path.lower()
+                for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+            )
             or path.is_absolute()
             or ".." in path.parts
             or "\\" in artifact_path
@@ -2775,6 +3205,8 @@ def _canonical_copied_input_path_errors(value: Any, label: str) -> list[str]:
         return [
             f"{label} path contains control character {control_character}"
         ]
+    if not value.isascii():
+        return [f"{label} path contains non-ASCII character"]
     markdown_unsafe_character = _path_markdown_unsafe_character(value)
     if markdown_unsafe_character is not None:
         return [
@@ -2784,6 +3216,11 @@ def _canonical_copied_input_path_errors(value: Any, label: str) -> list[str]:
     percent_traversal = _path_percent_encoded_traversal(value)
     if percent_traversal is not None:
         return [f"{label} path contains percent-encoded traversal segment"]
+    if any(
+        marker in value.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        return [f"{label} path contains sensitive name"]
     if "\\" in value:
         return [f"{label} path is not canonical"]
     path = PurePosixPath(value)
@@ -2874,7 +3311,7 @@ def _release_checklist_bundle_errors(
 ) -> list[str]:
     errors: list[str] = []
     payload = _require_report_mapping(checklist, label, errors)
-    if errors or not payload:
+    if errors:
         return errors
     errors.extend(
         _unknown_public_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS)
@@ -3077,7 +3514,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
     if isinstance(payload.get("cross_sdk_fixture_parity_artifact"), dict):
         artifact_hash = payload["cross_sdk_fixture_parity_artifact"].get("sha256")
         if (
-            _is_canonical_sha256_text(artifact_hash)
+            _is_nonzero_canonical_sha256_text(artifact_hash)
             and isinstance(parity_hash, str)
             and f"0x{artifact_hash}" != parity_hash
         ):
@@ -3089,7 +3526,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
     if isinstance(payload.get("native_prover_self_test_artifact"), dict):
         artifact_hash = payload["native_prover_self_test_artifact"].get("sha256")
         if (
-            _is_canonical_sha256_text(artifact_hash)
+            _is_nonzero_canonical_sha256_text(artifact_hash)
             and isinstance(self_test_hash, str)
             and f"0x{artifact_hash}" != self_test_hash
         ):
@@ -3214,7 +3651,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                     artifact_hash = implementation_artifact.get("sha256")
                     implementation_hash = row_payload.get("implementation_hash")
                     if (
-                        _is_canonical_sha256_text(artifact_hash)
+                        _is_nonzero_canonical_sha256_text(artifact_hash)
                         and isinstance(implementation_hash, str)
                         and f"0x{artifact_hash}" != implementation_hash
                     ):
@@ -3300,6 +3737,26 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         if field in payload and type(payload.get(field)) is not bool:
             errors.append(f"{label} {field} must be true or false")
     if (
+        "route_canary_message_proof_used" in payload
+        and payload.get("route_canary_message_proof_used") is not None
+        and type(payload.get("route_canary_message_proof_used")) is not bool
+    ):
+        errors.append(
+            f"{label} route_canary_message_proof_used must be true, false, or null"
+        )
+    for field in (
+        "route_canary_raw_data_owner_matches_transaction",
+        "route_canary_signature_recovers_to_owner",
+    ):
+        # Source-inventory marker: route_canary_raw_data_owner_matches_transaction must be true, false, or null
+        # Source-inventory marker: route_canary_signature_recovers_to_owner must be true, false, or null
+        if (
+            field in payload
+            and payload.get(field) is not None
+            and type(payload.get(field)) is not bool
+        ):
+            errors.append(f"{label} {field} must be true, false, or null")
+    if (
         "route_canary_receipt_block_finalized" in payload
         and payload.get("route_canary_receipt_block_finalized") is not None
         and type(payload.get("route_canary_receipt_block_finalized")) is not bool
@@ -3310,6 +3767,113 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
     has_evm_route_canary_evidence = payload.get("domain") in {1, 2} and bool(
         payload.get("route_canary_evidence_hash")
     )
+    has_message_proof_route_canary_evidence = payload.get("domain") in {
+        _sccp_domain_eth(),
+        2,
+        _sccp_domain_tron(),
+    } and bool(payload.get("route_canary_evidence_hash"))
+    if (
+        has_message_proof_route_canary_evidence
+        and payload.get("route_canary_message_proof_used") is not True
+    ):
+        # Source-inventory marker: route_canary_message_proof_used must be true for message-proof route canary evidence
+        errors.append(
+            f"{label} route_canary_message_proof_used must be true for "
+            "message-proof route canary evidence"
+        )
+    if has_message_proof_route_canary_evidence:
+        for field in (
+            "route_canary_call_data_sha256",
+            "route_canary_payload_hash",
+            "route_canary_statement_hash",
+            "route_canary_commitment_root",
+            "route_canary_finality_height",
+            "route_canary_finality_block_hash",
+        ):
+            if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+                # Source-inventory marker: route-canary public transcript hashes must be non-zero bytes32 for message-proof route canary evidence
+                errors.append(
+                    f"{label} {field} must be a non-zero canonical bytes32 hex "
+                    "string for message-proof route canary evidence"
+                )
+        scalar_expectations = (
+            ("route_canary_log_index", None, "a non-negative u32 integer"),
+            ("route_canary_target_domain", payload.get("domain"), "the lane domain"),
+            ("route_canary_proof_version", 1, "1"),
+            ("route_canary_proof_source_domain", _sccp_domain_sora(), "SORA"),
+        )
+        for field, expected, expected_label in scalar_expectations:
+            value_for_field = payload.get(field)
+            if expected is None:
+                if (
+                    type(value_for_field) is not int
+                    or value_for_field < 0
+                    or value_for_field > 0xFFFF_FFFF
+                ):
+                    # Source-inventory marker: route-canary public scalar proof context must be exact for message-proof route canary evidence
+                    errors.append(
+                        f"{label} {field} must be {expected_label} for "
+                        "message-proof route canary evidence"
+                    )
+            elif value_for_field != expected:
+                # Source-inventory marker: route-canary public scalar proof context must be exact for message-proof route canary evidence
+                errors.append(
+                    f"{label} {field} must be {expected_label} for "
+                    "message-proof route canary evidence"
+                )
+    if (
+        payload.get("domain")
+        not in {_sccp_domain_eth(), 2, _sccp_domain_tron()}
+        and payload.get("route_canary_message_proof_used") is not None
+    ):
+        # Source-inventory marker: route_canary_message_proof_used must be null for lanes without message-proof route canary evidence
+        errors.append(
+            f"{label} route_canary_message_proof_used must be null for lanes "
+            "without message-proof route canary evidence"
+        )
+    if payload.get("domain") not in {_sccp_domain_eth(), 2, _sccp_domain_tron()}:
+        for field in (
+            "route_canary_log_index",
+            "route_canary_target_domain",
+            "route_canary_proof_version",
+            "route_canary_proof_source_domain",
+            "route_canary_call_data_sha256",
+            "route_canary_payload_hash",
+            "route_canary_statement_hash",
+            "route_canary_commitment_root",
+            "route_canary_finality_height",
+            "route_canary_finality_block_hash",
+        ):
+            if payload.get(field) is not None:
+                # Source-inventory marker: route-canary public transcript proof context must be null for lanes without message-proof route canary evidence
+                # Source-inventory marker: route-canary public scalar proof context must be null for lanes without message-proof route canary evidence
+                errors.append(
+                    f"{label} {field} must be null for lanes without "
+                    "message-proof route canary evidence"
+                )
+    if payload.get("domain") == _sccp_domain_tron() and payload.get(
+        "route_canary_evidence_hash"
+    ):
+        for field in (
+            "route_canary_raw_data_owner_matches_transaction",
+            "route_canary_signature_recovers_to_owner",
+        ):
+            if payload.get(field) is not True:
+                # Source-inventory marker: TRON route-canary public owner/signature flags must be true for TRON route canary evidence
+                errors.append(
+                    f"{label} {field} must be true for TRON route canary evidence"
+                )
+    if payload.get("domain") != _sccp_domain_tron():
+        for field in (
+            "route_canary_raw_data_owner_matches_transaction",
+            "route_canary_signature_recovers_to_owner",
+        ):
+            if payload.get(field) is not None:
+                # Source-inventory marker: TRON route-canary public owner/signature flags must be null for non-TRON lanes
+                errors.append(
+                    f"{label} {field} must be null for non-TRON route "
+                    "canary evidence"
+                )
     if has_evm_route_canary_evidence:
         expected_source = _route_canary_source_by_domain().get(payload.get("domain"))
         if payload.get("route_canary_evidence_source") != expected_source:
@@ -3334,6 +3898,12 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         "source_adapter_gate_hash",
         "route_allowlist_hash",
         "route_canary_evidence_hash",
+        "route_canary_call_data_sha256",
+        "route_canary_payload_hash",
+        "route_canary_statement_hash",
+        "route_canary_commitment_root",
+        "route_canary_finality_height",
+        "route_canary_finality_block_hash",
         "route_canary_transaction_hash",
         "route_canary_receipt_block_hash",
         "route_canary_block_receipts_root",
@@ -3356,6 +3926,28 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             positive=True,
         )
     )
+    for field in (
+        "route_canary_log_index",
+        "route_canary_target_domain",
+        "route_canary_proof_version",
+        "route_canary_proof_source_domain",
+    ):
+        errors.extend(
+            _optional_integer_field_errors(
+                label,
+                payload,
+                field,
+                positive=False,
+            )
+        )
+        errors.extend(
+            _optional_u32_integer_field_errors(
+                label,
+                payload,
+                field,
+                positive=False,
+            )
+        )
     errors.extend(
         _optional_integer_field_errors(
             label,
@@ -3423,6 +4015,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             audit_hashes,
         )
     )
+    errors.extend(_cryptographic_evidence_route_canary_hash_role_errors(label, payload))
     return errors
 
 
@@ -3470,6 +4063,55 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
         (
             "route_canary_evidence_bound",
             ("route_allowlist", "route_canary", "evidence_bound"),
+        ),
+        (
+            "route_canary_message_proof_used",
+            ("route_allowlist", "route_canary", "message_proof_used"),
+        ),
+        (
+            "route_canary_raw_data_owner_matches_transaction",
+            ("route_allowlist", "route_canary", "raw_data_owner_matches_transaction"),
+        ),
+        (
+            "route_canary_signature_recovers_to_owner",
+            ("route_allowlist", "route_canary", "signature_recovers_to_owner"),
+        ),
+        ("route_canary_log_index", ("route_allowlist", "route_canary", "log_index")),
+        (
+            "route_canary_target_domain",
+            ("route_allowlist", "route_canary", "target_domain"),
+        ),
+        (
+            "route_canary_proof_version",
+            ("route_allowlist", "route_canary", "proof_version"),
+        ),
+        (
+            "route_canary_proof_source_domain",
+            ("route_allowlist", "route_canary", "proof_source_domain"),
+        ),
+        (
+            "route_canary_call_data_sha256",
+            ("route_allowlist", "route_canary", "call_data_sha256"),
+        ),
+        (
+            "route_canary_payload_hash",
+            ("route_allowlist", "route_canary", "payload_hash"),
+        ),
+        (
+            "route_canary_statement_hash",
+            ("route_allowlist", "route_canary", "statement_hash"),
+        ),
+        (
+            "route_canary_commitment_root",
+            ("route_allowlist", "route_canary", "commitment_root"),
+        ),
+        (
+            "route_canary_finality_height",
+            ("route_allowlist", "route_canary", "finality_height"),
+        ),
+        (
+            "route_canary_finality_block_hash",
+            ("route_allowlist", "route_canary", "finality_block_hash"),
         ),
         (
             "route_canary_transaction_hash",
@@ -4040,7 +4682,7 @@ def _bundled_artifact_integrity_errors(
                 f"expected {expected_bytes}, got {actual_bytes}"
             )
     expected_hash = artifact.get("sha256")
-    if _is_canonical_sha256_text(expected_hash):
+    if _is_nonzero_canonical_sha256_text(expected_hash):
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         if expected_hash != actual_hash:
             errors.append(
@@ -4150,6 +4792,98 @@ def _readiness_markdown_bundle_errors(
     return errors
 
 
+def _destination_binding_recompute_bundle_errors(
+    label: str,
+    lane: dict[str, Any],
+    destination_binding: dict[str, Any],
+) -> list[str]:
+    """Return bounded errors when copied destination hashes drift from the key."""
+
+    try:
+        all_lanes = _all_lanes_module()
+        helper = getattr(all_lanes, "_public_lane_destination_binding_recompute_errors")
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label} destination_binding_hash must recompute from "
+            "destination_binding_key"
+        ]
+    try:
+        helper_errors = helper(lane, label, destination_binding)
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label} destination_binding_hash must recompute from "
+            "destination_binding_key"
+        ]
+    return [
+        error.replace(f"{label}.", f"{label} ", 1)
+        for error in helper_errors
+    ]
+
+
+def _route_allowlist_recompute_bundle_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_allowlist: dict[str, Any],
+) -> list[str]:
+    """Return bounded errors when copied route hashes drift from lane hashes."""
+
+    try:
+        all_lanes = _all_lanes_module()
+        helper = getattr(all_lanes, "_public_lane_route_allowlist_recompute_errors")
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label} route_allowlist_hash must recompute from source material, "
+            "source adapter deployment, and destination binding hashes"
+        ]
+    try:
+        helper_errors = helper(lane, label, route_allowlist)
+    except (
+        argparse.ArgumentTypeError,
+        AttributeError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        SystemExit,
+        TypeError,
+        ValueError,
+    ):
+        return [
+            f"{label} route_allowlist_hash must recompute from source material, "
+            "source adapter deployment, and destination binding hashes"
+        ]
+    return [
+        error.replace(f"{label}.", f"{label} ", 1)
+        for error in helper_errors
+    ]
+
+
 def _all_lanes_nested_bundle_errors(
     lane: dict[str, Any],
     label: str,
@@ -4174,11 +4908,23 @@ def _all_lanes_nested_bundle_errors(
         errors,
     )
     for field in field_sets["source_record_hashes"]:
+        hash_label = f"{label}.source_record_hashes"
+        if enforce_governed_hash_semantics:
+            errors.extend(_nonzero_bytes32_field_errors(hash_label, source_hashes, field))
+        else:
+            errors.extend(
+                _optional_nonzero_bytes32_field_errors(
+                    hash_label,
+                    source_hashes,
+                    field,
+                )
+            )
+    if enforce_governed_hash_semantics:
         errors.extend(
-            _optional_nonzero_bytes32_field_errors(
+            _source_record_template_hash_errors(
                 f"{label}.source_record_hashes",
+                lane.get("domain"),
                 source_hashes,
-                field,
             )
         )
 
@@ -4342,13 +5088,19 @@ def _all_lanes_nested_bundle_errors(
         "destination_binding_hash",
         "expected_destination_binding_hash",
     ):
-        errors.extend(
-            _optional_nonzero_bytes32_field_errors(
-                f"{label}.destination_binding",
-                destination_binding,
-                field,
+        binding_label = f"{label}.destination_binding"
+        if enforce_governed_hash_semantics:
+            errors.extend(
+                _nonzero_bytes32_field_errors(binding_label, destination_binding, field)
             )
-        )
+        else:
+            errors.extend(
+                _optional_nonzero_bytes32_field_errors(
+                    binding_label,
+                    destination_binding,
+                    field,
+                )
+            )
     for field in ("destination_binding_key", "destination_bridge_address"):
         errors.extend(
             _string_field_errors(
@@ -4370,6 +5122,62 @@ def _all_lanes_nested_bundle_errors(
                 allow_empty=True,
             )
         )
+    if enforce_governed_hash_semantics:
+        binding_label = f"{label}.destination_binding"
+        if domain in _all_lanes_evm_destination_domains():
+            if "destination_network_id" not in destination_binding:
+                errors.append(
+                    f"{binding_label} destination_network_id is required for EVM-family lanes"
+                )
+            if "destination_bridge_address" not in destination_binding:
+                errors.append(
+                    f"{binding_label} destination_bridge_address is required for EVM-family lanes"
+                )
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    binding_label,
+                    destination_binding,
+                    "destination_network_id",
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    binding_label,
+                    destination_binding,
+                    "destination_bridge_address",
+                    byte_length=20,
+                    type_label="20-byte",
+                )
+            )
+        elif domain == _sccp_domain_tron():
+            if "destination_network_id" not in destination_binding:
+                errors.append(
+                    f"{binding_label} destination_network_id is required for TRON lanes"
+                )
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    binding_label,
+                    destination_binding,
+                    "destination_network_id",
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+            if "destination_bridge_address" in destination_binding:
+                errors.append(
+                    f"{binding_label} destination_bridge_address is only valid for EVM-family lanes"
+                )
+        elif domain in (_sccp_domain_sol(), _sccp_domain_ton()):
+            if "destination_network_id" in destination_binding:
+                errors.append(
+                    f"{binding_label} destination_network_id is only valid for EVM-family or TRON lanes"
+                )
+            if "destination_bridge_address" in destination_binding:
+                errors.append(
+                    f"{binding_label} destination_bridge_address is only valid for EVM-family lanes"
+                )
     for field in ("expected_destination_binding_hash_matches", "recomputed"):
         if (
             field in destination_binding
@@ -4397,6 +5205,14 @@ def _all_lanes_nested_bundle_errors(
         errors.append(
             f"{label}.destination_binding expected_destination_binding_hash must match destination_binding_hash"
         )
+    if enforce_governed_hash_semantics:
+        errors.extend(
+            _destination_binding_recompute_bundle_errors(
+                f"{label}.destination_binding",
+                lane,
+                destination_binding,
+            )
+        )
 
     route_allowlist = _all_lanes_object(
         lane.get("route_allowlist"),
@@ -4406,13 +5222,17 @@ def _all_lanes_nested_bundle_errors(
         errors,
     )
     for field in ("route_allowlist_hash", "expected_route_allowlist_hash"):
-        errors.extend(
-            _optional_nonzero_bytes32_field_errors(
-                f"{label}.route_allowlist",
-                route_allowlist,
-                field,
+        route_label = f"{label}.route_allowlist"
+        if enforce_governed_hash_semantics:
+            errors.extend(_nonzero_bytes32_field_errors(route_label, route_allowlist, field))
+        else:
+            errors.extend(
+                _optional_nonzero_bytes32_field_errors(
+                    route_label,
+                    route_allowlist,
+                    field,
+                )
             )
-        )
     if (
         "expected_route_allowlist_hash_matches" in route_allowlist
         and type(route_allowlist.get("expected_route_allowlist_hash_matches"))
@@ -4441,6 +5261,14 @@ def _all_lanes_nested_bundle_errors(
     ):
         errors.append(
             f"{label}.route_allowlist expected_route_allowlist_hash must match route_allowlist_hash"
+        )
+    if enforce_governed_hash_semantics:
+        errors.extend(
+            _route_allowlist_recompute_bundle_errors(
+                f"{label}.route_allowlist",
+                lane,
+                route_allowlist,
+            )
         )
     route_canary_value = route_allowlist.get("route_canary")
     if enforce_governed_hash_semantics or route_canary_value is not None:
@@ -4609,6 +5437,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             allow_empty=True,
         )
     )
+    errors.extend(_launch_domain_list_bundle_errors(label, payload))
     errors.extend(
         _public_blocker_list_field_errors(
             label,
@@ -4630,7 +5459,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         f"{label}.release_checklist",
         errors,
     )
-    if checklist:
+    if isinstance(payload.get("release_checklist"), dict):
         errors.extend(
             _release_checklist_bundle_errors(
                 checklist,
@@ -4689,7 +5518,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             f"{lane_label}.records",
             errors,
         )
-        if records:
+        if isinstance(lane_payload.get("records"), dict):
             errors.extend(
                 _unknown_public_field_errors(
                     records,
@@ -4708,6 +5537,12 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
                     errors.append(
                         f"{lane_label}.records {field} must be true or false"
                     )
+                elif (
+                    lane_payload.get("production_ready") is True
+                    and field in records
+                    and records.get(field) is not True
+                ):
+                    errors.append(f"{lane_label}.records {field} must be true")
 
         errors.extend(_all_lanes_nested_bundle_errors(lane_payload, lane_label))
     errors.extend(_all_lanes_route_canary_cross_lane_bundle_errors(label, lanes))
@@ -4762,7 +5597,7 @@ def _release_report_bundle_errors(
         f"{label}.release_checklist",
         errors,
     )
-    if checklist:
+    if isinstance(payload.get("release_checklist"), dict):
         checklist_errors = _release_checklist_bundle_errors(
             checklist,
             f"{label}.release_checklist",
@@ -4773,7 +5608,7 @@ def _release_report_bundle_errors(
         checklist_errors = []
 
     corridor = _require_report_mapping(payload.get("corridor"), f"{label}.corridor", errors)
-    if corridor:
+    if isinstance(payload.get("corridor"), dict):
         errors.extend(
             _unknown_public_field_errors(
                 corridor,
@@ -4949,17 +5784,15 @@ def _release_report_bundle_errors(
         errors,
     )
     source_inventory_label = f"{label}.source_inventory"
-    if source_inventory:
+    if isinstance(payload.get("source_inventory"), dict):
         known_source_inventory_gates = _source_inventory_known_gates()
+        for gate in sorted(known_source_inventory_gates - set(source_inventory)):
+            errors.append(f"{source_inventory_label} missing required gate: {gate}")
         for gate in sorted(source_inventory, key=str):
             gate_error = _source_inventory_gate_key_error(gate, source_inventory_label)
             if gate_error is not None:
                 errors.append(gate_error)
-                if isinstance(gate, str) and any(
-                    marker in gate.lower()
-                    for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
-                ):
-                    continue
+                continue
             elif gate not in known_source_inventory_gates:
                 errors.append(f"{source_inventory_label} contains unknown gate: {gate}")
             inventory = source_inventory[gate]
@@ -5049,8 +5882,8 @@ def _release_report_bundle_errors(
 
 def _reject_malformed_release_report(errors: list[str]) -> None:
     if errors:
-        details = "\n".join(f"- {error}" for error in errors)
-        raise ValueError("malformed SCCP release readiness report:\n" + details)
+        details = "; ".join(f"- {error}" for error in errors)
+        raise ValueError("malformed SCCP release readiness report: " + details)
 
 
 def _release_notes_attachment_bundle_errors(
@@ -5111,13 +5944,13 @@ def _release_notes_artifact_row_cells(artifact: Any) -> list[str]:
     artifact_bytes = artifact.get("bytes")
     bytes_cell = (
         str(artifact_bytes)
-        if type(artifact_bytes) is int and artifact_bytes >= 0
+        if type(artifact_bytes) is int and artifact_bytes > 0
         else "`<invalid bytes>`"
     )
     artifact_hash = artifact.get("sha256")
     hash_cell = (
         f"`{artifact_hash}`"
-        if _is_canonical_sha256_text(artifact_hash)
+        if _is_nonzero_canonical_sha256_text(artifact_hash)
         else "`<invalid artifact.sha256>`"
     )
     return [path_cell, bytes_cell, hash_cell]
@@ -5395,11 +6228,14 @@ def _strict_verifier_summary_errors(summary: Any) -> list[str]:
     ):
         errors.append(f"{label} errors must not be empty when verified is false")
 
-    if summary.get("verified") is True and not _is_canonical_sha256_text(
+    if summary.get("verified") is True and not _is_nonzero_canonical_sha256_text(
         summary.get("manifest_sha256")
     ):
+        # Source-inventory markers:
+        # strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string
+        # strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string
         errors.append(
-            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string"
+            "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string"
         )
     return errors
 
@@ -5559,12 +6395,24 @@ def _reject_path_markdown_unsafe_characters(path_text: str, label: str) -> None:
         )
 
 
+def _reject_sensitive_source_filename(name: str) -> None:
+    if any(
+        marker in name.lower()
+        for marker in NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS
+    ):
+        raise ValueError("release bundle source filename contains sensitive name")
+
+
 def _reject_symlink_sources(paths: list[Path]) -> None:
     for path in paths:
         _reject_path_control_characters(path, "release bundle source path")
         if path.name.strip() != path.name:
             raise ValueError(
                 "release bundle source filename must not contain surrounding whitespace"
+            )
+        if not path.name.isascii():
+            raise ValueError(
+                "release bundle source filename contains non-ASCII character"
             )
         if _path_percent_encoded_traversal(path.name) is not None:
             raise ValueError(
@@ -5590,6 +6438,7 @@ def _reject_symlink_sources(paths: list[Path]) -> None:
                 raise ValueError(
                     "release bundle source path ancestor must not be a symlink"
                 )
+        _reject_sensitive_source_filename(path.name)
 
 
 def _evidence_input_identity(path: Path) -> tuple[object, ...]:
@@ -5653,6 +6502,10 @@ def _validate_output_dir(
     if _path_contains(resolved_output, ROOT.resolve()):
         raise ValueError("refusing output directory that contains the repository root")
     _reject_symlinked_existing_output_path(output_dir)
+    if force or not output_dir.exists():
+        output_path_error = _output_directory_path_error(str(output_dir))
+        if output_path_error is not None:
+            raise ValueError(output_path_error)
     protected_paths = [*input_paths, *phase_sources.values()]
     if native_evm_prover_bundle is not None:
         protected_paths.append(native_evm_prover_bundle)
@@ -5678,20 +6531,39 @@ def _validate_output_dir(
 
 SENSITIVE_CLI_ERROR_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "passphrase",
-    "bearer ",
+    "bearer",
     "authorization",
+    "access key",
     "access-key",
     "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
-    "session=",
-    "token=",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
+    "session",
+    "token",
 )
 
 
@@ -5704,10 +6576,12 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     text = str(exc)
     if not text:
         return fallback
+    if not text.isascii():
+        return fallback
     lowered = text.lower()
     if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
-    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
         return fallback
     return text
 

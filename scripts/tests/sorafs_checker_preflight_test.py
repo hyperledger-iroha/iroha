@@ -16,11 +16,17 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_notice,
+    inspect_checker_preflight_path_exists,
+    inspect_checker_preflight_path_is_dir,
+    inspect_checker_preflight_path_is_symlink,
     record_artifact_error,
     render_and_write_checker_summary,
     render_checker_summary,
+    resolve_checker_preflight_path,
+    validate_checker_output_parent,
     validate_checker_preflight,
     validate_checker_evidence_inputs,
+    validate_checker_summary_output,
     write_checker_summary,
 )
 
@@ -29,6 +35,13 @@ def test_absent_summary_out_passes() -> None:
     errors = validate_checker_preflight(argparse.Namespace(summary_out=None))
 
     assert errors == []
+
+
+def test_checker_path_resolution_uses_shared_identity_helper() -> None:
+    assert (
+        resolve_checker_preflight_path.__globals__["resolve_path_identity"].__module__
+        == "sorafs_path_identity"
+    )
 
 
 def test_absent_evidence_attrs_skip_evidence_input_check() -> None:
@@ -77,6 +90,164 @@ def test_summary_out_parent_file_fails(tmp_path: Path) -> None:
 
     assert len(errors) == 1
     assert "must be a directory when it exists" in errors[0]
+
+
+def test_summary_out_symlink_fails_preflight(tmp_path: Path) -> None:
+    target = tmp_path / "actual-summary.json"
+    target.write_text("{}", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.symlink_to(target)
+
+    errors = validate_checker_preflight(argparse.Namespace(summary_out=summary))
+
+    assert errors == [f"--summary-out `{summary}` must not be a symlink"]
+
+
+def test_summary_out_parent_symlink_fails_preflight(tmp_path: Path) -> None:
+    target = tmp_path / "actual-parent"
+    target.mkdir()
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = validate_checker_preflight(
+        argparse.Namespace(summary_out=parent / "summary.json")
+    )
+
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+
+
+def test_summary_out_parent_chain_symlink_fails_preflight(tmp_path: Path) -> None:
+    target = tmp_path / "actual-parent"
+    target.mkdir()
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = validate_checker_preflight(
+        argparse.Namespace(summary_out=parent / "nested" / "summary.json")
+    )
+
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+
+
+def test_summary_out_parent_chain_file_fails_preflight(tmp_path: Path) -> None:
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("", encoding="utf-8")
+    summary = parent / "nested" / "summary.json"
+
+    errors = validate_checker_preflight(argparse.Namespace(summary_out=summary))
+
+    assert errors == [
+        f"--summary-out parent `{parent}` must be a directory when it exists"
+    ]
+
+
+def test_validate_checker_summary_output_rejects_non_path_without_traceback() -> None:
+    errors: list[str] = []
+
+    assert not validate_checker_summary_output("summary.json", errors)
+    assert errors == ["--summary-out `summary.json` must be a path"]
+
+
+def test_validate_checker_output_parent_rejects_non_path_without_traceback() -> None:
+    errors: list[str] = []
+
+    assert not validate_checker_output_parent(
+        "summary.json",
+        errors,
+        label="--summary-out",
+    )
+    assert errors == ["--summary-out `summary.json` must be a path"]
+
+
+def test_checker_preflight_path_inspectors_reject_malformed_error_container(
+    tmp_path: Path,
+) -> None:
+    for helper in (
+        inspect_checker_preflight_path_exists,
+        inspect_checker_preflight_path_is_dir,
+        inspect_checker_preflight_path_is_symlink,
+    ):
+        for errors in ("", (), {"error": "old"}, ["old", 7]):
+            try:
+                helper(tmp_path, errors, label="--summary-out")
+            except ValueError as error:
+                assert "checker preflight errors must be a list of strings" in str(
+                    error
+                )
+            else:
+                raise AssertionError(
+                    f"{helper.__name__} accepted malformed errors {errors!r}"
+                )
+
+
+def test_checker_preflight_path_inspectors_reject_malformed_labels(
+    tmp_path: Path,
+) -> None:
+    for helper in (
+        inspect_checker_preflight_path_exists,
+        inspect_checker_preflight_path_is_dir,
+        inspect_checker_preflight_path_is_symlink,
+    ):
+        for label in ("", " --summary-out", "--summary-out ", "--summary\nout", 7):
+            errors: list[str] = []
+            try:
+                helper(tmp_path, errors, label=label)
+            except ValueError as error:
+                assert (
+                    "checker preflight label must be a non-empty canonical string"
+                    in str(error)
+                )
+                assert errors == []
+            else:
+                raise AssertionError(
+                    f"{helper.__name__} accepted malformed label {label!r}"
+                )
+
+
+def test_validate_checker_output_parent_rejects_malformed_error_container(
+    tmp_path: Path,
+) -> None:
+    summary = tmp_path / "summary.json"
+
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            validate_checker_output_parent(summary, errors, label="--summary-out")
+        except ValueError as error:
+            assert "checker preflight errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_validate_checker_output_parent_rejects_malformed_label(
+    tmp_path: Path,
+) -> None:
+    summary = tmp_path / "summary.json"
+
+    for label in ("", " --summary-out", "--summary-out ", "--summary\nout", 7):
+        errors: list[str] = []
+        try:
+            validate_checker_output_parent(summary, errors, label=label)
+        except ValueError as error:
+            assert "checker preflight label must be a non-empty canonical string" in str(
+                error
+            )
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed label {label!r}")
+
+
+def test_validate_checker_summary_output_rejects_malformed_error_container(
+    tmp_path: Path,
+) -> None:
+    summary = tmp_path / "summary.json"
+
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            validate_checker_summary_output(summary, errors)
+        except ValueError as error:
+            assert "checker preflight errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
 
 
 def test_summary_out_exists_inspection_failure_fails_preflight(
@@ -265,14 +436,40 @@ def test_write_checker_summary_rejects_parent_file(tmp_path: Path) -> None:
     errors = write_checker_summary(parent / "summary.json", "{}")
 
     assert len(errors) == 1
-    assert "failed to create --summary-out parent" in errors[0]
+    assert "must be a directory when it exists" in errors[0]
 
 
 def test_write_checker_summary_rejects_directory_target(tmp_path: Path) -> None:
     errors = write_checker_summary(tmp_path, "{}")
 
     assert len(errors) == 1
-    assert "failed to write --summary-out" in errors[0]
+    assert "must not be a directory" in errors[0]
+
+
+def test_write_checker_summary_rejects_summary_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "actual-summary.json"
+    target.write_text("old", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.symlink_to(target)
+
+    errors = write_checker_summary(summary, "new")
+
+    assert errors == [f"--summary-out `{summary}` must not be a symlink"]
+    assert target.read_text(encoding="utf-8") == "old"
+
+
+def test_write_checker_summary_rejects_parent_chain_symlink_before_create(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "actual-parent"
+    target.mkdir()
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = write_checker_summary(parent / "nested" / "summary.json", "{}")
+
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+    assert not (target / "nested").exists()
 
 
 def test_emit_checker_error_lines_writes_prefixed_stderr(capsys) -> None:
@@ -304,6 +501,7 @@ def test_artifact_path_label_returns_path_or_unknown() -> None:
     assert artifact_path_label({"path": ""}) == "<unknown>"
     assert artifact_path_label({"path": None}) == "<unknown>"
     assert artifact_path_label({}) == "<unknown>"
+    assert artifact_path_label("bad") == "<unknown>"
 
 
 def test_record_artifact_error_appends_existing_artifact_errors() -> None:
@@ -353,3 +551,17 @@ def test_record_artifact_error_uses_unknown_for_malformed_path() -> None:
     assert artifact["valid"] is False
     assert artifact["errors"] == ["new"]
     assert summary_errors == ["<unknown>: new"]
+
+
+def test_record_artifact_error_rejects_malformed_artifact_rows() -> None:
+    summary_errors: list[str] = []
+
+    record_artifact_error("bad", "new", summary_errors)
+    record_artifact_error(
+        ["bad"],
+        "artifact detail",
+        summary_errors,
+        summary_error="summary detail",
+    )
+
+    assert summary_errors == ["<unknown>: new", "<unknown>: summary detail"]

@@ -14,7 +14,7 @@ use norito::codec::{Decode, Encode};
 
 #[cfg(test)]
 use crate::state::StateView;
-use crate::state::WorldReadOnly;
+use crate::state::{WorldReadOnly, public_lane_validator_record_matches_key};
 
 /// Stake snapshot entry for a single validator.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -78,6 +78,7 @@ impl CommitStakeSnapshot {
 }
 
 /// Determine whether strict >2/3 stake quorum is reached for the provided signers.
+#[cfg(test)]
 pub fn stake_quorum_reached_for_world(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -110,6 +111,7 @@ pub fn stake_quorum_reached_for_world_with_active_lanes(
 }
 
 /// Return selected signer stake coverage in basis points for the provided roster.
+#[cfg(test)]
 pub fn stake_coverage_bps_for_world(
     world: &impl WorldReadOnly,
     roster: &[PeerId],
@@ -286,6 +288,7 @@ pub fn stake_quorum_reached_for_snapshot(
 }
 
 /// Build a stake map keyed by peer id using the largest stake seen per peer.
+#[cfg(test)]
 #[must_use]
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
     stake_map_from_world_with_active_lanes(world, None)
@@ -298,7 +301,10 @@ pub(super) fn stake_map_from_world_with_active_lanes(
     active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> BTreeMap<PeerId, Numeric> {
     let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
-    for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+    for (key, record) in world.public_lane_validators().iter() {
+        if !public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
         if active_lane_ids.is_some_and(|active_lane_ids| !active_lane_ids.contains(&record.lane_id))
         {
             continue;
@@ -429,10 +435,12 @@ mod tests {
 
         let keypair_a = checked_random_keypair();
         let keypair_b = checked_random_keypair();
+        let keypair_mismatched = checked_random_keypair();
         let peer_a = PeerId::new(keypair_a.public_key().clone());
         let peer_b = PeerId::new(keypair_b.public_key().clone());
         let account_a = AccountId::new(keypair_a.public_key().clone());
         let account_b = AccountId::new(keypair_b.public_key().clone());
+        let account_mismatched = AccountId::new(keypair_mismatched.public_key().clone());
 
         {
             let mut block = state.world.public_lane_validators.block();
@@ -484,12 +492,49 @@ mod tests {
                     last_reward_epoch: None,
                 },
             );
+            block.insert(
+                (LaneId::new(4), account_a.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(5),
+                    validator: account_a.clone(),
+                    peer_id: peer_a.clone(),
+                    stake_account: account_a.clone(),
+                    total_stake: Numeric::new(9_000, 0),
+                    self_stake: Numeric::new(9_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(6), account_mismatched.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(6),
+                    validator: account_a.clone(),
+                    peer_id: peer_a.clone(),
+                    stake_account: account_mismatched,
+                    total_stake: Numeric::new(8_000, 0),
+                    self_stake: Numeric::new(8_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
             block.commit();
         }
 
         let view = state.view();
         let stake_map = stake_map_from_world(view.world());
         assert_eq!(stake_map.get(&peer_a), Some(&Numeric::new(25, 0)));
+        assert_ne!(
+            stake_map.get(&peer_a),
+            Some(&Numeric::new(9_000, 0)),
+            "mismatched key/record lane rows must not inflate stake"
+        );
         assert_eq!(stake_map.get(&peer_b), Some(&Numeric::new(15, 0)));
 
         let roster = vec![peer_b.clone(), peer_a.clone()];

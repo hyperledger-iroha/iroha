@@ -448,6 +448,10 @@ ManifestGateRescheduleExactness ==
   /\ AuthoritativeRotationExact
   /\ PassiveVoteBackedEvidenceExact
 
+ManifestGateRescheduleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ManifestGateRescheduleExactness
+
 BugManifestNotEffective ==
   ActualOutput("manifest_no_votes") = SpecOutput("manifest_no_votes")
 

@@ -10,6 +10,27 @@ from pathlib import Path
 from typing import Any
 
 from sorafs_evidence_paths import record_reserved_output_evidence_conflicts
+from sorafs_path_identity import resolve_path_identity
+
+
+def _require_error_list(errors: Any) -> list[str]:
+    if not isinstance(errors, list):
+        raise ValueError("checker preflight errors must be a list of strings")
+    for error in errors:
+        if not isinstance(error, str):
+            raise ValueError("checker preflight errors must be a list of strings")
+    return errors
+
+
+def _require_label(label: Any) -> str:
+    if (
+        not isinstance(label, str)
+        or not label.strip()
+        or label != label.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in label)
+    ):
+        raise ValueError("checker preflight label must be a non-empty canonical string")
+    return label
 
 
 def resolve_checker_preflight_path(
@@ -20,11 +41,7 @@ def resolve_checker_preflight_path(
 ) -> Path | None:
     """Return a checker preflight path identity, recording resolver failures."""
 
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be resolved: {error}")
-        return None
+    return resolve_path_identity(path, errors, label=label)
 
 
 def inspect_checker_preflight_path_exists(
@@ -35,10 +52,15 @@ def inspect_checker_preflight_path_exists(
 ) -> bool | None:
     """Return whether a preflight path exists, recording inspection failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.exists()
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
 
 
@@ -50,11 +72,124 @@ def inspect_checker_preflight_path_is_dir(
 ) -> bool | None:
     """Return whether a preflight path is a directory, recording failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.is_dir()
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
+
+
+def inspect_checker_preflight_path_is_symlink(
+    path: Path,
+    errors: list[str],
+    *,
+    label: str,
+) -> bool | None:
+    """Return whether a preflight path is a symlink, recording failures."""
+
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
+    try:
+        return path.is_symlink()
+    except (OSError, RuntimeError) as error:
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
+        return None
+
+
+def validate_checker_output_parent(
+    path: Path,
+    errors: list[str],
+    *,
+    label: str,
+) -> bool:
+    """Validate a checker output path's parent chain before creating files."""
+
+    error_list = _require_error_list(errors)
+    output_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{output_label} `{path}` must be a path")
+        return False
+    for parent in (path.parent, *path.parent.parents):
+        parent_label = f"{output_label} parent"
+        parent_is_symlink = inspect_checker_preflight_path_is_symlink(
+            parent,
+            error_list,
+            label=parent_label,
+        )
+        if parent_is_symlink is None:
+            return False
+        if parent_is_symlink:
+            error_list.append(f"{parent_label} `{parent}` must not be a symlink")
+            return False
+        parent_exists = inspect_checker_preflight_path_exists(
+            parent,
+            error_list,
+            label=parent_label,
+        )
+        if parent_exists is None:
+            return False
+        if parent_exists:
+            parent_is_dir = inspect_checker_preflight_path_is_dir(
+                parent,
+                error_list,
+                label=parent_label,
+            )
+            if parent_is_dir is None:
+                return False
+            if not parent_is_dir:
+                error_list.append(
+                    f"{parent_label} `{parent}` must be a directory when it exists"
+                )
+                return False
+    return True
+
+
+def validate_checker_summary_output(summary_out: Path, errors: list[str]) -> bool:
+    """Validate the optional checker summary output target."""
+
+    error_list = _require_error_list(errors)
+    if not isinstance(summary_out, Path):
+        error_list.append(f"--summary-out `{summary_out}` must be a path")
+        return False
+    summary_out_is_symlink = inspect_checker_preflight_path_is_symlink(
+        summary_out,
+        error_list,
+        label="--summary-out",
+    )
+    if summary_out_is_symlink is None:
+        return False
+    if summary_out_is_symlink:
+        error_list.append(f"--summary-out `{summary_out}` must not be a symlink")
+        return False
+    summary_out_exists = inspect_checker_preflight_path_exists(
+        summary_out,
+        error_list,
+        label="--summary-out",
+    )
+    if summary_out_exists is None:
+        return False
+    if summary_out_exists:
+        summary_out_is_dir = inspect_checker_preflight_path_is_dir(
+            summary_out,
+            error_list,
+            label="--summary-out",
+        )
+        if summary_out_is_dir is None:
+            return False
+        if summary_out_is_dir:
+            error_list.append(f"--summary-out `{summary_out}` must not be a directory")
+            return False
+    return validate_checker_output_parent(
+        summary_out, error_list, label="--summary-out"
+    )
 
 
 def validate_checker_preflight(args: argparse.Namespace) -> list[str]:
@@ -67,44 +202,8 @@ def validate_checker_preflight(args: argparse.Namespace) -> list[str]:
     if not isinstance(summary_out, Path):
         errors.append(f"--summary-out `{summary_out}` must be a path")
         return errors
-    summary_out_exists = inspect_checker_preflight_path_exists(
-        summary_out,
-        errors,
-        label="--summary-out",
-    )
-    if summary_out_exists is None:
+    if not validate_checker_summary_output(summary_out, errors):
         return errors
-    if summary_out_exists:
-        summary_out_is_dir = inspect_checker_preflight_path_is_dir(
-            summary_out,
-            errors,
-            label="--summary-out",
-        )
-        if summary_out_is_dir is None:
-            return errors
-        if summary_out_is_dir:
-            errors.append(f"--summary-out `{summary_out}` must not be a directory")
-            return errors
-    parent = summary_out.parent
-    parent_exists = inspect_checker_preflight_path_exists(
-        parent,
-        errors,
-        label="--summary-out parent",
-    )
-    if parent_exists is None:
-        return errors
-    if parent_exists:
-        parent_is_dir = inspect_checker_preflight_path_is_dir(
-            parent,
-            errors,
-            label="--summary-out parent",
-        )
-        if parent_is_dir is None:
-            return errors
-        if not parent_is_dir:
-            errors.append(
-                f"--summary-out parent `{parent}` must be a directory when it exists"
-            )
     summary_out_identity = resolve_checker_preflight_path(
         summary_out,
         errors,
@@ -187,6 +286,10 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
     if not isinstance(summary_out, Path):
         return [f"--summary-out `{summary_out}` must be a path"]
 
+    errors: list[str] = []
+    if not validate_checker_summary_output(summary_out, errors):
+        return errors
+
     parent = summary_out.parent
     try:
         parent.mkdir(parents=True, exist_ok=True)
@@ -221,9 +324,11 @@ def emit_checker_notice(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def artifact_path_label(artifact: Mapping[str, Any]) -> str:
+def artifact_path_label(artifact: Any) -> str:
     """Return an artifact path label for diagnostics."""
 
+    if not isinstance(artifact, Mapping):
+        return "<unknown>"
     path = artifact.get("path")
     if isinstance(path, str) and path:
         return path
@@ -231,7 +336,7 @@ def artifact_path_label(artifact: Mapping[str, Any]) -> str:
 
 
 def record_artifact_error(
-    artifact: dict[str, Any],
+    artifact: Any,
     error: str,
     summary_errors: list[str],
     *,
@@ -239,6 +344,9 @@ def record_artifact_error(
 ) -> None:
     """Mark an evidence artifact invalid and mirror the error to summary errors."""
 
+    if not isinstance(artifact, dict):
+        summary_errors.append(f"<unknown>: {summary_error or error}")
+        return
     artifact["valid"] = False
     artifact_errors = artifact.get("errors")
     if not isinstance(artifact_errors, list):

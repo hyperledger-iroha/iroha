@@ -30,7 +30,8 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 /** Torii-backed issuer client for Offline Note wallet loads. */
 public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient {
   private static final String KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill";
-  private static final String NOTES_ISSUE_PATH = "/v1/offline/v2/notes/issue";
+  public static final String RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE =
+      "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows.";
 
   private final ToriiCanonicalRequestAuth canonicalAuth;
   private final OfflineNoteIssuerDeviceBindingProvider deviceBindingProvider;
@@ -199,7 +200,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
       final OfflineNoteIssueRequest request) {
     final PendingLoad pending;
     synchronized (this) {
-      pending = pendingLoads.get(request.loadContext().operationId());
+      pending = pendingLoads.remove(request.loadContext().operationId());
     }
     if (pending == null) {
       return failedFuture(
@@ -208,63 +209,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
                   + request.loadContext().operationId()
                   + "."));
     }
-    final Map<String, Object> body = new LinkedHashMap<>();
-    body.put("account_id", request.accountId());
-    body.put("operation_id", pending.operationId);
-    body.put("device_id", pending.deviceBinding.deviceId());
-    body.put("offline_public_key", pending.deviceBinding.offlinePublicKey());
-    body.put("asset_definition_id", request.assetDefinitionId());
-    body.put("device_binding", pending.deviceBinding.deviceBinding());
-    body.put("lineage_id", pending.lineageId);
-    body.put("lineage_state", OfflineNoteIssuerDeviceBinding.deepCopyObject(pending.lineageState));
-    body.put("amount", request.amount());
-    body.put("local_balance", pending.localBalance);
-    body.put("local_revision", pending.preIssueRevision);
-    body.put("note_commitment", request.noteCommitmentHex());
-    final Object stateHash = pending.lineageState.get("server_state_hash");
-    if (stateHash instanceof String value && !value.isEmpty()) {
-      body.put("local_state_hash", value);
-    }
-    addDeviceProof(
-        body,
-        request.chainId(),
-        request.accountId(),
-        request.assetDefinitionId(),
-        "load",
-        pending.lineageId,
-        request.amount());
-    return executePost(
-        NOTES_ISSUE_PATH,
-        body,
-        payload -> {
-          final Map<String, Object> response = expectObject(parseJson(payload), "notes issue response");
-          notifyIssuerResponse(NOTES_ISSUE_PATH, response);
-          final byte[] commitment =
-              hexToBytes(requiredString(response, "issued_note_commitment"), "issued_note_commitment");
-          final Map<String, Object> lineageState =
-              expectObject(requiredValue(response, "lineage_state"), "lineage_state");
-          final long localRevision = requiredLong(response, "local_revision");
-          final Map<String, Object> certificateJson =
-              expectObject(requiredValue(response, "key_certificate"), "key_certificate");
-          final OfflineNote.KeyCertificate keyCertificate = parseKeyCertificate(certificateJson);
-          final Map<String, Object> settlement = optionalObject(response.get("settlement"));
-          final String settlementEntryHash =
-              settlement == null ? null : optionalString(settlement.get("entry_hash"));
-          final StoredLineageState stored =
-              storedLineageState(
-                  lineageState, keyCertificate, optionalLong(certificateJson.get("expires_at_ms")));
-          synchronized (this) {
-            pendingLoads.remove(pending.operationId);
-            lineageStates.put(pending.lineageKey, stored);
-          }
-          return new OfflineNoteIssueResponse(
-              commitment,
-              requiredString(response, "operation_id"),
-              stored.lineageId,
-              localRevision,
-              keyCertificate,
-              settlementEntryHash);
-        });
+    return failedFuture(new IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE));
   }
 
   private CompletableFuture<OfflineNoteLoadContext> refillKeys(

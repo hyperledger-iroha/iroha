@@ -258,6 +258,10 @@ KnownBlockCommitQcRecoveryExactness ==
   /\ PendingTipExtensionExact
   /\ StaleViewCommitQcFetchAdmissionExact
 
+KnownBlockCommitQcRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KnownBlockCommitQcRecoveryExactness
+
 BugPlanLocalRequestsBody ==
   ActualPlanOutput("plan_local_payload") = SpecPlanOutput("plan_local_payload")
 

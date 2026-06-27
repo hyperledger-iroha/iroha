@@ -1185,11 +1185,17 @@ public final class EvmSccpProver {
     if (!body.trim().equals(body)) {
       throw new IllegalArgumentException(field + " must be canonical hex");
     }
-    if (body.regionMatches(true, 0, "0x", 0, 2)) {
+    if (body.startsWith("0X")) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
+    }
+    if (body.startsWith("0x")) {
       body = body.substring(2);
     }
     if (body.length() != 64) {
       throw new IllegalArgumentException(field + " must be 32 bytes");
+    }
+    if (!isLowercaseHexBody(body)) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
     }
     final byte[] out = new byte[32];
     for (int i = 0; i < out.length; i++) {
@@ -1201,6 +1207,16 @@ public final class EvmSccpProver {
       out[i] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private static boolean isLowercaseHexBody(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      final char character = value.charAt(i);
+      if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static byte[] nonZeroHex32Bytes(final String value, final String field) {

@@ -28,6 +28,7 @@ from sorafs_evidence_paths import (  # noqa: E402
 from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
+from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     build_evidence_artifact,
     count_evidence_artifacts,
@@ -218,7 +219,20 @@ class ValidationOptions:
 
 
 
-FINGERPRINT_FIELDS: tuple[str, ...] = ("schema", "generated_at_unix", "config_digest_hex")
+FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "schema",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "config_digest_hex",
+)
+RECONCILIATION_RUN_FIELDS: tuple[str, ...] = (
+    "generated_at_unix",
+    "peer_count",
+    "validator_count",
+    "case_count",
+    "config_digest_hex",
+)
 
 
 def validate_route_records(
@@ -617,18 +631,8 @@ def validate_evidence_payload(
         lambda kind, checked_payload, errors: validate_kind_specific(
             kind, checked_payload, errors, options
         ),
+        require_reviewed_deployment_context=True,
     )
-
-
-
-def reconciliation_fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "generated_at_unix": payload.get("generated_at_unix"),
-        "peer_count": payload.get("peer_count"),
-        "validator_count": payload.get("validator_count"),
-        "case_count": payload.get("case_count"),
-        "config_digest_hex": payload.get("config_digest_hex"),
-    }
 
 
 def build_summary(
@@ -674,7 +678,7 @@ def build_summary(
             FINGERPRINT_FIELDS,
         )
         if kind_name == "multi_peer_reconciliation":
-            run = reconciliation_fingerprint(payload)
+            run = artifact_fingerprint(payload, RECONCILIATION_RUN_FIELDS)
             artifact["run"] = run
             if evidence_artifact_is_valid(artifact):
                 valid_multi_peer_runs.append(run)
@@ -684,7 +688,7 @@ def build_summary(
                 valid_config_digests.add(digest.lower())
             elif kind_name in CONFIG_BOUND_KINDS:
                 valid_config_bound_artifacts.append((kind_name, artifact))
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(

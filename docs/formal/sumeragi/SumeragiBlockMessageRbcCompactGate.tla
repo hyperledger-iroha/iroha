@@ -148,4 +148,9 @@ Safety == BlockMessageRbcCompactExactness
 
 SafetyFast == Safety
 
+BlockMessageRbcCompactCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ BlockMessageRbcCompactSafetyAnchors
+
 ====

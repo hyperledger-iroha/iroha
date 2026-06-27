@@ -207,4 +207,8 @@ QcSignerBitmapAdmissionExactness ==
   /\ LengthMismatchRejected
   /\ AcceptedMatchesSpec
 
+QcSignerBitmapAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcSignerBitmapAdmissionExactness
+
 ====

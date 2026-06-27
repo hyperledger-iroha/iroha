@@ -393,9 +393,13 @@ PendingBlockMarkerCooldownExactness ==
 PendingBlockMarkerCoreSafety ==
   PendingBlockMarkerCooldownExactness
 
+PendingBlockMarkerCooldownCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingBlockMarkerCooldownExactness
+
 NoBugInvariant == PendingBlockMarkerCoreSafety
 
-SafetyFast == PendingBlockMarkerCoreSafety
+SafetyFast == PendingBlockMarkerCooldownCorrectnessEnvelope
 
 BugLocalVoteSkipsFirstProgress == NoBugInvariant
 BugLocalVoteAdvancesFromQc == NoBugInvariant

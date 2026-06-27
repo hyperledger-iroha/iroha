@@ -1537,6 +1537,11 @@ pub mod torii {
         /// Master enable switch for in-process RAM-LFE runtime wiring.
         pub const ENABLED: bool = false;
     }
+    /// Retail recipient lookup defaults (disabled unless routes are configured).
+    pub mod recipient_lookup {
+        /// HTTP request timeout applied to configured bank Core API lookups.
+        pub const REQUEST_TIMEOUT_MS: u64 = 4_000;
+    }
     /// Operator request-signature defaults for Torii operator endpoints.
     pub mod operator_signatures {
         /// Master enable switch for operator signature authentication.
@@ -3876,8 +3881,6 @@ pub mod settlement {
         pub const PRUNE_BATCH_SIZE: usize = 128;
         /// Kagemusha shielded offline-offline payments are enabled by default.
         pub const KAGEMUSHA_ENABLED: bool = true;
-        /// Legacy bearer-audit lineage is not forced unless an operator opts into migration fallback.
-        pub const KAGEMUSHA_FORCE_LEGACY: bool = false;
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

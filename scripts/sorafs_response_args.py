@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import re
 import shlex
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Sequence
+from typing import Any
+
+from sorafs_path_identity import resolve_path_identity
 
 
 MAX_RESPONSE_ARGFILE_BYTES = 256 * 1024
@@ -15,12 +18,32 @@ MAX_EXPANDED_ARGS = 8192
 CANONICAL_DECIMAL_INTEGER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)\Z")
 
 
+def _require_string_sequence(values: Any, *, label: str) -> Sequence[Any]:
+    if (
+        isinstance(values, (str, bytes))
+        or isinstance(values, Mapping)
+        or not isinstance(values, Sequence)
+    ):
+        raise ValueError(f"{label} must be a sequence of strings")
+    return values
+
+
+def require_expanded_arg_limit(expanded: Sequence[str]) -> None:
+    """Reject expanded operator arguments that exceed the shared cap."""
+
+    _require_string_sequence(expanded, label="expanded arguments")
+    if len(expanded) > MAX_EXPANDED_ARGS:
+        raise ValueError(f"expanded arguments must be <= {MAX_EXPANDED_ARGS}")
+
+
 class EvidenceArgumentParser(argparse.ArgumentParser):
     """Argument parser with shell-like reviewed response-file support."""
 
     def convert_arg_line_to_args(self, arg_line: str) -> list[str]:
         """Parse one response-file line, ignoring blank and comment lines."""
 
+        if not isinstance(arg_line, str):
+            raise ValueError("response-file line must be a string")
         line = arg_line.strip()
         if not line or line.startswith("#"):
             return []
@@ -30,6 +53,8 @@ class EvidenceArgumentParser(argparse.ArgumentParser):
 def parse_int_arg(value: str) -> int:
     """Parse an integer argparse value with a stable diagnostic."""
 
+    if not isinstance(value, str):
+        raise argparse.ArgumentTypeError("must be an integer")
     if not CANONICAL_DECIMAL_INTEGER_RE.fullmatch(value) or value == "-0":
         raise argparse.ArgumentTypeError("must be an integer")
     return int(value)
@@ -70,15 +95,23 @@ def expand_response_args(
         )
 
     expanded: list[str] = []
-    for arg in args:
+    for arg in _require_string_sequence(args, label="arguments"):
+        if not isinstance(arg, str):
+            raise ValueError(f"argument `{arg}` must be a string")
         if not arg.startswith("@") or arg == "@":
             expanded.append(arg)
+            require_expanded_arg_limit(expanded)
             continue
         path = Path(arg[1:]).expanduser()
-        try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError) as error:
-            raise ValueError(f"failed to resolve @ARGFILE `{path}`: {error}") from error
+        resolve_errors: list[str] = []
+        resolved = resolve_path_identity(
+            path,
+            resolve_errors,
+            label="@ARGFILE",
+            failure_template="failed to resolve @ARGFILE `{path}`: {error}",
+        )
+        if resolved is None:
+            raise ValueError(resolve_errors[-1])
         if resolved in seen:
             raise ValueError(f"recursive @ARGFILE reference `{path}`")
         try:
@@ -100,7 +133,14 @@ def expand_response_args(
         file_args: list[str] = []
         for line_number, line in enumerate(contents.splitlines(), 1):
             try:
-                file_args.extend(parser.convert_arg_line_to_args(line))
+                line_args = parser.convert_arg_line_to_args(line)
+                line_args = _require_string_sequence(
+                    line_args, label="response-file line arguments"
+                )
+                for line_arg in line_args:
+                    if not isinstance(line_arg, str):
+                        raise ValueError(f"argument `{line_arg}` must be a string")
+                file_args.extend(line_args)
             except ValueError as error:
                 raise ValueError(
                     f"@ARGFILE `{path}` line {line_number}: {error}"
@@ -113,8 +153,5 @@ def expand_response_args(
                 depth=depth + 1,
             )
         )
-        if len(expanded) > MAX_EXPANDED_ARGS:
-            raise ValueError(
-                f"expanded @ARGFILE arguments must be <= {MAX_EXPANDED_ARGS}"
-            )
+        require_expanded_arg_limit(expanded)
     return expanded

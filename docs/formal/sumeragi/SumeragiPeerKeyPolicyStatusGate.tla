@@ -390,5 +390,10 @@ SafetyAnchors ==
   /\ SnapshotProjectionAnchors
   /\ ResetAfterRecordsClearsAllAnchors
 
+PeerKeyPolicyStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 =============================================================================
 ====

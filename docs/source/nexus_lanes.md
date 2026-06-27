@@ -64,7 +64,7 @@ LaneConfigEntry {
 - `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting to `lane_id`) and drives the persisted shard cursor journal to keep DA replay deterministic across restarts/resharding.
 - Kura segment names are deterministic across hosts; auditors can cross-check segment directories and manifests without bespoke tooling.
 - Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and global state commitments for that lane.
-- When governance renames a lane alias, nodes automatically relabel the corresponding `blocks/lane_{id:03}_{slug}` directories (and tiered snapshots) so auditors always see the canonical slug without manual cleanup.
+- When governance renames a lane alias, nodes automatically relabel the corresponding `blocks/lane_{id:03}_{slug}` directories (and tiered snapshots) so auditors always see the canonical slug without manual cleanup. If the target Kura segment already exists, the config/lifecycle transition fails before catalog or tiered-state changes are committed.
 
 ## World-State Partitioning
 
@@ -128,7 +128,10 @@ LaneConfigEntry {
   retired or unknown lane cannot override the weight from a valid active lane.
   State-backed QC and block-sync validation fallback paths use that filtered
   snapshot recomputation too, so a missing cached snapshot cannot revive stale
-  unknown-lane stake during quorum checks.
+  unknown-lane stake during quorum checks. Live NPoS commit quorum status,
+  local quorum-completion checks, commit-root signer selection, NEW_VIEW
+  aggregation, and repair fanout/coverage telemetry now also pass the active
+  lane set into world-backed stake quorum math.
 - When autoscale adds managed elastic lanes for the default dataspace, ordinary
   no-target default traffic is sharded deterministically across the configured
   default lane plus valid elastic lanes using the transaction hash. The default
@@ -152,7 +155,30 @@ LaneConfigEntry {
   autoscale still shards over valid elastic lanes.
   Block autoscale application also requires both enabled Nexus and enabled
   autoscale, so corrupted actual state with either gate disabled cannot create
-  or retire elastic lanes.
+  or retire elastic lanes. Autoscale catalog changes are staged inside the
+  `StateBlock` and published to committed Nexus state and lane storage geometry
+  only during `StateBlock::commit()` after transaction-height validation, so a
+  transaction-height validation failure cannot publish a lane addition,
+  retirement, runtime reset, or cooldown marker. DA commitment, shard/receipt
+  cursor, confidential-compute receipt, and pin-intent indexes prepared while
+  applying a block are staged on the same side of commit validation, so those
+  runtime and world indexes cannot leak from a block whose height later fails
+  commit validation. Commit also applies the fallible autoscale lifecycle
+  preparation before publishing those staged DA indexes, so a storage failure
+  while reconciling elastic-lane geometry cannot partially publish DA runtime,
+  query state, or block-local WSV cleanup for an uncommitted block. Lane
+  lifecycle and config-swap retirements use the same storage preflight barrier:
+  a failed Kura or tiered retire preflight preserves the committed WSV rows that
+  would otherwise be reset for the retiring lane. Lane-geometry reconciliation
+  dry-runs both Kura block/merge storage and tiered-state snapshot geometry
+  before either backend is mutated, and then prepares tiered-state storage
+  before Kura block/merge storage is provisioned, so a Kura path conflict,
+  tiered path conflict, occupied relabel target, retired archive-root conflict,
+  or invalid tiered cold root aborts lane creation/relabel/retirement before
+  the other storage backend creates new lane artifacts. The same commit boundary
+  applies to deterministic autoscale scale-out and scale-in, including staged DA
+  indexes in the block: a Kura or tiered conflict for a new or retiring elastic
+  lane aborts before tiered artifacts or DA runtime/query indexes are published.
   Catalog-only routing without a live Nexus state view does not shard over
   elastic lanes; it keeps ordinary no-target traffic on the configured base
   default lane until live autoscale enablement and bounds are available.
@@ -180,15 +206,37 @@ LaneConfigEntry {
   when Kura cannot provide the complete historical sample window.
 - When autoscale retires a managed elastic lane, the block-local lifecycle path
   prunes lane relay caches, lane-emergency-validator overrides, and
-  merge-history checkpoints, DA receipt cursors, and DA shard cursors owned
-  only by the retired lane in the same committed transition. It also refreshes
-  the block-local AXT policy cache after the catalog change, retargeting Space
-  Directory-derived entries when directory data is present and pruning explicit
-  cache entries whose target lane no longer exists. Scale-in uses the same
-  resolved default-route capacity and complete historical sample-window
-  preconditions as scale-out, and only retires when that capacity is strictly
-  above `autoscale.min_lanes`, so stale routing state or unrelated manual lanes
-  cannot retire an elastic lane.
+  verified relay contract-state records, merge-history checkpoints, DA
+  commitment, confidential-compute, pin-intent, DA receipt cursor, and DA shard
+  cursor indexes owned only by the retired lane in the same committed
+  transition. Verified relay cleanup removes the canonical relay state key and
+  its exact contract-map key for decoded records owned by the reset lane; if a
+  canonical relay state row is undecodable, the lowercase exact key format is
+  parsed and rows whose key lane is reset-owned are pruned as stale. Arbitrary
+  prefixed siblings, uppercase digest variants, and opaque malformed
+  contract-map rows remain inert state because they cannot be safely
+  reverse-mapped to a lane. Verified-relay hydration likewise scans only
+  lowercase exact canonical relay keys before decode, so arbitrary prefixed
+  state cannot drive relay-cache admission attempts. Block-local resets also drop
+  verified relay records staged earlier in the block for reset lanes before
+  commit-time hydration, treating either the public relay reference lane or the
+  embedded envelope lane as reset ownership. The same reset prunes AXT replay
+  ledger entries keyed by a retired handle target lane while preserving
+  cross-lane replay guards whose handles target surviving lanes. Public-lane
+  stake-share rows and reward records keyed by or carrying the reset lane, plus
+  reward-claim cursors keyed by the reset lane, are removed as live economic
+  indices so a fresh incarnation can start reward epochs and claim accounting
+  from its own state. Operator staking status snapshots for reset lanes are
+  cleared at the same time, so status surfaces cannot continue reporting stale
+  bonded or slash totals after a lane id is reused. It also
+  refreshes the block-local AXT policy cache after the catalog change,
+  retargeting Space Directory-derived entries when directory data is present and
+  pruning explicit cache entries whose target lane no longer exists. Scale-in
+  uses the same resolved
+  default-route capacity and complete historical sample-window preconditions as
+  scale-out, and only retires when that capacity is strictly above
+  `autoscale.min_lanes`, so stale routing state or unrelated manual lanes cannot
+  retire an elastic lane.
 - Autoscale utilization samples count committed fragments, not just external
   transaction envelopes. Current-block decisions use the in-flight execution
   counter, and historical window samples read the persisted committed-fragment
@@ -224,9 +272,12 @@ LaneConfigEntry {
   strictly below scale-out ratios after conversion to the permille thresholds
   used by block application. A future `last_transition_height` is treated as an
   active cooldown and suppresses create/retire transitions without overwriting
-  the marker. When configured windows conflict, a hot longer scale-out window
-  takes precedence over a cold shorter scale-in window so capacity is added
-  rather than retired in the same block.
+  the marker. If a hot/cold decision reaches the internal lifecycle helper but
+  that helper rejects the add/retire plan, the catalog remains unchanged and
+  `last_transition_height` is not advanced, so corrupted runtime state cannot
+  pin cooldown after a failed scaling attempt. When configured windows
+  conflict, a hot longer scale-out window takes precedence over a cold shorter
+  scale-in window so capacity is added rather than retired in the same block.
 - Native AMX participant votes are prefiltered before they enter proposer
   session caches. The received vote message variant must match the signed
   attestation phase, remote sender `PeerId` must match the vote signer, the
@@ -424,9 +475,13 @@ LaneConfigEntry {
   to an older cached relay, even when the relay payload and merge QC are
   otherwise valid. Lane retirement, lane/dataspace rebinding (including
   rebinds that keep the same runtime DA shard id), and fresh lane-id additions
-  reset the remembered merge height and lane-scoped DA receipt cursors plus any
-  DA shard cursor owned only by that lane, so a
-  deliberately destroyed and recreated lane is not blocked by the previous
+  reset the remembered merge height, verified relay contract-state records, and
+  lane-scoped DA receipt cursors plus any DA shard cursor and public-lane
+  economic index or operator staking status owned only by that lane. Verified
+  relay contract-state pruning is exact-keyed to the canonical
+  relay key and matching contract-map key, so spoofed prefixed siblings cannot
+  expand reset scope or rehydrate relay evidence. A deliberately destroyed and
+  recreated lane is not blocked by the previous
   incarnation's merge height or DA sequence cursors, including after startup
   rehydrates historical merge entries from Kura or persisted DA shard cursor
   journals. A lifecycle plan that retires and adds the same lane id in one
@@ -453,11 +508,39 @@ LaneConfigEntry {
   records. Jailed, exiting, exited, pending, or slashed historical records stay
   available for audit and staking lifecycle queries but cannot pin recovery
   elections or active topology selection to a stale lane after retirement,
-  rebinding, or autoscale scale-in. When a lane reset retires or rebinds a
-  lane, `set_nexus`, lifecycle plans, and autoscale scale-in terminalize
+  rebinding, or autoscale scale-in. Live topology, stake-snapshot, election,
+  due-activation, released-exit sweeping, penalty-locator,
+  staking-admission, direct staking mutations, reward bookkeeping, slash
+  handling, peer/account cleanup guards, multisig account-rekey rewrites,
+  Soracloud runtime-authority, and host-finance stake-accounting derivations
+  also ignore or reject public-lane validator rows unless the
+  storage key `(lane_id, validator)` exactly matches the embedded
+  `PublicLaneValidatorRecord`, so malformed or stale rows cannot auto-promote,
+  exit-finalize, mutate bonded stake, receive reward epochs, enter a roster,
+  reserve capacity or peer bindings, block account cleanup, get force-exited by
+  peer cleanup, get repaired into a live row during account rekey, grant
+  runtime authority, or redirect penalties through a mismatched peer binding.
+  Torii's public-lane validator app API applies the same exact-key filter before
+  serializing staking rows, falling back to manifest validator bindings only
+  when no valid staking rows exist for the requested lane. Torii stake-share and
+  reward app APIs likewise serialize only rows whose storage keys exactly match
+  the embedded `(lane_id, validator, staker)` or `(lane_id, epoch)` economic
+  record fields.
+  When a lane reset retires or rebinds a lane, `set_nexus`, lifecycle plans,
+  and autoscale scale-in terminalize
   revivable public-validator records (`PendingActivation`, `Active`, or
-  `Jailed`) for that lane as `Exited` before later epoch promotion or roster
-  derivation can reuse them.
+  `Jailed`) for that lane as `Exited`, treating either the storage key lane or
+  the embedded record lane as reset ownership before later epoch promotion or
+  roster derivation can reuse them. World-backed NPoS quorum, coverage, and
+  commit-root stake selection paths use the same active-lane filter whenever
+  Nexus is enabled. Public-lane stake-share rows, reward records, and
+  reward-claim cursors are not audit records; lane reset paths delete
+  reset-owned rows (by storage key or embedded lane where present) and clear
+  operator staking status for reset lanes while preserving unchanged-lane
+  economic state and status. Failed lane-retirement preflight
+  keeps those live rows, emergency overrides, AXT replay entries, verified
+  relay state, and validator activity in the committed WSV until the storage
+  transition can complete.
 
 ## Telemetry & Status
 

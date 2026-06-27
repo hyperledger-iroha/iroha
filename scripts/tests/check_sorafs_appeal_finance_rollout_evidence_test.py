@@ -23,6 +23,8 @@ NOW_UNIX = 1_800_200_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+DEPLOYMENT_ID = "appeal-finance-staging-a"
+ENVIRONMENT = "staging"
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -41,8 +43,14 @@ def route(name: str, *, authz: bool = True) -> dict:
     }
 
 
+def with_context(payload: dict) -> dict:
+    payload["deployment_id"] = DEPLOYMENT_ID
+    payload["environment"] = ENVIRONMENT
+    return payload
+
+
 def pricing_config() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.pricing_config_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -58,7 +66,7 @@ def pricing_config() -> dict:
         "status_route_2xx": True,
         "config_payload_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def quote_api() -> dict:
@@ -67,7 +75,7 @@ def quote_api() -> dict:
         route("finance_settle", authz=False),
         route("finance_disburse", authz=False),
     ]
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.quote_api_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -84,7 +92,7 @@ def quote_api() -> dict:
         "max_route_latency_ms": 250,
         "payloads_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def deposit_lifecycle(*, authz: bool = True) -> dict:
@@ -94,7 +102,7 @@ def deposit_lifecycle(*, authz: bool = True) -> dict:
         route("deposit_confirm", authz=authz),
         route("ballot_announcement_gate", authz=authz),
     ]
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.deposit_lifecycle_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -115,7 +123,7 @@ def deposit_lifecycle(*, authz: bool = True) -> dict:
         "raw_instruction_included": False,
         "deposit_payloads_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def settlement_execution() -> dict:
@@ -125,7 +133,7 @@ def settlement_execution() -> dict:
         route("deposit_settle"),
         route("deposit_reconcile"),
     ]
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.settlement_execution_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -159,11 +167,11 @@ def settlement_execution() -> dict:
         "raw_instruction_included": False,
         "signed_transaction_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def settlement_submitter() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.settlement_submitter_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -179,11 +187,11 @@ def settlement_submitter() -> dict:
         "max_settlement_lag_seconds": 60,
         "raw_receipt_included": False,
         "signed_transaction_included": False,
-    }
+    })
 
 
 def moderation_worker() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.moderation_worker_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -202,11 +210,11 @@ def moderation_worker() -> dict:
         "max_settlement_lag_seconds": 60,
         "raw_ballot_included": False,
         "deposit_confirmation_payload_included": False,
-    }
+    })
 
 
 def governance_dag_publication() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.governance_dag_publication_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -230,7 +238,7 @@ def governance_dag_publication() -> dict:
         "raw_report_included": False,
         "raw_rollup_included": False,
         "raw_receipt_included": False,
-    }
+    })
 
 
 def dashboard_metrics(*, generated_at: int = GENERATED_AT, include_all_metrics: bool = True) -> dict:
@@ -242,7 +250,7 @@ def dashboard_metrics(*, generated_at: int = GENERATED_AT, include_all_metrics: 
     ]
     if not include_all_metrics:
         metrics.pop()
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.dashboard_metrics_canary.v1",
         "status": "passed",
         "generated_at_unix": generated_at,
@@ -259,11 +267,11 @@ def dashboard_metrics(*, generated_at: int = GENERATED_AT, include_all_metrics: 
             "appeal_finance_settlement_receipt",
         ],
         "response_bodies_included": False,
-    }
+    })
 
 
 def multi_peer_reconciliation(*, peer_count: int = 4) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.multi_peer_reconciliation_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -282,11 +290,11 @@ def multi_peer_reconciliation(*, peer_count: int = 4) -> dict:
         "mismatch_count": 0,
         "unexpected_failure_count": 0,
         "raw_ledger_included": False,
-    }
+    })
 
 
 def governance_approval() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.appeal_finance.governance_approval.v1",
         "status": "passed",
         "approved": True,
@@ -302,7 +310,7 @@ def governance_approval() -> dict:
         "multi_peer_reconciliation_accepted": True,
         "config_source": "iroha_config",
         "policy_digest_hex": DIGEST,
-    }
+    })
 
 
 def write_complete_evidence(root: Path) -> None:
@@ -332,7 +340,18 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.appeal_finance.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["multi_peer_reconciliation"]["valid"] is True
-    assert len(payload["valid_multi_peer_runs"]) == 1
+    assert payload["valid_multi_peer_runs"] == [
+        {
+            "generated_at_unix": GENERATED_AT,
+            "peer_count": 4,
+            "validator_count": 4,
+            "case_count": 2,
+            "config_digest_hex": DIGEST,
+        }
+    ]
+    assert payload["required"]["pricing_config"]["artifacts"][0]["fingerprint"][
+        "deployment_id"
+    ] == DEPLOYMENT_ID
 
 
 def test_missing_multi_peer_reconciliation_fails(tmp_path: Path) -> None:
@@ -340,6 +359,41 @@ def test_missing_multi_peer_reconciliation_fails(tmp_path: Path) -> None:
     (tmp_path / "multi-peer-reconciliation.json").unlink()
 
     assert run_gate(tmp_path) == 1
+
+
+def test_deployment_context_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = pricing_config()
+    del payload["deployment_id"]
+    write_json(tmp_path / "pricing-config.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["pricing_config"]["artifacts"][0]
+    assert "deployment_id must be a non-empty string" in artifact["errors"]
+
+
+def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["deployment_id"] = "appeal-finance-dev-a"
+    payload["environment"] = "dev"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact_errors = result["required"]["governance_approval"]["artifacts"][0][
+        "errors"
+    ]
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in artifact_errors
+    )
+    assert "environment must be one of" in "\n".join(artifact_errors)
 
 
 def test_stale_dashboard_metrics_fails(tmp_path: Path) -> None:

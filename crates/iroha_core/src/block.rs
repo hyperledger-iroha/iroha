@@ -3745,6 +3745,7 @@ pub(crate) mod valid {
                         mutation.encryption,
                         None,
                         None,
+                        None,
                         runtime_receipt.receipt_id,
                         request.execution_sequence,
                     )
@@ -16556,6 +16557,91 @@ pub(crate) mod valid {
                     actual: 99,
                 }
             ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_normalizes_legacy_zero_committed_fragment_count() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let state = State::new(World::new(), Arc::clone(&kura), query);
+
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let (leader_public, leader_private) = leader.into_parts();
+            let topology = Topology::new(vec![PeerId::new(leader_public.clone())]);
+
+            let prev_valid = ValidBlock::new_dummy_and_modify_header(&leader_private, |header| {
+                header.set_height(nonzero!(1_u64));
+                header.creation_time_ms = 0;
+            });
+            let prev_committed = prev_valid.commit_unchecked().unpack(|_| {});
+            {
+                let mut prev_state_block = state.block(prev_committed.as_ref().header());
+                let _ = prev_state_block
+                    .apply_without_execution(&prev_committed, topology.as_ref().to_owned());
+                prev_state_block.commit().unwrap();
+            }
+            kura.store_block(prev_committed.clone())
+                .expect("store previous block");
+
+            let (authority, signer) = gen_account_in("wonderland");
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
+            let tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                authority,
+                &time_source,
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                "legacy-zero-fragment-count".to_owned(),
+            )])
+            .sign(signer.private_key());
+            let entry_hash = tx.hash_as_entrypoint();
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+            let builder = BlockBuilder::new_with_time_source(vec![accepted], time_source.clone());
+            let new_block = builder
+                .chain(0, Some(prev_committed.as_ref()))
+                .sign(&leader_private)
+                .unpack(|_| {});
+            let mut signed_block: SignedBlock = SignedBlock::from(new_block);
+            signed_block
+                .set_transaction_results_with_transcripts(
+                    Vec::new(),
+                    &[entry_hash],
+                    vec![
+                        iroha_data_model::transaction::signed::TransactionResultInner::Ok(
+                            iroha_data_model::trigger::DataTriggerSequence::default(),
+                        ),
+                    ],
+                    BTreeMap::new(),
+                    Vec::new(),
+                    None,
+                )
+                .expect("fixture result roots match external entrypoint");
+            signed_block.set_committed_fragment_count(0);
+            assert_eq!(signed_block.committed_fragment_count(), Some(0));
+
+            let mut voting_block: Option<super::super::VotingBlock> = None;
+            let result = ValidBlock::validate_keep_voting_block(
+                signed_block,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let (valid_block, state_block) =
+                result.expect("legacy zero fragment counts should be normalized");
+            assert_eq!(valid_block.as_ref().committed_fragment_count(), Some(1));
+            assert_eq!(
+                state_block.committed_fragment_count(),
+                1,
+                "accepted blocks must expose the locally executed fragment count"
+            );
         }
 
         #[test]

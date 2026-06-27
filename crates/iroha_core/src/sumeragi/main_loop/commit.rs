@@ -2,7 +2,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io,
     sync::{Arc, mpsc},
     time::{Duration, Instant, SystemTime},
@@ -9844,49 +9844,7 @@ impl Actor {
         world: &impl WorldReadOnly,
         candidates: &[PeerId],
     ) -> Vec<election::CandidateProfile> {
-        use iroha_data_model::{
-            account::AccountId,
-            nexus::{
-                LaneId,
-                staking::{PublicLaneStakeShare, PublicLaneValidatorRecord},
-            },
-        };
-
-        let mut record_map: BTreeMap<PeerId, PublicLaneValidatorRecord> = BTreeMap::new();
-        for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
-            record_map
-                .entry(record.peer_id.clone())
-                .or_insert_with(|| record.clone());
-        }
-
-        let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> =
-            BTreeMap::new();
-        for ((lane_id, validator, _staker), share) in world.public_lane_stake_shares().iter() {
-            share_map
-                .entry((*lane_id, validator.clone()))
-                .or_default()
-                .push(share.clone());
-        }
-
-        candidates
-            .iter()
-            .map(|peer| {
-                let record = record_map.get(peer).cloned();
-                let stake_shares = record
-                    .as_ref()
-                    .and_then(|rec| {
-                        share_map
-                            .get(&(rec.lane_id, rec.validator.clone()))
-                            .cloned()
-                    })
-                    .unwrap_or_default();
-                election::CandidateProfile {
-                    peer_id: peer.clone(),
-                    record,
-                    stake_shares,
-                }
-            })
-            .collect()
+        collect_candidate_profiles_from_world(world, candidates)
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -10183,6 +10141,61 @@ impl Actor {
     }
 }
 
+fn collect_candidate_profiles_from_world(
+    world: &impl WorldReadOnly,
+    candidates: &[PeerId],
+) -> Vec<election::CandidateProfile> {
+    use iroha_data_model::{
+        account::AccountId,
+        nexus::{LaneId, staking::PublicLaneStakeShare},
+    };
+
+    let record_map = public_lane_validator_records_by_peer(world);
+
+    let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> = BTreeMap::new();
+    for (key, share) in world.public_lane_stake_shares().iter() {
+        if !crate::state::public_lane_stake_share_matches_key(key, share) {
+            continue;
+        }
+        let (lane_id, validator, _staker) = key;
+        share_map
+            .entry((*lane_id, validator.clone()))
+            .or_default()
+            .push(share.clone());
+    }
+
+    candidates
+        .iter()
+        .map(|peer| {
+            let record = record_map.get(peer).cloned();
+            let stake_shares = record
+                .as_ref()
+                .and_then(|rec| share_map.get(&(rec.lane_id, rec.validator.clone())).cloned())
+                .unwrap_or_default();
+            election::CandidateProfile {
+                peer_id: peer.clone(),
+                record,
+                stake_shares,
+            }
+        })
+        .collect()
+}
+
+fn public_lane_validator_records_by_peer(
+    world: &impl WorldReadOnly,
+) -> BTreeMap<PeerId, iroha_data_model::nexus::staking::PublicLaneValidatorRecord> {
+    let mut record_map = BTreeMap::new();
+    for (key, record) in world.public_lane_validators().iter() {
+        if !crate::state::public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
+        record_map
+            .entry(record.peer_id.clone())
+            .or_insert_with(|| record.clone());
+    }
+    record_map
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -10214,6 +10227,8 @@ mod tests {
     use iroha_data_model::{
         ChainId, Registrable,
         block::{BlockSignature, SignedBlock},
+        metadata::Metadata,
+        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         peer::{Peer, PeerId},
         prelude::{Account, AccountId, Domain, EventBox, Level, Log, TransactionBuilder},
         transaction::SignedTransaction,
@@ -10225,6 +10240,78 @@ mod tests {
     // This suite runs with the default parallel test runner and can be CPU-contended on CI.
     // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
     const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(180);
+
+    #[test]
+    fn public_lane_validator_records_by_peer_ignore_mismatched_storage_key_rows() {
+        let world = World::default();
+        let valid_keypair = KeyPair::try_random().expect("valid test keypair");
+        let mismatched_lane_keypair = KeyPair::try_random().expect("mismatched lane keypair");
+        let mismatched_account_keypair = KeyPair::try_random().expect("mismatched account keypair");
+        let valid_account = AccountId::new(valid_keypair.public_key().clone());
+        let mismatched_lane_account = AccountId::new(mismatched_lane_keypair.public_key().clone());
+        let mismatched_account = AccountId::new(mismatched_account_keypair.public_key().clone());
+        let valid_peer = PeerId::new(valid_keypair.public_key().clone());
+        let mismatched_lane_peer = PeerId::new(mismatched_lane_keypair.public_key().clone());
+        let mismatched_account_peer = PeerId::new(mismatched_account_keypair.public_key().clone());
+
+        {
+            let mut block = world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), valid_account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: valid_account.clone(),
+                    peer_id: valid_peer.clone(),
+                    stake_account: valid_account.clone(),
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(2), mismatched_lane_account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(3),
+                    validator: mismatched_lane_account.clone(),
+                    peer_id: mismatched_lane_peer.clone(),
+                    stake_account: mismatched_lane_account,
+                    total_stake: Numeric::new(20, 0),
+                    self_stake: Numeric::new(20, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(4), mismatched_account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: valid_account.clone(),
+                    peer_id: mismatched_account_peer.clone(),
+                    stake_account: mismatched_account,
+                    total_stake: Numeric::new(30, 0),
+                    self_stake: Numeric::new(30, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let records = public_lane_validator_records_by_peer(&world.view());
+        assert!(records.contains_key(&valid_peer));
+        assert!(!records.contains_key(&mismatched_lane_peer));
+        assert!(!records.contains_key(&mismatched_account_peer));
+    }
 
     #[test]
     fn materialize_qc_formal_gate_matrix() {

@@ -106,7 +106,9 @@ public final class KagemushaRecursiveSpendProver {
 
   public static Mode preferredMode(
       final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {
-    // ABI-7 compact mode is not a production default yet.
+    if (recursiveCompactAvailable) {
+      return Mode.RECURSIVE_COMPACT_V1;
+    }
     return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;
   }
 

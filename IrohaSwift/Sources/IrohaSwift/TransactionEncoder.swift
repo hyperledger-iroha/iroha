@@ -282,6 +282,7 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     case unsupportedSigningAlgorithm(SigningAlgorithm)
     case invalidClaimIdentifierReceipt(String)
     case invalidNativeSignedTransaction(String)
+    case retiredOfflineNotePayment
 
     public var errorDescription: String? {
         switch self {
@@ -297,6 +298,8 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
             return "ClaimIdentifier receipt is invalid: \(reason)"
         case let .invalidNativeSignedTransaction(reason):
             return "Native signed transaction is invalid: \(reason)"
+        case .retiredOfflineNotePayment:
+            return "Classic Offline Note payment transactions are retired; use Kagemusha payment flows."
         }
     }
 }

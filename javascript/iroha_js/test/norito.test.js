@@ -363,6 +363,9 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     multisig_account_alias: "cbdc@hbl.sbp",
     signer_account_id: ACCOUNT_ID,
     fee_sponsor: "sponsor@sbp",
+    validation_fee_policy_version: "7",
+    validation_fee_policy_hash: "ab".repeat(32),
+    validation_fee_instruction_index: "1",
     instructions: [instruction],
   };
   const nativeBody = Buffer.from(noritoEncodeMultisigProposeRequest(request));
@@ -439,6 +442,83 @@ baseTest("native multisig proposal DTO embeds pure JS instructions with compact 
     "MultisigProposeDto.instructions[0].payload.frame",
   );
   assert.equal((inner.flags & 0x02) !== 0, true);
+  const feeInstructionIndex = readNoritoFieldPayload(
+    outer.payload,
+    instructions.offset,
+    "MultisigProposeDto.validation_fee_instruction_index",
+    outerUsesCompactLengths,
+  );
+  assert.equal(feeInstructionIndex.offset, outer.payload.length);
+  assert.equal(feeInstructionIndex.payload[0], 1);
+  const feeInstructionIndexValue = readNoritoFieldPayload(
+    feeInstructionIndex.payload,
+    1,
+    "MultisigProposeDto.validation_fee_instruction_index.value",
+    outerUsesCompactLengths,
+  );
+  const feeInstructionIndexString = readNoritoFieldPayload(
+    feeInstructionIndexValue.payload,
+    0,
+    "MultisigProposeDto.validation_fee_instruction_index.value.string",
+    outerUsesCompactLengths,
+  );
+  assert.equal(feeInstructionIndexString.payload.toString("utf8"), "1");
+  assert.equal(feeInstructionIndexString.offset, feeInstructionIndexValue.payload.length);
+  assert.equal(feeInstructionIndexValue.offset, feeInstructionIndex.payload.length);
+});
+
+test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {
+  const request = {
+    multisig_account_alias: "cbdc@hbl.sbp",
+    signer_account_id: ACCOUNT_ID,
+    instructions: [
+      {
+        Transfer: {
+          Asset: {
+            source: loadAssetIdFromFixture("mint_asset_numeric.json"),
+            object: "7",
+            destination: ACCOUNT_ID,
+          },
+        },
+      },
+    ],
+  };
+
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_instruction_index: "1",
+      }),
+    /requires validation fee policy metadata/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_policy_version: "7",
+      }),
+    /must be provided together/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_policy_version: "7",
+        validation_fee_policy_hash: "ab",
+      }),
+    /32-byte hex string/,
+  );
+  assert.throws(
+    () =>
+      noritoEncodeMultisigProposeRequest({
+        ...request,
+        validation_fee_policy_version: "7",
+        validation_fee_policy_hash: "ab".repeat(32),
+        validation_fee_instruction_index: "-1",
+      }),
+    /must be a bigint, integer number, or decimal string/,
+  );
 });
 
 test("native multisig proposal DTO preserves native instruction frames without JS schema entries", () => {

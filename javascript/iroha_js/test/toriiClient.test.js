@@ -218,6 +218,9 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "signature_b64",
     "creation_time_ms",
     "fee_sponsor",
+    "memo",
+    "validation_fee_policy_version",
+    "validation_fee_policy_hash",
   ]) {
     offset = readNoritoFieldPayload(
       payload,
@@ -8275,9 +8278,8 @@ test("submitTransaction retries broken pipe failures without an explicit error c
 test("submitTransaction rejects unavailable pipeline submit", async () => {
   const payload = new Uint8Array([0xab, 0xcd]);
   const seenUrls = [];
-  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
   let nativeEncodeCalls = 0;
-  globalThis.__IROHA_NATIVE_BINDING__ = {
+  const nativeBinding = {
     encodeSignedTransactionNorito: (buffer) => {
       nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
@@ -8318,33 +8320,197 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
     }
     if (url === `${BASE_URL}/v1/pipeline/transactions`) {
       assert.equal(init.method, "POST");
+      assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xca, 0xfe]);
       return createResponse({ status: 405 });
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  try {
-    const client = new ToriiClient(BASE_URL, { fetchImpl });
-    await assert.rejects(() => client.submitTransaction(payload), /405/);
-    assert.deepEqual(seenUrls, [
-      `${BASE_URL}/v1/node/capabilities`,
-      `${BASE_URL}/v1/pipeline/transactions`,
-    ]);
-    assert.equal(nativeEncodeCalls, 0);
-  } finally {
-    if (originalBinding === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  await assert.rejects(() => client.submitTransaction(payload), /405/);
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/node/capabilities`,
+    `${BASE_URL}/v1/pipeline/transactions`,
+  ]);
+  assert.equal(nativeEncodeCalls, 1);
+});
+
+test("submitTransaction wraps native Norito transaction payload for pipeline submit", async () => {
+  const payload = new Uint8Array([0xab, 0xcd]);
+  let nativeEncodeCalls = 0;
+  const nativeBinding = {
+    encodeSignedTransactionNorito: (buffer) => {
+      nativeEncodeCalls += 1;
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
+      return Buffer.from([0xca, 0xfe]);
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
     }
-  }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    assert.equal(init.headers["Content-Type"], "application/x-norito");
+    assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xca, 0xfe]);
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const response = await client.submitTransaction(payload);
+  assert.deepEqual(response, { ok: true });
+  assert.equal(nativeEncodeCalls, 1);
+});
+
+test("submitTransaction preserves native versioned transaction payload", async () => {
+  const payload = new Uint8Array([0xde, 0xad]);
+  let noritoEncodeCalls = 0;
+  let versionedEncodeCalls = 0;
+  const nativeBinding = {
+    encodeSignedTransactionNorito: undefined,
+    encodeSignedTransactionVersioned: (buffer) => {
+      versionedEncodeCalls += 1;
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [0xde, 0xad]);
+      return Buffer.from([0x01, 0xba, 0xdc]);
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xba, 0xdc]);
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const response = await client.submitTransaction(payload);
+  assert.deepEqual(response, { ok: true });
+  assert.equal(noritoEncodeCalls, 0);
+  assert.equal(versionedEncodeCalls, 1);
+});
+
+test("submitTransaction falls back when native transaction encoder rejects opaque bytes", async () => {
+  const payload = new Uint8Array([0xf0, 0x0d]);
+  let nativeEncodeCalls = 0;
+  const nativeBinding = {
+    encodeSignedTransactionNorito: (buffer) => {
+      nativeEncodeCalls += 1;
+      assert.ok(Buffer.isBuffer(buffer));
+      assert.deepEqual([...buffer.values()], [0xf0, 0x0d]);
+      throw new Error("schema mismatch");
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
+    assert.equal(init.method, "POST");
+    assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xf0, 0x0d]);
+    return createResponse({
+      status: 202,
+      jsonData: { ok: true },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  const response = await client.submitTransaction(payload);
+  assert.deepEqual(response, { ok: true });
+  assert.equal(nativeEncodeCalls, 1);
 });
 
 test("submitTransaction does not fall back to removed public submit route", async () => {
   const payload = new Uint8Array([0xfa, 0xce]);
   const seenUrls = [];
-  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
   let nativeEncodeCalls = 0;
-  globalThis.__IROHA_NATIVE_BINDING__ = {
+  const nativeBinding = {
     encodeSignedTransactionNorito: (buffer) => {
       nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
@@ -8385,25 +8551,18 @@ test("submitTransaction does not fall back to removed public submit route", asyn
     }
     if (url === `${BASE_URL}/v1/pipeline/transactions`) {
       assert.equal(init.method, "POST");
+      assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xba, 0xdc, 0x0f, 0xfe]);
       return createResponse({ status: 405 });
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  try {
-    const client = new ToriiClient(BASE_URL, { fetchImpl });
-    await assert.rejects(() => client.submitTransaction(payload), /405/);
-    assert.deepEqual(seenUrls, [
-      `${BASE_URL}/v1/node/capabilities`,
-      `${BASE_URL}/v1/pipeline/transactions`,
-    ]);
-    assert.equal(nativeEncodeCalls, 0);
-  } finally {
-    if (originalBinding === undefined) {
-      delete globalThis.__IROHA_NATIVE_BINDING__;
-    } else {
-      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
-    }
-  }
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
+  await assert.rejects(() => client.submitTransaction(payload), /405/);
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/node/capabilities`,
+    `${BASE_URL}/v1/pipeline/transactions`,
+  ]);
+  assert.equal(nativeEncodeCalls, 1);
 });
 
 test("submitTransaction rejects missing node capabilities advert", async () => {
@@ -16640,7 +16799,7 @@ test("queryDomains rejects non-object select entries", async () => {
       client.queryDomains({
         select: [{ id: true }, []],
       }),
-    /select\[1] must be a plain object/,
+    /select\[1] must be a field-path string or plain object/,
   );
   assert.equal(callCount, 0);
 });
@@ -18141,6 +18300,63 @@ test("queryVisibleTransactions builds convenience transaction filters", async ()
   ]);
   assert.equal(capturedBody.fetch_size, 25);
   assert.equal(capturedBody.query, "VisibleTransactions");
+});
+
+test("queryVisibleTransactions posts field-path select projections", async () => {
+  let capturedPath;
+  let capturedBody;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url);
+    capturedPath = parsed.pathname;
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [], total: 0 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.queryVisibleTransactions({
+    select: [" authority ", "metadata.amount", "metadata.from_account_id"],
+    queryName: "VisibleTransactionProjection",
+  });
+  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.deepEqual(capturedBody.select, [
+    "authority",
+    "metadata.amount",
+    "metadata.from_account_id",
+  ]);
+  assert.equal(capturedBody.query, "VisibleTransactionProjection");
+});
+
+test("queryVisibleTransactions rejects invalid select projection entries", async () => {
+  let callCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      callCount += 1;
+      return createResponse({
+        status: 200,
+        jsonData: { items: [], total: 0 },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", 42],
+      }),
+    /select\[1] must be a field-path string or plain object/,
+  );
+  await assert.rejects(
+    () =>
+      client.queryVisibleTransactions({
+        select: ["authority", " "],
+      }),
+    /select\[1] must be a non-empty field path/,
+  );
+  assert.equal(callCount, 0);
 });
 
 test("queryAccountTransactions merges raw and convenience filters", async () => {
@@ -21269,6 +21485,9 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     instructions: [instruction],
     feeSponsor: FIXTURE_BOB_ID,
     creationTimeMs: 123456,
+    validationFeePolicyVersion: 7,
+    validationFeePolicyHash: "AB".repeat(32),
+    validationFeeInstructionIndex: 1,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
@@ -21288,12 +21507,18 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
       feeSponsor: "sponsor@sbp",
+      validationFeePolicyVersion: 7,
+      validationFeePolicyHash: "AB".repeat(32),
+      validationFeeInstructionIndex: 1,
     }),
     {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
       fee_sponsor: "sponsor@sbp",
+      validation_fee_policy_version: "7",
+      validation_fee_policy_hash: "ab".repeat(32),
+      validation_fee_instruction_index: "1",
     },
   );
 });
@@ -21364,6 +21589,32 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     /non-negative integer/,
   );
   await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeeInstructionIndex: 1,
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+      }),
+    /provided together/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  await assert.rejects(
     () => client.proposeMultisig({ ...request, instructions: [Buffer.from("NRT0")] }),
     /overran payload/,
   );
@@ -21374,6 +21625,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   assert.throws(
     () => buildMultisigProposeRequest({ ...request, instructions: [null] }),
     /multisigPropose\.instructions\[0\]/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeeInstructionIndex: 1 }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeePolicyVersion: 7 }),
+    /provided together/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
   );
 });
 
@@ -22188,12 +22457,17 @@ test("queryTriggers rejects unsupported option keys", async () => {
 test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
   const readiness = {
-    offline_note: true,
-    offline_one_use_keys: true,
-    offline_recursive_note_proof: false,
-    offline_fountain_qr: true,
-    offline_sync_optional: true,
     offline_telemetry: true,
+    offline_kagemusha_abi7: true,
+    offline_kagemusha_abi7_mode: "recursive_compact_v1",
+    offline_kagemusha_abi7_bridge_abi_version: 7,
+    offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
+    offline_kagemusha_abi7_artifacts: true,
+    offline_kagemusha_recursive_compact_available: true,
+    offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
+    offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
+    offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v1",
+    offline_kagemusha_recursive_compact_artifacts_available: true,
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init = {}) => {
@@ -22213,6 +22487,32 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(capturedRequest.init.method, "GET");
   assert.equal(capturedRequest.init.headers.Accept, "application/json");
   assert.deepEqual(response, readiness);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
+});
+
+test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          offline_note: true,
+          offline_one_use_keys: true,
+          offline_recursive_note_proof: true,
+          offline_fountain_qr: true,
+          offline_sync_optional: true,
+          offline_telemetry: true,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getOfflineReadiness(),
+    /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+  );
 });
 
 test("deleteTrigger tolerates missing records", async () => {

@@ -186,6 +186,8 @@ class ValidationOptions:
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "cycle_id",
     "cycle_index",
     "generated_at_unix",
@@ -417,6 +419,7 @@ def validate_evidence_payload(
         lambda kind, checked_payload, errors: validate_kind_specific(
             kind, checked_payload, errors, options
         ),
+        require_reviewed_deployment_context=True,
     )
 
 
@@ -475,7 +478,7 @@ def build_summary(
                 valid_reference_decision_ids.add(decision_id.lower())
         elif kind_name in CYCLE_BOUND_KINDS and evidence_artifact_is_valid(artifact):
             cycle_bound_artifacts.append((kind_name, artifact))
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
     if required_evidence_has_all_kinds(

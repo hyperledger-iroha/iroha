@@ -1113,6 +1113,10 @@ fn minimal_config_snapshot() {
                 offline_issuer: None,
                 ram_lfe: None,
                 tx_history: None,
+                recipient_lookup: ToriiRecipientLookup {
+                    request_timeout: 4s,
+                    routes: [],
+                },
                 app_api: AppApi {
                     default_list_limit: 100,
                     max_list_limit: 500,
@@ -2571,7 +2575,6 @@ fn minimal_config_snapshot() {
                     escrow_required: false,
                     escrow_accounts: {},
                     kagemusha_enabled: true,
-                    kagemusha_force_legacy: false,
                 },
                 router: Router {
                     twap_window: 60s,

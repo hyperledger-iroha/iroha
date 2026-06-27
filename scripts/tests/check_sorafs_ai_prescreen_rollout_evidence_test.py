@@ -23,6 +23,8 @@ DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 MANIFEST_ID = "12" * 16
 QUARANTINE_ID = "34" * 16
+DEPLOYMENT_ID = "ai-prescreen-staging-a"
+ENVIRONMENT = "staging"
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -30,8 +32,14 @@ def write_json(path: Path, payload: dict) -> Path:
     return path
 
 
+def with_context(payload: dict) -> dict:
+    payload["deployment_id"] = DEPLOYMENT_ID
+    payload["environment"] = ENVIRONMENT
+    return payload
+
+
 def runner(*, status: str = "verified") -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation.runner.rollout_evidence.v1",
         "status": status,
         "source": "sorafs_cli",
@@ -48,11 +56,11 @@ def runner(*, status: str = "verified") -> dict:
         "verdict": "quarantine",
         "evidence_digest_hex": DIGEST,
         "policy_digest_hex": DIGEST,
-    }
+    })
 
 
 def committee(*, status: str = "verified") -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation.committee.rollout_evidence.v1",
         "status": status,
         "source": "sorafs_cli",
@@ -69,7 +77,7 @@ def committee(*, status: str = "verified") -> dict:
         "aggregated_score_bps": 7250,
         "verdict": "quarantine",
         "checked_at_unix": 1_800_000_180,
-    }
+    })
 
 
 def operator_route(name: str) -> dict:
@@ -111,7 +119,7 @@ def operator_workflow(*, omit_route: str | None = None) -> dict:
         )
         if name != omit_route
     ]
-    return {
+    return with_context({
         "schema": "sorafs.moderation.quarantine.operator_canary.v1",
         "status": "passed",
         "source": "iroha_cli",
@@ -123,7 +131,7 @@ def operator_workflow(*, omit_route: str | None = None) -> dict:
         "payload_bytes_included": False,
         "private_payloads_included": False,
         "routes": routes,
-    }
+    })
 
 
 def notification_transport(*, accepted_count: int | None = None) -> dict:
@@ -145,7 +153,7 @@ def notification_transport(*, accepted_count: int | None = None) -> dict:
             "private_payloads_included": False,
         }
     ]
-    return {
+    return with_context({
         "schema": "sorafs.moderation.juror_notifications.transport_canary.v1",
         "source": "juror-notifications",
         "status": "passed",
@@ -158,7 +166,7 @@ def notification_transport(*, accepted_count: int | None = None) -> dict:
         "payload_bytes_included": False,
         "private_payloads_included": False,
         "probes": probes,
-    }
+    })
 
 
 def commit_reveal_executor(*, execution_summary_present: bool = True) -> dict:
@@ -188,7 +196,7 @@ def commit_reveal_executor(*, execution_summary_present: bool = True) -> dict:
             "private_payloads_included": False,
         },
     ]
-    return {
+    return with_context({
         "schema": "sorafs.moderation.ballots.executor_canary.v1",
         "source": "executor-bundle",
         "status": "passed",
@@ -219,7 +227,7 @@ def commit_reveal_executor(*, execution_summary_present: bool = True) -> dict:
         "private_payloads_included": False,
         "private_payload_files_copied": False,
         "artifacts": artifacts,
-    }
+    })
 
 
 def transparency_publication(*, missing_source: str | None = None) -> dict:
@@ -250,7 +258,7 @@ def transparency_publication(*, missing_source: str | None = None) -> dict:
         for source_kind in source_kinds
         if source_kind != missing_source
     ]
-    return {
+    return with_context({
         "schema": "sorafs.transparency.source_entry.canary.v1",
         "source": "iroha_cli",
         "status": "passed",
@@ -262,7 +270,7 @@ def transparency_publication(*, missing_source: str | None = None) -> dict:
         "private_payloads_included": False,
         "response_bodies_included": False,
         "probes": probes,
-    }
+    })
 
 
 def governance_dag(*, config_source: str = "iroha_config") -> dict:
@@ -279,7 +287,7 @@ def governance_dag(*, config_source: str = "iroha_config") -> dict:
             "transparency_publication",
         )
     ]
-    return {
+    return with_context({
         "schema": "sorafs.moderation.governance_dag_rollout.v1",
         "status": "passed",
         "workflow_digest_hex": DIGEST,
@@ -296,7 +304,7 @@ def governance_dag(*, config_source: str = "iroha_config") -> dict:
         "producers": producers,
         "payload_bytes_included": False,
         "private_payloads_included": False,
-    }
+    })
 
 
 def end_to_end_workflow(*, omit_step: str | None = None) -> dict:
@@ -315,7 +323,7 @@ def end_to_end_workflow(*, omit_step: str | None = None) -> dict:
         )
         if name != omit_step
     ]
-    return {
+    return with_context({
         "schema": "sorafs.moderation.end_to_end_rollout.v1",
         "status": "passed",
         "workflow_id": "sfm-4a-prod-canary-20260625",
@@ -332,7 +340,7 @@ def end_to_end_workflow(*, omit_step: str | None = None) -> dict:
         "steps": steps,
         "payload_bytes_included": False,
         "private_payloads_included": False,
-    }
+    })
 
 
 def write_complete_evidence(root: Path) -> None:
@@ -369,6 +377,9 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         }
     ]
     assert payload["valid_workflow_digests"] == [DIGEST]
+    assert payload["required"]["runner"]["artifacts"][0]["fingerprint"][
+        "deployment_id"
+    ] == DEPLOYMENT_ID
 
 
 def test_missing_commit_reveal_executor_fails(tmp_path: Path) -> None:
@@ -376,6 +387,41 @@ def test_missing_commit_reveal_executor_fails(tmp_path: Path) -> None:
     (tmp_path / "commit-reveal-executor.json").unlink()
 
     assert run_gate(tmp_path) == 1
+
+
+def test_deployment_context_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = runner()
+    del payload["deployment_id"]
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["runner"]["artifacts"][0]
+    assert "deployment_id must be a non-empty string" in artifact["errors"]
+
+
+def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag()
+    payload["deployment_id"] = "ai-prescreen-dev-a"
+    payload["environment"] = "dev"
+    write_json(tmp_path / "governance-dag.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact_errors = result["required"]["governance_dag"]["artifacts"][0][
+        "errors"
+    ]
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in artifact_errors
+    )
+    assert "environment must be one of" in "\n".join(artifact_errors)
 
 
 def test_runner_status_must_be_verified(tmp_path: Path) -> None:

@@ -370,7 +370,7 @@ def build_summary(
                     valid_release_manifest_digests.add(digest.lower())
             elif kind_name in RELEASE_MANIFEST_BOUND_KINDS:
                 valid_release_manifest_bound_artifacts.append((kind_name, artifact))
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(

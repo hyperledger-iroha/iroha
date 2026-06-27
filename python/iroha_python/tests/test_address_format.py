@@ -12,6 +12,7 @@ from requests.structures import CaseInsensitiveDict
 import iroha_python.client as client_module
 from iroha_python import (
     MultisigResponse,
+    QueryEnvelope,
     ToriiClient,
     account_query_envelope,
     asset_holders_query_envelope,
@@ -174,6 +175,43 @@ def test_account_query_envelope_omits_canonical_i105() -> None:
 def test_asset_holders_envelope_omits_canonical_i105() -> None:
     payload = asset_holders_query_envelope()
     assert "canonical_i105" not in payload
+
+
+def test_query_envelope_normalizes_string_and_object_select_entries() -> None:
+    payload = QueryEnvelope(
+        select=[" id ", {"metadata": {"amount": True}}],
+    ).to_dict()
+    assert payload["select"] == ["id", {"metadata": {"amount": True}}]
+
+
+def test_account_query_envelope_accepts_select_projection_entries() -> None:
+    payload = account_query_envelope(
+        select=[" authority ", {"metadata": {"memo": True}}],
+    )
+    assert payload["select"] == ["authority", {"metadata": {"memo": True}}]
+
+
+def test_query_envelope_normalizes_query_name_to_query_wire_field() -> None:
+    payload = QueryEnvelope(query_name=" recent-accounts ").to_dict()
+
+    assert payload["query"] == "recent-accounts"
+    assert "query_name" not in payload
+
+
+def test_query_envelope_rejects_bad_query_name() -> None:
+    with pytest.raises(ValueError, match="query_name must be a non-empty string"):
+        QueryEnvelope(query_name=" ").to_dict()
+    with pytest.raises(TypeError, match="query_name must be a string"):
+        QueryEnvelope(query_name=7).to_dict()  # type: ignore[arg-type]
+
+
+def test_query_envelope_rejects_bad_select_entries() -> None:
+    with pytest.raises(TypeError, match="select must be a sequence"):
+        QueryEnvelope(select="id").to_dict()
+    with pytest.raises(ValueError, match=r"select\[0].*non-empty"):
+        QueryEnvelope(select=[" "]).to_dict()
+    with pytest.raises(TypeError, match=r"select\[1].*field-path string or mapping"):
+        QueryEnvelope(select=["id", 7]).to_dict()
 
 
 def test_list_accounts_omits_canonical_i105_param() -> None:

@@ -11,6 +11,7 @@ public enum ToriiOfflineNoteIssuerClientError: Error, LocalizedError, Equatable 
     case httpStatus(Int, String?)
     case commitmentHex(String)
     case invalidBase64(String)
+    case retiredOfflineNoteIssue
 
     public var errorDescription: String? {
         switch self {
@@ -31,6 +32,8 @@ public enum ToriiOfflineNoteIssuerClientError: Error, LocalizedError, Equatable 
             return "Offline Note issuer returned an invalid commitment: \(value)."
         case let .invalidBase64(field):
             return "Offline Note issuer field \(field) must be base64."
+        case .retiredOfflineNoteIssue:
+            return "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows."
         }
     }
 }
@@ -115,7 +118,6 @@ public protocol OfflineNoteIssuerDeviceBindingProvider {
 
 public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
     private static let keysRefillPath = ToriiOfflineCashAPI.Endpoint.keyRefill.path
-    private static let notesIssuePath = ToriiOfflineCashAPI.Endpoint.noteIssue.path
     private static let legacyCanonicalAuthHeaders: Set<String> = [
         ToriiCanonicalRequest.headerAccount.lowercased(),
         ToriiCanonicalRequest.headerSignature.lowercased(),
@@ -198,52 +200,10 @@ public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient {
     }
 
     public func issueNote(_ request: OfflineNoteIssueRequest) async throws -> OfflineNoteIssueResponse {
-        guard let pending = withLock({ pendingLoads[request.loadContext.operationId] }) else {
+        guard withLock({ pendingLoads.removeValue(forKey: request.loadContext.operationId) }) != nil else {
             throw ToriiOfflineNoteIssuerClientError.missingLoadContext(request.loadContext.operationId)
         }
-        let body: [String: Any] = [
-            "account_id": request.accountId,
-            "operation_id": pending.operationId,
-            "device_id": pending.deviceBinding.deviceId,
-            "offline_public_key": pending.deviceBinding.offlinePublicKey,
-            "asset_definition_id": request.assetDefinitionId,
-            "device_binding": try pending.deviceBinding.deviceBinding(),
-            "lineage_id": pending.lineageId,
-            "lineage_state": try OfflineNoteIssuerDeviceBinding.deepCopyObject(pending.lineageState),
-            "amount": request.amount,
-            "local_balance": pending.localBalance,
-            "local_revision": NSNumber(value: pending.preIssueRevision),
-            "note_commitment": request.noteCommitment.hexLowercased(),
-        ]
-        let response = try await post(path: Self.notesIssuePath, body: body)
-        let commitmentHex = try requiredString(response, "issued_note_commitment")
-        let commitment = try decodeHex32(commitmentHex)
-        let lineageState = try requiredObject(response, "lineage_state")
-        let certificateObject = try requiredObject(response, "key_certificate")
-        let keyCertificate = try parseKeyCertificate(certificateObject)
-        let authorization = try optionalObject(lineageState["authorization"])
-        let stored = StoredLineageState(
-            lineageId: try requiredString(lineageState, "lineage_id"),
-            revision: try requiredUInt64(lineageState, "server_revision"),
-            balance: try requiredString(lineageState, "balance"),
-            authorizationExpiresAtMs: try authorization.flatMap { try optionalUInt64($0["expires_at_ms"]) },
-            keyCertificateExpiresAtMs: try optionalUInt64(certificateObject["expires_at_ms"]),
-            keyCertificate: keyCertificate,
-            lineageState: lineageState
-        )
-        withLock {
-            pendingLoads.removeValue(forKey: pending.operationId)
-            lineageStates[pending.lineageKey] = stored
-        }
-        let settlement = try optionalObject(response["settlement"])
-        return OfflineNoteIssueResponse(
-            noteCommitment: commitment,
-            operationId: try requiredString(response, "operation_id"),
-            lineageId: stored.lineageId,
-            localRevision: try requiredUInt64(response, "local_revision"),
-            keyCertificate: keyCertificate,
-            settlementEntryHashHex: try settlement.flatMap { try optionalString($0["entry_hash"]) }
-        )
+        throw ToriiOfflineNoteIssuerClientError.retiredOfflineNoteIssue
     }
 
     private func refillKeys(accountId: String,

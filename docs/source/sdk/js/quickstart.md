@@ -436,9 +436,8 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 ## Offline readiness
 
 JavaScript integrations should use `GET /v1/offline/readiness` for offline feature discovery.
-Offline note issuance, redemption, and audit payloads are submitted as transaction instructions;
-the legacy offline reserve, revocation, and transfer-history HTTP routes are no longer published by
-Torii.
+Classic Offline Note issuance, redemption, and audit transaction paths are retired;
+Kagemusha readiness fields advertise the active offline payment implementation.
 
 ## Torii Queries & Streaming
 

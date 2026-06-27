@@ -2566,6 +2566,22 @@ pub fn record_public_lane_slash(lane_id: LaneId) {
     });
 }
 
+/// Remove accumulated Nexus public-lane staking status for reset lanes.
+pub fn reset_public_lane_staking_lanes(lanes_to_reset: &BTreeSet<LaneId>) {
+    if lanes_to_reset.is_empty() {
+        return;
+    }
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&RBC_STATUS_TEST_LOCK) else {
+        return;
+    };
+
+    let mut guard = lock_operator_status_slot(nexus_staking_slot(), "nexus staking status");
+    for lane_id in lanes_to_reset {
+        guard.remove(lane_id);
+    }
+}
+
 /// Latest aggregated Nexus fee snapshot.
 pub fn nexus_fee_snapshot() -> NexusFeeSnapshot {
     lock_operator_status_slot(nexus_fee_slot(), "nexus fee status").clone()
@@ -12446,6 +12462,72 @@ mod tests {
         assert_eq!(lane_entry.bonded, bonded);
         assert_eq!(lane_entry.pending_unbond, pending);
         assert_eq!(lane_entry.slash_total, 1);
+    }
+
+    #[test]
+    fn reset_public_lane_staking_lanes_prunes_only_reset_lanes() {
+        let _guard = super::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        super::reset_nexus_economics_for_tests();
+
+        let reset_lane = LaneId::new(11);
+        let retained_lane = LaneId::new(12);
+        let reset_bonded = Numeric::new(500, 0);
+        let retained_bonded = Numeric::new(700, 0);
+        super::record_public_lane_bonded_delta(reset_lane, &reset_bonded, true);
+        super::record_public_lane_pending_unbond_delta(reset_lane, &Numeric::new(100, 0), true);
+        super::record_public_lane_slash(reset_lane);
+        super::record_public_lane_bonded_delta(retained_lane, &retained_bonded, true);
+
+        super::reset_public_lane_staking_lanes(&BTreeSet::from([reset_lane]));
+
+        let snap = super::nexus_staking_snapshot();
+        assert_eq!(snap.lanes.len(), 1);
+        let retained = snap.lanes.first().expect("retained lane snapshot");
+        assert_eq!(retained.lane_id, retained_lane);
+        assert_eq!(retained.bonded, retained_bonded);
+        assert_eq!(retained.pending_unbond, Numeric::zero());
+        assert_eq!(retained.slash_total, 0);
+    }
+
+    #[test]
+    fn reset_public_lane_staking_lanes_recovers_poisoned_status_lock() {
+        let _guard = super::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        super::reset_nexus_economics_for_tests();
+
+        let reset_lane = LaneId::new(31);
+        let retained_lane = LaneId::new(32);
+        let reset_bonded = Numeric::new(900, 0);
+        let retained_bonded = Numeric::new(1100, 0);
+        super::record_public_lane_bonded_delta(reset_lane, &reset_bonded, true);
+        super::record_public_lane_pending_unbond_delta(reset_lane, &Numeric::new(300, 0), true);
+        super::record_public_lane_slash(reset_lane);
+        super::record_public_lane_bonded_delta(retained_lane, &retained_bonded, true);
+        super::record_public_lane_pending_unbond_delta(retained_lane, &Numeric::new(400, 0), true);
+        super::record_public_lane_slash(retained_lane);
+
+        let poison_staking = std::panic::catch_unwind(|| {
+            let _guard = super::nexus_staking_slot()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison nexus staking status before reset");
+        });
+        assert!(poison_staking.is_err());
+
+        super::reset_public_lane_staking_lanes(&BTreeSet::from([reset_lane]));
+
+        let snap = super::nexus_staking_snapshot();
+        assert_eq!(snap.lanes.len(), 1);
+        let retained = snap.lanes.first().expect("retained lane snapshot");
+        assert_eq!(retained.lane_id, retained_lane);
+        assert_eq!(retained.bonded, retained_bonded);
+        assert_eq!(retained.pending_unbond, Numeric::new(400, 0));
+        assert_eq!(retained.slash_total, 1);
+
+        super::reset_nexus_economics_for_tests();
     }
 
     #[test]

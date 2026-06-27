@@ -41,6 +41,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_consistent_evidence_value,
     require_2xx_status,
     require_bool_true,
     require_count_equal,
@@ -287,6 +288,8 @@ class ValidationOptions:
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "case_digest_hex",
     "roster_hash_hex",
     "tally_digest_hex",
@@ -719,6 +722,7 @@ def validate_evidence_payload(
         lambda kind, checked_payload, errors: validate_kind_specific(
             kind, checked_payload, errors, options
         ),
+        require_reviewed_deployment_context=True,
     )
 
 
@@ -741,6 +745,7 @@ def build_summary(
     tally_candidate_artifacts: list[dict[str, Any]] = []
     tally_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     e2e_candidate_artifacts: list[dict[str, Any]] = []
+    deployment_context: dict[str, str] = {}
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -771,6 +776,20 @@ def build_summary(
         )
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
+            record_consistent_evidence_value(
+                deployment_context,
+                "deployment_id",
+                fingerprint.get("deployment_id"),
+                kind_name,
+                errors,
+            )
+            record_consistent_evidence_value(
+                deployment_context,
+                "environment",
+                fingerprint.get("environment"),
+                kind_name,
+                errors,
+            )
             case_digest = fingerprint.get("case_digest_hex")
             roster_hash = fingerprint.get("roster_hash_hex")
             tally_digest = fingerprint.get("tally_digest_hex")
@@ -797,7 +816,7 @@ def build_summary(
                 tally_bound_artifacts.append((kind_name, artifact))
             if kind_name == "e2e_panel":
                 e2e_candidate_artifacts.append(artifact)
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
 
@@ -902,6 +921,11 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "deployment_context": {
+            key: deployment_context[key]
+            for key in ("deployment_id", "environment")
+            if key in deployment_context
+        },
         "valid_case_digests": sorted(valid_case_digests),
         "valid_roster_bindings": [
             {

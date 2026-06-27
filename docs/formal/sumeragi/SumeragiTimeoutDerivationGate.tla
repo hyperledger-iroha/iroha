@@ -642,6 +642,10 @@ TimeoutDerivationExactness ==
   /\ TimeoutAvailabilityExact
   /\ TimeoutStaleGateExact
 
+TimeoutDerivationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TimeoutDerivationExactness
+
 SafetyFast ==
   TimeoutDerivationExactness
 

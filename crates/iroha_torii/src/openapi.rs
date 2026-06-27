@@ -536,6 +536,10 @@ fn alias_paths() -> Map {
         Value::Object(alias_lookup_by_account_operation()),
     );
     paths.insert(
+        "/v1/retail/recipients/lookup".to_owned(),
+        Value::Object(retail_recipient_lookup_operation()),
+    );
+    paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
         Value::Object(asset_alias_resolve_operation()),
     );
@@ -700,18 +704,18 @@ fn offline_paths() -> Map {
         ),
         (
             "/v1/offline/v2/notes/issue",
-            "Issue an Offline V2 note.",
-            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Retired Offline V2 note issue route.",
+            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
         ),
         (
             "/v1/offline/v2/audit",
-            "Submit an Offline V2 audit request.",
-            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Retired Offline V2 audit route.",
+            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -880,6 +884,15 @@ fn account_transactions_list_query_parameters() -> Vec<Value> {
     params.push(string_query_param(
         "asset_id",
         "Filter transactions by canonical Base58 asset id.",
+    ));
+    params
+}
+
+fn account_history_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "asset_id",
+        "Filter activity by canonical Base58 asset id, asset definition id, or active asset alias.",
     ));
     params
 }
@@ -3331,6 +3344,23 @@ fn account_paths() -> Map {
                 "Accounts",
                 "List account transactions.",
                 "List transactions authored by an account (supports pagination and optional asset_id filtering). Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
+    );
+    paths.insert(
+        "/v1/accounts/{account_id}/history".to_owned(),
+        Value::Object({
+            let mut params = vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )];
+            params.extend(account_history_list_query_parameters());
+            json_get_operation(
+                "Accounts",
+                "List indexed account history.",
+                "List indexed account activity for the selected account, including incoming and outgoing value movement plus raw affected transactions. Supports pagination and optional asset filtering.",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -7746,6 +7776,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/aliases/by_account"
                     | "/v1/aliases/resolve"
                     | "/v1/aliases/resolve_index"
+                    | "/v1/retail/recipients/lookup"
                     | "/v1/assets/aliases/resolve"
                     | "/v1/assets/definitions/query"
                     | "/v1/assets/holders/query"
@@ -8030,6 +8061,70 @@ fn alias_lookup_by_account_operation() -> Map {
         "responses".into(),
         Value::Object(alias_lookup_by_account_responses()),
     );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn retail_recipient_lookup_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Retail".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Lookup a retail recipient name through configured bank routes.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Verifies that the supplied alias is bound to the canonical account in Iroha, \
+             then calls the configured bank Core API route for HBL or UBL and returns the \
+             normalized recipient confirmation."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("retailRecipientLookup".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(
+            "#/components/schemas/RetailRecipientLookupRequest",
+        )),
+    );
+    let mut responses = single_json_response("#/components/schemas/RetailRecipientLookupResponse");
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed request or unsupported FI alias scope.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "502".to_owned(),
+        json_response(
+            "Configured bank recipient lookup route returned an invalid response.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response(
+            "Recipient lookup route is unavailable or not configured.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "504".to_owned(),
+        json_response(
+            "Recipient lookup route timed out.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
     methods
@@ -10829,6 +10924,59 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "RetailRecipientLookupRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "alias_fqn"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical recipient account identifier encoded as an I105 literal."
+                },
+                "alias_fqn": {
+                    "type": "string",
+                    "description": "Canonical bank alias FQN, for example `payee@hbl.sbp`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RetailRecipientLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved": {
+                    "type": "boolean",
+                    "description": "Whether the bank confirmed the account, alias, FI, and recipient name."
+                },
+                "account_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Canonical recipient account identifier."
+                },
+                "alias_fqn": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Canonical bank alias FQN."
+                },
+                "fi_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "enum": ["hbl.sbp", "ubl.sbp"],
+                    "description": "Canonical FI identifier."
+                },
+                "full_name": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Human-readable recipient name confirmed by the bank."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "AssetAliasResolveResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -12984,6 +13132,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
         assert!(paths.contains_key("/v1/aliases/by_account"));
+        assert!(paths.contains_key("/v1/retail/recipients/lookup"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/contracts/aliases"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
@@ -13240,6 +13389,46 @@ mod tests {
             .expect("offline refill description");
         assert!(refill_description.contains("signature_base64 or witness_base64"));
         assert!(refill_description.contains("X-Iroha-* app-auth headers are rejected"));
+        let issue_post = paths
+            .get("/v1/offline/v2/notes/issue")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline issue post operation");
+        let issue_description = issue_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline issue description");
+        assert!(issue_description.contains("retired"));
+        assert!(issue_description.contains("Kagemusha online-to-offline top-up"));
+        let audit_post = paths
+            .get("/v1/offline/v2/audit")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline audit post operation");
+        let audit_description = audit_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline audit description");
+        assert!(audit_description.contains("retired"));
+        assert!(audit_description.contains("Kagemusha payment flows"));
+        let redeem_post = paths
+            .get("/v1/offline/v2/notes/redeem")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("offline redeem post operation");
+        let redeem_description = redeem_post
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("offline redeem description");
+        assert!(redeem_description.contains("redeem_request_norito_base64"));
+        assert!(redeem_description.contains("KagemushaRecursiveSpendRedeemRequestV1"));
+        assert!(redeem_description.contains("compact_payment_token_norito_base64"));
+        assert!(redeem_description.contains("projection_verifier_record_norito_base64"));
+        assert!(redeem_description.contains("source_note_commitment"));
+        assert!(redeem_description.contains("ignored auxiliary fields"));
         let refill_request_schema = refill_post
             .get("requestBody")
             .and_then(Value::as_object)

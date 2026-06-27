@@ -207,19 +207,19 @@ class PrivacyNativeBridgeTest {
         )
 
         for (helper in helpers) {
-            assertFailsWith<IllegalArgumentException> {
+            assertIllegalArgumentContains("requestArchive must not be empty") {
                 helper(ByteArray(0))
             }
-            assertFailsWith<IllegalArgumentException> {
+            assertIllegalArgumentContains("requestArchive must not be empty") {
                 helper(null)
             }
         }
         val oversized = ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1)
         for (helper in helpers) {
-            assertFailsWith<IllegalArgumentException> {
+            assertIllegalArgumentContains("requestArchive must not exceed 67108864 bytes") {
                 helper(oversized)
             }
-            assertFailsWith<IllegalArgumentException> {
+            assertIllegalArgumentContains("requestArchive must contain a non-empty privacy request payload") {
                 helper(privacyNoritoFrame(0x52))
             }
         }
@@ -227,7 +227,7 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun rejectsInvalidProofRequestComponentsBeforeNativeDispatch() {
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("algorithmId must not be null") {
             PrivacyNativeBridge.privacyProofRequestV1(
                 null,
                 "buildZkAceAuthorizationProofV1",
@@ -235,7 +235,7 @@ class PrivacyNativeBridgeTest {
                 "public-inputs".toByteArray(),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("publicInputs must not be empty") {
             PrivacyNativeBridge.privacyProofRequestV1(
                 "zk-ace-pq-authorization-v0",
                 "buildZkAceAuthorizationProofV1",
@@ -243,7 +243,7 @@ class PrivacyNativeBridgeTest {
                 ByteArray(0),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("witness must not exceed 33554432 bytes") {
             PrivacyNativeBridge.privacyProofRequestV1(
                 "zk-ace-pq-authorization-v0",
                 "buildZkAceAuthorizationProofV1",
@@ -318,25 +318,25 @@ class PrivacyNativeBridgeTest {
         val transferWitness = sampleTransferWitness()
         val unshieldWitness = sampleUnshieldWitness()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("vkRef must be halo2-ipa-pasta:confidential_transfer_v2") {
             PrivacyConfidentialWitnessCodecs.buildConfidentialTransferProofRequestV1(
                 transferWitness,
                 "halo2-ipa-pasta:confidential_unshield_v3",
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("vkRef must be halo2-ipa-pasta:confidential_unshield_v3") {
             PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldProofRequestV1(
                 unshieldWitness,
                 "halo2-ipa-pasta:confidential_transfer_v2",
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("proof must not be empty") {
             PrivacyConfidentialWitnessCodecs.buildConfidentialTransferVerifyRequestV1(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("proof must not be empty") {
             PrivacyConfidentialWitnessCodecs.buildConfidentialUnshieldVerifyRequestV1(ByteArray(0))
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("confidential transfer witness must include one or two transferOutputs") {
             PrivacyConfidentialWitnessCodecs.encodeTransferWitness(
                 PrivacyConfidentialWitnessV1(
                     chainId = transferWitness.chainId,
@@ -351,7 +351,7 @@ class PrivacyNativeBridgeTest {
                 ),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("confidential unshield witness must not include transferOutputs") {
             PrivacyConfidentialWitnessCodecs.encodeUnshieldWitness(
                 PrivacyConfidentialWitnessV1(
                     chainId = unshieldWitness.chainId,
@@ -366,7 +366,7 @@ class PrivacyNativeBridgeTest {
                 ),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("inputs[1].leafIndex duplicates inputs[0]") {
             PrivacyConfidentialWitnessV1(
                 chainId = transferWitness.chainId,
                 assetDefinitionId = transferWitness.assetDefinitionId,
@@ -379,7 +379,7 @@ class PrivacyNativeBridgeTest {
                 rootHint = transferWitness.rootHint,
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("inputs[0].leafIndex must reference treeCommitments") {
             PrivacyConfidentialWitnessV1(
                 chainId = transferWitness.chainId,
                 assetDefinitionId = transferWitness.assetDefinitionId,
@@ -1114,6 +1114,12 @@ class PrivacyNativeBridgeTest {
                 "Iroha production allowlist is not enabled for this audited row",
             ),
         )
+    }
+
+    private fun assertIllegalArgumentContains(expectedMessage: String, block: () -> Unit): IllegalArgumentException {
+        val error = assertFailsWith<IllegalArgumentException>(block = block)
+        assertTrue(error.message.orEmpty().contains(expectedMessage), error.message)
+        return error
     }
 
     private fun assertSanitized(

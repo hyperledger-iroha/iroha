@@ -28,6 +28,7 @@ from sorafs_evidence_paths import (  # noqa: E402
 from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
+from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     build_evidence_artifact,
     count_evidence_artifacts,
@@ -196,6 +197,12 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "policy_digest_hex",
     "matrix_digest_hex",
     "ledger_digest_hex",
+)
+PROVIDER_BAKE_FIELDS: tuple[str, ...] = (
+    "bake_id",
+    "started_at_unix",
+    "completed_at_unix",
+    "provider_count",
 )
 
 
@@ -514,16 +521,6 @@ def validate_evidence_payload(
     )
 
 
-
-def provider_bake_fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "bake_id": payload.get("bake_id"),
-        "started_at_unix": payload.get("started_at_unix"),
-        "completed_at_unix": payload.get("completed_at_unix"),
-        "provider_count": payload.get("provider_count"),
-    }
-
-
 def digest_binding(
     fingerprint: dict[str, Any],
     fields: tuple[str, ...],
@@ -585,7 +582,7 @@ def build_summary(
             FINGERPRINT_FIELDS,
         )
         if kind_name == "provider_bake":
-            bake = provider_bake_fingerprint(payload)
+            bake = artifact_fingerprint(payload, PROVIDER_BAKE_FIELDS)
             artifact["bake"] = bake
             if evidence_artifact_is_valid(artifact):
                 valid_provider_bakes.append(bake)
@@ -600,7 +597,7 @@ def build_summary(
                 policy_bound_artifacts.append(artifact)
             if kind_name in LEDGER_BOUND_KINDS:
                 ledger_bound_artifacts.append(artifact)
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(

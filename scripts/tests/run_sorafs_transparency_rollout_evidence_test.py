@@ -35,6 +35,10 @@ def complete_args(tmp_path: Path) -> list[str]:
         "/runtime/client.toml",
         "--torii-url",
         "https://torii.example",
+        "--deployment-id",
+        "transparency-staging-a",
+        "--environment",
+        "staging",
         "--out-dir",
         str(tmp_path / "evidence"),
         "--cycle-id",
@@ -85,6 +89,10 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.transparency.rollout_evidence_collection_plan.v1"
     assert plan["verifier_summary_schema"] == "sorafs.transparency.rollout_evidence_gate.v1"
+    assert plan["deployment_context"] == {
+        "deployment_id": "transparency-staging-a",
+        "environment": "staging",
+    }
     labels = [step["label"] for step in plan["steps"]]
     assert labels == [
         "source_entry_canary",
@@ -152,6 +160,23 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert "--proof-token-issuance" in captured.err
     assert "must exist and be a file" in captured.err
     assert str(missing) in captured.err
+
+
+def test_unreviewed_deployment_context_fails_before_plan(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--deployment-id") + 1] = "transparency-dev-a"
+    args[args.index("--environment") + 1] = "dev"
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in captured.err
+    )
+    assert "environment must be one of" in captured.err
 
 
 def test_cycle_id_is_required_for_publication_detail(tmp_path: Path, capsys) -> None:

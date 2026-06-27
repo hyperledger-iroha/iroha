@@ -24,7 +24,7 @@ use iroha_data_model::{
         musubi::{
             AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
         },
-        offline::{AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemOfflineNote},
+        offline::KagemushaTransfer,
         settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
@@ -2274,26 +2274,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 }
 
 fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
-    if let Some(issue) = any.downcast_ref::<IssueOfflineNote>() {
-        return Some(issue.issue.asset.definition());
-    }
-    if let Some(redemption) = any.downcast_ref::<RedeemOfflineNote>() {
-        return Some(redemption.redemption.asset.definition());
-    }
-    if let Some(audit) = any.downcast_ref::<AuditOfflineNote>() {
-        return audit
-            .audit
-            .input_claims
-            .first()
-            .map(|claim| claim.asset.definition())
-            .or_else(|| {
-                audit
-                    .audit
-                    .output_claims
-                    .first()
-                    .map(|claim| claim.asset.definition())
-            });
-    }
     if let Some(transfer) = any.downcast_ref::<KagemushaTransfer>() {
         return Some(&transfer.asset);
     }
@@ -5034,7 +5014,7 @@ mod tests {
             AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
         },
         isi::{
-            offline::{IssueOfflineNote, KagemushaTransfer},
+            offline::KagemushaTransfer,
             prelude::{Mint, Register, Transfer},
             settlement::{
                 DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
@@ -5047,7 +5027,7 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneConfig, LaneVisibility,
             UniversalAccountId,
         },
-        offline::{OfflineNoteIssue, OfflineNoteKeyCertificate},
+        offline::OfflineNoteKeyCertificate,
         permission::Permission,
         prelude::*,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
@@ -8678,7 +8658,7 @@ mod tests {
     }
 
     #[test]
-    fn opaque_offline_note_issue_defers_to_state_for_asset_definition_dataspace() {
+    fn opaque_kagemusha_transfer_defers_to_state_for_asset_definition_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
@@ -8703,17 +8683,6 @@ mod tests {
             &projected_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let issue = IssueOfflineNote::new(OfflineNoteIssue {
-            note_commitment: Hash::new(b"offline-note-route-test"),
-            key_certificate: sample_offline_certificate(sender_id.clone()),
-            asset: AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
-            amount: Numeric::new(25, 0),
-        });
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(issue)],
-        );
         let mut state = state_with_asset_definitions(
             vec![
                 AssetDefinition::numeric(opaque_asset_definition.clone())
@@ -8725,20 +8694,6 @@ mod tests {
             lane_catalog,
         );
         bind_asset_definition_alias(&mut state, &opaque_asset_definition, "unit#paynet");
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("opaque offline issue should defer to state"),
-            None
-        );
-
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("offline issue route must resolve with state"),
-            RoutingDecision::new(LaneId::new(2), dataspace_id)
-        );
 
         let kagemusha = KagemushaTransfer::new(
             opaque_asset_definition,

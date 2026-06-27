@@ -422,6 +422,11 @@ InvalidSignatureThrottleSafetyAnchors ==
   /\ RbcThrottleKeyBoundaryAndOutcomeAnchors
   /\ PenaltyThresholdCooldownAndPruneAnchors
 
+InvalidSignatureThrottleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ InvalidSignatureThrottleSafetyAnchors
+
 BugInvalidFirstThrottled ==
   ImplementationActions(InvalidFirstLogs) = SpecActions(InvalidFirstLogs)
 

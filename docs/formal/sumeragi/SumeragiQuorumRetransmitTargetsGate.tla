@@ -302,6 +302,10 @@ QuorumRetransmitTargetExactness ==
   /\ QuorumRetransmitMappingFallbackExact
   /\ QuorumRetransmitOrderDistinctExact
 
+QuorumRetransmitTargetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QuorumRetransmitTargetExactness
+
 BugEmptyReturnsFull ==
   ActualOutput("empty_topology") = SpecOutput("empty_topology")
 

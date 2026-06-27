@@ -77,3 +77,64 @@ def test_unknown_required_kind_fails() -> None:
         assert "unknown required evidence kind `unknown`" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("unknown required kind was accepted")
+
+
+def test_malformed_required_kind_values_fail() -> None:
+    for raw_values in ("feed_collector", b"feed_collector", {"kind": "feed_collector"}):
+        try:
+            parse_required_kinds(
+                raw_values,
+                allowed_kinds=ALLOWED,
+                default_required=DEFAULT,
+            )
+        except ValueError as error:
+            assert "--require-kind values must be a sequence" in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("malformed required kind values were accepted")
+
+
+def test_non_string_required_kind_value_fails() -> None:
+    try:
+        parse_required_kinds(
+            ["feed_collector", 7],
+            allowed_kinds=ALLOWED,
+            default_required=DEFAULT,
+        )
+    except ValueError as error:
+        assert "--require-kind values must be strings" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("non-string required kind value was accepted")
+
+
+def test_malformed_allowed_kind_registry_fails() -> None:
+    for allowed_kinds in ("feed_collector", {"": object()}, {7: object()}):
+        try:
+            parse_required_kinds(
+                [],
+                allowed_kinds=allowed_kinds,
+                default_required=DEFAULT,
+            )
+        except ValueError as error:
+            assert "allowed required evidence" in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("malformed allowed kind registry was accepted")
+
+
+def test_malformed_default_required_kinds_fail() -> None:
+    for default_required, expected in (
+        ("feed_collector", "must be a sequence"),
+        ({"feed_collector": True}, "must be a sequence"),
+        (("feed_collector", ""), "must be non-empty strings"),
+        (("feed_collector", "unknown"), "unknown default required evidence kind"),
+        (("feed_collector", "feed_collector"), "duplicate default required evidence kind"),
+    ):
+        try:
+            parse_required_kinds(
+                [],
+                allowed_kinds=ALLOWED,
+                default_required=default_required,
+            )
+        except ValueError as error:
+            assert expected in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("malformed default required kinds were accepted")

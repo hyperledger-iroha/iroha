@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7209cfb934f626d62b2f47f128a091a1f1e8201bd3eecb922010e8b5fe07fcd7
+source_hash: 7180a3e8fda0ce3cbf42bca6393fcd52dbe7ef100a6e6fe23b520010fdb5776a
 source_last_modified: "2026-06-25T17:05:30+00:00"
 translation_last_reviewed: 2026-06-25
 ---

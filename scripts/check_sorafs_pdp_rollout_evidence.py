@@ -408,7 +408,7 @@ def build_summary(
                 valid_proof_summary_digests.add(digest.lower())
             elif kind_name in PROOF_SUMMARY_BOUND_KINDS:
                 valid_proof_summary_bound_artifacts.append((kind_name, artifact))
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(

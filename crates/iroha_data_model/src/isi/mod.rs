@@ -225,6 +225,16 @@ impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::bridge::UpsertSccpRouteManifest> for InstructionBox {
+    fn from(i: crate::isi::bridge::UpsertSccpRouteManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::bridge::RemoveSccpRouteManifest> for InstructionBox {
+    fn from(i: crate::isi::bridge::RemoveSccpRouteManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
     fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
         InstructionBox(Box::new(i))
@@ -1128,7 +1138,8 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-// Allow direct boxing of Offline note instructions.
+// Retain direct boxing for historical Offline Note fixtures; the default
+// registry does not admit these retired payment instructions.
 impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
     fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
         InstructionBox(Box::new(i))
@@ -3795,7 +3806,10 @@ pub mod prelude {
         asset_transfer_control::{
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
         },
-        bridge::{RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof},
+        bridge::{
+            RecordBridgeReceipt, RecordSccpMessage, RemoveSccpRouteManifest, SubmitBridgeProof,
+            UpsertSccpRouteManifest,
+        },
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
@@ -3875,7 +3889,6 @@ mod tests {
     #![allow(clippy::too_many_lines)]
 
     use iroha_primitives::const_vec::ConstVec;
-    use iroha_primitives::numeric::Numeric;
 
     use super::*;
     use crate::prelude::*;
@@ -4733,78 +4746,27 @@ mod tests {
     }
 
     #[test]
-    fn offline_note_instructions_are_registered_and_boxable() {
-        use crate::offline::{
-            OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteIssuedClaim,
-            OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
-        };
+    fn kagemusha_transfer_instruction_is_registered_and_boxable() {
         use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
-        use iroha_crypto::{Hash, Signature};
 
         let registry = crate::instruction_registry::default();
-        let account_id = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .expect("public key"),
-        );
+        for retired_type_name in [
+            std::any::type_name::<crate::isi::offline::IssueOfflineNote>(),
+            std::any::type_name::<crate::isi::offline::RedeemOfflineNote>(),
+            std::any::type_name::<crate::isi::offline::AuditOfflineNote>(),
+        ] {
+            assert!(
+                !registry.contains(retired_type_name),
+                "default registry must not contain retired offline payment instruction {retired_type_name}"
+            );
+        }
+
         let asset_definition_id = AssetDefinitionId::new(
             DomainId::try_new("offline", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         );
-        let asset_id = AssetId::of(asset_definition_id, account_id.clone());
-        let proof = OfflineNoteRecursiveProof {
-            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-recursive"),
-            public_inputs_hash: Hash::new(b"offline-public-inputs"),
-            proof: ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-        };
-        let key_certificate = OfflineNoteKeyCertificate {
-            version: crate::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-            platform: "ios-appattest".to_owned(),
-            key_id: "one-use-key".to_owned(),
-            device_id: "device-1".to_owned(),
-            account_id: account_id.clone(),
-            public_key: vec![0x01, 0x02, 0x03],
-            assertion_scheme: "apple-appattest-counter".to_owned(),
-            assertion_key_algorithm: "app-attest-p256".to_owned(),
-            assertion_public_key: vec![0x04; 65],
-            assertion_usage_count_limit: None,
-            one_use: true,
-            issuer_signature: Signature::from_bytes(&[0xAB; 64]),
-        };
-
-        let issue = crate::isi::offline::IssueOfflineNote::new(OfflineNoteIssue {
-            note_commitment: Hash::new(b"note-commitment"),
-            key_certificate: key_certificate.clone(),
-            asset: asset_id.clone(),
-            amount: Numeric::new(10, 0),
-        });
-        let redemption = crate::isi::offline::RedeemOfflineNote::new(OfflineNoteRedeem {
-            source_note_commitment: Hash::new(b"note-commitment"),
-            input_nullifiers: vec![Hash::new(b"input-nullifier")],
-            sender_key_certificate: key_certificate.clone(),
-            recipient: account_id,
-            asset: asset_id.clone(),
-            amount: Numeric::new(10, 0),
-            recursive_proof: proof.clone(),
-        });
-        let audit = crate::isi::offline::AuditOfflineNote::new(OfflineNoteAuditBundle {
-            token_id: Hash::new(b"token"),
-            sender_key_certificate: key_certificate.clone(),
-            input_nullifiers: vec![Hash::new(b"audit-nullifier")],
-            input_claims: vec![
-                OfflineNoteIssuedClaim::from_issue(&issue.issue).expect("audit input claim"),
-            ],
-            output_commitments: vec![Hash::new(b"output-note")],
-            output_claims: vec![crate::offline::OfflineNoteAuditOutputClaim {
-                note_commitment: Hash::new(b"output-note"),
-                key_certificate,
-                asset: asset_id,
-                amount: Numeric::new(10, 0),
-            }],
-            recursive_proof: proof,
-        });
         let kagemusha = crate::isi::offline::KagemushaTransfer::new(
-            issue.issue.asset.definition().clone(),
+            asset_definition_id,
             vec![[0x11; 32]],
             vec![[0x22; 32], [0x33; 32]],
             ProofAttachment::new_ref(
@@ -4815,40 +4777,17 @@ mod tests {
             Some([0x44; 32]),
         );
 
-        let cases: Vec<(&'static str, InstructionBox, Vec<u8>)> = vec![
-            (
-                std::any::type_name::<crate::isi::offline::IssueOfflineNote>(),
-                issue.clone().into(),
-                norito::to_bytes(&issue).expect("encode issue instruction"),
-            ),
-            (
-                std::any::type_name::<crate::isi::offline::RedeemOfflineNote>(),
-                redemption.clone().into(),
-                norito::to_bytes(&redemption).expect("encode redemption instruction"),
-            ),
-            (
-                std::any::type_name::<crate::isi::offline::AuditOfflineNote>(),
-                audit.clone().into(),
-                norito::to_bytes(&audit).expect("encode audit instruction"),
-            ),
-            (
-                std::any::type_name::<crate::isi::offline::KagemushaTransfer>(),
-                kagemusha.clone().into(),
-                norito::to_bytes(&kagemusha).expect("encode kagemusha instruction"),
-            ),
-        ];
-
-        for (type_name, instruction, payload) in cases {
-            assert!(
-                registry.contains(type_name),
-                "default registry should contain {type_name}"
-            );
-            let decoded = registry
-                .decode(type_name, &payload)
-                .unwrap_or_else(|| panic!("missing decoder for {type_name}"))
-                .expect("decode instruction through registry");
-            assert_eq!(instruction, decoded);
-        }
+        let type_name = std::any::type_name::<crate::isi::offline::KagemushaTransfer>();
+        assert!(
+            registry.contains(type_name),
+            "default registry should contain {type_name}"
+        );
+        let payload = norito::to_bytes(&kagemusha).expect("encode kagemusha instruction");
+        let decoded = registry
+            .decode(type_name, &payload)
+            .unwrap_or_else(|| panic!("missing decoder for {type_name}"))
+            .expect("decode instruction through registry");
+        assert_eq!(InstructionBox::from(kagemusha), decoded);
     }
 
     #[test]

@@ -2026,13 +2026,46 @@ impl Kura {
         Ok(())
     }
 
+    /// Validate lane storage topology changes that can fail without mutating Kura state.
+    ///
+    /// This catches deterministic path-shape conflicts before callers reconcile
+    /// other lane-scoped storage backends.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if an existing file or directory would make lane
+    /// storage provisioning, retirement, or relabeling fail.
+    pub fn preflight_lane_segments(
+        &self,
+        added: &[&LaneConfigEntry],
+        retired: &[&LaneConfigEntry],
+        relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
+    ) -> Result<()> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+
+        for entry in added {
+            self.preflight_prepare_lane_storage(entry)?;
+        }
+        for entry in retired {
+            self.preflight_retire_lane_storage(entry)?;
+        }
+        for (previous, current) in relabelled {
+            self.preflight_relabel_lane_storage(previous, current)?;
+        }
+
+        Ok(())
+    }
+
     /// Rename lane storage directories when lane aliases change.
     ///
     /// The migrations slice pairs the previous and current lane entries; each
     /// pair triggers a best-effort `std::fs::rename` so block data continues to
     /// live under the new alias without re-syncing from peers. Missing or
     /// conflicting directories are logged and skipped so existing data is not
-    /// destroyed.
+    /// destroyed. Callers that bind the result to catalog state must call
+    /// [`Self::preflight_lane_segments`] first so occupied targets abort before
+    /// higher-level state changes are committed.
     /// Move per-lane block directories when a lane's configuration alias changes.
     ///
     /// Each tuple in `migrations` pairs the previous configuration entry with the
@@ -2222,6 +2255,111 @@ impl Kura {
             merge = %merge_path.display(),
             "lane storage provisioned"
         );
+        Ok(())
+    }
+
+    fn preflight_prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+        let blocks_dir = entry.blocks_dir(&self.store_root);
+        Self::preflight_dir_path(&blocks_dir)?;
+        for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
+            Self::preflight_file_path(&blocks_dir.join(name))?;
+        }
+
+        let merge_path = entry.merge_log_path(&self.store_root);
+        if let Some(parent) = merge_path.parent() {
+            Self::preflight_dir_path(parent)?;
+        }
+        Self::preflight_file_path(&merge_path)?;
+        Ok(())
+    }
+
+    fn preflight_retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+        let blocks_dir = entry.blocks_dir(&self.store_root);
+        if blocks_dir == *self.active_blocks_dir.lock() {
+            return Ok(());
+        }
+        let merge_path = entry.merge_log_path(&self.store_root);
+        if merge_path == *self.active_merge_path.lock() {
+            return Ok(());
+        }
+
+        let retired_root = self.store_root.join("retired");
+        Self::preflight_dir_path(&retired_root.join("blocks"))?;
+        Self::preflight_dir_path(&retired_root.join("merge_ledger"))?;
+        Ok(())
+    }
+
+    fn preflight_relabel_lane_storage(
+        &self,
+        previous: &LaneConfigEntry,
+        current: &LaneConfigEntry,
+    ) -> Result<()> {
+        if previous.kura_segment == current.kura_segment {
+            return Ok(());
+        }
+
+        let old_dir = previous.blocks_dir(&self.store_root);
+        if !old_dir.exists() {
+            self.preflight_prepare_lane_storage(current)?;
+            return Ok(());
+        }
+
+        let new_dir = current.blocks_dir(&self.store_root);
+        if let Some(parent) = new_dir.parent() {
+            Self::preflight_dir_path(parent)?;
+        }
+        if new_dir.exists() {
+            return Err(Error::MkDir(
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "lane storage relabel target already exists",
+                ),
+                new_dir,
+            ));
+        }
+        self.preflight_relabel_merge_log(previous, current)
+    }
+
+    fn preflight_relabel_merge_log(
+        &self,
+        previous: &LaneConfigEntry,
+        current: &LaneConfigEntry,
+    ) -> Result<()> {
+        let old_path = previous.merge_log_path(&self.store_root);
+        let new_path = current.merge_log_path(&self.store_root);
+        if old_path == new_path {
+            return Ok(());
+        }
+        if let Some(parent) = new_path.parent() {
+            Self::preflight_dir_path(parent)?;
+        }
+        if !old_path.exists() {
+            Self::preflight_file_path(&new_path)?;
+            return Ok(());
+        }
+        if new_path.exists() {
+            Self::preflight_dir_path(&self.store_root.join("retired").join("merge_ledger"))?;
+        }
+        Ok(())
+    }
+
+    fn preflight_dir_path(path: &Path) -> Result<()> {
+        if path.exists() && !path.is_dir() {
+            return Err(Error::MkDir(
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "expected directory path"),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn preflight_file_path(path: &Path) -> Result<()> {
+        if path.exists() && !path.is_file() {
+            return Err(Error::IO(
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "expected file path"),
+                path.to_path_buf(),
+            ));
+        }
         Ok(())
     }
 

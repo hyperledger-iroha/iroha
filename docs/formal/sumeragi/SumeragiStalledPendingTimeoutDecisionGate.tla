@@ -500,6 +500,10 @@ StalledPendingTimeoutExactness ==
   /\ StalledPendingTimeoutClassExact
   /\ StalledPendingTimeoutDecisionExact
 
+StalledPendingTimeoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ StalledPendingTimeoutExactness
+
 SafetyFast ==
   StalledPendingTimeoutExactness
 

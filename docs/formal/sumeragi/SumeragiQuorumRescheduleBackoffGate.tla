@@ -371,6 +371,10 @@ QuorumRescheduleBackoffExactness ==
   /\ QuorumFastResendPresentExact
   /\ QuorumFastResendRejectExact
 
+QuorumRescheduleBackoffCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QuorumRescheduleBackoffExactness
+
 BugBaseZeroEscalates ==
   ActualOutput("base_zero") = SpecOutput("base_zero")
 

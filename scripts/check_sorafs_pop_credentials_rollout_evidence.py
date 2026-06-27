@@ -183,6 +183,8 @@ class ValidationOptions:
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "root_digest_hex",
     "revocation_list_digest_hex",
     "synced_root_digest_hex",
@@ -417,6 +419,7 @@ def validate_evidence_payload(
         lambda kind, checked_payload, errors: validate_kind_specific(
             kind, checked_payload, errors, options
         ),
+        require_reviewed_deployment_context=True,
     )
 
 
@@ -463,7 +466,7 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             if kind_name == "issuer_bundle":
                 issuer_bundle_artifacts.append(artifact)

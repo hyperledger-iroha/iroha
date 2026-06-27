@@ -41,6 +41,8 @@ CHECKER_PREFLIGHT_TEST = SCRIPTS_DIR / "tests" / "sorafs_checker_preflight_test.
 RUNNER_PREFLIGHT_TEST = SCRIPTS_DIR / "tests" / "sorafs_runner_preflight_test.py"
 EVIDENCE_PATHS_HELPER = SCRIPTS_DIR / "sorafs_evidence_paths.py"
 EVIDENCE_PATHS_TEST = SCRIPTS_DIR / "tests" / "sorafs_evidence_paths_test.py"
+PATH_IDENTITY_HELPER = SCRIPTS_DIR / "sorafs_path_identity.py"
+PATH_IDENTITY_TEST = SCRIPTS_DIR / "tests" / "sorafs_path_identity_test.py"
 EVIDENCE_JSON_HELPER = SCRIPTS_DIR / "sorafs_evidence_json.py"
 EVIDENCE_JSON_TEST = SCRIPTS_DIR / "tests" / "sorafs_evidence_json_test.py"
 EVIDENCE_FINGERPRINT_HELPER = SCRIPTS_DIR / "sorafs_evidence_fingerprint.py"
@@ -150,6 +152,7 @@ def checker_names_without(*excluded: str) -> set[str]:
 
 def timestamp_validation_checkers() -> set[str]:
     return {
+        "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
@@ -157,39 +160,53 @@ def timestamp_validation_checkers() -> set[str]:
         "check_sorafs_moderation_panel_rollout_evidence.py",
         "check_sorafs_orderbook_rollout_evidence.py",
         "check_sorafs_pdp_rollout_evidence.py",
+        "check_sorafs_pop_credentials_rollout_evidence.py",
         "check_sorafs_por_rollout_evidence.py",
         "check_sorafs_potr_rollout_evidence.py",
         "check_sorafs_reference_sdk_release_evidence.py",
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_transparency_rollout_evidence.py",
     }
 
 
 def environment_validation_checkers() -> set[str]:
     return {
+        "check_sorafs_ai_prescreen_rollout_evidence.py",
+        "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
+        "check_sorafs_hedging_rollout_evidence.py",
+        "check_sorafs_moderation_panel_rollout_evidence.py",
         "check_sorafs_orderbook_rollout_evidence.py",
         "check_sorafs_pdp_rollout_evidence.py",
+        "check_sorafs_pop_credentials_rollout_evidence.py",
         "check_sorafs_por_rollout_evidence.py",
         "check_sorafs_potr_rollout_evidence.py",
         "check_sorafs_reference_sdk_release_evidence.py",
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_transparency_rollout_evidence.py",
     }
 
 
 def deployment_id_validation_checkers() -> set[str]:
     return {
+        "check_sorafs_ai_prescreen_rollout_evidence.py",
+        "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
+        "check_sorafs_hedging_rollout_evidence.py",
+        "check_sorafs_moderation_panel_rollout_evidence.py",
         "check_sorafs_orderbook_rollout_evidence.py",
         "check_sorafs_pdp_rollout_evidence.py",
+        "check_sorafs_pop_credentials_rollout_evidence.py",
         "check_sorafs_por_rollout_evidence.py",
         "check_sorafs_potr_rollout_evidence.py",
         "check_sorafs_reference_sdk_release_evidence.py",
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_transparency_rollout_evidence.py",
     }
 
 
@@ -707,6 +724,52 @@ def test_rollout_checkers_accept_reviewed_response_files() -> None:
     assert missing == []
 
 
+def test_reviewed_response_files_use_shared_path_identity_resolution() -> None:
+    helper = read(PATH_IDENTITY_HELPER)
+    helper_test = read(PATH_IDENTITY_TEST)
+    response_args = read(RESPONSE_ARGS_HELPER)
+    response_args_test = read(RESPONSE_ARGS_TEST)
+
+    assert "def resolve_path_identity" in helper
+    assert "def _require_error_list" in helper
+    assert "def _require_label" in helper
+    assert "def _require_failure_template" in helper
+    assert "ALLOWED_FAILURE_TEMPLATE_FIELDS" in helper
+    assert "Formatter().parse(failure_template)" in helper
+    assert "path identity errors must be a list of strings" in helper
+    assert "path identity label must be a non-empty canonical string" in helper
+    assert "path identity failure template must be a non-empty string" in helper
+    assert "path identity failure template must include {path} and {error}" in helper
+    assert (
+        "path identity failure template fields must be label, path, or error"
+        in helper
+    )
+    assert "path identity failure template must be valid format text" in helper
+    assert (
+        "path identity failure template fields must not use format specifiers"
+        in helper
+    )
+    assert "isinstance(path, Path)" in helper
+    assert "must be a path" in helper
+    assert "return path.resolve()" in helper
+    assert "except (OSError, RuntimeError)" in helper
+    assert "test_resolve_path_identity_rejects_non_path_without_traceback" in helper_test
+    assert "test_resolve_path_identity_rejects_malformed_error_container" in helper_test
+    assert (
+        "test_resolve_path_identity_rejects_malformed_labels_before_resolution"
+        in helper_test
+    )
+    assert (
+        "test_resolve_path_identity_rejects_malformed_failure_templates_before_resolution"
+        in helper_test
+    )
+    assert "test_resolve_path_identity_records_custom_failure" in helper_test
+    assert "from sorafs_path_identity import resolve_path_identity" in response_args
+    assert "resolve_path_identity(" in response_args
+    assert "path.resolve()" not in response_args
+    assert "test_response_file_resolution_uses_shared_identity_helper" in response_args_test
+
+
 def test_rollout_checkers_have_operator_argfile_examples() -> None:
     missing = [
         path.name
@@ -968,9 +1031,12 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "validate_fixture_manifest_preflight" in checker
     assert "read_file_bytes" in checker
     assert "failed to read {label}" in checker
+    assert "load_evidence_json_with_sha256" in checker
+    assert "load_generated_json_sidecar" in checker
     assert "failed to scan generated fixture root" in checker
     assert "render_checker_summary" in checker
     assert "write_checker_summary" in checker
+    assert "validate_checker_summary_output" in checker
     assert "args.summary_out.parent.mkdir" not in checker
     assert "args.summary_out.write_text" not in checker
     assert "must not be the same path as --manifest" in checker
@@ -988,7 +1054,14 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "missing generated Norito fixture" in checker_test
     assert "test_summary_out_same_as_manifest_fails_before_write" in checker_test
     assert "test_summary_out_directory_fails_before_write" in checker_test
+    assert "test_summary_out_symlink_fails_before_manifest_read" in checker_test
+    assert "test_summary_out_parent_chain_symlink_fails_before_write" in checker_test
     assert "test_manifest_read_error_writes_blocked_summary_without_traceback" in checker_test
+    assert "test_manifest_rejects_non_standard_json_constants" in checker_test
+    assert (
+        "test_full_mode_rejects_non_object_json_sidecar_with_shared_loader"
+        in checker_test
+    )
     assert "test_full_mode_rejects_unreadable_generated_fixture_without_traceback" in checker_test
     assert (
         "test_full_mode_rejects_fixture_inventory_scan_errors_without_traceback"
@@ -1131,22 +1204,40 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
         or 'print(f"ERROR: {error}"' in read(path)
     ]
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
+    helper_test = read(RUNNER_PREFLIGHT_TEST)
 
+    assert "def command_plan_steps" in helper
+    assert "COMMAND_PLAN_SHAPE_DIAGNOSTIC" in helper
+    assert "command plan must be a sequence of steps" in helper
+    assert "isinstance(plan, (str, bytes, bytearray, Mapping))" in helper
     assert "def run_command_plan" in helper
     assert "def emit_runner_error_lines" in helper
     assert "def emit_runner_error_block" in helper
     assert "def emit_runner_notice" in helper
+    assert "def validate_runner_output_dir" in helper
+    assert "def validate_runner_output_parent" in helper
+    assert "parent chain" in helper
     assert "validate_command_plan_artifacts" in helper
     assert "reserved_output_paths" in helper
     assert "duplicate planned artifact" in helper
     assert "must not be the same path as reserved output" in helper
     assert "must not be a symlink" in helper
+    assert 'parent_label = f"{output_label} parent"' in helper
+    assert 'label=f"{label} artifact"' in helper
+    assert "must not already exist" in helper
     assert "wrote empty expected artifact" in helper
     assert "reserved_output_paths=(out_dir,)" in helper
     assert "failed to launch" in helper
     assert "failed to create --out-dir" in helper
     assert "emit_runner_error_lines(errors)" in helper
+    assert "emit_runner_error_lines((COMMAND_PLAN_SHAPE_DIAGNOSTIC,))" in helper
     assert "emit_runner_notice(" in helper
+    assert "test_command_plan_steps_rejects_scalar_and_mapping_containers" in helper_test
+    assert "test_validate_command_plan_artifacts_rejects_malformed_plan_shapes" in helper_test
+    assert (
+        "test_run_command_plan_rejects_malformed_plan_before_output_creation"
+        in helper_test
+    )
     assert missing == []
     assert local_stderr_emitters == []
 
@@ -1245,25 +1336,73 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
 
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     helper_test = read(RUNNER_PREFLIGHT_TEST)
+    assert "def _require_error_list" in helper
+    assert "def _require_label" in helper
+    assert "runner preflight errors must be a list of strings" in helper
+    assert "runner preflight label must be a non-empty canonical string" in helper
     assert "def inspect_runner_path_exists" in helper
     assert "def inspect_runner_path_is_symlink" in helper
     assert "def inspect_runner_path_is_file" in helper
     assert "def inspect_runner_path_is_dir" in helper
     assert "cannot be inspected" in helper
+    assert "must be a path" in helper
     assert "must exist and be a file" in helper
     assert "must be a directory when it exists" in helper
     assert "must not be a directory" in helper
+    assert "must not be a symlink" in helper
     assert "must not be the same path as --out-dir" in helper
-    assert "--out-dir parent" in helper
-    assert "--summary-out parent" in helper
+    assert "validate_runner_output_dir(out_dir, errors)" in helper
+    assert 'validate_runner_output_parent(summary_out, errors, label="--summary-out")' in helper
+    assert "from sorafs_path_identity import resolve_path_identity" in helper
+    assert 'resolve_path_identity(path, errors, label="input file")' in helper
+    assert 'resolve_path_identity(path, errors, label="output path")' in helper
+    assert "path.resolve()" not in helper
     assert "test_verifier_inspection_failure_fails_preflight" in helper_test
     assert "test_out_dir_inspection_failure_fails_preflight" in helper_test
+    assert "test_validate_runner_output_dir_rejects_non_path_without_traceback" in helper_test
+    assert (
+        "test_validate_runner_output_parent_rejects_non_path_without_traceback"
+        in helper_test
+    )
+    assert (
+        "test_runner_path_inspectors_reject_malformed_error_container"
+        in helper_test
+    )
+    assert "test_runner_path_inspectors_reject_malformed_labels" in helper_test
+    assert (
+        "test_validate_runner_output_parent_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert "test_validate_runner_output_parent_rejects_malformed_label" in helper_test
+    assert (
+        "test_validate_runner_output_dir_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert "test_validate_runner_output_dir_rejects_malformed_label" in helper_test
+    assert "test_out_dir_symlink_fails_preflight" in helper_test
+    assert "test_out_dir_parent_chain_symlink_fails_preflight" in helper_test
     assert "test_summary_out_directory_inspection_failure_fails_preflight" in helper_test
+    assert "test_summary_out_symlink_fails_preflight" in helper_test
+    assert "test_summary_out_parent_symlink_fails_preflight" in helper_test
+    assert "test_summary_out_parent_chain_symlink_fails_preflight" in helper_test
+    assert "test_summary_out_parent_chain_file_fails_preflight" in helper_test
+    assert "test_input_file_rejects_non_path_without_traceback" in helper_test
     assert "test_input_file_inspection_failure_is_reported" in helper_test
+    assert "test_input_directory_rejects_non_path_without_traceback" in helper_test
     assert "test_input_directory_type_inspection_failure_is_reported" in helper_test
     assert "test_run_command_plan_reports_artifact_inspection_failure" in helper_test
     assert "test_planned_artifact_symlink_fails" in helper_test
+    assert "test_planned_artifact_parent_symlink_fails" in helper_test
+    assert "test_planned_artifact_parent_chain_symlink_fails" in helper_test
+    assert "test_planned_artifact_existing_file_fails" in helper_test
+    assert "test_run_command_plan_rejects_output_dir_symlink_before_launch" in helper_test
+    assert "test_run_command_plan_rejects_artifact_parent_symlink_before_create" in helper_test
+    assert (
+        "test_run_command_plan_rejects_artifact_parent_chain_symlink_before_create"
+        in helper_test
+    )
     assert "test_run_command_plan_rejects_empty_artifact_written_by_command" in helper_test
+    assert "test_runner_path_resolution_uses_shared_identity_helper" in helper_test
     assert missing == []
 
 
@@ -1294,6 +1433,14 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "MAX_RESPONSE_ARGFILE_BYTES" in helper
     assert "MAX_RESPONSE_ARGFILE_DEPTH" in helper
     assert "MAX_EXPANDED_ARGS" in helper
+    assert "def require_expanded_arg_limit" in helper
+    assert "require_expanded_arg_limit(expanded)" in helper
+    assert "{label} must be a sequence of strings" in helper
+    assert 'label="arguments"' in helper
+    assert 'label="response-file line arguments"' in helper
+    assert "response-file line must be a string" in helper
+    assert "argument `{arg}` must be a string" in helper
+    assert "expanded arguments must be <=" in helper
     assert "must exist and be a file" in helper
     assert "failed to resolve @ARGFILE" in helper
     assert "failed to stat @ARGFILE" in helper
@@ -1305,6 +1452,28 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "test_response_file_stat_failure_is_stable_value_error" in helper_test
     assert "test_response_file_read_failure_is_stable_value_error" in helper_test
     assert "test_response_file_non_utf8_bytes_fail_stably" in helper_test
+    assert "test_direct_non_string_argument_fails_without_traceback" in helper_test
+    assert (
+        "test_raw_string_argument_container_fails_without_character_expansion"
+        in helper_test
+    )
+    assert (
+        "test_raw_bytes_argument_container_fails_without_character_expansion"
+        in helper_test
+    )
+    assert "test_mapping_argument_container_fails_without_key_expansion" in helper_test
+    assert (
+        "test_response_file_parser_returning_scalar_line_args_fails_with_line"
+        in helper_test
+    )
+    assert (
+        "test_response_file_parser_returning_non_string_line_arg_fails_with_line"
+        in helper_test
+    )
+    assert "test_convert_arg_line_to_args_rejects_non_string_line" in helper_test
+    assert "test_shared_integer_arg_parsers_reject_non_string_values" in helper_test
+    assert "test_direct_expanded_argument_limit_fails" in helper_test
+    assert "test_response_file_expanded_argument_limit_fails" in helper_test
     assert missing == []
     assert local_response_parsers == []
 
@@ -1415,13 +1584,32 @@ def test_rollout_runners_use_shared_namespace_integer_validators() -> None:
     helper_test = read(RUNNER_PREFLIGHT_TEST)
 
     assert "def runner_arg_label" in helper
+    assert "RUNNER_ARG_FIELD_RE" in helper
+    assert "def _require_runner_arg_field" in helper
+    assert "runner argument field must be a snake_case string" in helper
+    assert "runner preflight errors must be a list of strings" in helper
     assert "def require_runner_positive_int" in helper
     assert "def require_runner_non_negative_int" in helper
-    assert "getattr(args, field, None)" in helper
+    assert "field_name = _require_runner_arg_field(field)" in helper
+    assert "getattr(args, field_name, None)" in helper
     assert "not isinstance(value, bool)" in helper
     assert '" when supplied" if allow_none else ""' in helper
+    assert "test_runner_arg_label_rejects_malformed_field_names" in helper_test
     assert "test_require_runner_positive_int_rejects_direct_non_int_values" in helper_test
+    assert (
+        "test_require_runner_positive_int_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert "test_require_runner_positive_int_rejects_malformed_field_name" in helper_test
     assert "test_require_runner_non_negative_int_rejects_direct_invalid_values" in helper_test
+    assert (
+        "test_require_runner_non_negative_int_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert (
+        "test_require_runner_non_negative_int_rejects_malformed_field_name"
+        in helper_test
+    )
     assert missing_positive == []
     assert missing_non_negative == []
     assert local_numeric_predicates == []
@@ -1464,9 +1652,19 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "def emit_checker_error_lines" in helper
     assert "def emit_checker_error_block" in helper
     assert "def emit_checker_notice" in helper
+    assert "def _require_error_list" in helper
+    assert "def _require_label" in helper
+    assert "checker preflight errors must be a list of strings" in helper
+    assert "checker preflight label must be a non-empty canonical string" in helper
     assert "def inspect_checker_preflight_path_exists" in helper
     assert "def inspect_checker_preflight_path_is_dir" in helper
+    assert "def inspect_checker_preflight_path_is_symlink" in helper
+    assert "def validate_checker_output_parent" in helper
+    assert "def validate_checker_summary_output" in helper
     assert "cannot be inspected" in helper
+    assert "parent chain" in helper
+    assert "must be a path" in helper
+    assert "must not be a symlink" in helper
     assert "def render_checker_summary" in helper
     assert "def render_and_write_checker_summary" in helper
     assert "rendered_summary = render_checker_summary(summary)" in helper
@@ -1483,9 +1681,46 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "must not be the same path as --evidence" in helper
     assert "record_reserved_output_evidence_conflicts" in helper
     assert 'reserved_label="--summary-out"' in helper
+    assert "from sorafs_path_identity import resolve_path_identity" in helper
+    assert "resolve_path_identity(path, errors, label=label)" in helper
+    assert "path.resolve()" not in helper
+    assert "validate_checker_summary_output(summary_out, errors)" in helper
+    assert "def validate_checker_summary_output(summary_out: Path" in helper
     assert "test_summary_out_exists_inspection_failure_fails_preflight" in helper_test
     assert "test_summary_out_directory_inspection_failure_fails_preflight" in helper_test
     assert "test_summary_out_parent_inspection_failure_fails_preflight" in helper_test
+    assert "test_summary_out_symlink_fails_preflight" in helper_test
+    assert "test_summary_out_parent_symlink_fails_preflight" in helper_test
+    assert "test_summary_out_parent_chain_symlink_fails_preflight" in helper_test
+    assert "test_summary_out_parent_chain_file_fails_preflight" in helper_test
+    assert (
+        "test_validate_checker_summary_output_rejects_non_path_without_traceback"
+        in helper_test
+    )
+    assert (
+        "test_validate_checker_output_parent_rejects_non_path_without_traceback"
+        in helper_test
+    )
+    assert (
+        "test_checker_preflight_path_inspectors_reject_malformed_error_container"
+        in helper_test
+    )
+    assert "test_checker_preflight_path_inspectors_reject_malformed_labels" in helper_test
+    assert (
+        "test_validate_checker_output_parent_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert "test_validate_checker_output_parent_rejects_malformed_label" in helper_test
+    assert (
+        "test_validate_checker_summary_output_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert "test_write_checker_summary_rejects_summary_symlink" in helper_test
+    assert (
+        "test_write_checker_summary_rejects_parent_chain_symlink_before_create"
+        in helper_test
+    )
+    assert "test_checker_path_resolution_uses_shared_identity_helper" in helper_test
     assert missing == []
     assert local_summary_renderers == []
     assert local_stderr_emitters == []
@@ -1568,11 +1803,20 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     ]
     helper = read(EVIDENCE_PATHS_HELPER)
     helper_test = read(EVIDENCE_PATHS_TEST)
+    path_identity_helper = read(PATH_IDENTITY_HELPER)
 
     assert "duplicate explicit evidence file" in helper
+    assert "def _require_error_list" in helper
+    assert "def _require_label" in helper
+    assert "evidence path errors must be a list of strings" in helper
+    assert "evidence path label must be a non-empty canonical string" in helper
+    assert "def evidence_path_collection" in helper
+    assert "paths must be a sequence" in helper
+    assert "isinstance(paths, (str, bytes, bytearray, Mapping))" in helper
     assert "both --evidence and --evidence-dir" in helper
     assert "duplicate evidence file" in helper
     assert "must exist and be a directory" in helper
+    assert "evidence directory `{directory}` must be a path" in helper
     assert "def inspect_evidence_directory" in helper
     assert "def scan_evidence_directory_json" in helper
     assert "cannot be inspected" in helper
@@ -1582,16 +1826,57 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "record_reserved_output_evidence_conflicts" in helper
     assert "reserved output" in helper
     assert "conflicts with reserved output" in helper
-    assert "RuntimeError" in helper
+    assert "from sorafs_path_identity import resolve_path_identity" in helper
+    assert "resolve_path_identity(path, errors, label=label)" in helper
+    assert "RuntimeError" in path_identity_helper
     assert "evidence_path_identities" in helper
     assert "is_explicit_evidence_path" in helper
+    assert (
+        "test_evidence_path_collection_rejects_scalar_and_mapping_containers"
+        in helper_test
+    )
+    assert (
+        "test_discover_evidence_files_rejects_malformed_path_collections"
+        in helper_test
+    )
+    assert (
+        "test_evidence_path_collection_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert "test_evidence_path_collection_rejects_malformed_labels" in helper_test
+    assert (
+        "test_discover_evidence_files_rejects_malformed_error_container"
+        in helper_test
+    )
+    assert (
+        "test_evidence_directory_helpers_reject_malformed_error_container"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_helpers_reject_malformed_error_container"
+        in helper_test
+    )
+    assert "test_reserved_output_helpers_reject_malformed_labels" in helper_test
+    assert (
+        "test_reserved_output_helpers_reject_malformed_path_collections"
+        in helper_test
+    )
+    assert (
+        "test_evidence_path_identities_rejects_malformed_path_collections"
+        in helper_test
+    )
+    assert "test_non_path_evidence_directory_fails_closed_without_traceback" in helper_test
     assert "test_evidence_directory_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_directory_scan_failure_fails_closed" in helper_test
+    assert (
+        "test_reserved_output_conflict_non_path_directory_fails_closed" in helper_test
+    )
     assert (
         "test_reserved_output_conflict_scan_inspection_failure_fails_closed"
         in helper_test
     )
     assert "test_reserved_output_conflict_scan_failure_fails_closed" in helper_test
+    assert "test_evidence_path_resolution_uses_shared_identity_helper" in helper_test
     assert missing == []
 
 
@@ -1624,9 +1909,16 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "def load_evidence_json" in helper
     assert "def load_evidence_json_with_sha256" in helper
     assert "def load_evidence_json_with_sha256_or_record_error" in helper
+    assert "evidence JSON errors must be a list of strings" in helper
     assert "failed to load evidence JSON" in helper
+    assert "evidence path `{path}` must be a path" in helper
+    assert "evidence byte limit must be positive" in helper
     assert "evidence file exceeds" in helper
+    assert "evidence JSON bytes must be bytes" in helper
     assert "evidence root must be a JSON object" in helper
+    assert "def json_object_without_duplicate_keys" in helper
+    assert "object_pairs_hook=json_object_without_duplicate_keys" in helper
+    assert "evidence JSON object contains duplicate key" in helper
     assert "hashlib.sha256(raw).hexdigest()" in helper
     assert "parse_constant=reject_non_standard_json_constant" in helper
     assert "non-standard JSON constant" in helper
@@ -1635,8 +1927,31 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
         "test_load_evidence_json_with_sha256_or_record_error_records_runtime_failure"
         in helper_test
     )
+    assert "test_load_evidence_json_rejects_non_path_without_traceback" in helper_test
+    assert (
+        "test_load_evidence_json_with_sha256_or_record_error_records_non_path"
+        in helper_test
+    )
+    assert (
+        "test_load_evidence_json_with_sha256_or_record_error_rejects_malformed_errors"
+        in helper_test
+    )
+    assert (
+        "test_load_evidence_json_rejects_invalid_byte_limit_without_traceback"
+        in helper_test
+    )
     assert (
         "test_load_evidence_json_rejects_non_standard_numeric_constants"
+        in helper_test
+    )
+    assert (
+        "test_decode_evidence_json_rejects_non_byte_input_without_traceback"
+        in helper_test
+    )
+    assert "test_load_evidence_json_rejects_duplicate_top_level_keys" in helper_test
+    assert "test_load_evidence_json_rejects_duplicate_nested_keys" in helper_test
+    assert (
+        "test_load_evidence_json_with_sha256_or_record_error_records_duplicate_key"
         in helper_test
     )
     assert "read_json_artifact" not in reputation
@@ -1667,21 +1982,117 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
         or '"errors": validation_errors' in read(path)
     ]
     helper = read(EVIDENCE_FINGERPRINT_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_fingerprint_test.py")
     validation_helper = read(EVIDENCE_VALIDATION_HELPER)
     pop_checker = read(SCRIPTS_DIR / "check_sorafs_pop_credentials_rollout_evidence.py")
     reputation_checker = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
 
     assert "def artifact_fingerprint" in helper
-    assert "return {field: payload.get(field) for field in fields}" in helper
+    assert "artifact fingerprint payload must be an object" in helper
+    assert "artifact fingerprint fields must be a sequence of strings" in helper
+    assert "artifact fingerprint fields must be non-empty strings" in helper
+    assert "artifact fingerprint fields must be canonical strings" in helper
+    assert "artifact fingerprint fields must not contain duplicates" in helper
+    assert "for field in fields:" in helper
+    assert "seen_fields: set[str] = set()" in helper
+    assert "fingerprint[field] = payload.get(field)" in helper
+    assert (
+        "test_artifact_fingerprint_rejects_non_object_payload_without_traceback"
+        in helper_test
+    )
+    assert (
+        "test_artifact_fingerprint_rejects_string_field_sequence_without_splitting"
+        in helper_test
+    )
+    assert (
+        "test_artifact_fingerprint_rejects_non_string_field_without_traceback"
+        in helper_test
+    )
+    assert "test_artifact_fingerprint_rejects_blank_field_without_traceback" in helper_test
+    assert (
+        "test_artifact_fingerprint_rejects_padded_field_without_drift"
+        in helper_test
+    )
+    assert (
+        "test_artifact_fingerprint_rejects_duplicate_fields_without_overwrite"
+        in helper_test
+    )
+    assert "def _artifact_validation_error_list" in validation_helper
+    assert "SHA256_HEX_PATTERN = re.compile" in validation_helper
+    assert "validation_errors: Any" in validation_helper
+    assert (
+        "not isinstance(validation_errors, (str, bytes, bytearray))"
+        in validation_helper
+    )
+    assert (
+        "artifact validation errors must be a sequence of strings"
+        in validation_helper
+    )
+    assert "def _artifact_field" in validation_helper
+    assert "not isinstance(payload, Mapping)" in validation_helper
+    assert "def _artifact_sha256_or_error" in validation_helper
+    assert "SHA256_HEX_PATTERN.fullmatch(digest)" in validation_helper
+    assert (
+        "artifact sha256 must be a 64-character lowercase hex string"
+        in validation_helper
+    )
+    assert "def _artifact_kind_name_or_error" in validation_helper
+    assert "kind_name.strip()" in validation_helper
+    assert "artifact kind must be a non-empty string" in validation_helper
+    assert "def _artifact_fingerprint_or_error" in validation_helper
+    assert "except ValueError as exc" in validation_helper
+    assert "def _merge_artifact_fingerprint_values" in validation_helper
+    assert "artifact fingerprint values must be a mapping" in validation_helper
+    assert (
+        "artifact fingerprint value keys must be non-empty strings"
+        in validation_helper
+    )
     assert "def build_evidence_artifact" in validation_helper
     assert "def build_kinded_evidence_artifact" in validation_helper
+    assert "payload: Any" in validation_helper
+    assert "kind_name: Any" in validation_helper
+    assert "digest: Any" in validation_helper
+    assert "fingerprint_fields: Any" in validation_helper
     assert "artifact_fingerprint(payload, fingerprint_fields)" in validation_helper
     assert '"path": str(path)' in validation_helper
-    assert '"sha256": digest' in validation_helper
-    assert '"schema": payload.get("schema")' in validation_helper
-    assert '"status": payload.get("status")' in validation_helper
-    assert '"valid": not validation_errors' in validation_helper
-    assert '"errors": validation_errors' in validation_helper
+    assert '"kind": kind' in validation_helper
+    assert '"sha256": sha256' in validation_helper
+    assert '"schema": _artifact_field(payload, "schema")' in validation_helper
+    assert '"status": _artifact_field(payload, "status")' in validation_helper
+    assert (
+        "fingerprint = _artifact_fingerprint_or_error(payload, fingerprint_fields, errors)"
+        in validation_helper
+    )
+    assert "sha256 = _artifact_sha256_or_error(digest, errors)" in validation_helper
+    assert "kind = _artifact_kind_name_or_error(kind_name, errors)" in validation_helper
+    assert "_merge_artifact_fingerprint_values(" in validation_helper
+    assert "errors = _artifact_validation_error_list(validation_errors)" in validation_helper
+    assert '"valid": not errors' in validation_helper
+    assert '"errors": errors' in validation_helper
+    assert (
+        "test_build_evidence_artifact_rejects_malformed_error_buckets"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_build_kinded_evidence_artifact_rejects_malformed_error_buckets"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_build_evidence_artifact_rejects_malformed_payload_or_fingerprint_fields"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_build_kinded_evidence_artifact_rejects_malformed_fingerprint_inputs"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_build_evidence_artifact_rejects_malformed_sha256"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_build_kinded_evidence_artifact_rejects_malformed_kind_or_sha256"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
     assert "build_kinded_evidence_artifact(" in reputation_checker
     assert "artifact_fingerprint(payload, FINGERPRINT_FIELDS)" not in reputation_checker
     assert "synced_revocation_list_digest_hex" in pop_checker
@@ -1700,11 +2111,24 @@ def test_rollout_checkers_use_shared_recognized_artifact_count() -> None:
         or "len(artifacts) for artifacts in artifacts_by_kind.values()" in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     reputation_checker = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
 
+    assert "def _evidence_sequence_count" in helper
+    assert "not isinstance(" in helper
+    assert "value, (str, bytes, bytearray)" in helper
     assert "def count_evidence_artifacts" in helper
     assert "def count_recognized_evidence_artifacts" in helper
-    assert "return sum(len(artifacts) for artifacts in artifacts_by_kind.values())" in helper
+    assert "_evidence_sequence_count(artifacts)" in helper
+    assert "return _evidence_sequence_count(recognized)" in helper
+    assert (
+        "test_count_evidence_artifacts_rejects_malformed_buckets_without_traceback"
+        in helper_test
+    )
+    assert (
+        "test_count_recognized_evidence_artifacts_rejects_strings_without_traceback"
+        in helper_test
+    )
     assert "count_recognized_evidence_artifacts," in reputation_checker
     assert (
         '"recognized_artifact_count": count_recognized_evidence_artifacts(recognized)'
@@ -1723,9 +2147,11 @@ def test_rollout_checkers_use_shared_evidence_file_count() -> None:
         or '"evidence_file_count": len(files)' in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def count_evidence_files" in helper
-    assert "return len(files)" in helper
+    assert "return _evidence_sequence_count(files)" in helper
+    assert "test_count_evidence_files_rejects_strings_without_traceback" in helper_test
     assert missing == []
 
 
@@ -1738,9 +2164,13 @@ def test_rollout_checkers_use_shared_evidence_gate_status() -> None:
         or '"status": "ready" if not errors else "blocked"' in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def evidence_gate_status" in helper
+    assert "errors: Any" in helper
+    assert "isinstance(errors, (str, bytes, bytearray))" in helper
     assert 'return "blocked" if errors else "ready"' in helper
+    assert "test_evidence_gate_status_fails_closed_on_malformed_errors" in helper_test
     assert missing == []
 
 
@@ -1756,9 +2186,22 @@ def test_rollout_checkers_use_shared_validation_error_recorder() -> None:
         or 'errors.extend(f"{path}: {error}" for error in validation_errors)' in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def record_evidence_validation_errors" in helper
+    assert "validation errors must be a sequence of strings" in helper
+    assert "isinstance(validation_errors, (str, bytes, bytearray))" in helper
+    assert "all(isinstance(error, str) for error in validation_errors)" in helper
     assert 'errors.extend(f"{path}: {error}" for error in validation_errors)' in helper
+    assert (
+        "test_record_evidence_validation_errors_rejects_string_without_character_split"
+        in helper_test
+    )
+    assert (
+        "test_record_evidence_validation_errors_rejects_scalar_without_traceback"
+        in helper_test
+    )
+    assert "test_record_evidence_validation_errors_rejects_non_string_entry" in helper_test
     assert missing == []
 
 
@@ -1797,13 +2240,31 @@ def test_rollout_checkers_use_shared_standard_payload_validator() -> None:
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
 
+    assert "def require_string" in helper
+    assert "not isinstance(payload, Mapping)" in helper
+    assert "payload must be an object" in helper
+    assert "def require_known_schema" in helper
+    assert "schema_to_kind: Any" in helper
+    assert "schema registry must be a mapping" in helper
     assert "def validate_standard_evidence_payload" in helper
+    assert "payload: Any" in helper
     assert "require_known_schema(payload, schema_to_kind, artifact_label, errors)" in helper
+    assert "if not isinstance(payload, dict)" in helper
+    assert "kind_name = getattr(kind, \"name\", None)" in helper
+    assert "schema kind must have a non-empty name" in helper
     assert "require_rollout_deployment_id(payload, errors)" in helper
     assert "require_rollout_environment(payload, errors)" in helper
     assert "visit_sensitive_fields(" in helper
     assert "validate_kind(kind, payload, errors)" in helper
-    assert "return kind.name, errors" in helper
+    assert "return kind_name, errors" in helper
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    assert "test_require_string_helpers_reject_malformed_payloads" in helper_test
+    assert "test_require_known_schema_rejects_malformed_schema_registry" in helper_test
+    assert "test_validate_standard_evidence_payload_rejects_malformed_payload" in helper_test
+    assert (
+        "test_validate_standard_evidence_payload_rejects_malformed_kind_name"
+        in helper_test
+    )
     assert missing == []
     assert local_wrappers == []
 
@@ -1827,13 +2288,17 @@ def test_rollout_checkers_use_shared_string_coverage_validation() -> None:
         and "required not in names" in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     transparency = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
     ai_prescreen = read(SCRIPTS_DIR / "check_sorafs_ai_prescreen_rollout_evidence.py")
 
     assert "def collect_string_values" in helper
+    assert "def _required_string_values" in helper
     assert "def require_string_coverage" in helper
+    assert "required values must be a sequence of strings" in helper
     assert "allow_scalar_items" in helper
     assert "trim_values" in helper
+    assert "test_string_coverage_helpers_reject_malformed_payloads" in helper_test
     assert 'field or "value"' in helper
     assert "allow_scalar_items=False" in transparency
     assert "trim_values=False" in transparency
@@ -1983,11 +2448,13 @@ def test_rollout_checkers_use_shared_extended_validation_primitives() -> None:
         for path in CHECKERS
         if 'payload.get("reconciled_line_item_count") != line_item_count' in read(path)
     ]
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     for helper in expected_by_helper:
         assert f"def {helper}" in helper_source
     assert "must be true" in helper_source
     assert "path or field" in helper_source
     assert "quote_expected" in helper_source
+    assert "test_require_string_equal_rejects_malformed_payloads" in helper_test
     assert "must be a non-negative integer" in helper_source
     assert "must equal" in helper_source
     assert missing == {}
@@ -2124,6 +2591,39 @@ def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
     assert local_copies == []
 
 
+def test_rollout_checkers_enforce_consistent_deployment_context() -> None:
+    expected_names = environment_validation_checkers() & deployment_id_validation_checkers()
+    missing_required_summary = [
+        path.name
+        for path in CHECKERS
+        if path.name in expected_names
+        and "build_required_evidence_summary(" not in function_source(
+            path,
+            "build_summary",
+        )
+    ]
+    helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_summary = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "build_required_evidence_summary",
+    )
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+
+    assert "def record_consistent_deployment_context" in helper
+    assert "def deployment_context_summary" in helper
+    assert "record_consistent_deployment_context(" in helper_summary
+    assert "record_artifact_error(artifact, error, errors)" in helper
+    assert '"deployment_id" not in fingerprint' in helper_summary
+    assert '"environment" not in fingerprint' in helper_summary
+    assert "row_errors: list[str] = []" in helper_summary
+    assert '"errors": row_errors' in helper_summary
+    assert "mark_required_evidence_summary_invalid(" in helper_summary
+    assert "required," in helper_summary
+    assert "evidence deployment context must match across artifacts" in helper_summary
+    assert "test_build_required_evidence_summary_rejects_mixed_deployments" in helper_test
+    assert missing_required_summary == []
+
+
 def test_rollout_checkers_use_shared_iroha_config_binding_validation() -> None:
     expected_names = iroha_config_binding_checkers()
     config_backed_names = config_backed_governance_approval_validation_checkers()
@@ -2169,8 +2669,10 @@ def test_rollout_checkers_use_shared_iroha_config_binding_validation() -> None:
         in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def require_iroha_config_binding" in helper
+    assert "test_config_and_governance_helpers_reject_malformed_payloads" in helper_test
     assert missing_import == []
     assert missing_source_call == []
     assert missing_bound_call == []
@@ -2263,10 +2765,12 @@ def test_rollout_checkers_use_shared_governance_approval_validation() -> None:
         in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def require_governance_approval" in helper
     assert "def require_config_backed_governance_approval" in helper
     assert "def require_policy_digest" in helper
+    assert "test_config_and_governance_helpers_reject_malformed_payloads" in helper_test
     assert missing_config_backed_import == []
     assert missing_config_backed_call == []
     assert unexpected_config_backed_call == []
@@ -2328,11 +2832,19 @@ def test_rollout_checkers_use_shared_hex_validation() -> None:
     ]
     direct_imports = [path.name for path in CHECKERS if "is_hex," in read(path)]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    transparency = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
 
     assert "def is_hex" in helper
     assert "def require_hex" in helper
+    assert "not isinstance(payload, Mapping)" in helper
+    assert "payload must be an object" in helper
     assert "must be {length} hex characters" in helper
     assert "return value.lower()" in helper
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    assert "test_require_hex_rejects_malformed_payloads" in helper_test
+    assert 'path=f"{field}[{index}].request_body_blake3"' in transparency
+    assert 'path=f"{field}[{index}].response_body_blake3"' in transparency
+    assert 'path=f"routes[{index}].body_blake3_hex"' in transparency
     assert missing_require_hex == []
     assert missing_direct_is_hex == []
     assert local_copies == []
@@ -2358,10 +2870,12 @@ def test_rollout_checkers_use_shared_hex_string_array_validation() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
     hedging = read(SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py")
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def require_hex_string_array" in helper
     assert "expected_length_label" in helper
     assert "must be unique" in helper
+    assert "test_require_hex_string_array_rejects_malformed_payloads" in helper_test
     assert "path=\"proof.siblings_hex\"" in reputation
     assert "expected_length_label=\"statement_count\"" in hedging
     assert missing == []
@@ -2417,6 +2931,12 @@ def test_rollout_checkers_use_shared_negative_validation_primitives() -> None:
     assert "must be false" in helper_source
     assert "must be false when present" in helper_source
     assert "must be false or explicitly governed" in helper_source
+    assert "payload must be an object" in helper_source
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    assert "test_require_false_rejects_malformed_payloads" in helper_test
+    assert "test_require_false_or_absent_rejects_malformed_payloads" in helper_test
+    assert "test_require_false_or_governed_rejects_malformed_payloads" in helper_test
+    assert "test_require_status_and_number_helpers_reject_malformed_payloads" in helper_test
     assert 'payload.get("hedge_execution_enabled")' not in read(
         SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py"
     )
@@ -2871,7 +3391,9 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
     assert "def require_maximum_number" in helper_source
     assert "def require_passed_status" in helper_source
     assert "def require_status_in" in helper_source
+    assert "payload must be an object" in helper_source
     assert "def require_string_in" in helper_source
+    assert "allowed values must be a sequence of strings" in helper_source
     assert "def require_string_not_equal" in helper_source
     assert "def require_string_value_equal" in helper_source
     assert "not isinstance(value, str) or not value" in helper_source
@@ -2888,6 +3410,12 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
     assert "must be at least {minimum}" in helper_source
     assert "must be <= {maximum}" in helper_source
     assert 'require_status_in(payload, ("passed",), errors, path=path)' in helper_source
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    assert "test_require_status_helpers_reject_malformed_payloads" in helper_test
+    assert "test_require_optional_hex_rejects_malformed_payloads" in helper_test
+    assert "test_require_bool_true_rejects_malformed_payloads" in helper_test
+    assert "test_require_numeric_integer_helpers_reject_malformed_payloads" in helper_test
+    assert "test_require_count_helpers_reject_malformed_payloads" in helper_test
     assert "must not be `{disallowed}`" in helper_source
     assert "must match {expected_label}" in helper_source
     assert "must be a string" in helper_source
@@ -2986,6 +3514,7 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
         )
     ]
     helper_source = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     helper_module = load_script_module(
         EVIDENCE_VALIDATION_HELPER, "sorafs_evidence_validation_tuple_contract"
     )
@@ -2998,9 +3527,20 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
     assert "def require_string_tuple_in" in helper_source
     assert "def record_string_tuple_binding_errors" in helper_source
     assert "def validate_bound_evidence_tuple_references" in helper_source
+    assert "def _evidence_kind_artifact_pairs" in helper_source
+    assert "_evidence_kind_artifact_pairs(" in helper_source
+    assert 'label="bound evidence artifacts"' in helper_source
+    assert "values: Any" in helper_source
+    assert "allowed: Any" in helper_source
+    assert "isinstance(values, (str, bytes, bytearray))" in helper_source
+    assert "isinstance(allowed, (str, bytes, bytearray, Mapping))" in helper_source
     assert "value.lower()" in helper_source
     assert "and value for value in values" in helper_source
     assert "record_artifact_error(artifact, error, errors)" in helper_source
+    assert (
+        "test_record_string_tuple_binding_errors_rejects_malformed_artifact_rows"
+        in helper_test
+    )
     assert (
         helper_module.require_string_tuple_in(
             ("AA", "bb"), {("aa", "bb")}, errors, message="missing binding"
@@ -3022,6 +3562,28 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
         is None
     )
     assert errors == ["missing binding", "missing binding"]
+    assert (
+        helper_module.require_string_tuple_in(
+            "AB", {("a", "b")}, errors, message="missing binding"
+        )
+        is None
+    )
+    assert errors == ["missing binding", "missing binding", "missing binding"]
+    assert (
+        helper_module.require_string_tuple_in(
+            ("AA", "BB"),
+            {("aa", "bb"): True},
+            errors,
+            message="missing binding",
+        )
+        is None
+    )
+    assert errors == [
+        "missing binding",
+        "missing binding",
+        "missing binding",
+        "missing binding",
+    ]
     assert "validate_bound_evidence_tuple_references(" in ai_prescreen
     assert "record_string_tuple_binding_errors(" not in ai_prescreen
     assert "require_string_tuple_in," not in ai_prescreen
@@ -3105,6 +3667,7 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
         )
     ]
     helper_source = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     helper_module = load_script_module(
         EVIDENCE_VALIDATION_HELPER, "sorafs_evidence_validation_scalar_contract"
     )
@@ -3130,9 +3693,18 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
     assert "def require_string_value_in" in helper_source
     assert "def record_string_value_binding_errors" in helper_source
     assert "def validate_bound_evidence_digest_references" in helper_source
+    assert "def _evidence_kind_artifact_pairs" in helper_source
+    assert 'label="missing-anchor evidence artifacts"' in helper_source
+    assert "allowed: Any" in helper_source
+    assert "isinstance(allowed, (str, bytes, bytearray, Mapping))" in helper_source
+    assert "isinstance(allowed_value, str) and allowed_value" in helper_source
     assert "not value" in helper_source
     assert "normalized = value.lower()" in helper_source
     assert "record_artifact_error(artifact, error, errors)" in helper_source
+    assert (
+        "test_record_string_value_binding_errors_rejects_malformed_artifact_rows"
+        in helper_test
+    )
     assert (
         helper_module.require_string_value_in(
             "AA", {"aa"}, errors, message="missing digest"
@@ -3154,6 +3726,25 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
         is None
     )
     assert errors == ["missing digest", "missing digest"]
+    assert (
+        helper_module.require_string_value_in(
+            "AA", "aabb", errors, message="missing digest"
+        )
+        is None
+    )
+    assert errors == ["missing digest", "missing digest", "missing digest"]
+    assert (
+        helper_module.require_string_value_in(
+            "AA", {"aa": True}, errors, message="missing digest"
+        )
+        is None
+    )
+    assert errors == [
+        "missing digest",
+        "missing digest",
+        "missing digest",
+        "missing digest",
+    ]
     for source in (
         ai_prescreen,
         appeal,
@@ -3227,6 +3818,7 @@ def test_rollout_checkers_use_shared_status_in_validation() -> None:
     helper_source = read(EVIDENCE_VALIDATION_HELPER)
 
     assert "def require_status_in" in helper_source
+    assert "allowed statuses must be a sequence of strings" in helper_source
     assert missing_import == []
     assert local_status_membership_checks == []
 
@@ -3277,10 +3869,12 @@ def test_rollout_checkers_use_shared_route_probe_object_array_validation() -> No
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
     ai_prescreen = read(SCRIPTS_DIR / "check_sorafs_ai_prescreen_rollout_evidence.py")
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def require_object_array" in helper
     assert "must be a non-empty array" in helper
     assert "require_object(item" in helper
+    assert "test_require_object_array_rejects_malformed_payloads" in helper_test
     assert 'route_records = require_object_array(payload, "routes", errors)' in ai_prescreen
     assert 'probe_records = require_object_array(payload, field, errors)' in ai_prescreen
     assert missing == []
@@ -3307,8 +3901,10 @@ def test_rollout_checkers_use_shared_generic_object_array_validation() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
     orderbook = read(SCRIPTS_DIR / "check_sorafs_orderbook_rollout_evidence.py")
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def require_object_array" in helper
+    assert "test_require_object_array_rejects_malformed_payloads" in helper_test
     assert 'stream_records = require_object_array(payload, "streams", errors)' in orderbook
     assert 'artifact_records = require_object_array(payload, "artifacts", errors)' in orderbook
     assert 'event_records = require_object_array(payload, "events", errors)' in reputation
@@ -3361,13 +3957,18 @@ def test_rollout_checkers_use_shared_artifact_error_recording() -> None:
     ]
     helper = read(CHECKER_PREFLIGHT)
     evidence_helper = read(EVIDENCE_VALIDATION_HELPER)
+    preflight_test = read(SCRIPTS_DIR / "tests" / "sorafs_checker_preflight_test.py")
 
     assert "def artifact_path_label" in helper
+    assert "artifact: Any" in helper
+    assert "if not isinstance(artifact, Mapping)" in helper
     assert "artifact_path_label(artifact)" in helper
     assert "def record_artifact_error" in helper
+    assert "if not isinstance(artifact, dict)" in helper
     assert "artifact_errors = artifact.get(\"errors\")" in helper
     assert "summary_error: str | None = None" in helper
     assert "summary_errors.append" in helper
+    assert "test_record_artifact_error_rejects_malformed_artifact_rows" in preflight_test
     assert "artifact['path']" not in helper
     assert "def validate_snapshot_bound_evidence_artifacts" in evidence_helper
     assert "def validate_bound_evidence_digest_references" in evidence_helper
@@ -3389,10 +3990,30 @@ def test_rollout_checkers_use_shared_required_summary_builder() -> None:
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
 
+    assert "def _required_evidence_kind_list" in helper
+    assert "def _evidence_artifact_rows" in helper
     assert "def build_required_evidence_summary" in helper
+    assert "artifact_buckets = artifacts_by_kind" in helper
+    assert "schema_map = schema_by_kind" in helper
+    assert "artifacts by kind must be a mapping" in helper
+    assert "schema by kind must be a mapping" in helper
+    assert "raw_artifacts = artifact_buckets.get(name, [])" in helper
+    assert "_evidence_artifact_rows(raw_artifacts)" in helper
+    assert "required evidence kinds must not be empty" in helper
+    assert "def _duplicate_required_evidence_kind_names" in helper
+    assert "duplicate_kind_names = _duplicate_required_evidence_kind_names(" in helper
+    assert "required evidence kinds must not contain duplicates" in helper
+    assert "malformed_artifact_bucket = name in artifact_buckets" in helper
+    assert "required `{name}` artifacts must be a sequence" in helper
+    assert "required {name} {evidence_label} artifacts must be a sequence" in helper
+    assert "for kind_name, artifacts in artifact_buckets.items()" in helper
+    assert "schema_map.get(name)" in helper
+    assert "required `{name}` schema must be configured" in helper
+    assert "required evidence kinds must be a sequence of strings" in helper
     assert "missing required {name} {evidence_label} evidence" in helper
     assert "{name} {evidence_label} evidence has invalid artifact(s)" in helper
     assert "evidence_artifact_is_valid(artifact)" in helper
+    assert "schema_by_kind[name]" not in helper
     assert 'all(artifact["valid"] for artifact in artifacts)' not in helper
     assert missing == []
 
@@ -3456,13 +4077,34 @@ def test_rollout_checkers_use_shared_required_kind_membership() -> None:
         if re.search(r"[\"'][a-z0-9_]+[\"'] in required_kinds", read(path))
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
+    assert "def _evidence_kind_name_set" in helper
+    assert "kinds: Any" in helper
+    assert "not isinstance(" in helper
+    assert "kinds, Collection" in helper
+    assert "isinstance(kinds, (str, bytes, bytearray, Mapping))" in helper
+    assert "not isinstance(kind, str) or not kind" in helper
     assert "def required_evidence_has_any_kind" in helper
     assert "def required_evidence_has_all_kinds" in helper
     assert "def validate_bound_evidence_digest_references" in helper
-    assert "any(kind in required_kind_names for kind in candidate_kinds)" in helper
-    assert "all(kind in required_kind_names for kind in candidate_kinds)" in helper
+    assert "_evidence_kind_name_set(required_kinds)" in helper
+    assert "_evidence_kind_name_set(candidate_kinds)" in helper
+    assert (
+        "any(kind in required_kind_names for kind in candidate_kind_names)" in helper
+    )
+    assert (
+        "all(kind in required_kind_names for kind in candidate_kind_names)" in helper
+    )
     assert "required_evidence_has_any_kind(" in helper
+    assert (
+        "test_required_evidence_has_any_kind_fails_closed_on_malformed_kinds"
+        in helper_test
+    )
+    assert (
+        "test_required_evidence_has_all_kinds_fails_closed_on_malformed_kinds"
+        in helper_test
+    )
     assert missing_any == []
     assert missing_bound_reference == []
     assert missing_all == []
@@ -3472,6 +4114,7 @@ def test_rollout_checkers_use_shared_required_kind_membership() -> None:
 
 def test_reputation_uses_shared_required_row_invalidation() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
 
     assert "def mark_required_evidence_invalid" in helper
@@ -3480,22 +4123,72 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
     assert "def build_kinded_evidence_artifact" in helper
     assert "def finalize_custom_required_evidence_rows" in helper
     assert "def record_custom_required_evidence_artifact" in helper
+    assert "required `{kind}` row must be an object" in helper
+    assert "required `{kind}` errors must be a list" in helper
+    assert "required `{kind_name}` row must be an object" in helper
+    assert "required `{kind_name}` errors must be a list" in helper
+    assert "artifact errors must be a sequence of strings" in helper
+    assert (
+        "test_record_custom_required_evidence_artifact_rejects_error_shape_drift"
+        in helper_test
+    )
+    assert "if kind_name not in required" in helper
+    assert "return False" in helper
+    assert "return True" in helper
     assert "def required_evidence_summary_is_valid" in helper
+    assert "required: Any" in helper
+    assert "not isinstance(required, Mapping)" in helper
+    assert "isinstance(row, Mapping)" in helper
     assert "def required_evidence_has_any_kind" in helper
     assert "def hashable_evidence_values" in helper
+    assert "def _evidence_value_items" in helper
+    assert "values: Any" in helper
+    assert "isinstance(values, (str, bytes, bytearray, Mapping))" in helper
+    assert "_evidence_value_items(values)" in helper
     assert "def missing_required_evidence_values" in helper
+    assert "required_values: Any" in helper
+    assert "observed_values: Any" in helper
+    assert (
+        "test_required_evidence_summary_is_valid_fails_closed_on_malformed_rows"
+        in helper_test
+    )
+    assert (
+        "test_hashable_evidence_values_rejects_scalar_or_mapping_containers"
+        in helper_test
+    )
+    assert (
+        "test_missing_required_evidence_values_rejects_scalar_containers"
+        in helper_test
+    )
     assert "def record_missing_required_evidence_value_errors" in helper
     assert "def required_or_observed_evidence_values_are_present" in helper
     assert "hashable_evidence_values(required_values)" in helper
     assert "hashable_evidence_values(observed_values)" in helper
     assert "def record_missing_required_or_observed_evidence_error" in helper
     assert "def distinct_evidence_values_are_consistent" in helper
+    assert "def distinct_evidence_values_are_consistent(values: Any)" in helper
+    assert "not isinstance(\n        values, Collection" in helper
+    assert (
+        "test_distinct_evidence_values_are_consistent_fails_closed_on_malformed_values"
+        in helper_test
+    )
+    assert (
+        "test_record_inconsistent_evidence_values_error_marks_malformed_values"
+        in helper_test
+    )
     assert "def record_inconsistent_evidence_values_error" in helper
     assert "def record_consistent_evidence_value" in helper
     assert "isinstance(value, str)" in helper
+    assert 'errors.append(f"{context}.{key} must be a string")' in helper
+    assert (
+        "test_record_consistent_evidence_value_reports_malformed_values"
+        in helper_test
+    )
     assert "def record_observed_evidence_value" in helper
     assert "Hashable" in helper
     assert "def record_snapshot_bound_evidence_artifact" in helper
+    assert "_evidence_kind_name_set(anchor_kinds)" in helper
+    assert "_evidence_kind_name_set(bound_kinds)" in helper
     assert "isinstance(snapshot_id, str)" in helper
     assert "isinstance(merkle_root, str)" in helper
     assert "def validate_snapshot_bound_evidence_artifacts" in helper
@@ -3504,7 +4197,7 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
     assert "mark_required_evidence_invalid_if_present(" in helper
     assert "evidence_artifact_fingerprint(" in helper
     assert "evidence_artifact_kind(" in helper
-    assert "row = required.setdefault" in helper
+    assert "required[kind_name] = {\"valid\": False, \"errors\": [], \"artifacts\": []}" in helper
     assert "build_kinded_evidence_artifact," in reputation
     assert "finalize_custom_required_evidence_rows," in reputation
     assert "record_consistent_evidence_value," in reputation
@@ -3606,8 +4299,13 @@ def test_rollout_checkers_use_shared_required_kind_names() -> None:
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
 
+    assert "def _required_evidence_kind_list" in helper
+    assert "def _duplicate_required_evidence_kind_names" in helper
     assert "def required_evidence_kind_names" in helper
-    assert "return list(required_kinds)" in helper
+    assert "_required_evidence_kind_list(required_kinds)" in helper
+    assert "not names" in helper
+    assert "_duplicate_required_evidence_kind_names(names)" in helper
+    assert "return list(required_kinds)" not in helper
     assert missing == []
 
 
@@ -3622,7 +4320,11 @@ def test_rollout_checkers_use_shared_evidence_schema_map() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
 
     assert "def evidence_schema_by_kind" in helper
-    assert "{name: kind.schema for name, kind in kind_by_name.items()}" in helper
+    assert "kind_by_name: Any" in helper
+    assert "not isinstance(kind_by_name, Mapping)" in helper
+    assert "getattr(kind, \"schema\", None)" in helper
+    assert "not isinstance(name, str) or not name" in helper
+    assert "not isinstance(schema, str) or not schema" in helper
     assert missing == []
 
 
@@ -3640,7 +4342,11 @@ def test_rollout_checkers_use_shared_artifact_bucket_initializer() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
 
     assert "def init_evidence_artifact_buckets" in helper
-    assert "return {name: [] for name in evidence_kind_names}" in helper
+    assert "evidence_kind_names: Any" in helper
+    assert "_required_evidence_kind_list(evidence_kind_names)" in helper
+    assert "not names" in helper
+    assert "_duplicate_required_evidence_kind_names(names)" in helper
+    assert "return {name: [] for name in names}" in helper
     assert missing == []
 
 
@@ -3650,7 +4356,7 @@ def test_rollout_checkers_use_shared_artifact_recorder() -> None:
         for path in required_summary_checkers()
         if "record_evidence_artifact," not in read(path)
         or (
-            "record_evidence_artifact(artifacts_by_kind, kind_name, artifact)"
+            "record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)"
             not in read(path)
         )
         or "artifacts_by_kind[kind_name].append(artifact)" in read(path)
@@ -3658,7 +4364,18 @@ def test_rollout_checkers_use_shared_artifact_recorder() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
 
     assert "def record_evidence_artifact" in helper
-    assert "artifacts_by_kind[kind_name].append(artifact)" in helper
+    assert "artifacts_by_kind: Any" in helper
+    assert "kind_name: Any" in helper
+    assert "artifact: Any" in helper
+    assert "not isinstance(artifacts_by_kind, Mapping)" in helper
+    assert "recognized evidence artifacts by kind must be a mapping" in helper
+    assert "not isinstance(kind_name, str) or not kind_name" in helper
+    assert "recognized evidence kind must be a non-empty string" in helper
+    assert "not isinstance(artifact, dict)" in helper
+    assert "evidence artifact must be an object" in helper
+    assert "artifacts_by_kind.get(kind_name)" in helper
+    assert "has no artifact bucket" in helper
+    assert "artifacts_by_kind[kind_name].append(artifact)" not in helper
     assert missing == []
 
 
@@ -3673,10 +4390,18 @@ def test_rollout_checkers_use_shared_artifact_validity_helper() -> None:
         or "not validation_errors" in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
 
     assert "def evidence_artifact_is_valid" in helper
     assert "def recognized_evidence_artifacts_are_valid" in helper
+    assert "recognized: Any" in helper
+    assert "recognized, (str, bytes, bytearray)" in helper
+    assert "if not isinstance(artifact, Mapping):" in helper
+    assert (
+        "test_evidence_artifact_accessors_reject_non_mapping_without_traceback"
+        in helper_test
+    )
     assert 'artifact.get("valid") is True' in helper
     assert "finalize_custom_required_evidence_rows," in reputation
     assert "recognized_evidence_artifacts_are_valid," in reputation
@@ -3765,6 +4490,14 @@ def test_rollout_checkers_use_shared_artifact_detail_accessor() -> None:
     assert 'evidence_artifact_detail(artifact, "bake")' in reserve
     assert 'valid_provider_bakes.append(provider_bake_fingerprint(payload))' not in reserve
     assert 'valid_multi_peer_runs.append(reconciliation_fingerprint(payload))' not in appeal
+    assert "from sorafs_evidence_fingerprint import artifact_fingerprint" in reserve
+    assert "from sorafs_evidence_fingerprint import artifact_fingerprint" in appeal
+    assert "PROVIDER_BAKE_FIELDS: tuple[str, ...]" in reserve
+    assert "RECONCILIATION_RUN_FIELDS: tuple[str, ...]" in appeal
+    assert "artifact_fingerprint(payload, PROVIDER_BAKE_FIELDS)" in reserve
+    assert "artifact_fingerprint(payload, RECONCILIATION_RUN_FIELDS)" in appeal
+    assert "def provider_bake_fingerprint" not in reserve
+    assert "def reconciliation_fingerprint" not in appeal
 
 
 def test_rollout_checkers_use_shared_artifact_schema_accessor() -> None:
@@ -3799,10 +4532,21 @@ def test_rollout_checkers_use_shared_required_kind_parser() -> None:
         or "choices=tuple(KIND_BY_NAME)" in read(path)
     ]
     helper = read(REQUIRED_KINDS_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_required_kinds_test.py")
 
+    assert "def _validate_allowed_kinds" in helper
+    assert "def _validate_default_required" in helper
+    assert "--require-kind values must be a sequence" in helper
+    assert "--require-kind values must be strings" in helper
+    assert "allowed required evidence kinds must be a mapping" in helper
+    assert "default required evidence kinds must be a sequence" in helper
     assert "must be non-empty" in helper
     assert "duplicate required evidence kind" in helper
     assert "unknown required evidence kind" in helper
+    assert "test_malformed_required_kind_values_fail" in helper_test
+    assert "test_non_string_required_kind_value_fails" in helper_test
+    assert "test_malformed_allowed_kind_registry_fails" in helper_test
+    assert "test_malformed_default_required_kinds_fail" in helper_test
     assert missing == []
 
 
@@ -3868,6 +4612,10 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
     helper_test = read(SENSITIVITY_TEST)
 
     assert "def normalize_sensitive_key" in helper
+    assert "sensitive keys must be a sequence of strings" in helper
+    assert "sensitive keys must be non-empty strings" in helper
+    assert "key must be a string" in helper
+    assert "isinstance(value, Mapping)" in helper
     assert "MAX_SENSITIVE_FIELD_DEPTH" in helper
     assert "nesting exceeds" in helper
     assert "HIGH_RISK_SENSITIVE_KEY_FRAGMENTS" in helper
@@ -3887,6 +4635,11 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
         "test_overly_deep_sensitive_scan_fails_closed_without_recursion_error"
         in helper_test
     )
+    assert (
+        "test_non_string_payload_keys_fail_closed_and_still_scan_children"
+        in helper_test
+    )
+    assert "test_malformed_sensitive_key_configuration_fails_closed" in helper_test
     assert missing == []
 
 

@@ -57,6 +57,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_optional_hex,
     require_policy_digest,
     require_positive_int,
+    require_recent_timestamp,
     require_score_bps,
     require_status_in,
     require_string,
@@ -215,6 +216,8 @@ DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "manifest_id_hex",
     "runner_hash_hex",
     "subject_digest_hex",
@@ -514,6 +517,7 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         SENSITIVE_KEYS,
         "rollout evidence",
         validate_kind_specific,
+        require_reviewed_deployment_context=True,
     )
 
 
@@ -558,7 +562,7 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             if kind_name == "runner":

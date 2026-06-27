@@ -13,12 +13,24 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
+    MAX_EXPANDED_ARGS,
     MAX_RESPONSE_ARGFILE_BYTES,
     expand_response_args,
     non_negative_int_arg,
     parse_int_arg,
     positive_int_arg,
 )
+
+
+def test_response_file_resolution_uses_shared_identity_helper() -> None:
+    import sorafs_response_args
+
+    assert (
+        sorafs_response_args.expand_response_args.__globals__[
+            "resolve_path_identity"
+        ].__module__
+        == "sorafs_path_identity"
+    )
 
 
 def test_response_file_expands_shell_style_args(tmp_path: Path) -> None:
@@ -46,6 +58,42 @@ def test_response_file_expands_shell_style_args(tmp_path: Path) -> None:
         "feed collector",
         "--dry-run",
     ]
+
+
+def test_direct_non_string_argument_fails_without_traceback() -> None:
+    try:
+        expand_response_args(["--dry-run", 7], EvidenceArgumentParser())
+    except ValueError as error:
+        assert "argument `7` must be a string" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("non-string response argument was accepted")
+
+
+def test_raw_string_argument_container_fails_without_character_expansion() -> None:
+    try:
+        expand_response_args("--dry-run", EvidenceArgumentParser())
+    except ValueError as error:
+        assert "arguments must be a sequence of strings" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("raw string arguments were expanded character-wise")
+
+
+def test_raw_bytes_argument_container_fails_without_character_expansion() -> None:
+    try:
+        expand_response_args(b"--dry-run", EvidenceArgumentParser())
+    except ValueError as error:
+        assert "arguments must be a sequence of strings" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("raw bytes arguments were expanded byte-wise")
+
+
+def test_mapping_argument_container_fails_without_key_expansion() -> None:
+    try:
+        expand_response_args({"--dry-run": "ignored"}, EvidenceArgumentParser())
+    except ValueError as error:
+        assert "arguments must be a sequence of strings" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("mapping arguments were expanded from keys")
 
 
 def test_recursive_response_file_fails(tmp_path: Path) -> None:
@@ -164,6 +212,55 @@ def test_response_file_line_parse_error_identifies_file_and_line(tmp_path: Path)
         raise AssertionError("malformed response-file line was accepted")
 
 
+def test_response_file_parser_returning_scalar_line_args_fails_with_line(
+    tmp_path: Path,
+) -> None:
+    class BrokenParser(EvidenceArgumentParser):
+        def convert_arg_line_to_args(self, arg_line: str):
+            return "--dry-run"
+
+    args_file = tmp_path / "broken-parser.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+
+    try:
+        expand_response_args([f"@{args_file}"], BrokenParser())
+    except ValueError as error:
+        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert "response-file line arguments must be a sequence of strings" in str(
+            error
+        )
+    else:  # pragma: no cover - defensive
+        raise AssertionError("scalar line-argument container was accepted")
+
+
+def test_response_file_parser_returning_non_string_line_arg_fails_with_line(
+    tmp_path: Path,
+) -> None:
+    class BrokenParser(EvidenceArgumentParser):
+        def convert_arg_line_to_args(self, arg_line: str):
+            return ["--dry-run", 7]
+
+    args_file = tmp_path / "broken-parser.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+
+    try:
+        expand_response_args([f"@{args_file}"], BrokenParser())
+    except ValueError as error:
+        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert "argument `7` must be a string" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("non-string line argument was accepted")
+
+
+def test_convert_arg_line_to_args_rejects_non_string_line() -> None:
+    try:
+        EvidenceArgumentParser().convert_arg_line_to_args(b"--dry-run")
+    except ValueError as error:
+        assert "response-file line must be a string" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("non-string response-file line was accepted")
+
+
 def test_oversized_response_file_fails(tmp_path: Path) -> None:
     args_file = tmp_path / "large.args"
     args_file.write_text("x" * (MAX_RESPONSE_ARGFILE_BYTES + 1), encoding="utf-8")
@@ -174,6 +271,31 @@ def test_oversized_response_file_fails(tmp_path: Path) -> None:
         assert "exceeds" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("oversized response file was accepted")
+
+
+def test_direct_expanded_argument_limit_fails() -> None:
+    try:
+        expand_response_args(
+            ["--flag"] * (MAX_EXPANDED_ARGS + 1), EvidenceArgumentParser()
+        )
+    except ValueError as error:
+        assert f"expanded arguments must be <= {MAX_EXPANDED_ARGS}" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("direct expanded arguments bypassed the shared cap")
+
+
+def test_response_file_expanded_argument_limit_fails(tmp_path: Path) -> None:
+    args_file = tmp_path / "too-many.args"
+    args_file.write_text(
+        " ".join(["--flag"] * (MAX_EXPANDED_ARGS + 1)), encoding="utf-8"
+    )
+
+    try:
+        expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert f"expanded arguments must be <= {MAX_EXPANDED_ARGS}" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("response-file expanded arguments bypassed the shared cap")
 
 
 def test_shared_integer_arg_parsers_accept_expected_values() -> None:
@@ -196,6 +318,16 @@ def test_shared_integer_arg_parsers_reject_invalid_values() -> None:
             assert expected in str(error)
         else:  # pragma: no cover - defensive
             raise AssertionError(f"{parser.__name__} accepted {value!r}")
+
+
+def test_shared_integer_arg_parsers_reject_non_string_values() -> None:
+    for value in [7, True, None, b"7"]:
+        try:
+            parse_int_arg(value)
+        except argparse.ArgumentTypeError as error:
+            assert "must be an integer" in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"parse_int_arg accepted {value!r}")
 
 
 def test_shared_integer_arg_parsers_reject_non_canonical_values() -> None:

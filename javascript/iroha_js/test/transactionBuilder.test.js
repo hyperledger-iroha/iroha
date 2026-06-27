@@ -1,6 +1,7 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   buildRegisterDomainTransaction,
   buildTransaction,
@@ -8,6 +9,10 @@ import {
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
   buildKagemushaRecursiveRedeemTransaction,
+  buildUpsertSccpRouteManifestInstruction,
+  buildRemoveSccpRouteManifestInstruction,
+  buildUpsertSccpRouteManifestTransaction,
+  buildRemoveSccpRouteManifestTransaction,
   buildPrivateKaigiFeeSpend,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
@@ -51,12 +56,15 @@ import { makeNativeTest } from "./helpers/native.js";
 const AUTHORITY_PUBLIC_KEY_HEX =
   "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const AUTHORITY_ID = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
-const AUTHORITY_ID_INPUT = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
+const AUTHORITY_ID_INPUT = i105FromEd25519PublicKeyHex(
+  AUTHORITY_PUBLIC_KEY_HEX,
+);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const RELAY_PUBLIC_KEY_HEX =
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201";
 const RELAY_ACCOUNT_ID = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
-const RELAY_ACCOUNT_ID_INPUT = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
+const RELAY_ACCOUNT_ID_INPUT =
+  i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const LILY_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
@@ -99,7 +107,9 @@ function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {
   if (accountId === AUTHORITY_ID || accountId === AUTHORITY_ID_INPUT) {
     return CANONICAL_ASSET_ID_INPUT;
   }
-  throw new Error(`unexpected account id for test asset encoding: ${accountId}`);
+  throw new Error(
+    `unexpected account id for test asset encoding: ${accountId}`,
+  );
 }
 
 function crc16(tag, body) {
@@ -132,8 +142,80 @@ function normalizedHashHex(bytes) {
   }
   buffer[buffer.length - 1] |= 1;
   const body = buffer.toString("hex").toUpperCase();
-  const checksum = crc16("hash", body).toString(16).toUpperCase().padStart(4, "0");
+  const checksum = crc16("hash", body)
+    .toString(16)
+    .toUpperCase()
+    .padStart(4, "0");
   return `hash:${body}#${checksum}`;
+}
+
+function hex32(byte) {
+  return `0x${Buffer.alloc(32, byte).toString("hex")}`;
+}
+
+function buildSampleSccpRouteManifest() {
+  const destinationBindingHash = hex32(0x47);
+  const proofArtifactHash = hex32(0x4c);
+  const browserProverRef = (seed) => ({
+    module_url: `https://provers.sora.org/bsc-${seed}.js`,
+    module_specifier: `@sora/sccp-bsc-prover/${seed}`,
+    module_hash: hex32(seed),
+    manifest_hash: hex32(seed + 1),
+    expected_exports: [
+      "bscSccpProve",
+      "bscSccpNativeProverSelfTest",
+    ],
+    bound_route_hash: destinationBindingHash,
+    bound_proof_hash: proofArtifactHash,
+  });
+  return {
+    version: 1,
+    route_id: "taira_bsc_xor",
+    asset_key: "xor",
+    tron_network: "bsc-testnet",
+    chain: "bsc-testnet",
+    chain_id_hex: "0x61",
+    counterparty_domain: 2,
+    verifier_target: "EvmContract",
+    production_ready: true,
+    disabled_reason: null,
+    network_id_hex: hex32(0x61),
+    taira_xor_token_address: "0x1111111111111111111111111111111111111111",
+    taira_xor_bridge_address: "0x2222222222222222222222222222222222222222",
+    sccp_tron_source_bridge_address:
+      "0x3333333333333333333333333333333333333333",
+    tron_verifier_address: "0x4444444444444444444444444444444444444444",
+    verifier_code_hash: hex32(0x45),
+    verifier_key_hash: hex32(0x46),
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: hex32(0x55),
+    native_evm_prover_bundle_hash: hex32(0x50),
+    destination_browser_prover: browserProverRef(0x60),
+    source_browser_prover: browserProverRef(0x70),
+    deployment_evidence_sha256: hex32(0x4f),
+    destination_binding_key: "evm:0:2:test-binding",
+    destination_binding_hash: destinationBindingHash,
+    taira_burn_record_settlement_asset_definition_id:
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    taira_burn_record_contract_artifact_b64: "QUJDREVGRw==",
+    taira_burn_record_artifact_sha256: hex32(0x48),
+    taira_burn_record_code_hash: hex32(0x49),
+    taira_burn_record_vk_backend: "halo2_ipa",
+    taira_burn_record_vk_name: "taira_bsc_xor_burn_record_v1",
+    taira_burn_record_gas_limit: 2_000_000,
+    settlement_contract_address: null,
+    settlement_contract_alias: null,
+    post_deploy_full_toml_ready: true,
+    post_deploy_source_bridge_config_hash: hex32(0x4a),
+    post_deploy_source_event_transaction_id: hex32(0x4b),
+    post_deploy_source_event_explorer_url:
+      `https://testnet.bscscan.com/tx/${hex32(0x4b)}`,
+    post_deploy_route_canary_evidence_hash: hex32(0x4e),
+    post_deploy_route_canary_transaction_id: hex32(0x4d),
+    post_deploy_route_canary_explorer_url:
+      `https://testnet.bscscan.com/tx/${hex32(0x4d)}`,
+    post_deploy_offline_full_toml_sha256: hex32(0x56),
+  };
 }
 
 function toByteArray(bytes) {
@@ -162,9 +244,7 @@ function frameKagemushaInstructionArchive(type, payload, options = {}) {
   const header = Buffer.alloc(40);
   header.write("NRT0", 0, "ascii");
   testNoritoSchemaHash(
-    TEST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES[
-      options.schemaType ?? type
-    ],
+    TEST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES[options.schemaType ?? type],
   ).copy(header, 6);
   header[22] = options.compression ?? 0;
   header.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
@@ -214,7 +294,10 @@ test("buildRegisterDomainTransaction accepts metadata JSON strings", () => {
 });
 
 test("buildTransaction normalizes instruction objects", () => {
-  const instruction = buildMintAssetInstruction({ assetId: ASSET_ID_INPUT, quantity: "2" });
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID_INPUT,
+    quantity: "2",
+  });
   const captures = [];
   const fakeResult = {
     signed_transaction: Buffer.from([0x01, 0x02]),
@@ -232,6 +315,7 @@ test("buildTransaction normalizes instruction objects", () => {
         ttlMs,
         nonce,
         secret,
+        privateKeyAlgorithm,
       ) => {
         captures.push({
           chainId,
@@ -242,6 +326,7 @@ test("buildTransaction normalizes instruction objects", () => {
           ttlMs,
           nonce,
           secret,
+          privateKeyAlgorithm,
         });
         return fakeResult;
       },
@@ -256,8 +341,12 @@ test("buildTransaction normalizes instruction objects", () => {
         ttlMs: 20,
         nonce: 5,
         privateKey: PRIVATE_KEY,
+        privateKeyAlgorithm: "secp256k1",
       });
-      assert.deepEqual(built.signedTransaction, Buffer.from(fakeResult.signed_transaction));
+      assert.deepEqual(
+        built.signedTransaction,
+        Buffer.from(fakeResult.signed_transaction),
+      );
       assert.deepEqual(built.hash, Buffer.from(fakeResult.hash));
     },
   );
@@ -271,6 +360,219 @@ test("buildTransaction normalizes instruction objects", () => {
   assert.equal(call.creationTimeMs, 10);
   assert.equal(call.ttlMs, 20);
   assert.equal(call.nonce, 5);
+  assert.equal(call.privateKeyAlgorithm, "secp256k1");
+});
+
+test("buildUpsertSccpRouteManifestInstruction wraps canonical manifests", () => {
+  const manifest = buildSampleSccpRouteManifest();
+
+  assert.deepEqual(buildUpsertSccpRouteManifestInstruction({ manifest }), {
+    UpsertSccpRouteManifest: { manifest },
+  });
+  assert.deepEqual(buildUpsertSccpRouteManifestInstruction(manifest), {
+    UpsertSccpRouteManifest: { manifest },
+  });
+});
+
+test("buildUpsertSccpRouteManifestInstruction rejects missing explicit manifests", () => {
+  assert.throws(
+    () => buildUpsertSccpRouteManifestInstruction({ manifest: null }),
+    /manifest must be a non-null object/u,
+  );
+  assert.throws(
+    () => buildUpsertSccpRouteManifestInstruction("not-an-object"),
+    /input must be a non-null object/u,
+  );
+});
+
+test("buildRemoveSccpRouteManifestInstruction normalizes aliases", () => {
+  assert.deepEqual(
+    buildRemoveSccpRouteManifestInstruction({
+      routeId: " taira_bsc_xor ",
+      assetKey: " xor ",
+      counterpartyDomain: "2",
+      chainIdHex: " 0X61 ",
+    }),
+    {
+      RemoveSccpRouteManifest: {
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: 2,
+        chain_id_hex: "0X61",
+      },
+    },
+  );
+});
+
+test("buildRemoveSccpRouteManifestInstruction rejects invalid removal keys", () => {
+  assert.throws(
+    () =>
+      buildRemoveSccpRouteManifestInstruction({
+        route_id: "",
+        asset_key: "xor",
+        counterparty_domain: 2,
+        chain_id_hex: "0x61",
+      }),
+    /routeId must be a non-empty string/u,
+  );
+  assert.throws(
+    () =>
+      buildRemoveSccpRouteManifestInstruction({
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: "2.5",
+        chain_id_hex: "0x61",
+      }),
+    /counterpartyDomain must be a uint32 integer/u,
+  );
+  assert.throws(
+    () =>
+      buildRemoveSccpRouteManifestInstruction({
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: 0x1_0000_0000n,
+        chain_id_hex: "0x61",
+      }),
+    /counterpartyDomain must be between 0 and 4294967295/u,
+  );
+});
+
+test("SCCP route manifest transaction wrappers submit one typed instruction", () => {
+  const manifest = buildSampleSccpRouteManifest();
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x10, 0x20]),
+    hash: Buffer.alloc(32, 0xb1),
+  };
+
+  withNativeBinding(
+    {
+      buildTransaction: (
+        chainId,
+        authority,
+        instructions,
+        metadataPayload,
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        secret,
+      ) => {
+        captures.push({
+          chainId,
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        });
+        return fakeResult;
+      },
+    },
+    () => {
+      const upsert = buildUpsertSccpRouteManifestTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        manifest,
+        metadata: { op: "upsert-sccp-route" },
+        creationTimeMs: 1_700_000_000_000,
+        ttlMs: 5_000,
+        nonce: 7,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(upsert.hash, Buffer.from(fakeResult.hash));
+
+      const remove = buildRemoveSccpRouteManifestTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: 2,
+        chain_id_hex: "0x61",
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(remove.signedTransaction, Buffer.from([0x10, 0x20]));
+    },
+  );
+
+  assert.equal(captures.length, 2);
+  assert.deepEqual(captures[0].instructions, [
+    { UpsertSccpRouteManifest: { manifest } },
+  ]);
+  assert.deepEqual(JSON.parse(captures[0].metadataPayload), {
+    op: "upsert-sccp-route",
+  });
+  assert.equal(captures[0].creationTimeMs, 1_700_000_000_000);
+  assert.equal(captures[0].ttlMs, 5_000);
+  assert.equal(captures[0].nonce, 7);
+  assert.equal(captures[0].secret.equals(PRIVATE_KEY), true);
+  assert.deepEqual(captures[1].instructions, [
+    {
+      RemoveSccpRouteManifest: {
+        route_id: "taira_bsc_xor",
+        asset_key: "xor",
+        counterparty_domain: 2,
+        chain_id_hex: "0x61",
+      },
+    },
+  ]);
+});
+
+test("transaction helper wrappers forward privateKeyAlgorithm", () => {
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x03, 0x04]),
+    hash: Buffer.alloc(32, 0xbb),
+  };
+
+  withNativeBinding(
+    {
+      buildTransaction: (
+        _chainId,
+        _authority,
+        _instructions,
+        _metadataPayload,
+        _creationTimeMs,
+        _ttlMs,
+        _nonce,
+        _secret,
+        privateKeyAlgorithm,
+      ) => {
+        captures.push(privateKeyAlgorithm);
+        return fakeResult;
+      },
+    },
+    () => {
+      buildMintAssetTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        assetHoldingId: ASSET_ID_INPUT,
+        quantity: "2",
+        privateKey: PRIVATE_KEY,
+        privateKeyAlgorithm: "secp256k1",
+      });
+    },
+  );
+
+  assert.deepEqual(captures, ["secp256k1"]);
+});
+
+test("transaction helper wrappers do not omit privateKeyAlgorithm forwarding", () => {
+  const source = readFileSync(
+    new URL("../src/transaction.js", import.meta.url),
+    "utf8",
+  );
+  assert.equal(
+    /privateKey,\n\s*\}\);/u.test(source),
+    false,
+    "a buildTransaction call forwards privateKey but not privateKeyAlgorithm",
+  );
+  assert.equal(
+    /privateKey,\n\}\) \{/u.test(source),
+    false,
+    "a transaction helper accepts privateKey without privateKeyAlgorithm",
+  );
 });
 
 test("buildTransaction rejects empty instruction arrays", () => {
@@ -286,391 +588,419 @@ test("buildTransaction rejects empty instruction arrays", () => {
   );
 });
 
-baseTest("buildKagemushaInstructionArchiveInstruction normalizes archive bytes", () => {
-  const redeemArchive = frameKagemushaInstructionArchive(
-    "RedeemKagemushaRecursive",
-    [0x01, 0x02, 0x03],
-  );
-  const transferArchive = frameKagemushaInstructionArchive(
-    "KagemushaTransfer",
-    [0x04, 0x05, 0x06],
-  );
-  const transferArchiveBase64 = transferArchive.toString("base64");
-  assert.deepEqual(
-    buildKagemushaInstructionArchiveInstruction({
-      instructionType: "RedeemKagemushaRecursive",
-      instructionArchive: redeemArchive,
-    }),
-    {
-      KagemushaInstructionArchive: {
-        type: "RedeemKagemushaRecursive",
-        bytes_base64: redeemArchive.toString("base64"),
-      },
-    },
-  );
-  assert.deepEqual(
-    buildKagemushaInstructionArchiveInstruction({
-      type: "KagemushaTransfer",
-      bytesBase64: transferArchiveBase64,
-    }),
-    {
-      KagemushaInstructionArchive: {
-        type: "KagemushaTransfer",
-        bytes_base64: transferArchiveBase64,
-      },
-    },
-  );
-  assert.throws(
-    () =>
+baseTest(
+  "buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
+  () => {
+    const redeemArchive = frameKagemushaInstructionArchive(
+      "RedeemKagemushaRecursive",
+      [0x01, 0x02, 0x03],
+    );
+    const transferArchive = frameKagemushaInstructionArchive(
+      "KagemushaTransfer",
+      [0x04, 0x05, 0x06],
+    );
+    const transferArchiveBase64 = transferArchive.toString("base64");
+    assert.deepEqual(
       buildKagemushaInstructionArchiveInstruction({
-        type: "OfflineTransfer",
-        instructionArchive: transferArchive,
-      }),
-    /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
-  );
-  const whitespaceInstructionType = " RedeemKagemushaRecursive ";
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: whitespaceInstructionType,
+        instructionType: "RedeemKagemushaRecursive",
         instructionArchive: redeemArchive,
       }),
-    /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
-  );
-  assert.throws(
-    () =>
+      {
+        KagemushaInstructionArchive: {
+          type: "RedeemKagemushaRecursive",
+          bytes_base64: redeemArchive.toString("base64"),
+        },
+      },
+    );
+    assert.deepEqual(
       buildKagemushaInstructionArchiveInstruction({
         type: "KagemushaTransfer",
-        instructionArchive: Buffer.alloc(0),
+        bytesBase64: transferArchiveBase64,
       }),
-    /instructionArchive must not be empty/u,
-  );
-  assert.throws(
-    () => buildKagemushaInstructionArchiveInstruction({ type: "KagemushaTransfer" }),
-    /instructionArchive or kagemushaInstructionArchive\.bytesBase64 is required/u,
-  );
-  for (const bytesBase64 of [
-    `${transferArchiveBase64.slice(0, 8)}!${transferArchiveBase64.slice(8)}`,
-    ` ${transferArchiveBase64}`,
-    transferArchiveBase64.replace(/=+$/u, ""),
-  ]) {
+      {
+        KagemushaInstructionArchive: {
+          type: "KagemushaTransfer",
+          bytes_base64: transferArchiveBase64,
+        },
+      },
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "OfflineTransfer",
+          instructionArchive: transferArchive,
+        }),
+      /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
+    );
+    const whitespaceInstructionType = " RedeemKagemushaRecursive ";
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: whitespaceInstructionType,
+          instructionArchive: redeemArchive,
+        }),
+      /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
+    );
     assert.throws(
       () =>
         buildKagemushaInstructionArchiveInstruction({
           type: "KagemushaTransfer",
-          bytesBase64,
+          instructionArchive: Buffer.alloc(0),
         }),
-      /bytesBase64 must be canonical standard base64/u,
+      /instructionArchive must not be empty/u,
     );
-  }
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+        }),
+      /instructionArchive or kagemushaInstructionArchive\.bytesBase64 is required/u,
+    );
+    for (const bytesBase64 of [
+      `${transferArchiveBase64.slice(0, 8)}!${transferArchiveBase64.slice(8)}`,
+      ` ${transferArchiveBase64}`,
+      transferArchiveBase64.replace(/=+$/u, ""),
+    ]) {
+      assert.throws(
+        () =>
+          buildKagemushaInstructionArchiveInstruction({
+            type: "KagemushaTransfer",
+            bytesBase64,
+          }),
+        /bytesBase64 must be canonical standard base64/u,
+      );
+    }
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: Buffer.from([0x4e, 0x52, 0x54, 0x30]),
+        }),
+      /valid KagemushaTransfer Norito archive/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "RedeemKagemushaRecursive",
+          instructionArchive: transferArchive,
+        }),
+      /schema must match RedeemKagemushaRecursive/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: frameKagemushaInstructionArchive(
+            "KagemushaTransfer",
+            [],
+          ),
+        }),
+      /non-empty Norito payload/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: frameKagemushaInstructionArchive(
+            "KagemushaTransfer",
+            [0x01],
+            { compression: 1 },
+          ),
+        }),
+      /must not be compressed/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: frameKagemushaInstructionArchive(
+            "KagemushaTransfer",
+            [0x01],
+            { flags: 0x08 },
+          ),
+        }),
+      /valid KagemushaTransfer Norito archive/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: frameKagemushaInstructionArchive(
+            "KagemushaTransfer",
+            [0x01],
+            { flags: 0x20 },
+          ),
+        }),
+      /valid KagemushaTransfer Norito archive/u,
+    );
+    const invalidPadding = frameKagemushaInstructionArchive(
+      "KagemushaTransfer",
+      [0x01],
+      { paddingLength: 1 },
+    );
+    invalidPadding[40] = 0xff;
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: invalidPadding,
+        }),
+      /valid KagemushaTransfer Norito archive/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: frameKagemushaInstructionArchive(
+            "KagemushaTransfer",
+            [0x01],
+            { paddingLength: 65 },
+          ),
+        }),
+      /valid KagemushaTransfer Norito archive/u,
+    );
+    const tampered = Buffer.from(transferArchive);
+    tampered[tampered.length - 1] ^= 0xff;
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          instructionArchive: tampered,
+        }),
+      /checksum is invalid/u,
+    );
+    assert.throws(
+      () =>
+        buildKagemushaInstructionTransaction({
+          chainId: "test-chain",
+          authority: AUTHORITY_ID_INPUT,
+          instructionType: whitespaceInstructionType,
+          instructionArchive: redeemArchive,
+          privateKey: PRIVATE_KEY,
+        }),
+      /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
+    );
+  },
+);
+
+baseTest(
+  "buildKagemushaInstructionTransaction wraps one archive instruction",
+  () => {
+    const captures = [];
+    const archive = frameKagemushaInstructionArchive(
+      "KagemushaTransfer",
+      [0x01, 0x02, 0x03],
+    );
+    const fakeResult = {
+      signed_transaction: Buffer.from([0x71, 0x72]),
+      hash: Buffer.alloc(32, 0x73),
+    };
+
+    withNativeBinding(
+      {
+        buildTransaction: (
+          chainId,
+          authority,
+          instructions,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        ) => {
+          captures.push({
+            chainId,
+            authority,
+            instructions,
+            metadataPayload,
+            creationTimeMs,
+            ttlMs,
+            nonce,
+            secret,
+          });
+          return fakeResult;
+        },
+      },
+      () => {
+        const built = buildKagemushaInstructionTransaction({
+          chainId: "test-chain",
+          authority: AUTHORITY_ID_INPUT,
+          instruction_type: "KagemushaTransfer",
+          instructionArchive: archive,
+          metadata: { kagemusha: "transfer" },
+          creationTimeMs: 11,
+          ttlMs: 22,
+          nonce: 6,
+          privateKey: PRIVATE_KEY,
+        });
+        assert.deepEqual(
+          built.signedTransaction,
+          fakeResult.signed_transaction,
+        );
+        assert.deepEqual(built.hash, fakeResult.hash);
+      },
+    );
+
+    assert.equal(captures.length, 1);
+    const [call] = captures;
+    assert.equal(call.chainId, "test-chain");
+    assert.equal(call.authority, AUTHORITY_ID);
+    assert.equal(
+      call.metadataPayload,
+      JSON.stringify({ kagemusha: "transfer" }),
+    );
+    assert.equal(call.creationTimeMs, 11);
+    assert.equal(call.ttlMs, 22);
+    assert.equal(call.nonce, 6);
+    assert.deepEqual(call.secret, PRIVATE_KEY);
+    assert.equal(call.instructions.length, 1);
+    assert.deepEqual(JSON.parse(call.instructions[0]), {
+      KagemushaInstructionArchive: {
         type: "KagemushaTransfer",
-        instructionArchive: Buffer.from([0x4e, 0x52, 0x54, 0x30]),
-      }),
-    /valid KagemushaTransfer Norito archive/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
+        bytes_base64: archive.toString("base64"),
+      },
+    });
+  },
+);
+
+baseTest(
+  "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+  () => {
+    const calls = [];
+    const redeemRequestArchive = Buffer.from([0x80, 0x81, 0x82]);
+    const redeemInstructionArchive = frameKagemushaInstructionArchive(
+      "RedeemKagemushaRecursive",
+      [0xa1, 0xb2],
+    );
+    const fakeResult = {
+      signed_transaction: Buffer.from([0x91, 0x92]),
+      hash: Buffer.alloc(32, 0x93),
+    };
+
+    withNativeBinding(
+      {
+        kagemushaRecursiveSpendRedeem: (requestArchive) => {
+          calls.push({
+            type: "redeem",
+            requestArchive: Buffer.from(requestArchive),
+          });
+          return redeemInstructionArchive;
+        },
+        buildTransaction: (
+          chainId,
+          authority,
+          instructions,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        ) => {
+          calls.push({
+            type: "sign",
+            chainId,
+            authority,
+            instructions,
+            metadataPayload,
+            creationTimeMs,
+            ttlMs,
+            nonce,
+            secret,
+          });
+          return fakeResult;
+        },
+      },
+      () => {
+        const built = buildKagemushaRecursiveRedeemTransaction({
+          chainId: "test-chain",
+          authority: AUTHORITY_ID_INPUT,
+          redeemRequestArchive,
+          metadata: { kagemusha: "redeem" },
+          creationTimeMs: 12,
+          ttlMs: 23,
+          nonce: 7,
+          privateKey: PRIVATE_KEY,
+        });
+        assert.deepEqual(
+          built.signedTransaction,
+          fakeResult.signed_transaction,
+        );
+        assert.deepEqual(built.hash, fakeResult.hash);
+      },
+    );
+
+    assert.deepEqual(
+      calls.map((call) => call.type),
+      ["redeem", "sign"],
+    );
+    assert.deepEqual(calls[0].requestArchive, redeemRequestArchive);
+    assert.equal(calls[1].chainId, "test-chain");
+    assert.equal(calls[1].authority, AUTHORITY_ID);
+    assert.equal(
+      calls[1].metadataPayload,
+      JSON.stringify({ kagemusha: "redeem" }),
+    );
+    assert.equal(calls[1].creationTimeMs, 12);
+    assert.equal(calls[1].ttlMs, 23);
+    assert.equal(calls[1].nonce, 7);
+    assert.deepEqual(JSON.parse(calls[1].instructions[0]), {
+      KagemushaInstructionArchive: {
         type: "RedeemKagemushaRecursive",
-        instructionArchive: transferArchive,
-      }),
-    /schema must match RedeemKagemushaRecursive/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: frameKagemushaInstructionArchive("KagemushaTransfer", []),
-      }),
-    /non-empty Norito payload/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: frameKagemushaInstructionArchive(
-          "KagemushaTransfer",
-          [0x01],
-          { compression: 1 },
-        ),
-      }),
-    /must not be compressed/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: frameKagemushaInstructionArchive(
-          "KagemushaTransfer",
-          [0x01],
-          { flags: 0x08 },
-        ),
-      }),
-    /valid KagemushaTransfer Norito archive/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: frameKagemushaInstructionArchive(
-          "KagemushaTransfer",
-          [0x01],
-          { flags: 0x20 },
-        ),
-      }),
-    /valid KagemushaTransfer Norito archive/u,
-  );
-  const invalidPadding = frameKagemushaInstructionArchive(
-    "KagemushaTransfer",
-    [0x01],
-    { paddingLength: 1 },
-  );
-  invalidPadding[40] = 0xff;
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: invalidPadding,
-      }),
-    /valid KagemushaTransfer Norito archive/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: frameKagemushaInstructionArchive(
-          "KagemushaTransfer",
-          [0x01],
-          { paddingLength: 65 },
-        ),
-      }),
-    /valid KagemushaTransfer Norito archive/u,
-  );
-  const tampered = Buffer.from(transferArchive);
-  tampered[tampered.length - 1] ^= 0xff;
-  assert.throws(
-    () =>
-      buildKagemushaInstructionArchiveInstruction({
-        type: "KagemushaTransfer",
-        instructionArchive: tampered,
-      }),
-    /checksum is invalid/u,
-  );
-  assert.throws(
-    () =>
-      buildKagemushaInstructionTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        instructionType: whitespaceInstructionType,
-        instructionArchive: redeemArchive,
-        privateKey: PRIVATE_KEY,
-      }),
-    /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
-  );
-});
-
-baseTest("buildKagemushaInstructionTransaction wraps one archive instruction", () => {
-  const captures = [];
-  const archive = frameKagemushaInstructionArchive("KagemushaTransfer", [
-    0x01, 0x02, 0x03,
-  ]);
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x71, 0x72]),
-    hash: Buffer.alloc(32, 0x73),
-  };
-
-  withNativeBinding(
-    {
-      buildTransaction: (
-        chainId,
-        authority,
-        instructions,
-        metadataPayload,
-        creationTimeMs,
-        ttlMs,
-        nonce,
-        secret,
-      ) => {
-        captures.push({
-          chainId,
-          authority,
-          instructions,
-          metadataPayload,
-          creationTimeMs,
-          ttlMs,
-          nonce,
-          secret,
-        });
-        return fakeResult;
+        bytes_base64: redeemInstructionArchive.toString("base64"),
       },
-    },
-    () => {
-      const built = buildKagemushaInstructionTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        instruction_type: "KagemushaTransfer",
-        instructionArchive: archive,
-        metadata: { kagemusha: "transfer" },
-        creationTimeMs: 11,
-        ttlMs: 22,
-        nonce: 6,
-        privateKey: PRIVATE_KEY,
-      });
-      assert.deepEqual(built.signedTransaction, fakeResult.signed_transaction);
-      assert.deepEqual(built.hash, fakeResult.hash);
-    },
-  );
+    });
 
-  assert.equal(captures.length, 1);
-  const [call] = captures;
-  assert.equal(call.chainId, "test-chain");
-  assert.equal(call.authority, AUTHORITY_ID);
-  assert.equal(call.metadataPayload, JSON.stringify({ kagemusha: "transfer" }));
-  assert.equal(call.creationTimeMs, 11);
-  assert.equal(call.ttlMs, 22);
-  assert.equal(call.nonce, 6);
-  assert.deepEqual(call.secret, PRIVATE_KEY);
-  assert.equal(call.instructions.length, 1);
-  assert.deepEqual(JSON.parse(call.instructions[0]), {
-    KagemushaInstructionArchive: {
-      type: "KagemushaTransfer",
-      bytes_base64: archive.toString("base64"),
-    },
-  });
-});
+    const signCalls = [];
+    withNativeBinding(
+      {
+        kagemushaRecursiveSpendRedeem: () => {
+          throw new Error("native redeem should not be called");
+        },
+        buildTransaction: () => {
+          signCalls.push("signed");
+          return fakeResult;
+        },
+      },
+      () => {
+        assert.throws(
+          () =>
+            buildKagemushaRecursiveRedeemTransaction({
+              chainId: "test-chain",
+              authority: AUTHORITY_ID_INPUT,
+              privateKey: PRIVATE_KEY,
+            }),
+          /redeemRequestArchive must be a Buffer or ArrayBuffer view/u,
+        );
+      },
+    );
+    assert.equal(signCalls.length, 0);
 
-baseTest("buildKagemushaRecursiveRedeemTransaction derives instruction before signing", () => {
-  const calls = [];
-  const redeemRequestArchive = Buffer.from([0x80, 0x81, 0x82]);
-  const redeemInstructionArchive = frameKagemushaInstructionArchive(
-    "RedeemKagemushaRecursive",
-    [0xa1, 0xb2],
-  );
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x91, 0x92]),
-    hash: Buffer.alloc(32, 0x93),
-  };
-
-  withNativeBinding(
-    {
-      kagemushaRecursiveSpendRedeem: (requestArchive) => {
-        calls.push({
-          type: "redeem",
-          requestArchive: Buffer.from(requestArchive),
-        });
-        return redeemInstructionArchive;
+    withNativeBinding(
+      {
+        kagemushaRecursiveSpendRedeem: () => {
+          throw new Error("redeem native rejected");
+        },
+        buildTransaction: () => {
+          signCalls.push("signed");
+          return fakeResult;
+        },
       },
-      buildTransaction: (
-        chainId,
-        authority,
-        instructions,
-        metadataPayload,
-        creationTimeMs,
-        ttlMs,
-        nonce,
-        secret,
-      ) => {
-        calls.push({
-          type: "sign",
-          chainId,
-          authority,
-          instructions,
-          metadataPayload,
-          creationTimeMs,
-          ttlMs,
-          nonce,
-          secret,
-        });
-        return fakeResult;
+      () => {
+        assert.throws(
+          () =>
+            buildKagemushaRecursiveRedeemTransaction({
+              chainId: "test-chain",
+              authority: AUTHORITY_ID_INPUT,
+              redeemRequestArchive,
+              privateKey: PRIVATE_KEY,
+            }),
+          /redeem native rejected/u,
+        );
       },
-    },
-    () => {
-      const built = buildKagemushaRecursiveRedeemTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        redeemRequestArchive,
-        metadata: { kagemusha: "redeem" },
-        creationTimeMs: 12,
-        ttlMs: 23,
-        nonce: 7,
-        privateKey: PRIVATE_KEY,
-      });
-      assert.deepEqual(built.signedTransaction, fakeResult.signed_transaction);
-      assert.deepEqual(built.hash, fakeResult.hash);
-    },
-  );
-
-  assert.deepEqual(
-    calls.map((call) => call.type),
-    ["redeem", "sign"],
-  );
-  assert.deepEqual(calls[0].requestArchive, redeemRequestArchive);
-  assert.equal(calls[1].chainId, "test-chain");
-  assert.equal(calls[1].authority, AUTHORITY_ID);
-  assert.equal(calls[1].metadataPayload, JSON.stringify({ kagemusha: "redeem" }));
-  assert.equal(calls[1].creationTimeMs, 12);
-  assert.equal(calls[1].ttlMs, 23);
-  assert.equal(calls[1].nonce, 7);
-  assert.deepEqual(JSON.parse(calls[1].instructions[0]), {
-    KagemushaInstructionArchive: {
-      type: "RedeemKagemushaRecursive",
-      bytes_base64: redeemInstructionArchive.toString("base64"),
-    },
-  });
-
-  const signCalls = [];
-  withNativeBinding(
-    {
-      kagemushaRecursiveSpendRedeem: () => {
-        throw new Error("native redeem should not be called");
-      },
-      buildTransaction: () => {
-        signCalls.push("signed");
-        return fakeResult;
-      },
-    },
-    () => {
-      assert.throws(
-        () =>
-          buildKagemushaRecursiveRedeemTransaction({
-            chainId: "test-chain",
-            authority: AUTHORITY_ID_INPUT,
-            privateKey: PRIVATE_KEY,
-          }),
-        /redeemRequestArchive must be a Buffer or ArrayBuffer view/u,
-      );
-    },
-  );
-  assert.equal(signCalls.length, 0);
-
-  withNativeBinding(
-    {
-      kagemushaRecursiveSpendRedeem: () => {
-        throw new Error("redeem native rejected");
-      },
-      buildTransaction: () => {
-        signCalls.push("signed");
-        return fakeResult;
-      },
-    },
-    () => {
-      assert.throws(
-        () =>
-          buildKagemushaRecursiveRedeemTransaction({
-            chainId: "test-chain",
-            authority: AUTHORITY_ID_INPUT,
-            redeemRequestArchive,
-            privateKey: PRIVATE_KEY,
-          }),
-        /redeem native rejected/u,
-      );
-    },
-  );
-  assert.equal(signCalls.length, 0);
-});
+    );
+    assert.equal(signCalls.length, 0);
+  },
+);
 
 test("buildIvmProvedTransaction normalizes proved executable and attachment", () => {
   const captures = [];
@@ -735,7 +1065,10 @@ test("buildIvmProvedTransaction normalizes proved executable and attachment", ()
         nonce: 5,
         privateKey: PRIVATE_KEY,
       });
-      assert.deepEqual(built.signedTransaction, Buffer.from(fakeResult.signed_transaction));
+      assert.deepEqual(
+        built.signedTransaction,
+        Buffer.from(fakeResult.signed_transaction),
+      );
       assert.deepEqual(built.hash, Buffer.from(fakeResult.hash));
     },
   );
@@ -828,7 +1161,10 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((json) => JSON.parse(json)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((json) => JSON.parse(json)),
+        });
         return {
           signed_transaction: Buffer.from([0x44]),
           hash: Buffer.alloc(32, 0xdd),
@@ -878,7 +1214,10 @@ test("buildRwaKeyValueTransactions forward canonical instruction payloads", () =
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((json) => JSON.parse(json)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((json) => JSON.parse(json)),
+        });
         return {
           signed_transaction: Buffer.from([0x45]),
           hash: Buffer.alloc(32, 0xee),
@@ -968,7 +1307,10 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((j) => JSON.parse(j)),
+        });
         return {
           signed_transaction: Buffer.from([0x30]),
           hash: Buffer.alloc(32, 0xcc),
@@ -1011,12 +1353,19 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   const captures = [];
   const secondAccountIdPublicKeyHex =
     "1AA70BFDE38BFD7CBE6AD29E59F290D4A4B0DD02792C0CE7371477C4E0D62759";
-  const secondAccountId = i105FromEd25519PublicKeyHex(secondAccountIdPublicKeyHex);
-  const secondAccountIdInput = i105FromEd25519PublicKeyHex(secondAccountIdPublicKeyHex);
+  const secondAccountId = i105FromEd25519PublicKeyHex(
+    secondAccountIdPublicKeyHex,
+  );
+  const secondAccountIdInput = i105FromEd25519PublicKeyHex(
+    secondAccountIdPublicKeyHex,
+  );
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((j) => JSON.parse(j)),
+        });
         return {
           signed_transaction: Buffer.from([0x31]),
           hash: Buffer.alloc(32, 0xdd),
@@ -1088,7 +1437,10 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids f
     {
       encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((j) => JSON.parse(j)),
+        });
         return {
           signed_transaction: Buffer.from([0x32]),
           hash: Buffer.alloc(32, 0xee),
@@ -1107,7 +1459,9 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids f
             quantity: "1",
           },
         ],
-        transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
+        transfers: [
+          { quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT },
+        ],
         privateKey: PRIVATE_KEY,
       }),
   );
@@ -1170,7 +1524,10 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
         return fakeResult;
       },
     },
@@ -1221,7 +1578,10 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
         return {
           signed_transaction: Buffer.from([0x40]),
           hash: Buffer.alloc(32, 0x55),
@@ -1262,7 +1622,10 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
         return fakeResult;
       },
     },
@@ -1284,7 +1647,10 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
   const [{ instructions }] = captures;
   const joinInstruction = instructions[0].Kaigi.JoinKaigi;
   assert.equal(joinInstruction.participant, AUTHORITY_ID);
-  assert.equal(joinInstruction.commitment.commitment, normalizedHashHex(commitment));
+  assert.equal(
+    joinInstruction.commitment.commitment,
+    normalizedHashHex(commitment),
+  );
   assert.equal(joinInstruction.nullifier.digest, normalizedHashHex(nullifier));
   assert.equal(joinInstruction.nullifier.issued_at_ms, 42);
   assert.equal(joinInstruction.proof, proof.toString("base64"));
@@ -1301,7 +1667,10 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
         return fakeResult;
       },
     },
@@ -1337,7 +1706,10 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
-        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
         return fakeResult;
       },
     },
@@ -1346,7 +1718,8 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         proposal: {
-          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          contractAddress:
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           codeHash: "aa".repeat(32),
           abiHash: "bb".repeat(32),
           window: { lower: 1, upper: 2 },
@@ -1552,7 +1925,10 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
   );
   assert.equal(captures.length, 1);
   const parsed = JSON.parse(captures[0].instructions[0]);
-  assert.equal(parsed.RegisterSmartContractCode.manifest.compiler_fingerprint, "rustc");
+  assert.equal(
+    parsed.RegisterSmartContractCode.manifest.compiler_fingerprint,
+    "rustc",
+  );
 });
 
 test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
@@ -1599,7 +1975,10 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
     },
   );
   const parsed = JSON.parse(captures[0].instructions[0]);
-  assert.equal(parsed.RegisterSmartContractBytes.code, codeBytes.toString("base64"));
+  assert.equal(
+    parsed.RegisterSmartContractBytes.code,
+    codeBytes.toString("base64"),
+  );
 });
 
 test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
@@ -1700,7 +2079,9 @@ test("proof builders reject padded inline verifier-key metadata", () => {
         withNativeBinding(
           {
             buildPrivateKaigiFeeSpend: () => {
-              throw new Error(`${label} metadata should fail before native call`);
+              throw new Error(
+                `${label} metadata should fail before native call`,
+              );
             },
           },
           () =>
@@ -1731,28 +2112,28 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     verifyingKeyRef: "halo2/ipa:vk_transfer",
   };
   const register = captureInstructionObject(() =>
-      buildRegisterZkAssetTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        registration: {
+    buildRegisterZkAssetTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY_ID_INPUT,
+      registration: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-          mode: "Hybrid",
-          transferVerifyingKey: "halo2/ipa:vk_transfer",
-        },
+        mode: "Hybrid",
+        transferVerifyingKey: "halo2/ipa:vk_transfer",
+      },
       privateKey: PRIVATE_KEY,
     }),
   );
   assert.ok(register.zk?.RegisterZkAsset);
 
   const policy = captureInstructionObject(() =>
-      buildScheduleConfidentialPolicyTransitionTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        transition: {
+    buildScheduleConfidentialPolicyTransitionTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY_ID_INPUT,
+      transition: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-          newMode: "TransparentOnly",
-          effectiveHeight: 5,
-          transitionId: Buffer.alloc(32, 0xaa),
+        newMode: "TransparentOnly",
+        effectiveHeight: 5,
+        transitionId: Buffer.alloc(32, 0xaa),
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -1760,27 +2141,27 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(policy.zk?.ScheduleConfidentialPolicyTransition);
 
   const cancel = captureInstructionObject(() =>
-      buildCancelConfidentialPolicyTransitionTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        cancellation: {
+    buildCancelConfidentialPolicyTransitionTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY_ID_INPUT,
+      cancellation: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-          transitionId: Buffer.alloc(32, 0xbb),
-        },
+        transitionId: Buffer.alloc(32, 0xbb),
+      },
       privateKey: PRIVATE_KEY,
     }),
   );
   assert.ok(cancel.zk?.CancelConfidentialPolicyTransition);
 
   const shield = captureInstructionObject(() =>
-      buildShieldTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        shield: {
+    buildShieldTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY_ID_INPUT,
+      shield: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-          fromAccountId: AUTHORITY_ID_INPUT,
-          amount: "10",
-          noteCommitment: Buffer.alloc(32, 0x03),
+        fromAccountId: AUTHORITY_ID_INPUT,
+        amount: "10",
+        noteCommitment: Buffer.alloc(32, 0x03),
         encryptedPayload,
       },
       privateKey: PRIVATE_KEY,
@@ -1789,14 +2170,14 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(shield.zk?.Shield);
 
   const transfer = captureInstructionObject(() =>
-      buildZkTransferTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        transfer: {
+    buildZkTransferTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY_ID_INPUT,
+      transfer: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-          inputs: [Buffer.alloc(32, 0x10)],
-          outputs: [Buffer.alloc(32, 0x20)],
-          proof,
+        inputs: [Buffer.alloc(32, 0x10)],
+        outputs: [Buffer.alloc(32, 0x20)],
+        proof,
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -1804,14 +2185,14 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(transfer.zk?.ZkTransfer);
 
   const unshield = captureInstructionObject(() =>
-      buildUnshieldTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        unshield: {
+    buildUnshieldTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY_ID_INPUT,
+      unshield: {
         assetDefinitionId: ASSET_DEFINITION_ID,
-          destinationAccountId: AUTHORITY_ID_INPUT,
-          publicAmount: 3,
-          inputs: [Buffer.alloc(32, 0x30)],
+        destinationAccountId: AUTHORITY_ID_INPUT,
+        publicAmount: 3,
+        inputs: [Buffer.alloc(32, 0x30)],
         proof,
         rootHint: Buffer.alloc(32, 0x40),
       },

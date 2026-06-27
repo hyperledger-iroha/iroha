@@ -321,6 +321,10 @@ BlockSyncRosterEvidenceExactness ==
   /\ BlockSyncRosterEvidenceApplyClearExact
   /\ BlockSyncRosterEvidenceApplyPreserveExact
 
+BlockSyncRosterEvidenceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncRosterEvidenceExactness
+
 BugNoProofPermissionedVerifiable ==
   ImplementationActions(NoProofPermissioned) = SpecActions(NoProofPermissioned)
 

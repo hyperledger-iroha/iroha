@@ -26,7 +26,10 @@ use iroha_primitives::{BigInt, numeric::Numeric};
 use super::prelude::*;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
-    state::{ConsensusKeyGate, WorldReadOnly, WorldTransaction, peer_consensus_key_gate},
+    state::{
+        ConsensusKeyGate, WorldReadOnly, WorldTransaction, peer_consensus_key_gate,
+        public_lane_reward_record_matches_key, public_lane_validator_record_matches_key,
+    },
     sumeragi::status as sumeragi_status,
     telemetry::StateTelemetry,
 };
@@ -77,6 +80,19 @@ fn ensure_validator_authority(
         ));
     }
     Ok(())
+}
+
+fn ensure_public_lane_validator_record_matches_key(
+    key: &(LaneId, AccountId),
+    record: &PublicLaneValidatorRecord,
+) -> Result<(), Error> {
+    if public_lane_validator_record_matches_key(key, record) {
+        Ok(())
+    } else {
+        Err(Error::InvariantViolation(
+            "public-lane validator record does not match its storage key".into(),
+        ))
+    }
 }
 
 impl Execute for RegisterPublicLaneValidator {
@@ -135,8 +151,10 @@ impl Execute for RegisterPublicLaneValidator {
             .world
             .public_lane_validators
             .iter()
-            .filter(|((lane, _), record)| {
-                *lane == self.lane_id && !matches!(record.status, PublicLaneValidatorStatus::Exited)
+            .filter(|(key, record)| {
+                public_lane_validator_record_matches_key(key, record)
+                    && key.0 == self.lane_id
+                    && !matches!(record.status, PublicLaneValidatorStatus::Exited)
             })
             .count();
         let max_validators = usize::try_from(state_transaction.nexus.staking.max_validators.get())
@@ -147,14 +165,18 @@ impl Execute for RegisterPublicLaneValidator {
             ));
         }
 
-        if state_transaction.world.public_lane_validators.iter().any(
-            |((lane, validator_id), record)| {
-                *lane == self.lane_id
-                    && validator_id != &self.validator
+        if state_transaction
+            .world
+            .public_lane_validators
+            .iter()
+            .any(|(key, record)| {
+                public_lane_validator_record_matches_key(key, record)
+                    && key.0 == self.lane_id
+                    && key.1 != self.validator
                     && record.peer_id == self.peer_id
                     && !matches!(record.status, PublicLaneValidatorStatus::Exited)
-            },
-        ) {
+            })
+        {
             return Err(Error::InvariantViolation(
                 "validator peer is already registered for lane".into(),
             ));
@@ -269,13 +291,13 @@ impl Execute for ActivatePublicLaneValidator {
         )?;
         finalize_validator_lifecycle(state_transaction)?;
         let validator_key = validator_storage_key(self.lane_id, &self.validator);
-        let validator_peer = state_transaction
+        let validator_record = state_transaction
             .world
             .public_lane_validators
             .get(&validator_key)
-            .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?
-            .peer_id
-            .clone();
+            .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, validator_record)?;
+        let validator_peer = validator_record.peer_id.clone();
         ensure_validator_peer_registered(
             state_transaction,
             self.lane_id,
@@ -373,6 +395,7 @@ impl Execute for RebindPublicLaneValidatorPeer {
             .get(&validator_key)
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, &record)?;
         if record.peer_id == self.peer_id {
             return Ok(());
         }
@@ -397,17 +420,21 @@ impl Execute for RebindPublicLaneValidatorPeer {
             &self.peer_id,
         )?;
 
-        if state_transaction.world.public_lane_validators.iter().any(
-            |((lane, validator_id), record)| {
-                *lane == self.lane_id
-                    && validator_id != &self.validator
+        if state_transaction
+            .world
+            .public_lane_validators
+            .iter()
+            .any(|(key, record)| {
+                public_lane_validator_record_matches_key(key, record)
+                    && key.0 == self.lane_id
+                    && key.1 != self.validator
                     && record.peer_id == self.peer_id
                     && !matches!(
                         record.status,
                         PublicLaneValidatorStatus::Exited | PublicLaneValidatorStatus::Slashed(_)
                     )
-            },
-        ) {
+            })
+        {
             return Err(Error::InvariantViolation(
                 "validator peer is already registered for lane".into(),
             ));
@@ -452,6 +479,7 @@ impl Execute for ExitPublicLaneValidator {
             .get(&validator_key)
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, &record)?;
         #[cfg(feature = "telemetry")]
         let previous_status = record.status.clone();
         match record.status {
@@ -525,14 +553,12 @@ impl Execute for BondPublicLaneStake {
         )?;
 
         let validator_key = validator_storage_key(self.lane_id, &self.validator);
-        if state_transaction
+        let validator_record = state_transaction
             .world
             .public_lane_validators
             .get(&validator_key)
-            .is_none()
-        {
-            return Err(Error::InvariantViolation("validator not registered".into()));
-        }
+            .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, validator_record)?;
 
         let amount = self.amount.clone();
         let available = state_transaction
@@ -641,6 +667,7 @@ impl Execute for SchedulePublicLaneUnbond {
             .public_lane_validators
             .get_mut(&validator_key)
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, validator)?;
 
         let amount = self.amount.clone();
         if validator.total_stake < amount {
@@ -944,12 +971,16 @@ impl Execute for ClaimPublicLaneRewards {
             last_claimed.insert(asset_id.clone(), *epoch);
         }
 
-        for ((lane, epoch), record) in state_transaction.world.public_lane_rewards.iter() {
+        for (key, record) in state_transaction.world.public_lane_rewards.iter() {
+            let (lane, epoch) = key;
             if *lane != self.lane_id {
                 continue;
             }
             if *epoch > upto_epoch {
                 break;
+            }
+            if !public_lane_reward_record_matches_key(key, record) {
+                continue;
             }
             let last_seen = *last_claimed.get(&record.asset).unwrap_or(&0);
             if *epoch <= last_seen {
@@ -1102,8 +1133,9 @@ fn finalize_pending_activations(
         .world
         .public_lane_validators
         .iter()
-        .filter(|(_, record)| {
-            matches!(
+        .filter(|(key, record)| {
+            public_lane_validator_record_matches_key(key, record)
+                && matches!(
                 record.status,
                 PublicLaneValidatorStatus::PendingActivation(pending) if pending <= current_epoch
             )
@@ -1144,11 +1176,12 @@ fn finalize_released_exits(state_transaction: &mut StateTransaction<'_, '_>) {
         .world
         .public_lane_validators
         .iter()
-        .filter(|(_, record)| {
-            matches!(
-                record.status,
-                PublicLaneValidatorStatus::Exiting(releases_at) if releases_at <= now_ms
-            )
+        .filter(|(key, record)| {
+            public_lane_validator_record_matches_key(key, record)
+                && matches!(
+                    record.status,
+                    PublicLaneValidatorStatus::Exiting(releases_at) if releases_at <= now_ms
+                )
         })
         .map(|(key, record)| (key.clone(), record.status.clone()))
         .collect();
@@ -1180,16 +1213,15 @@ fn ensure_reward_targets_active(
         if !matches!(share.role, PublicLaneRewardRole::Validator) {
             continue;
         }
-        let Some(record) = state_transaction
-            .world
-            .public_lane_validators
-            .get(&validator_storage_key(lane_id, &share.account))
-        else {
+        let key = validator_storage_key(lane_id, &share.account);
+        let Some(record) = state_transaction.world.public_lane_validators.get(&key) else {
             return Err(Error::InvariantViolation(
                 "reward share references unknown validator".into(),
             ));
         };
-        if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+        if !public_lane_validator_record_matches_key(&key, record)
+            || !matches!(record.status, PublicLaneValidatorStatus::Active)
+        {
             return Err(Error::InvariantViolation(
                 "reward share validator is not active".into(),
             ));
@@ -1333,10 +1365,9 @@ fn update_validator_rewards(
         if !matches!(share.role, PublicLaneRewardRole::Validator) {
             continue;
         }
-        if let Some(validator) = state_transaction
-            .world
-            .public_lane_validators
-            .get_mut(&validator_storage_key(lane_id, &share.account))
+        let key = validator_storage_key(lane_id, &share.account);
+        if let Some(validator) = state_transaction.world.public_lane_validators.get_mut(&key)
+            && public_lane_validator_record_matches_key(&key, validator)
         {
             validator.last_reward_epoch = Some(epoch);
         }
@@ -1551,7 +1582,11 @@ pub(crate) fn apply_slash_to_validator(
     let stake_account = world
         .public_lane_validators
         .get(&validator_key)
-        .map(|record| record.stake_account.clone())
+        .map(|record| {
+            ensure_public_lane_validator_record_matches_key(&validator_key, record)?;
+            Ok(record.stake_account.clone())
+        })
+        .transpose()?
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
     let stake_ctx = stake_context(
         world,
@@ -1576,6 +1611,7 @@ pub(crate) fn apply_slash_to_validator(
             .public_lane_validators
             .get_mut(&validator_key)
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, validator)?;
         let allowed =
             slash_within_limit(amount, &validator.total_stake, staking_cfg.max_slash_bps)?;
         if !allowed {
@@ -2124,6 +2160,32 @@ mod tests {
             .extend(stx.world.peers.iter().cloned());
 
         (validator, delegator, escrow, asset_def_id)
+    }
+
+    fn insert_validator_record_for_key(
+        stx: &mut StateTransaction<'_, '_>,
+        key_lane: LaneId,
+        record_lane: LaneId,
+        validator: &AccountId,
+        status: PublicLaneValidatorStatus,
+        stake: Numeric,
+    ) {
+        stx.world.public_lane_validators.insert(
+            (key_lane, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: record_lane,
+                validator: validator.clone(),
+                peer_id: validator_peer_id(validator),
+                stake_account: validator.clone(),
+                total_stake: stake.clone(),
+                self_stake: stake,
+                metadata: Metadata::default(),
+                status,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
     }
 
     #[test]
@@ -2728,6 +2790,57 @@ mod tests {
     }
 
     #[test]
+    fn register_ignores_mismatched_public_lane_validator_rows_for_capacity_and_peer_binding() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, stale_validator, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(144);
+        let shared_peer = validator_peer_id(&validator);
+        stx.nexus.staking.max_validators = nonzero!(1u32);
+        stx.world.public_lane_validators.insert(
+            (lane_id, stale_validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(145),
+                validator: stale_validator.clone(),
+                peer_id: shared_peer.clone(),
+                stake_account: stale_validator,
+                total_stake: Numeric::new(10_000, 0),
+                self_stake: Numeric::new(10_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id: shared_peer,
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("mismatched stale row must not consume capacity or peer binding");
+
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("valid validator should be registered");
+        assert_eq!(record.lane_id, lane_id);
+        assert!(matches!(
+            record.status,
+            PublicLaneValidatorStatus::PendingActivation(_)
+        ));
+    }
+
+    #[test]
     fn rebind_updates_active_validator_peer_and_preserves_record_fields() {
         let state = setup_state();
         let block = new_block();
@@ -2866,6 +2979,105 @@ mod tests {
     }
 
     #[test]
+    fn rebind_ignores_mismatched_public_lane_validator_rows_for_peer_binding() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, stale_validator, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(147);
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register primary validator");
+        {
+            let record = stx
+                .world
+                .public_lane_validators
+                .get_mut(&(lane_id, validator.clone()))
+                .expect("validator record");
+            record.status = PublicLaneValidatorStatus::Active;
+        }
+
+        let replacement_peer = checked_peer_id();
+        let _ = stx.world.peers.push(replacement_peer.clone());
+        seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
+        stx.commit_topology.get_mut().push(replacement_peer.clone());
+        stx.world.public_lane_validators.insert(
+            (lane_id, stale_validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(148),
+                validator: stale_validator.clone(),
+                peer_id: replacement_peer.clone(),
+                stake_account: stale_validator,
+                total_stake: Numeric::new(10_000, 0),
+                self_stake: Numeric::new(10_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+
+        RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement_peer.clone())
+            .execute(&validator, &mut stx)
+            .expect("mismatched stale row must not reserve the replacement peer");
+
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("validator record remains present");
+        assert_eq!(record.peer_id, replacement_peer);
+    }
+
+    #[test]
+    fn rebind_rejects_mismatched_public_lane_validator_row() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(152);
+        let replacement_peer = checked_peer_id();
+        let _ = stx.world.peers.push(replacement_peer.clone());
+        seed_validator_consensus_key(&mut stx, &replacement_peer, ConsensusKeyStatus::Active);
+        stx.commit_topology.get_mut().push(replacement_peer.clone());
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(153),
+            &validator,
+            PublicLaneValidatorStatus::Active,
+            Numeric::new(1_000, 0),
+        );
+
+        let err = RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), replacement_peer)
+            .execute(&validator, &mut stx)
+            .expect_err("mismatched validator row must reject peer rebinding");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+        );
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched record remains present");
+        assert_eq!(record.lane_id, LaneId::new(153));
+        assert_eq!(record.peer_id, validator_peer_id(&record.validator));
+    }
+
+    #[test]
     fn rebind_requires_validator_authority() {
         let state = setup_state();
         let block = new_block();
@@ -2994,6 +3206,162 @@ mod tests {
             stx.world.assets.get(&escrow_asset).is_none(),
             "rejected registration must not move stake into escrow"
         );
+    }
+
+    #[test]
+    fn finalize_pending_activations_ignores_mismatched_public_lane_validator_rows() {
+        let mut state = setup_state();
+        set_epoch_length(&mut state, 2);
+
+        let mut state_block = state.block(block_header_with_height(5));
+        let mut stx = state_block.transaction();
+        let (validator, mismatched_validator, _, _) = prepare_accounts(&mut stx);
+        let valid_lane = LaneId::new(149);
+        let mismatched_key_lane = LaneId::new(150);
+        let mismatched_record_lane = LaneId::new(151);
+
+        stx.world.public_lane_validators.insert(
+            (valid_lane, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: valid_lane,
+                validator: validator.clone(),
+                peer_id: validator_peer_id(&validator),
+                stake_account: validator.clone(),
+                total_stake: Numeric::new(1_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::PendingActivation(2),
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        stx.world.public_lane_validators.insert(
+            (mismatched_key_lane, mismatched_validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: mismatched_record_lane,
+                validator: mismatched_validator.clone(),
+                peer_id: validator_peer_id(&mismatched_validator),
+                stake_account: mismatched_validator.clone(),
+                total_stake: Numeric::new(9_000, 0),
+                self_stake: Numeric::new(9_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::PendingActivation(2),
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+
+        finalize_pending_activations(&mut stx).expect("activation pass should complete");
+
+        let valid = stx
+            .world
+            .public_lane_validators()
+            .get(&(valid_lane, validator))
+            .expect("valid pending validator remains present");
+        assert!(matches!(valid.status, PublicLaneValidatorStatus::Active));
+        assert_eq!(valid.activation_epoch, Some(2));
+        assert_eq!(valid.activation_height, Some(5));
+
+        let mismatched = stx
+            .world
+            .public_lane_validators()
+            .get(&(mismatched_key_lane, mismatched_validator))
+            .expect("mismatched pending validator remains present");
+        assert!(
+            matches!(
+                mismatched.status,
+                PublicLaneValidatorStatus::PendingActivation(2)
+            ),
+            "mismatched key/record rows must not auto-promote to Active"
+        );
+        assert_eq!(mismatched.activation_epoch, None);
+        assert_eq!(mismatched.activation_height, None);
+    }
+
+    #[test]
+    fn activate_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
+        let state = setup_state();
+        let mut state_block = state.block(block_header_with_height(1));
+        let mut stx = state_block.transaction();
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(154);
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(155),
+            &validator,
+            PublicLaneValidatorStatus::PendingActivation(0),
+            Numeric::new(1_000, 0),
+        );
+
+        let err = ActivatePublicLaneValidator {
+            lane_id,
+            validator: validator.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("mismatched validator row must reject explicit activation");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+        );
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched record remains present");
+        assert!(matches!(
+            record.status,
+            PublicLaneValidatorStatus::PendingActivation(0)
+        ));
+        assert_eq!(record.activation_epoch, None);
+        assert_eq!(record.activation_height, None);
+    }
+
+    #[test]
+    fn finalize_released_exits_ignores_mismatched_public_lane_validator_rows() {
+        let state = setup_state();
+        let block = new_block_with_height_and_time(2, 1_000);
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        let (validator, mismatched_validator, _, _) = prepare_accounts(&mut stx);
+        let valid_lane = LaneId::new(156);
+        let mismatched_key_lane = LaneId::new(157);
+        insert_validator_record_for_key(
+            &mut stx,
+            valid_lane,
+            valid_lane,
+            &validator,
+            PublicLaneValidatorStatus::Exiting(999),
+            Numeric::new(1_000, 0),
+        );
+        insert_validator_record_for_key(
+            &mut stx,
+            mismatched_key_lane,
+            LaneId::new(158),
+            &mismatched_validator,
+            PublicLaneValidatorStatus::Exiting(999),
+            Numeric::new(1_000, 0),
+        );
+
+        finalize_released_exits(&mut stx);
+
+        let valid = stx
+            .world
+            .public_lane_validators()
+            .get(&(valid_lane, validator))
+            .expect("valid exiting validator remains present");
+        assert!(matches!(valid.status, PublicLaneValidatorStatus::Exited));
+        let mismatched = stx
+            .world
+            .public_lane_validators()
+            .get(&(mismatched_key_lane, mismatched_validator))
+            .expect("mismatched exiting validator remains present");
+        assert!(matches!(
+            mismatched.status,
+            PublicLaneValidatorStatus::Exiting(999)
+        ));
     }
 
     #[test]
@@ -3196,6 +3564,84 @@ mod tests {
             matches!(&err, Error::InvariantViolation(msg) if msg.contains("not active")),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn record_rewards_rejects_mismatched_public_lane_validator_row() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let lane_id = LaneId::new(159);
+        let (_sink, validator, reward_asset, _) = configure_reward_fixture(&mut stx, lane_id, 500);
+        let record = stx
+            .world
+            .public_lane_validators
+            .get_mut(&(lane_id, validator.clone()))
+            .expect("validator record");
+        record.lane_id = LaneId::new(160);
+        record.status = PublicLaneValidatorStatus::Active;
+
+        let err = RecordPublicLaneRewards {
+            lane_id,
+            epoch: 1,
+            reward_asset,
+            total_reward: Numeric::new(25, 0),
+            shares: vec![PublicLaneRewardShare {
+                account: validator.clone(),
+                role: PublicLaneRewardRole::Validator,
+                amount: Numeric::new(25, 0),
+            }],
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("mismatched validator row must not receive rewards");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("not active")),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            stx.world.public_lane_rewards.get(&(lane_id, 1)).is_none(),
+            "rejected reward record must not be persisted"
+        );
+    }
+
+    #[test]
+    fn update_validator_rewards_ignores_mismatched_public_lane_validator_rows() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(161);
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(162),
+            &validator,
+            PublicLaneValidatorStatus::Active,
+            Numeric::new(1_000, 0),
+        );
+
+        update_validator_rewards(
+            &mut stx,
+            lane_id,
+            7,
+            &[PublicLaneRewardShare {
+                account: validator.clone(),
+                role: PublicLaneRewardRole::Validator,
+                amount: Numeric::new(10, 0),
+            }],
+        );
+
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched validator row remains present");
+        assert_eq!(record.last_reward_epoch, None);
     }
 
     #[test]
@@ -4218,6 +4664,43 @@ mod tests {
     }
 
     #[test]
+    fn exit_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(163);
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(164),
+            &validator,
+            PublicLaneValidatorStatus::Active,
+            Numeric::new(1_000, 0),
+        );
+
+        let err = ExitPublicLaneValidator {
+            lane_id,
+            validator: validator.clone(),
+            release_at_ms: stx.block_unix_timestamp_ms(),
+        }
+        .execute(&validator, &mut stx)
+        .expect_err("mismatched validator row must reject exit");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+        );
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched record remains present");
+        assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
+    }
+
+    #[test]
     fn slashed_validator_must_exit_before_reregistering() {
         let state = setup_state();
         let block = new_block();
@@ -4639,6 +5122,74 @@ mod tests {
     }
 
     #[test]
+    fn bond_public_lane_stake_rejects_mismatched_public_lane_validator_row() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(165);
+        let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
+        let escrow_asset = AssetId::new(asset_def_id, escrow);
+        let delegator_before = stx
+            .world
+            .assets
+            .get(&delegator_asset)
+            .expect("delegator stake asset")
+            .as_ref()
+            .clone();
+        let escrow_before = stx
+            .world
+            .assets
+            .get(&escrow_asset)
+            .map_or_else(Numeric::zero, |asset| asset.as_ref().clone());
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(166),
+            &validator,
+            PublicLaneValidatorStatus::Active,
+            Numeric::new(1_000, 0),
+        );
+
+        let err = BondPublicLaneStake {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            amount: Numeric::new(100, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("mismatched validator row must reject bonding");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+        );
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&delegator_asset)
+                .expect("delegator stake asset after rejection")
+                .as_ref(),
+            &delegator_before
+        );
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&escrow_asset)
+                .map_or_else(Numeric::zero, |asset| asset.as_ref().clone()),
+            escrow_before
+        );
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched record remains present");
+        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
+    }
+
+    #[test]
     fn register_rejects_below_min_stake() {
         let mut state = setup_state();
         state.nexus.get_mut().staking.min_validator_stake = 2_000;
@@ -4734,6 +5285,47 @@ mod tests {
     }
 
     #[test]
+    fn schedule_public_lane_unbond_rejects_mismatched_public_lane_validator_row() {
+        let mut state = setup_state();
+        state.nexus.get_mut().staking.unbonding_delay = Duration::from_millis(0);
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, delegator, _, _) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(167);
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(168),
+            &validator,
+            PublicLaneValidatorStatus::Active,
+            Numeric::new(1_000, 0),
+        );
+
+        let err = SchedulePublicLaneUnbond {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator,
+            request_id: Hash::new("req-mismatched"),
+            amount: Numeric::new(100, 0),
+            release_at_ms: stx.block_unix_timestamp_ms(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("mismatched validator row must reject unbond scheduling");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+        );
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched record remains present");
+        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
+    }
+
+    #[test]
     fn slash_transfers_funds_to_sink() {
         let state = setup_state();
         let block = new_block();
@@ -4793,6 +5385,60 @@ mod tests {
             .expect("slash sink asset");
         assert_eq!(escrow_balance.as_ref(), &Numeric::new(1_100, 0));
         assert_eq!(sink_balance.as_ref(), &Numeric::new(9_900, 0));
+    }
+
+    #[test]
+    fn slash_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(169);
+        let escrow_asset = AssetId::new(asset_def_id, escrow);
+        let escrow_before = stx
+            .world
+            .assets
+            .get(&escrow_asset)
+            .map_or_else(Numeric::zero, |asset| asset.as_ref().clone());
+        insert_validator_record_for_key(
+            &mut stx,
+            lane_id,
+            LaneId::new(170),
+            &validator,
+            PublicLaneValidatorStatus::Active,
+            Numeric::new(1_000, 0),
+        );
+
+        let err = SlashPublicLaneValidator {
+            lane_id,
+            validator: validator.clone(),
+            slash_id: Hash::new("slash-mismatched-row"),
+            amount: Numeric::new(100, 0),
+            reason_code: "evidence".to_string(),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("mismatched validator row must reject slashing");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("does not match its storage key"))
+        );
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&escrow_asset)
+                .map_or_else(Numeric::zero, |asset| asset.as_ref().clone()),
+            escrow_before
+        );
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(lane_id, validator))
+            .expect("mismatched record remains present");
+        assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
+        assert_eq!(record.total_stake, Numeric::new(1_000, 0));
     }
 
     #[test]
@@ -4904,6 +5550,60 @@ mod tests {
         assert!(
             view.world.assets().get(&validator_asset).is_none(),
             "dust claim should not transfer funds"
+        );
+    }
+
+    #[test]
+    fn claim_rewards_ignores_mismatched_reward_record_rows() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        seed_test_call_hash(&mut stx, 0xD9);
+
+        let lane_id = LaneId::new(13);
+        let (_sink, validator, reward_asset, asset_def_id) =
+            configure_reward_fixture(&mut stx, lane_id, 50);
+        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.world.public_lane_rewards.insert(
+            (lane_id, 1),
+            PublicLaneRewardRecord {
+                lane_id: LaneId::new(14),
+                epoch: 1,
+                asset: reward_asset.clone(),
+                total_reward: Numeric::new(25, 0),
+                shares: vec![PublicLaneRewardShare {
+                    account: validator.clone(),
+                    role: PublicLaneRewardRole::Validator,
+                    amount: Numeric::new(25, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+
+        ClaimPublicLaneRewards {
+            lane_id,
+            account: validator.clone(),
+            upto_epoch: Some(1),
+        }
+        .execute(&validator, &mut stx)
+        .unwrap();
+
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert!(
+            view.world
+                .public_lane_reward_claims()
+                .get(&(lane_id, validator.clone(), reward_asset))
+                .is_none(),
+            "mismatched reward row must not advance claim cursor"
+        );
+        let validator_asset = AssetId::new(asset_def_id, validator);
+        assert!(
+            view.world.assets().get(&validator_asset).is_none(),
+            "mismatched reward row must not transfer rewards"
         );
     }
 

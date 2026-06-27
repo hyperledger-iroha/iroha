@@ -194,6 +194,10 @@ VoteVerifyWorkerConfigCoreSafety ==
 SafetyFast ==
   VoteVerifyWorkerConfigCoreSafety
 
+VoteVerifyWorkerConfigCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+
 BugAutoThreadsUseAvailable ==
   ActualAutoHigh = SpecAutoHigh
 

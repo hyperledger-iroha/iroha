@@ -13,17 +13,27 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_runner_preflight import (  # noqa: E402
+    command_plan_steps,
     emit_runner_error_block,
     emit_runner_error_lines,
     emit_runner_notice,
+    inspect_runner_path_exists,
+    inspect_runner_path_is_dir,
+    inspect_runner_path_is_file,
+    inspect_runner_path_is_symlink,
+    inspect_runner_path_size,
     render_runner_plan,
     require_existing_dirs,
     require_existing_files,
     require_runner_non_negative_int,
     require_runner_positive_int,
+    resolve_runner_input_file,
+    resolve_runner_output_path,
     run_command_plan,
     runner_arg_label,
     validate_command_plan_artifacts,
+    validate_runner_output_dir,
+    validate_runner_output_parent,
     validate_runner_preflight,
     write_runner_plan,
 )
@@ -40,6 +50,27 @@ class Step:
 
 def test_runner_arg_label_formats_namespace_field() -> None:
     assert runner_arg_label("max_route_latency_ms") == "--max-route-latency-ms"
+
+
+def test_runner_arg_label_rejects_malformed_field_names() -> None:
+    for field in ("", "max-route-latency-ms", "MaxRouteLatencyMs", "_limit", 7):
+        try:
+            runner_arg_label(field)
+        except ValueError as error:
+            assert "runner argument field must be a snake_case string" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed field {field!r}")
+
+
+def test_runner_path_resolution_uses_shared_identity_helper() -> None:
+    assert (
+        resolve_runner_input_file.__globals__["resolve_path_identity"].__module__
+        == "sorafs_path_identity"
+    )
+    assert (
+        resolve_runner_output_path.__globals__["resolve_path_identity"].__module__
+        == "sorafs_path_identity"
+    )
 
 
 def test_require_runner_positive_int_accepts_positive_value() -> None:
@@ -78,6 +109,32 @@ def test_require_runner_positive_int_rejects_direct_non_int_values() -> None:
         "--quorum must be positive",
         "--screened-at must be positive",
     ]
+
+
+def test_require_runner_positive_int_rejects_malformed_error_container() -> None:
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            require_runner_positive_int(
+                argparse.Namespace(limit=1),
+                "limit",
+                errors,
+            )
+        except ValueError as error:
+            assert "runner preflight errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_require_runner_positive_int_rejects_malformed_field_name() -> None:
+    for field in ("", "limit-ms", "LimitMs", "_limit", 7):
+        errors: list[str] = []
+        try:
+            require_runner_positive_int(argparse.Namespace(limit=1), field, errors)
+        except ValueError as error:
+            assert "runner argument field must be a snake_case string" in str(error)
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed field {field!r}")
 
 
 def test_require_runner_positive_int_allows_optional_none() -> None:
@@ -142,6 +199,162 @@ def test_require_runner_non_negative_int_rejects_direct_invalid_values() -> None
         "--max-feed-lag-secs must be non-negative",
         "--max-cycle-age-secs must be non-negative",
     ]
+
+
+def test_require_runner_non_negative_int_rejects_malformed_error_container() -> None:
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            require_runner_non_negative_int(
+                argparse.Namespace(max_evidence_age_secs=0),
+                "max_evidence_age_secs",
+                errors,
+            )
+        except ValueError as error:
+            assert "runner preflight errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_require_runner_non_negative_int_rejects_malformed_field_name() -> None:
+    for field in ("", "max-evidence-age-secs", "MaxEvidenceAgeSecs", "_limit", 7):
+        errors: list[str] = []
+        try:
+            require_runner_non_negative_int(
+                argparse.Namespace(max_evidence_age_secs=0),
+                field,
+                errors,
+            )
+        except ValueError as error:
+            assert "runner argument field must be a snake_case string" in str(error)
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed field {field!r}")
+
+
+def test_validate_runner_output_dir_rejects_non_path_without_traceback() -> None:
+    errors: list[str] = []
+
+    assert not validate_runner_output_dir("evidence", errors)
+    assert errors == ["--out-dir `evidence` must be a path"]
+
+
+def test_validate_runner_output_parent_rejects_non_path_without_traceback() -> None:
+    errors: list[str] = []
+
+    assert not validate_runner_output_parent(
+        "summary.json",
+        errors,
+        label="--summary-out",
+    )
+    assert errors == ["--summary-out `summary.json` must be a path"]
+
+
+def test_runner_path_inspectors_reject_malformed_error_container(
+    tmp_path: Path,
+) -> None:
+    for helper in (
+        inspect_runner_path_exists,
+        inspect_runner_path_is_symlink,
+        inspect_runner_path_is_file,
+        inspect_runner_path_size,
+        inspect_runner_path_is_dir,
+    ):
+        for errors in ("", (), {"error": "old"}, ["old", 7]):
+            try:
+                helper(tmp_path, errors, label="--out-dir")
+            except ValueError as error:
+                assert "runner preflight errors must be a list of strings" in str(
+                    error
+                )
+            else:
+                raise AssertionError(
+                    f"{helper.__name__} accepted malformed errors {errors!r}"
+                )
+
+
+def test_runner_path_inspectors_reject_malformed_labels(tmp_path: Path) -> None:
+    for helper in (
+        inspect_runner_path_exists,
+        inspect_runner_path_is_symlink,
+        inspect_runner_path_is_file,
+        inspect_runner_path_size,
+        inspect_runner_path_is_dir,
+    ):
+        for label in ("", " --out-dir", "--out-dir ", "--out\nDir", 7):
+            errors: list[str] = []
+            try:
+                helper(tmp_path, errors, label=label)
+            except ValueError as error:
+                assert "runner preflight label must be a non-empty canonical string" in str(
+                    error
+                )
+                assert errors == []
+            else:
+                raise AssertionError(
+                    f"{helper.__name__} accepted malformed label {label!r}"
+                )
+
+
+def test_validate_runner_output_parent_rejects_malformed_error_container(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            validate_runner_output_parent(out_dir, errors, label="--out-dir")
+        except ValueError as error:
+            assert "runner preflight errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_validate_runner_output_parent_rejects_malformed_label(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+
+    for label in ("", " --out-dir", "--out-dir ", "--out\nDir", 7):
+        errors: list[str] = []
+        try:
+            validate_runner_output_parent(out_dir, errors, label=label)
+        except ValueError as error:
+            assert "runner preflight label must be a non-empty canonical string" in str(
+                error
+            )
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed label {label!r}")
+
+
+def test_validate_runner_output_dir_rejects_malformed_error_container(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            validate_runner_output_dir(out_dir, errors)
+        except ValueError as error:
+            assert "runner preflight errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_validate_runner_output_dir_rejects_malformed_label(tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+
+    for label in ("", " --out-dir", "--out-dir ", "--out\nDir", 7):
+        errors: list[str] = []
+        try:
+            validate_runner_output_dir(out_dir, errors, label=label)
+        except ValueError as error:
+            assert "runner preflight label must be a non-empty canonical string" in str(
+                error
+            )
+            assert errors == []
+        else:
+            raise AssertionError(f"accepted malformed label {label!r}")
 
 
 def test_out_dir_parent_file_fails(tmp_path: Path) -> None:
@@ -218,6 +431,47 @@ def test_out_dir_inspection_failure_fails_preflight(
     assert errors == [f"--out-dir `{out_dir}` cannot be inspected: out dir stat denied"]
 
 
+def test_out_dir_symlink_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    out_dir = tmp_path / "evidence"
+    out_dir.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=out_dir,
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--out-dir `{out_dir}` must not be a symlink"]
+
+
+def test_out_dir_parent_chain_symlink_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    ancestor = tmp_path / "redirect"
+    ancestor.symlink_to(target, target_is_directory=True)
+    out_dir = ancestor / "nested" / "evidence"
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=out_dir,
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--out-dir parent `{ancestor}` must not be a symlink"]
+
+
 def test_summary_out_parent_file_fails(tmp_path: Path) -> None:
     verifier = tmp_path / "verifier.py"
     verifier.write_text("", encoding="utf-8")
@@ -266,6 +520,86 @@ def test_summary_out_directory_inspection_failure_fails_preflight(
     assert errors == [f"--summary-out `{summary}` cannot be inspected: summary type denied"]
 
 
+def test_summary_out_symlink_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target-summary.json"
+    target.write_text("{}", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.symlink_to(target)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=summary,
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--summary-out `{summary}` must not be a symlink"]
+
+
+def test_summary_out_parent_symlink_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=parent / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+
+
+def test_summary_out_parent_chain_symlink_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    ancestor = tmp_path / "summary-root"
+    ancestor.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=ancestor / "nested" / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--summary-out parent `{ancestor}` must not be a symlink"]
+
+
+def test_summary_out_parent_chain_file_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    ancestor = tmp_path / "not-a-directory"
+    ancestor.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=ancestor / "nested" / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [
+        f"--summary-out parent `{ancestor}` must be a directory when it exists"
+    ]
+
+
 def test_summary_out_same_as_out_dir_fails_before_execution(tmp_path: Path) -> None:
     verifier = tmp_path / "verifier.py"
     verifier.write_text("", encoding="utf-8")
@@ -302,6 +636,12 @@ def test_missing_input_file_reports_only_file_requirement(tmp_path: Path) -> Non
     errors = require_existing_files([missing], "--evidence")
 
     assert errors == [f"--evidence `{missing}` must exist and be a file"]
+
+
+def test_input_file_rejects_non_path_without_traceback() -> None:
+    errors = require_existing_files(["evidence.json"], "--evidence")
+
+    assert errors == ["--evidence `evidence.json` must be a path"]
 
 
 def test_input_file_inspection_failure_is_reported(
@@ -367,6 +707,12 @@ def test_missing_input_directory_reports_only_directory_requirement(
     assert errors == [f"--bundle `{missing}` must exist and be a directory"]
 
 
+def test_input_directory_rejects_non_path_without_traceback() -> None:
+    errors = require_existing_dirs(["bundle"], "--bundle")
+
+    assert errors == ["--bundle `bundle` must be a path"]
+
+
 def test_input_directory_type_inspection_failure_is_reported(
     tmp_path: Path,
     monkeypatch,
@@ -411,6 +757,25 @@ def test_duplicate_planned_artifact_identity_fails(tmp_path: Path) -> None:
     assert "duplicate planned artifact" in errors[0]
 
 
+def test_command_plan_steps_rejects_scalar_and_mapping_containers() -> None:
+    steps = [Step("gate", None, ["true"])]
+
+    assert command_plan_steps(steps) is steps
+    assert command_plan_steps("gate") is None
+    assert command_plan_steps(b"gate") is None
+    assert command_plan_steps({"label": "gate"}) is None
+    assert command_plan_steps(None) is None
+
+
+def test_validate_command_plan_artifacts_rejects_malformed_plan_shapes() -> None:
+    assert validate_command_plan_artifacts("gate") == [
+        "command plan must be a sequence of steps"
+    ]
+    assert validate_command_plan_artifacts({"label": "gate"}) == [
+        "command plan must be a sequence of steps"
+    ]
+
+
 def test_planned_artifact_same_as_reserved_output_fails(tmp_path: Path) -> None:
     out_dir = tmp_path / "evidence"
     artifact = tmp_path / "nested" / ".." / "evidence"
@@ -435,6 +800,39 @@ def test_planned_artifact_symlink_fails(tmp_path: Path) -> None:
     errors = validate_command_plan_artifacts([Step("gate", artifact, ["true"])])
 
     assert errors == [f"gate artifact `{artifact}` must not be a symlink"]
+
+
+def test_planned_artifact_existing_file_fails(tmp_path: Path) -> None:
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("stale", encoding="utf-8")
+
+    errors = validate_command_plan_artifacts([Step("gate", artifact, ["true"])])
+
+    assert errors == [f"gate artifact `{artifact}` must not already exist"]
+
+
+def test_planned_artifact_parent_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    parent = tmp_path / "artifact-parent"
+    parent.symlink_to(target, target_is_directory=True)
+    artifact = parent / "artifact.json"
+
+    errors = validate_command_plan_artifacts([Step("gate", artifact, ["true"])])
+
+    assert errors == [f"gate artifact parent `{parent}` must not be a symlink"]
+
+
+def test_planned_artifact_parent_chain_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    ancestor = tmp_path / "artifact-root"
+    ancestor.symlink_to(target, target_is_directory=True)
+    artifact = ancestor / "nested" / "artifact.json"
+
+    errors = validate_command_plan_artifacts([Step("gate", artifact, ["true"])])
+
+    assert errors == [f"gate artifact parent `{ancestor}` must not be a symlink"]
 
 
 def test_render_runner_plan_uses_sorted_newline_terminated_json() -> None:
@@ -517,6 +915,21 @@ def test_run_command_plan_reports_launch_failure(tmp_path: Path, capsys) -> None
     assert "failed to launch" in captured.err
 
 
+def test_run_command_plan_rejects_malformed_plan_before_output_creation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+
+    exit_code = run_command_plan("gate", out_dir)
+
+    assert exit_code == 1
+    assert not out_dir.exists()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "ERROR: command plan must be a sequence of steps\n"
+
+
 def test_run_command_plan_reports_artifact_inspection_failure(
     tmp_path: Path,
     capsys,
@@ -559,6 +972,116 @@ def test_run_command_plan_rejects_preexisting_artifact_symlink_before_create(
     assert not out_dir.exists()
     captured = capsys.readouterr()
     assert f"gate artifact `{artifact}` must not be a symlink" in captured.err
+
+
+def test_run_command_plan_rejects_preexisting_artifact_before_create(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+    artifact = tmp_path / "artifact.json"
+    launched = tmp_path / "launched"
+    artifact.write_text("stale", encoding="utf-8")
+    script = (
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('launched', encoding='utf-8')\n"
+    )
+
+    exit_code = run_command_plan(
+        [Step("gate", artifact, [sys.executable, "-c", script, str(launched)])],
+        out_dir,
+    )
+
+    assert exit_code == 1
+    assert not out_dir.exists()
+    assert not launched.exists()
+    captured = capsys.readouterr()
+    assert f"gate artifact `{artifact}` must not already exist" in captured.err
+
+
+def test_run_command_plan_rejects_output_dir_symlink_before_launch(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    out_dir = tmp_path / "out"
+    out_dir.symlink_to(target, target_is_directory=True)
+    launched = tmp_path / "launched"
+    script = (
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('launched', encoding='utf-8')\n"
+    )
+
+    exit_code = run_command_plan(
+        [Step("gate", None, [sys.executable, "-c", script, str(launched)])],
+        out_dir,
+    )
+
+    assert exit_code == 1
+    assert not launched.exists()
+    captured = capsys.readouterr()
+    assert f"--out-dir `{out_dir}` must not be a symlink" in captured.err
+
+
+def test_run_command_plan_rejects_artifact_parent_symlink_before_create(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+    target = tmp_path / "target"
+    target.mkdir()
+    parent = tmp_path / "artifact-parent"
+    parent.symlink_to(target, target_is_directory=True)
+    artifact = parent / "artifact.json"
+    launched = tmp_path / "launched"
+    script = (
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('launched', encoding='utf-8')\n"
+    )
+
+    exit_code = run_command_plan(
+        [Step("gate", artifact, [sys.executable, "-c", script, str(launched)])],
+        out_dir,
+    )
+
+    assert exit_code == 1
+    assert not out_dir.exists()
+    assert not launched.exists()
+    captured = capsys.readouterr()
+    assert f"gate artifact parent `{parent}` must not be a symlink" in captured.err
+
+
+def test_run_command_plan_rejects_artifact_parent_chain_symlink_before_create(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+    target = tmp_path / "target"
+    target.mkdir()
+    ancestor = tmp_path / "artifact-root"
+    ancestor.symlink_to(target, target_is_directory=True)
+    artifact = ancestor / "nested" / "artifact.json"
+    launched = tmp_path / "launched"
+    script = (
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('launched', encoding='utf-8')\n"
+    )
+
+    exit_code = run_command_plan(
+        [Step("gate", artifact, [sys.executable, "-c", script, str(launched)])],
+        out_dir,
+    )
+
+    assert exit_code == 1
+    assert not out_dir.exists()
+    assert not launched.exists()
+    captured = capsys.readouterr()
+    assert f"gate artifact parent `{ancestor}` must not be a symlink" in captured.err
 
 
 def test_run_command_plan_rejects_artifact_symlink_written_by_command(

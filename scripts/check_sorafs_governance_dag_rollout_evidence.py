@@ -435,7 +435,7 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             digest = evidence_artifact_fingerprint(artifact).get("public_head_cid_hex")
             if kind_name == "publisher_service":

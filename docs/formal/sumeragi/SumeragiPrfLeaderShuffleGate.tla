@@ -264,4 +264,8 @@ PrfLeaderShuffleExactness ==
   /\ PrfShufflePermutationExact
   /\ PrfWrapperCanonicalShuffleExact
 
+PrfLeaderShuffleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrfLeaderShuffleExactness
+
 ====

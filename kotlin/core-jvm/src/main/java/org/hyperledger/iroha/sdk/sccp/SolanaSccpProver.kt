@@ -5043,10 +5043,10 @@ object SccpSolana {
     private fun solanaHash32Bytes(value: String, field: String): ByteArray {
         val text = normalizeNonEmpty(value, field)
         var body = text
-        if (body.startsWith("0x", ignoreCase = true)) {
+        if (body.startsWith("0x")) {
             body = body.substring(2)
         }
-        if (body.length == 64 && body.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+        if (body.length == 64 && isLowercaseHexBody(body)) {
             val bytes = hex32Bytes(text, field)
             require(bytes.any { it.toInt() != 0 }) { "$field must not be zero" }
             return bytes
@@ -5095,11 +5095,13 @@ object SccpSolana {
     private fun hexBytes(value: String, field: String, byteLength: Int): ByteArray {
         require(value.trim() == value) { "$field must be canonical hex" }
         var body = value
-        if (body.startsWith("0x", ignoreCase = true)) {
+        require(!body.startsWith("0X")) { "$field must be canonical hex" }
+        if (body.startsWith("0x")) {
             body = body.substring(2)
         }
         require(body.none { it.isWhitespace() }) { "$field must be canonical hex" }
         require(body.length == byteLength * 2) { "$field must be $byteLength bytes" }
+        require(isLowercaseHexBody(body)) { "$field must be canonical hex" }
         val out = ByteArray(byteLength)
         for (i in out.indices) {
             val byteText = body.substring(i * 2, i * 2 + 2)
@@ -5108,6 +5110,9 @@ object SccpSolana {
         }
         return out
     }
+
+    private fun isLowercaseHexBody(value: String): Boolean =
+        value.all { it in '0'..'9' || it in 'a'..'f' }
 
     private fun normalizeU64(value: String, field: String): BigInteger {
         val trimmed = value.trim()

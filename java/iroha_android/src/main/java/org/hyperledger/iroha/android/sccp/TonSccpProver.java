@@ -226,6 +226,7 @@ public final class TonSccpProver {
         input.sourceStateVerifierHash(),
         input.sourceAdapterDeploymentHash(),
         input.sourceAdapterDeploymentReceiptHash(),
+        input.sourceAdapterDeployment(),
         input.backend(),
         input.sourceDomain());
   }
@@ -2539,12 +2540,50 @@ public final class TonSccpProver {
           "sourceStateVerifierHash must not be the TON template verifier hash");
     }
     final String sourceStateVerifierHash = "0x" + hexLower(sourceStateVerifierHashBytes);
+    SolanaSccpProver.SourceAdapterDeploymentBinding descriptorDerivedDeploymentBinding = null;
+    if (input.sourceAdapterDeployment() != null) {
+      final SourceAdapterDeploymentInput sourceAdapterDeployment = input.sourceAdapterDeployment();
+      if (sourceAdapterDeployment.sourceDomain() != DOMAIN_TON) {
+        throw new IllegalArgumentException("sourceAdapterDeployment.sourceDomain must be TON");
+      }
+      if (sourceAdapterDeployment.targetDomain() != SolanaSccpProver.DOMAIN_SORA) {
+        throw new IllegalArgumentException("sourceAdapterDeployment.targetDomain must be SORA");
+      }
+      if (!normalizeNonZeroHex32(
+              sourceAdapterDeployment.sourceStateVerifierHash(),
+              "sourceAdapterDeployment.sourceStateVerifierHash")
+          .equals(sourceStateVerifierHash)) {
+        throw new IllegalArgumentException(
+            "sourceStateVerifierHash must match sourceAdapterDeployment");
+      }
+      descriptorDerivedDeploymentBinding =
+          sourceAdapterDeploymentBindingFromDeployment(sourceAdapterDeployment);
+    }
+    final String sourceAdapterDeploymentHash =
+        selectProofRequestDeploymentHash(
+            input.sourceAdapterDeploymentHash(),
+            descriptorDerivedDeploymentBinding == null
+                ? null
+                : descriptorDerivedDeploymentBinding.sourceAdapterDeploymentHash(),
+            "sourceAdapterDeploymentHash");
+    final String sourceAdapterDeploymentReceiptHash =
+        selectProofRequestDeploymentHash(
+            input.sourceAdapterDeploymentReceiptHash(),
+            descriptorDerivedDeploymentBinding == null
+                ? null
+                : descriptorDerivedDeploymentBinding.sourceAdapterDeploymentReceiptHash(),
+            "sourceAdapterDeploymentReceiptHash");
     final SolanaSccpProver.SourceAdapterDeploymentBinding deploymentBinding =
         SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
             input.sourceDomain(),
             SolanaSccpProver.DOMAIN_SORA,
-            input.sourceAdapterDeploymentHash(),
-            input.sourceAdapterDeploymentReceiptHash());
+            sourceAdapterDeploymentHash,
+            sourceAdapterDeploymentReceiptHash);
+    if (descriptorDerivedDeploymentBinding != null
+        && !deploymentBinding.equals(descriptorDerivedDeploymentBinding)) {
+      throw new IllegalArgumentException(
+          "sourceAdapterDeploymentBinding must match sourceAdapterDeployment");
+    }
     if (SolanaSccpProver.ZERO_HASH_V1.equals(
         deploymentBinding.sourceAdapterDeploymentHash())) {
       throw new IllegalArgumentException(
@@ -2717,6 +2756,7 @@ public final class TonSccpProver {
                 proofResult.sourceStateVerifierHash(),
                 deploymentBinding.sourceAdapterDeploymentHash(),
                 deploymentBinding.sourceAdapterDeploymentReceiptHash(),
+                null,
                 proofResult.backend(),
                 DOMAIN_TON));
     if (!expectedRequest.requestHash().equals(requestHash)) {
@@ -3430,6 +3470,7 @@ public final class TonSccpProver {
                 request.sourceStateVerifierHash(),
                 request.sourceAdapterDeploymentBinding().sourceAdapterDeploymentHash(),
                 request.sourceAdapterDeploymentBinding().sourceAdapterDeploymentReceiptHash(),
+                null,
                 request.backend(),
                 request.sourceDomain()));
     if (request.version() != expected.version()
@@ -5489,7 +5530,10 @@ public final class TonSccpProver {
       throw new IllegalArgumentException(field + " must be canonical hex");
     }
     String body = value;
-    if (body.regionMatches(true, 0, "0x", 0, 2)) {
+    if (body.startsWith("0X")) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
+    }
+    if (body.startsWith("0x")) {
       body = body.substring(2);
     }
     for (int i = 0; i < body.length(); i++) {
@@ -5499,6 +5543,9 @@ public final class TonSccpProver {
     }
     if (body.length() != 64) {
       throw new IllegalArgumentException(field + " must be 32 bytes");
+    }
+    if (!isLowercaseHexBody(body)) {
+      throw new IllegalArgumentException(field + " must be canonical hex");
     }
     final byte[] out = new byte[32];
     for (int i = 0; i < out.length; i++) {
@@ -5510,6 +5557,16 @@ public final class TonSccpProver {
       out[i] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private static boolean isLowercaseHexBody(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      final char character = value.charAt(i);
+      if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static byte[] nonZeroHex32Bytes(final String value, final String field) {
@@ -7066,6 +7123,53 @@ public final class TonSccpProver {
     return deploymentBinding;
   }
 
+  private static String selectProofRequestDeploymentHash(
+      final String supplied, final String derived, final String field) {
+    final String normalizedSupplied = normalizeHex32(supplied, field);
+    if (derived != null && SolanaSccpProver.ZERO_HASH_V1.equals(normalizedSupplied)) {
+      return derived;
+    }
+    return normalizedSupplied;
+  }
+
+  public static SolanaSccpProver.SourceAdapterDeploymentBinding
+      sourceAdapterDeploymentBindingFromDeployment(final SourceAdapterDeploymentInput input) {
+    Objects.requireNonNull(input, "sourceAdapterDeployment");
+    if (input.sourceDomain() != DOMAIN_TON) {
+      throw new IllegalArgumentException("sourceAdapterDeployment.sourceDomain must be TON");
+    }
+    if (input.targetDomain() != SolanaSccpProver.DOMAIN_SORA) {
+      throw new IllegalArgumentException("sourceAdapterDeployment.targetDomain must be SORA");
+    }
+    final String sourceAdapterDeploymentHash =
+        SourceSccpProofs.sourceAdapterEngineDeploymentHash(
+            input.sourceDomain(),
+            input.sourceTrustAnchorHash(),
+            input.consensusVerifierHash(),
+            input.messageInclusionVerifierHash(),
+            input.finalityPolicyHash(),
+            input.deploymentReceiptHash(),
+            input.targetDomain(),
+            input.adapterVerifierVkHash(),
+            input.sourceStateVerifierHash(),
+            input.bridgeAddress(),
+            input.sourceBridgeEmitterCodeHash(),
+            input.networkId(),
+            input.ownerAddress(),
+            input.configHash(),
+            null,
+            null,
+            null,
+            input.tonMasterchainConfigVerifierHash(),
+            input.tonValidatorSetTransitionVerifierHash(),
+            input.tonShardAccountsDictionaryVerifierHash());
+    return SolanaSccpProver.normalizeSourceAdapterDeploymentBinding(
+        input.sourceDomain(),
+        input.targetDomain(),
+        sourceAdapterDeploymentHash,
+        input.deploymentReceiptHash());
+  }
+
   /** TON live-account evidence collected by UI code before route canary submission. */
   public record RouteCanaryEvidenceInput(
       String routeAllowlistHash,
@@ -7105,8 +7209,36 @@ public final class TonSccpProver {
       String sourceStateVerifierHash,
       String sourceAdapterDeploymentHash,
       String sourceAdapterDeploymentReceiptHash,
+      SourceAdapterDeploymentInput sourceAdapterDeployment,
       String backend,
       int sourceDomain) {
+    public ProofRequestInput(
+        final PublicInputsInput publicInputs,
+        final byte[] bundleBytes,
+        final byte[] sourceProofBytes,
+        final String statementHash,
+        final String destinationBindingHash,
+        final String sourceStateVerifierId,
+        final String sourceStateVerifierHash,
+        final String sourceAdapterDeploymentHash,
+        final String sourceAdapterDeploymentReceiptHash,
+        final String backend,
+        final int sourceDomain) {
+      this(
+          publicInputs,
+          bundleBytes,
+          sourceProofBytes,
+          statementHash,
+          destinationBindingHash,
+          sourceStateVerifierId,
+          sourceStateVerifierHash,
+          sourceAdapterDeploymentHash,
+          sourceAdapterDeploymentReceiptHash,
+          null,
+          backend,
+          sourceDomain);
+    }
+
     public ProofRequestInput(
         final PublicInputsInput publicInputs,
         final byte[] bundleBytes,
@@ -7132,6 +7264,7 @@ public final class TonSccpProver {
           checkedTonProofRequestDeploymentBinding(
                   sourceAdapterDeploymentBinding, sourceDomain)
               .sourceAdapterDeploymentReceiptHash(),
+          null,
           backend,
           sourceDomain);
     }
@@ -7172,10 +7305,30 @@ public final class TonSccpProver {
           SolanaSccpProver.ZERO_HASH_V1,
           SolanaSccpProver.ZERO_HASH_V1,
           SolanaSccpProver.ZERO_HASH_V1,
+          null,
           CONTRACT_PROOF_BACKEND_V1,
           DOMAIN_TON);
     }
   }
+
+  public record SourceAdapterDeploymentInput(
+      int sourceDomain,
+      int targetDomain,
+      String sourceTrustAnchorHash,
+      String consensusVerifierHash,
+      String messageInclusionVerifierHash,
+      String finalityPolicyHash,
+      String sourceStateVerifierHash,
+      String deploymentReceiptHash,
+      String adapterVerifierVkHash,
+      String bridgeAddress,
+      String sourceBridgeEmitterCodeHash,
+      String networkId,
+      String ownerAddress,
+      String configHash,
+      String tonMasterchainConfigVerifierHash,
+      String tonValidatorSetTransitionVerifierHash,
+      String tonShardAccountsDictionaryVerifierHash) {}
 
   public record ProofContext(int version, String statementHash, String destinationBindingHash) {}
 

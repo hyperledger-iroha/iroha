@@ -938,7 +938,7 @@ def source_material(module, profile, seed):
             )
             record["_comment_evm_source_deployment_transaction_input_sha256"] = hex32(
                 seed + 30
-            )[2:]
+            )
             record["_comment_evm_source_deployment_receipt_status"] = "0x1"
             record["_comment_evm_source_deployment_contract_address"] = record[
                 "source_bridge_emitter_address"
@@ -2480,6 +2480,39 @@ def test_all_lanes_evidence_bundle_is_ready():
         assert route["route_canary"]["evidence_bound"] is True
 
 
+def test_all_lanes_evidence_rejects_bare_fixed_hex_aliases():
+    module = load_evidence_module()
+    source_records = complete_bundle(module)
+    eth_material = source_records["sccp_source_verifier_materials"][0]
+    eth_material["source_trust_anchor_hash"] = eth_material[
+        "source_trust_anchor_hash"
+    ][2:]
+
+    source_summary = module.validate_evidence_bundle(source_records)
+
+    source_blockers = "\n".join(source_summary["blockers"])
+    assert source_summary["production_ready"] is False
+    assert (
+        "domain 1 (eth): source_trust_anchor_hash must be a non-zero "
+        "32-byte hex value"
+    ) in source_blockers
+
+    route_records = complete_bundle(module)
+    eth_route = route_records["sccp_route_allowlists"][0]
+    eth_route["_comment_route_canary_evidence_hash"] = eth_route[
+        "_comment_route_canary_evidence_hash"
+    ][2:]
+
+    route_summary = module.validate_evidence_bundle(route_records)
+
+    route_blockers = "\n".join(route_summary["blockers"])
+    assert route_summary["production_ready"] is False
+    assert (
+        "domain 1 (eth): route canary evidence hash metadata must be a "
+        "non-zero bytes32"
+    ) in route_blockers
+
+
 def test_all_lanes_evidence_accepts_config_route_canary_fields():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -2900,7 +2933,7 @@ def test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays()
                 assert (
                     f"domain {domain} ({profile.chain}): {audit_field} must be "
                     "deployed audit evidence, not built-in template material"
-                ) in "\n".join(summary["blockers"])
+                ) in summary["blockers"]
 
 
 def test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes():
@@ -2964,7 +2997,7 @@ def test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lane
         assert (
             f"domain {domain} ({profile.chain}): {field} must be deployed "
             "evidence, not built-in template material"
-        ) in "\n".join(summary["blockers"])
+        ) in summary["blockers"]
 
 
 def test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_for_all_lanes():
@@ -3032,7 +3065,7 @@ def test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_fo
         assert (
             f"domain {domain} ({profile.chain}): {field} must be deployed "
             "source-adapter evidence, not built-in template material"
-        ) in "\n".join(summary["blockers"])
+        ) in summary["blockers"]
 
 
 def test_all_lanes_evidence_reports_deployment_source_role_shape_independently():
@@ -3548,7 +3581,7 @@ def test_all_lanes_redacts_evm_runtime_bytecode_parser_failures(
     destination = records["sccp_destination_rollouts"][0]
     original_loader = module._load_sibling_module
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
         def fail_runtime(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} runtime parser")
@@ -3831,7 +3864,7 @@ def test_all_lanes_accepts_verified_evm_source_live_toml(tmp_path):
         in source_toml
     )
     assert (
-        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "0x'
         + hashlib.sha256(fake.deployment_input).hexdigest()
         + '"'
         in source_toml
@@ -3968,7 +4001,7 @@ def test_all_lanes_accepts_direct_evm_source_toml_with_audited_metadata(tmp_path
         material["_comment_evm_source_deployment_transaction_block_number"]
     )
     args.deployment_transaction_input_sha256 = raw_hex(
-        "0x" + material["_comment_evm_source_deployment_transaction_input_sha256"]
+        material["_comment_evm_source_deployment_transaction_input_sha256"]
     )
     args.deployment_receipt_contract_address = raw_hex(
         material["_comment_evm_source_deployment_contract_address"]
@@ -4207,31 +4240,35 @@ def test_all_lanes_redacts_tron_route_canary_address_parser_failures(
         deployment,
     )
 
-    def fail_address(_value, *, label):
-        raise ValueError(f"secret-token {label} route canary parser")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(
-        module,
-        "_load_sibling_module",
-        lambda _name: SimpleNamespace(parse_tron_address=fail_address),
-    )
+        def fail_address(_value, *, label, exception_type=exception_type):
+            raise exception_type(f"secret-token {label} route canary parser")
 
-    canary: dict[str, object] = {}
-    errors = module._check_tron_route_canary_transaction_evidence(
-        route,
-        destination_record=destination,
-        source_record_hashes=source_hashes,
-        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
-        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
-        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
-        canary=canary,
-    )
-    rendered = "\n".join(errors)
+        monkeypatch.setattr(
+            module,
+            "_load_sibling_module",
+            lambda _name, fail_address=fail_address: SimpleNamespace(
+                parse_tron_address=fail_address
+            ),
+        )
 
-    assert "TRON route canary verifier address metadata is invalid" in errors
-    assert "metadata is invalid:" not in rendered
-    assert "secret-token" not in rendered
-    assert "ValueError" not in rendered
+        canary: dict[str, object] = {}
+        errors = module._check_tron_route_canary_transaction_evidence(
+            route,
+            destination_record=destination,
+            source_record_hashes=source_hashes,
+            evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+            route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+            destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+            canary=canary,
+        )
+        rendered = "\n".join(errors)
+
+        assert "TRON route canary verifier address metadata is invalid" in errors
+        assert "metadata is invalid:" not in rendered
+        assert "secret-token" not in rendered
+        assert exception_type.__name__ not in rendered
 
 
 def test_all_lanes_rejects_tron_route_canary_call_transcript_metadata_drift():
@@ -5178,7 +5215,7 @@ def test_all_lanes_redacts_tron_live_metadata_parser_failures(
         "sccp_tron_source_bridge_evidence.py"
     )
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
         def fail_address(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} address parser")
@@ -5695,7 +5732,7 @@ def test_all_lanes_redacts_solana_live_base64_comment_failures():
 def test_all_lanes_base64_helper_redacts_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
         def fail_decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token all-lanes base64")
@@ -5719,42 +5756,49 @@ def test_all_lanes_base64_helper_redacts_parser_causes(monkeypatch):
                 raise AssertionError("all-lanes base64 helper accepted invalid base64")
 
 
-def test_all_lanes_hex_helpers_redact_typeerror_parser_causes(monkeypatch):
+def test_all_lanes_hex_helpers_redact_parser_exit_causes(monkeypatch):
     module = load_evidence_module()
 
-    class SecretBytes:
-        @staticmethod
-        def fromhex(_text):
-            raise TypeError("secret-token all-lanes hex TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "bytes", SecretBytes, raising=False)
+        class SecretBytes:
+            @staticmethod
+            def fromhex(_text, exception_type=exception_type):
+                raise exception_type(
+                    f"secret-token all-lanes hex {exception_type.__name__} detail"
+                )
 
-    assert module._hex_bytes("0x" + "11" * 32, byte_length=32) is None
-    assert module._exact_hex_bytes("0x" + "22" * 32, byte_length=32) is None
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "bytes", SecretBytes, raising=False)
 
-    for helper, field, expected_message in (
-        (
-            module._required_hex_bytes,
-            "source_verifier_material_hash",
-            "source_verifier_material_hash must be a 32-byte hex value",
-        ),
-        (
-            module._required_exact_hex_bytes,
-            "destination_binding_hash",
-            "destination_binding_hash must be an exact 32-byte hex value",
-        ),
-    ):
-        try:
-            helper({field: "0x" + "33" * 32}, field, byte_length=32)
-        except ValueError as exc:
-            rendered = str(exc)
-            assert rendered == expected_message
-            assert "secret-token" not in rendered
-            assert "TypeError" not in rendered
-            assert exc.__cause__ is None
-            assert exc.__suppress_context__ is False
-        else:
-            raise AssertionError(f"{field} helper TypeError was accepted")
+            assert module._hex_bytes("0x" + "11" * 32, byte_length=32) is None
+            assert module._exact_hex_bytes("0x" + "22" * 32, byte_length=32) is None
+
+            for helper, field, expected_message in (
+                (
+                    module._required_hex_bytes,
+                    "source_verifier_material_hash",
+                    "source_verifier_material_hash must be a 32-byte hex value",
+                ),
+                (
+                    module._required_exact_hex_bytes,
+                    "destination_binding_hash",
+                    "destination_binding_hash must be an exact 32-byte hex value",
+                ),
+            ):
+                try:
+                    helper({field: "0x" + "33" * 32}, field, byte_length=32)
+                except ValueError as exc:
+                    rendered = str(exc)
+                    assert rendered == expected_message
+                    assert "secret-token" not in rendered
+                    assert exception_type.__name__ not in rendered
+                    assert exc.__cause__ is None
+                    assert exc.__suppress_context__ is False
+                else:
+                    raise AssertionError(
+                        f"{field} helper {exception_type.__name__} was accepted"
+                    )
 
 
 def test_all_lanes_rejects_solana_programdata_invalid_executable_base64():
@@ -5834,10 +5878,10 @@ def test_all_lanes_redacts_solana_route_canary_base64_comment_failures():
     assert "canonical base64" not in rendered
 
 
-def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes(
+def test_all_lanes_solana_base64_callers_redact_helper_exit_causes(
     monkeypatch,
 ) -> None:
-    """Solana all-lanes base64 callers must not leak helper TypeErrors."""
+    """Solana all-lanes base64 callers must not leak helper exits."""
 
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -5853,29 +5897,42 @@ def test_all_lanes_solana_base64_callers_redact_typeerror_helper_causes(
         deployment,
     )
 
-    def fail_base64(_value, *, label):
-        raise TypeError(f"secret-token all-lanes {label} TypeError detail")
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
-    monkeypatch.setattr(module, "_decode_canonical_base64", fail_base64)
+        def fail_base64(_value, *, label, exception_type=exception_type):
+            raise exception_type(
+                f"secret-token all-lanes {label} {exception_type.__name__} detail"
+            )
 
-    destination_errors = module._check_solana_live_programdata_evidence(destination)
-    route_errors = module._check_solana_route_canary_live_program_evidence(
-        route,
-        destination_record=destination,
-        source_record_hashes=source_hashes,
-        evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
-        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
-        destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
-        canary={},
-    )
-    rendered = "\n".join([*destination_errors, *route_errors])
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_decode_canonical_base64", fail_base64)
 
-    assert "Solana Program account data base64 metadata is invalid" in destination_errors
-    assert "Solana ProgramData metadata base64 metadata is invalid" in destination_errors
-    assert "Solana route canary Program account data is invalid" in route_errors
-    assert "Solana route canary ProgramData metadata is invalid" in route_errors
-    assert "secret-token" not in rendered
-    assert "TypeError" not in rendered
+            destination_errors = module._check_solana_live_programdata_evidence(
+                destination
+            )
+            route_errors = module._check_solana_route_canary_live_program_evidence(
+                route,
+                destination_record=destination,
+                source_record_hashes=source_hashes,
+                evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+                route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+                destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+                canary={},
+            )
+            rendered = "\n".join([*destination_errors, *route_errors])
+
+            assert (
+                "Solana Program account data base64 metadata is invalid"
+                in destination_errors
+            )
+            assert (
+                "Solana ProgramData metadata base64 metadata is invalid"
+                in destination_errors
+            )
+            assert "Solana route canary Program account data is invalid" in route_errors
+            assert "Solana route canary ProgramData metadata is invalid" in route_errors
+            assert "secret-token" not in rendered
+            assert exception_type.__name__ not in rendered
 
 
 def test_all_lanes_redacts_solana_programdata_parser_failures(
@@ -5896,8 +5953,11 @@ def test_all_lanes_redacts_solana_programdata_parser_failures(
         material,
         deployment,
     )
+    real_solana_module = module._load_sibling_module(
+        "sccp_solana_destination_evidence.py"
+    )
 
-    for exception_type in (TypeError, ValueError):
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
 
         def fail_program_id(_value, *, label, exception_type=exception_type):
             raise exception_type(f"secret-token {label} program id")
@@ -5941,6 +6001,35 @@ def test_all_lanes_redacts_solana_programdata_parser_failures(
         assert "Solana route canary ProgramData executable is invalid" in route_errors
         assert "metadata is invalid:" not in rendered
         assert "is not canonical:" not in rendered
+        assert "secret-token" not in rendered
+        assert exception_type.__name__ not in rendered
+
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+
+        def fail_canary_hash(**_kwargs):
+            raise exception_type("secret-token route canary live program detail")
+
+        module_attrs = dict(real_solana_module.__dict__)
+        module_attrs["solana_route_canary_evidence_hash"] = fail_canary_hash
+        monkeypatch.setattr(
+            module,
+            "_load_sibling_module",
+            lambda _name, module_attrs=module_attrs: SimpleNamespace(**module_attrs),
+        )
+
+        route_errors = module._check_solana_route_canary_live_program_evidence(
+            route,
+            destination_record=destination,
+            source_record_hashes=source_hashes,
+            evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
+            route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
+            destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
+            canary={},
+        )
+        rendered = "\n".join(route_errors)
+
+        assert "Solana route canary live program metadata is invalid" in route_errors
+        assert "metadata is invalid:" not in rendered
         assert "secret-token" not in rendered
         assert exception_type.__name__ not in rendered
 
@@ -6683,15 +6772,33 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         for route in records["sccp_route_allowlists"]
         if route["domain"] == module.SCCP_DOMAIN_TON
     )
+    bsc_destination = next(
+        rollout
+        for rollout in records["sccp_destination_rollouts"]
+        if rollout["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    tron_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_TRON
+    )
 
     confusable_blocker = "operator public bl\u043ecker"
     eth_destination["blockers"] = "operator says destination rollout is ready"
     tron_destination["blockers"] = [123]
     sol_destination["blockers"] = ["operator\nsecret-token-governed-blocker"]
+    bsc_destination["blockers"] = [
+        "destination verifier deployment still pending",
+        "destination verifier deployment still pending",
+    ]
     eth_route["blockers"] = ["operator secret-token-governed-blocker"]
     bsc_route["blockers"] = [""]
     sol_route["blockers"] = [" route canary still pending"]
     ton_route["blockers"] = ["operator|governed-blocker", confusable_blocker]
+    tron_route["blockers"] = [
+        "governance canary has not passed",
+        "governance canary has not passed",
+    ]
 
     summary = module.validate_evidence_bundle(records)
 
@@ -6729,8 +6836,20 @@ def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers():
         "domain 4 (ton): route allowlist blockers[1] contains non-ASCII "
         "character"
     ) in blockers
+    assert (
+        # Source-inventory marker: destination rollout blockers must not contain duplicate strings
+        "domain 2 (bsc): destination rollout blockers must not contain "
+        "duplicate strings"
+    ) in blockers
+    assert (
+        # Source-inventory marker: route allowlist blockers must not contain duplicate strings
+        "domain 5 (tron): route allowlist blockers must not contain duplicate "
+        "strings"
+    ) in blockers
     assert "domain 2 (bsc): route allowlist blockers must be empty" in blockers
     assert "domain 3 (sol): route allowlist blockers must be empty" in blockers
+    assert "destination verifier deployment still pending" not in blockers
+    assert "governance canary has not passed" not in blockers
     assert "secret-token-governed-blocker" not in blockers
     assert "operator|governed-blocker" not in blockers
     assert confusable_blocker not in blockers
@@ -6800,6 +6919,39 @@ def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse():
         "audit_hashes.tron_dpos_source_gate_hash must not reuse "
         "destination_binding_hash"
     ) in blockers
+
+
+def test_all_lanes_evidence_rejects_source_gate_audit_route_canary_transcript_replay():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    by_domain = {
+        material["source_domain"]: (material, deployment)
+        for material, deployment in zip(
+            records["sccp_source_verifier_materials"],
+            records["sccp_source_adapter_engine_deployments"],
+        )
+    }
+    _, eth_deployment = by_domain[module.SCCP_DOMAIN_ETH]
+    eth_route = next(
+        route
+        for route in records["sccp_route_allowlists"]
+        if route["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_deployment["evm_source_gate_hash"] = eth_route[
+        "_comment_evm_route_canary_message_id"
+    ]
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    eth_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    source_gate_blockers = "\n".join(eth_lane["source_adapter_gate"]["blockers"])
+    assert (
+        "source_adapter_gate hash role audit_hashes.evm_source_gate_hash "
+        "must not reuse route_canary.message_id"
+    ) in source_gate_blockers
 
 
 def test_all_lanes_evidence_rejects_missing_evm_source_gate_hash():
@@ -7005,7 +7157,7 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
         ),
     )
 
-    for exception_type in (TypeError, ValueError, RuntimeError):
+    for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):
 
         def fail_recompute(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token source gate material")
@@ -7335,6 +7487,46 @@ def test_all_lanes_release_checklist_reports_ready_bundle():
     assert all(item["ready"] for item in items.values())
 
 
+def test_all_lanes_public_summary_accepts_active_ready_with_future_lane_blockers():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    active_domain = module.SCCP_DOMAIN_ETH
+    for section, domain_key in {
+        "sccp_source_verifier_materials": "source_domain",
+        "sccp_destination_rollouts": "domain",
+        "sccp_route_allowlists": "domain",
+    }.items():
+        records[section] = [
+            record
+            for record in records[section]
+            if record.get(domain_key) == active_domain
+        ]
+
+    summary = module.validate_evidence_bundle(records)
+    public_summary = module._public_summary_payload(copy.deepcopy(summary))
+
+    assert public_summary == summary
+    assert summary["production_ready"] is False
+    active_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == active_domain
+    )
+    assert active_lane["production_ready"] is True
+    blocked_future_lanes = [
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] != active_domain and not lane["production_ready"]
+    ]
+    assert blocked_future_lanes
+    assert all(
+        blocker.startswith("domain ") and "missing " in blocker
+        for blocker in summary["blockers"]
+    )
+    assert not any(
+        "all-lanes summary lanes[" in blocker
+        for blocker in public_summary["blockers"]
+    )
+
+
 def test_all_lanes_release_checklist_rejects_malformed_record_flags():
     module = load_evidence_module()
     summary = module.validate_evidence_bundle(complete_bundle(module))
@@ -7621,12 +7813,11 @@ def test_all_lanes_cli_exit_compares_production_ready_exactly(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
     original_validate = module.validate_evidence_bundle
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    summary["production_ready"] = "true"
 
     module.load_evidence_bundle = lambda paths: {}
-    module.validate_evidence_bundle = lambda records: {
-        "production_ready": "true",
-        "blockers": [],
-    }
+    module.validate_evidence_bundle = lambda records: copy.deepcopy(summary)
     try:
         exit_code = module.main(["evidence.toml"])
     finally:
@@ -7668,12 +7859,11 @@ def test_all_lanes_cli_suppresses_malformed_summary_blockers(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
     original_validate = module.validate_evidence_bundle
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    summary["blockers"] = ["operator secret-token-blocker"]
 
     module.load_evidence_bundle = lambda paths: {}
-    module.validate_evidence_bundle = lambda records: {
-        "production_ready": True,
-        "blockers": ["operator secret-token-blocker"],
-    }
+    module.validate_evidence_bundle = lambda records: copy.deepcopy(summary)
     try:
         exit_code = module.main(["evidence.toml"])
     finally:
@@ -7688,6 +7878,69 @@ def test_all_lanes_cli_suppresses_malformed_summary_blockers(capsys):
         "all-lanes summary blockers[0] contains sensitive name"
     ]
     assert "secret-token-blocker" not in captured.out
+
+
+def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    root_blocker = "safe duplicated root blocker"
+    lane_blocker = "safe duplicated lane blocker"
+    gate_blocker = "safe duplicated source gate blocker"
+    checklist_blocker = "safe duplicated checklist blocker"
+    eth_lane = summary["lanes"][0]
+    summary["production_ready"] = False
+    summary["blockers"] = [root_blocker, root_blocker]
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = [lane_blocker, lane_blocker]
+    eth_lane["source_adapter_gate"]["ready"] = False
+    eth_lane["source_adapter_gate"]["blockers"] = [gate_blocker, gate_blocker]
+    summary["release_checklist"]["items"][0]["ready"] = False
+    summary["release_checklist"]["items"][0]["blockers"] = [
+        checklist_blocker,
+        checklist_blocker,
+    ]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: copy.deepcopy(summary)
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert (
+        "all-lanes summary blockers must not contain duplicate strings"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0] blockers must not contain duplicate strings"
+    ) in blockers
+    assert (
+        # Source-inventory marker: all-lanes summary lanes[0].source_adapter_gate blockers must not contain duplicate strings
+        "all-lanes summary lanes[0].source_adapter_gate blockers must not "
+        "contain duplicate strings"
+    ) in blockers
+    assert (
+        # Source-inventory marker: all-lanes summary release_checklist items[0] blockers must not contain duplicate strings
+        "all-lanes summary release_checklist items[0] blockers must not contain "
+        "duplicate strings"
+    ) in blockers
+    assert "lanes" not in payload
+    assert "release_checklist" not in payload
+    for copied_blocker in (
+        root_blocker,
+        lane_blocker,
+        gate_blocker,
+        checklist_blocker,
+    ):
+        assert copied_blocker not in captured.out
+    assert "Traceback" not in captured.err
 
 
 def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
@@ -7766,6 +8019,41 @@ def test_all_lanes_cli_rejects_malformed_allowed_summary_roots_without_leaking(
             "all-lanes summary release_checklist must be an object",
         ],
     }
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_missing_copied_summary_roots_without_leaking(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["blockers"] = ["operator pending copied root field audit"]
+    missing_fields = tuple(
+        field for field in module.ALL_LANES_PUBLIC_SUMMARY_FIELDS if field != "blockers"
+    )
+    for field in missing_fields:
+        summary.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "operator pending copied root field audit" in blockers
+    for field in missing_fields:
+        assert f"all-lanes summary {field} missing" in blockers
+    assert "all-lanes summary production_ready must be boolean" in blockers
     assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
 
@@ -8016,6 +8304,3072 @@ def test_all_lanes_cli_rejects_malformed_lanes_without_leaking(capsys):
     assert "all-lanes summary lanes are invalid" in blockers
     assert "secret-token" not in captured.out
     assert "secret-token" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_source_adapter_gate_drift_without_leaking(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    eth_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    bsc_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    eth_lane["source_adapter_gate"]["required"] = "true"
+    eth_lane["source_adapter_gate"]["ready"] = "true"
+    eth_lane["source_adapter_gate"]["blockers"] = ["secret-token-gate-blocker"]
+    bsc_lane["source_adapter_gate"]["gate_hash"] = hex32(0)
+    bsc_lane["source_adapter_gate"]["audit_hashes"]["evm_source_gate_hash"] = hex32(0)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate.required must be a boolean"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate.ready must be a boolean"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate blockers[0] "
+        "contains sensitive name"
+    ) in blockers
+    expected_gate_hash_blocker = "source adapter gate hash must be a canonical non-zero bytes32"
+    assert (
+        f"all-lanes summary lanes[1]: {expected_gate_hash_blocker} when required"
+        in blockers
+    )
+    assert (
+        "all-lanes summary lanes[1]: source adapter gate audit hashes "
+        "evm_source_gate_hash must be a canonical non-zero bytes32"
+    ) in blockers
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_source_adapter_gate_semantics(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    for lane in (eth_lane, bsc_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+
+    eth_gate = eth_lane["source_adapter_gate"]
+    eth_gate["required"] = False
+    eth_gate["ready"] = False
+    eth_gate["blockers"] = ["operator pending source gate certification"]
+    bsc_gate = bsc_lane["source_adapter_gate"]
+    bsc_gate["ready"] = False
+    bsc_gate["gate_hash"] = hex32(0xD1)
+    bsc_gate["blockers"] = ["operator pending source gate certification"]
+    forged_values = {hex32(0xD1), "operator pending source gate certification"}
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (eth_index, "source adapter gate required flag must match lane policy"),
+        (
+            eth_index,
+            "source adapter gate hash must be empty when not required",
+        ),
+        (
+            eth_index,
+            "source adapter gate audit hashes must be empty when not required",
+        ),
+        (
+            eth_index,
+            "source adapter gate ready must be true when not required",
+        ),
+        (
+            eth_index,
+            "source adapter gate blockers must be empty when not required",
+        ),
+        (
+            bsc_index,
+            "source adapter gate ready must be true when required",
+        ),
+        (
+            bsc_index,
+            "source adapter gate blockers must be empty when required",
+        ),
+        (
+            bsc_index,
+            "source adapter gate hash must match audit_hashes.evm_source_gate_hash",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}]: {expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_source_gate_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active source gate field audit"]
+    source_gate = eth_lane["source_adapter_gate"]
+    missing_fields = tuple(module.PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS)
+    for field in missing_fields:
+        source_gate.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in missing_fields:
+        assert (
+            f"all-lanes summary lanes[{eth_index}]."
+            f"source_adapter_gate missing field {field}"
+        ) in blockers
+    assert "operator pending active source gate field audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_active_lane_ready_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active lane certification"]
+    eth_lane["records"]["source_verifier_material"] = False
+    eth_lane["records"]["route_allowlist"] = False
+    eth_gate = eth_lane["source_adapter_gate"]
+    eth_gate["ready"] = False
+    eth_gate["blockers"] = ["operator pending active source gate certification"]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_root_blockers = (
+        "production_ready must be true",
+        "records.source_verifier_material must be true",
+        "records.route_allowlist must be true",
+        "blockers must be empty",
+    )
+    for expected in expected_root_blockers:
+        assert f"all-lanes summary lanes[{eth_index}] {expected}" in blockers
+    expected_nested_blockers = (
+        "source_adapter_gate.ready must be true",
+        "source_adapter_gate blockers must be empty",
+    )
+    for expected in expected_nested_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: "
+        "source adapter gate ready must be true when required"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: "
+        "source adapter gate blockers must be empty when required"
+    ) in blockers
+    assert "operator pending active lane certification" not in captured.out
+    assert "operator pending active source gate certification" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_record_flags_missing_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active record flag audit"]
+    eth_lane["records"] = {}
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in module.PUBLIC_LANE_RECORD_FIELDS:
+        assert (
+            f"all-lanes summary lanes[{eth_index}] records.{field} "
+            "must be a boolean"
+        ) in blockers
+    assert "operator pending active record flag audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_lane_root_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active lane-root field audit"]
+    missing_fields = tuple(
+        field for field in module.PUBLIC_LANE_FIELDS if field != "domain"
+    )
+    for field in missing_fields:
+        eth_lane.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in missing_fields:
+        assert f"all-lanes summary lanes[{eth_index}] missing field {field}" in (
+            blockers
+        )
+    assert "operator pending active lane-root field audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_ready_lane_hash_shape_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    eth_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    bsc_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    bare_source_hash = eth_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ][2:]
+    bare_route_hash = bsc_lane["route_allowlist"]["route_allowlist_hash"][2:]
+    eth_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ] = bare_source_hash
+    eth_lane["destination_binding"][
+        "expected_destination_binding_hash"
+    ] = "not-a-destination-hash"
+    bsc_lane["route_allowlist"]["route_allowlist_hash"] = bare_route_hash
+    bsc_lane["route_allowlist"]["route_canary"]["evidence_hash"] = (
+        "not-a-canary-hash"
+    )
+    bsc_lane["route_allowlist"]["route_canary"]["message_id"] = hex32(0)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    expected_source_hash_blocker = (
+        "source_record_hashes.source_verifier_material_hash must be a "
+        "canonical non-zero bytes32"
+    )
+    expected_destination_hash_blocker = (
+        "destination_binding.expected_destination_binding_hash must be a "
+        "canonical non-zero bytes32"
+    )
+    expected_route_hash_blocker = (
+        "route_allowlist.route_allowlist_hash must be a canonical non-zero bytes32"
+    )
+    expected_canary_hash_blocker = (
+        "route_allowlist.route_canary.evidence_hash must be a canonical "
+        "non-zero bytes32"
+    )
+    expected_canary_message_blocker = (
+        "route_allowlist.route_canary.message_id must be a canonical non-zero bytes32"
+    )
+    assert f"all-lanes summary lanes[0].{expected_source_hash_blocker}" in blockers
+    assert f"all-lanes summary lanes[0].{expected_destination_hash_blocker}" in blockers
+    assert f"all-lanes summary lanes[1].{expected_route_hash_blocker}" in blockers
+    assert f"all-lanes summary lanes[1].{expected_canary_hash_blocker}" in blockers
+    assert f"all-lanes summary lanes[1].{expected_canary_message_blocker}" in blockers
+    assert bare_source_hash not in captured.out
+    assert "not-a-destination-hash" not in captured.out
+    assert bare_route_hash not in captured.out
+    assert "not-a-canary-hash" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_ready_source_record_template_replay(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    forged_hashes = set()
+
+    for domain, (_index, lane) in lanes.items():
+        profile = module.LANE_PROFILES[domain]
+        template_hashes = tuple(
+            module._source_material_template_hashes(profile).values()
+        )
+        assert template_hashes
+        for offset, field in enumerate(module.PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS):
+            forged_hash = "0x" + template_hashes[offset].hex()
+            lane["source_record_hashes"][field] = forged_hash
+            forged_hashes.add(forged_hash)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    for _domain, (index, _lane) in lanes.items():
+        for field in module.PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS:
+            assert (
+                f"all-lanes summary lanes[{index}].source_record_hashes.{field} "
+                "must be deployed evidence, not built-in template material"
+            ) in blockers
+    for forged_hash in forged_hashes:
+        assert forged_hash not in captured.out
+        assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_source_record_template_replay(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    template_hash = next(
+        iter(
+            module._source_material_template_hashes(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    eth_lane["source_record_hashes"]["source_verifier_material_hash"] = forged_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}].source_record_hashes."
+        "source_verifier_material_hash must be deployed evidence, "
+        "not built-in template material"
+    ) in blockers
+    assert forged_hash not in captured.out
+    assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active source-record audit"]
+    template_hashes = tuple(
+        module._source_material_template_hashes(
+            module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+        ).values()
+    )
+    assert len(template_hashes) >= 2
+    forged_material_hash = "0x" + template_hashes[0].hex()
+    forged_deployment_hash = "0x" + template_hashes[1].hex()
+    eth_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ] = forged_material_hash
+    eth_lane["source_record_hashes"][
+        "source_adapter_engine_deployment_hash"
+    ] = forged_deployment_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_fields = (
+        "source_verifier_material_hash",
+        "source_adapter_engine_deployment_hash",
+    )
+    for field in expected_fields:
+        assert (
+            f"all-lanes summary lanes[{eth_index}].source_record_hashes.{field} "
+            "must be deployed evidence, not built-in template material"
+        ) in blockers
+    assert "operator pending active source-record audit" not in captured.out
+    for forged_hash in (forged_material_hash, forged_deployment_hash):
+        assert forged_hash not in captured.out
+        assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_source_record_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active source-record field audit"]
+    source_hashes = eth_lane["source_record_hashes"]
+    missing_fields = tuple(module.PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS)
+    for field in missing_fields:
+        source_hashes.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in missing_fields:
+        assert (
+            f"all-lanes summary lanes[{eth_index}]."
+            f"source_record_hashes missing field {field}"
+        ) in blockers
+    assert "operator pending active source-record field audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_nested_hash_shape_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    bsc_gate_field, _bsc_audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_BSC
+    )
+    forged_values = {
+        "not-a-source-hash",
+        "not-a-gate-hash",
+        "not-an-audit-hash",
+        "not-a-destination-hash",
+        "not-a-route-hash",
+        "not-a-canary-hash",
+    }
+
+    eth_lane["source_record_hashes"][
+        "source_adapter_engine_deployment_hash"
+    ] = "not-a-source-hash"
+    bsc_lane["source_adapter_gate"]["gate_hash"] = "not-a-gate-hash"
+    bsc_lane["source_adapter_gate"]["audit_hashes"][bsc_gate_field] = (
+        "not-an-audit-hash"
+    )
+    sol_lane["destination_binding"][
+        "destination_binding_hash"
+    ] = "not-a-destination-hash"
+    ton_lane["route_allowlist"]["route_allowlist_hash"] = "not-a-route-hash"
+    tron_lane["route_allowlist"]["route_canary"]["evidence_hash"] = (
+        "not-a-canary-hash"
+    )
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            eth_index,
+            "source_record_hashes.source_adapter_engine_deployment_hash "
+            "must be a canonical non-zero bytes32",
+        ),
+        (
+            bsc_index,
+            "source_adapter_gate.gate_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            bsc_index,
+            f"source_adapter_gate.audit_hashes.{bsc_gate_field} must be a "
+            "canonical non-zero bytes32",
+        ),
+        (
+            sol_index,
+            "destination_binding.destination_binding_hash must be a canonical "
+            "non-zero bytes32",
+        ),
+        (
+            ton_index,
+            "route_allowlist.route_allowlist_hash must be a canonical non-zero "
+            "bytes32",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.evidence_hash must be a canonical "
+            "non-zero bytes32",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_nested_scalar_shape_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    forged_values = {
+        " 01 ",
+        " finalized ",
+        "yes-recomputed",
+        " bsc-mainnet ",
+        "yes-route",
+        " forged-status ",
+        "yes-bound",
+        "123-string",
+        "bad-owner-address",
+        "42-int-slot",
+        "lt-int-zero",
+    }
+
+    eth_lane["evm_live_metadata"]["source_rpc_chain_id"] = " 01 "
+    eth_lane["evm_live_metadata"]["source_block_tag"] = " finalized "
+    bsc_lane["destination_binding"]["recomputed"] = "yes-recomputed"
+    bsc_lane["destination_binding"]["destination_network_id"] = " bsc-mainnet "
+    sol_lane["route_allowlist"]["expected_route_allowlist_hash_matches"] = (
+        "yes-route"
+    )
+    sol_lane["route_allowlist"]["route_canary"]["solana_programdata_slot"] = (
+        "42-int-slot"
+    )
+    ton_lane["route_allowlist"]["route_canary"]["ton_last_transaction_lt"] = (
+        "lt-int-zero"
+    )
+    tron_canary = tron_lane["route_allowlist"]["route_canary"]
+    tron_canary["status"] = " forged-status "
+    tron_canary["evidence_bound"] = "yes-bound"
+    tron_canary["receipt_block_number"] = "123-string"
+    tron_canary["signature_recovered_address"] = "bad-owner-address"
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            eth_index,
+            "evm_live_metadata.source_rpc_chain_id must be a canonical "
+            "positive decimal string",
+        ),
+        (
+            eth_index,
+            "evm_live_metadata.source_block_tag must be a non-empty "
+            "canonical string",
+        ),
+        (
+            bsc_index,
+            "destination_binding.recomputed must be a boolean",
+        ),
+        (
+            bsc_index,
+            "destination_binding.destination_network_id must be a non-empty "
+            "canonical string",
+        ),
+        (
+            sol_index,
+            "route_allowlist.expected_route_allowlist_hash_matches must be a "
+            "boolean",
+        ),
+        (
+            sol_index,
+            "route_allowlist.route_canary.solana_programdata_slot must be a "
+            "canonical positive decimal string",
+        ),
+        (
+            ton_index,
+            "route_allowlist.route_canary.ton_last_transaction_lt must be a "
+            "canonical positive decimal string",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.status must be a non-empty "
+            "canonical string",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.evidence_bound must be a boolean",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.receipt_block_number must be a "
+            "positive integer",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.signature_recovered_address must be "
+            "a non-zero TRON address",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_nested_semantic_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    forged_values = {
+        "safe-block-tag",
+        "failed",
+        "wrong_source",
+        "0x41" + "22" * 20,
+        "0x41" + "33" * 20,
+    }
+
+    eth_lane["evm_live_metadata"]["source_rpc_chain_id"] = "2"
+    eth_lane["evm_live_metadata"]["source_block_tag"] = "safe-block-tag"
+    eth_canary = eth_lane["route_allowlist"]["route_canary"]
+    eth_canary["status"] = "failed"
+    eth_canary["evidence_source"] = "wrong_source"
+    eth_canary["evidence_bound"] = False
+    eth_canary["target_domain"] = module.SCCP_DOMAIN_BSC
+    eth_canary["proof_version"] = 2
+    eth_canary["proof_source_domain"] = module.SCCP_DOMAIN_ETH
+    eth_canary["message_proof_used"] = False
+    eth_canary["receipt_block_finalized"] = False
+    bsc_lane["destination_binding"][
+        "expected_destination_binding_hash_matches"
+    ] = False
+    bsc_lane["destination_binding"]["recomputed"] = False
+    bsc_lane["route_allowlist"]["expected_route_allowlist_hash_matches"] = False
+    tron_canary = tron_lane["route_allowlist"]["route_canary"]
+    tron_canary["transaction_owner_address"] = "0x41" + "22" * 20
+    tron_canary["signature_recovered_address"] = "0x41" + "33" * 20
+    tron_canary["raw_data_owner_matches_transaction"] = False
+    tron_canary["signature_recovers_to_owner"] = False
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (eth_index, "evm_live_metadata.source_rpc_chain_id must be 1"),
+        (
+            eth_index,
+            "evm_live_metadata.source_block_tag must be finalized",
+        ),
+        (eth_index, "route_allowlist.route_canary.status must be passed"),
+        (
+            eth_index,
+            "route_allowlist.route_canary.evidence_source must be "
+            "evm_message_proof_accepted_transaction",
+        ),
+        (eth_index, "route_allowlist.route_canary.evidence_bound must be true"),
+        (
+            eth_index,
+            "route_allowlist.route_canary.target_domain must match lane domain",
+        ),
+        (eth_index, "route_allowlist.route_canary.proof_version must be 1"),
+        (
+            eth_index,
+            "route_allowlist.route_canary.proof_source_domain must be "
+            "SORA domain",
+        ),
+        (
+            eth_index,
+            "route_allowlist.route_canary.message_proof_used must be true",
+        ),
+        (
+            eth_index,
+            "route_allowlist.route_canary.receipt_block_finalized must be true",
+        ),
+        (
+            bsc_index,
+            "destination_binding.expected_destination_binding_hash_matches "
+            "must be true",
+        ),
+        (bsc_index, "destination_binding.recomputed must be true"),
+        (
+            bsc_index,
+            "route_allowlist.expected_route_allowlist_hash_matches must be true",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.signature_recovered_address must "
+            "match transaction_owner_address",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.raw_data_owner_matches_transaction "
+            "must be true",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.signature_recovers_to_owner must be true",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_route_canary_semantic_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route canary audit"]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    forged_hashes: list[str] = []
+    for seed in range(0x6A, 0x16A):
+        candidate = hex32(seed)
+        if candidate not in taken_hashes:
+            forged_hashes.append(candidate)
+        if len(forged_hashes) == 2:
+            break
+    if len(forged_hashes) != 2:
+        raise AssertionError("could not forge distinct active canary hashes")
+
+    route_canary = eth_lane["route_allowlist"]["route_canary"]
+    route_canary["status"] = "failed"
+    route_canary["evidence_source"] = "operator_review_note"
+    route_canary["evidence_bound"] = False
+    route_canary["route_allowlist_hash"] = forged_hashes[0]
+    route_canary["destination_binding_hash"] = forged_hashes[1]
+    forged_values = {
+        "failed",
+        "operator_review_note",
+        *forged_hashes,
+    }
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        "route_allowlist.route_canary.status must be passed",
+        (
+            "route_allowlist.route_canary.evidence_source must be "
+            "evm_message_proof_accepted_transaction"
+        ),
+        "route_allowlist.route_canary.evidence_bound must be true",
+        (
+            "route_allowlist.route_canary.route_allowlist_hash must match "
+            "lane route_allowlist_hash"
+        ),
+        (
+            "route_allowlist.route_canary.destination_binding_hash must match "
+            "lane destination_binding_hash"
+        ),
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active route canary audit" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_evm_route_canary_proof_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route canary proof audit"]
+
+    route_canary = eth_lane["route_allowlist"]["route_canary"]
+    route_canary["target_domain"] = module.SCCP_DOMAIN_BSC
+    route_canary["proof_version"] = 2
+    route_canary["proof_source_domain"] = module.SCCP_DOMAIN_ETH
+    route_canary["message_proof_used"] = False
+    route_canary["receipt_block_finalized"] = False
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        "route_allowlist.route_canary.target_domain must match lane domain",
+        "route_allowlist.route_canary.proof_version must be 1",
+        "route_allowlist.route_canary.proof_source_domain must be SORA domain",
+        "route_allowlist.route_canary.message_proof_used must be true",
+        "route_allowlist.route_canary.receipt_block_finalized must be true",
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active route canary proof audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_evm_route_canary_transcript_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route canary transcript audit"]
+
+    route_canary = eth_lane["route_allowlist"]["route_canary"]
+    route_canary["finality_block_hash"] = "0x" + "00" * 32
+    route_canary["receipt_block_hash"] = route_canary["transaction_hash"]
+    route_canary["message_id"] = eth_lane["route_allowlist"]["route_allowlist_hash"]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            "route_allowlist.route_canary.finality_block_hash must be a "
+            "canonical non-zero bytes32"
+        ),
+        (
+            "route_allowlist.route_canary hash role receipt_block_hash must not "
+            "reuse transaction_hash"
+        ),
+        (
+            "route_allowlist.route_canary hash role message_id must not reuse "
+            "route_allowlist_hash"
+        ),
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active route canary transcript audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_evm_route_canary_scalar_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route canary scalar audit"]
+
+    route_canary = eth_lane["route_allowlist"]["route_canary"]
+    route_canary["log_index"] = -1
+    route_canary["receipt_block_number"] = 0
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        "route_allowlist.route_canary.log_index must be a u32 integer",
+        "route_allowlist.route_canary.receipt_block_number must be a positive integer",
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active route canary scalar audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_evm_route_canary_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route canary field audit"]
+
+    route_canary = eth_lane["route_allowlist"]["route_canary"]
+    missing_fields = tuple(module.PUBLIC_LANE_EVM_ROUTE_CANARY_FIELDS)
+    for field in missing_fields:
+        route_canary.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in missing_fields:
+        assert (
+            f"all-lanes summary lanes[{eth_index}]."
+            f"route_allowlist.route_canary missing field {field}"
+        ) in blockers
+    assert "operator pending active route canary field audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_lane_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+    eth_lane["records"]["source_verifier_material"] = False
+    eth_lane["source_record_hashes"]["source_verifier_material_hash"] = ""
+    eth_lane["source_adapter_gate"]["ready"] = False
+    eth_lane["destination_binding"][
+        "expected_destination_binding_hash_matches"
+    ] = False
+    eth_lane["route_allowlist"]["route_canary"]["evidence_hash"] = ""
+    eth_lane["blockers"] = ["claimed-ready lane blocker"]
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        f"all-lanes summary lanes[{eth_index}] "
+        "records.source_verifier_material must be true",
+        f"all-lanes summary lanes[{eth_index}].source_record_hashes."
+        "source_verifier_material_hash must be a canonical non-zero bytes32",
+        f"all-lanes summary lanes[{eth_index}].source_adapter_gate.ready "
+        "must be true",
+        f"all-lanes summary lanes[{eth_index}].destination_binding."
+        "expected_destination_binding_hash_matches must be true",
+        f"all-lanes summary lanes[{eth_index}].route_allowlist.route_canary."
+        "evidence_hash must be a canonical non-zero bytes32",
+        f"all-lanes summary lanes[{eth_index}] blockers must be empty",
+    )
+    for expected in expected_blockers:
+        assert expected in blockers
+    assert "claimed-ready lane blocker" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_destination_family_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    forged_values = {
+        "bsc-mainnet",
+        "0X" + "44" * 20,
+        "0x" + "55" * 20,
+        "0x" + "66" * 32,
+    }
+
+    assert bsc_lane["production_ready"] is True
+    bsc_lane["destination_binding"].pop("destination_network_id", None)
+    bsc_lane["destination_binding"]["destination_bridge_address"] = "0X" + "44" * 20
+    sol_lane["destination_binding"]["destination_bridge_address"] = "0x" + "55" * 20
+    ton_lane["destination_binding"]["destination_network_id"] = "0x" + "66" * 32
+    tron_lane["destination_binding"].pop("destination_network_id", None)
+    tron_lane["destination_binding"]["destination_bridge_address"] = "0x" + "55" * 20
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            bsc_index,
+            "destination_binding.destination_network_id is required for "
+            "EVM-family lanes",
+        ),
+        (
+            bsc_index,
+            "destination_binding.destination_network_id must be a canonical "
+            "non-zero bytes32",
+        ),
+        (
+            bsc_index,
+            "destination_binding.destination_bridge_address must be a "
+            "canonical non-zero 20-byte hex value",
+        ),
+        (
+            sol_index,
+            "destination_binding.destination_bridge_address is only valid for "
+            "EVM-family lanes",
+        ),
+        (
+            ton_index,
+            "destination_binding.destination_network_id is only valid for "
+            "EVM-family or TRON lanes",
+        ),
+        (
+            tron_index,
+            "destination_binding.destination_network_id is required for TRON lanes",
+        ),
+        (
+            tron_index,
+            "destination_binding.destination_network_id must be a canonical "
+            "non-zero bytes32",
+        ),
+        (
+            tron_index,
+            "destination_binding.destination_bridge_address is only valid for "
+            "EVM-family lanes",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_destination_family_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active destination family audit"]
+
+    destination = eth_lane["destination_binding"]
+    destination.pop("destination_network_id", None)
+    destination["destination_bridge_address"] = "0X" + "44" * 20
+    forged_values = {"0X" + "44" * 20}
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        "destination_binding.destination_network_id is required for EVM-family lanes",
+        (
+            "destination_binding.destination_network_id must be a canonical "
+            "non-zero bytes32"
+        ),
+        (
+            "destination_binding.destination_bridge_address must be a "
+            "canonical non-zero 20-byte hex value"
+        ),
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active destination family audit" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_destination_binding_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active destination-binding field audit"]
+    destination = eth_lane["destination_binding"]
+    missing_fields = tuple(module.PUBLIC_LANE_DESTINATION_BINDING_FIELDS)
+    for field in missing_fields:
+        destination.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in module.PUBLIC_LANE_DESTINATION_BINDING_REQUIRED_FIELDS:
+        assert (
+            f"all-lanes summary lanes[{eth_index}]."
+            f"destination_binding missing field {field}"
+        ) in blockers
+    expected_family_blockers = (
+        "destination_binding.destination_network_id is required for EVM-family lanes",
+        "destination_binding.destination_bridge_address is required for EVM-family lanes",
+    )
+    for expected in expected_family_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert (
+        "operator pending active destination-binding field audit"
+        not in captured.out
+    )
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_hash_binding_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    assert bsc_lane["production_ready"] is True
+
+    def replacement_hash(current: str, seed: int) -> str:
+        candidate = hex32(seed)
+        return hex32(seed + 1) if candidate == current else candidate
+
+    destination = bsc_lane["destination_binding"]
+    route = bsc_lane["route_allowlist"]
+    canary = route["route_canary"]
+    forged_destination_expected = replacement_hash(
+        destination["destination_binding_hash"],
+        0xA0,
+    )
+    forged_route_expected = replacement_hash(route["route_allowlist_hash"], 0xA2)
+    forged_canary_route = replacement_hash(route["route_allowlist_hash"], 0xA4)
+    forged_canary_destination = replacement_hash(
+        destination["destination_binding_hash"],
+        0xA6,
+    )
+    forged_values = {
+        forged_destination_expected,
+        forged_route_expected,
+        forged_canary_route,
+        forged_canary_destination,
+    }
+    destination["expected_destination_binding_hash"] = forged_destination_expected
+    destination["expected_destination_binding_hash_matches"] = True
+    destination["recomputed"] = True
+    route["expected_route_allowlist_hash"] = forged_route_expected
+    route["expected_route_allowlist_hash_matches"] = True
+    canary["route_allowlist_hash"] = forged_canary_route
+    canary["destination_binding_hash"] = forged_canary_destination
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            "destination_binding.expected_destination_binding_hash must match "
+            "destination_binding_hash"
+        ),
+        "route_allowlist.expected_route_allowlist_hash must match route_allowlist_hash",
+        (
+            "route_allowlist.route_canary.route_allowlist_hash must match lane "
+            "route_allowlist_hash"
+        ),
+        (
+            "route_allowlist.route_canary.destination_binding_hash must match lane "
+            "destination_binding_hash"
+        ),
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{bsc_index}].{expected}" in blockers
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_hash_binding_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    assert bsc_lane["production_ready"] is True
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending diagnostic BSC lane certification"]
+
+    def replacement_hash(current: str, seed: int) -> str:
+        candidate = hex32(seed)
+        return hex32(seed + 1) if candidate == current else candidate
+
+    destination = bsc_lane["destination_binding"]
+    route = bsc_lane["route_allowlist"]
+    canary = route["route_canary"]
+    forged_destination_expected = replacement_hash(
+        destination["destination_binding_hash"],
+        0xB0,
+    )
+    forged_route_expected = replacement_hash(route["route_allowlist_hash"], 0xB2)
+    forged_canary_route = replacement_hash(route["route_allowlist_hash"], 0xB4)
+    forged_canary_destination = replacement_hash(
+        destination["destination_binding_hash"],
+        0xB6,
+    )
+    forged_values = {
+        forged_destination_expected,
+        forged_route_expected,
+        forged_canary_route,
+        forged_canary_destination,
+    }
+    destination["expected_destination_binding_hash"] = forged_destination_expected
+    destination["expected_destination_binding_hash_matches"] = True
+    destination["recomputed"] = True
+    route["expected_route_allowlist_hash"] = forged_route_expected
+    route["expected_route_allowlist_hash_matches"] = True
+    canary["route_allowlist_hash"] = forged_canary_route
+    canary["destination_binding_hash"] = forged_canary_destination
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            "destination_binding.expected_destination_binding_hash must match "
+            "destination_binding_hash"
+        ),
+        "route_allowlist.expected_route_allowlist_hash must match route_allowlist_hash",
+        (
+            "route_allowlist.route_canary.route_allowlist_hash must match lane "
+            "route_allowlist_hash"
+        ),
+        (
+            "route_allowlist.route_canary.destination_binding_hash must match lane "
+            "destination_binding_hash"
+        ),
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{bsc_index}].{expected}" in blockers
+    assert "operator pending diagnostic BSC lane certification" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_route_allowlist_recompute_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending route recompute certification"]
+
+    def replacement_hash(current: str, seed: int) -> str:
+        candidate = hex32(seed)
+        return hex32(seed + 1) if candidate == current else candidate
+
+    route = bsc_lane["route_allowlist"]
+    forged_route_hash = replacement_hash(route["route_allowlist_hash"], 0xC0)
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    assert (
+        f"all-lanes summary lanes[{bsc_index}].route_allowlist."
+        "route_allowlist_hash must recompute from source material, source "
+        "adapter deployment, and destination binding hashes"
+    ) in blockers
+    assert "operator pending route recompute certification" not in captured.out
+    assert forged_route_hash not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_route_allowlist_recompute_helper_failures(
+    monkeypatch,
+    capsys,
+):
+    module = load_evidence_module()
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending route recompute certification"]
+    expected_blocker = (
+        f"all-lanes summary lanes[{bsc_index}].route_allowlist."
+        "route_allowlist_hash must recompute from source material, source "
+        "adapter deployment, and destination binding hashes"
+    )
+
+    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+
+        def fail_recompute(
+            _profile,
+            _source_hashes,
+            _destination_binding,
+            exception_type=exception_type,
+        ):
+            raise exception_type(
+                f"secret-token copied route material {exception_type.__name__}"
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "load_evidence_bundle", lambda paths: {})
+            patch.setattr(module, "validate_evidence_bundle", lambda records: summary)
+            patch.setattr(module, "_expected_route_allowlist_hash", fail_recompute)
+
+            assert module.main(["evidence.toml"]) == 1
+
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        blockers = "\n".join(payload["blockers"])
+        assert payload["production_ready"] is False
+        assert "lanes" not in payload
+        assert "operator pending external verifier deployment" in blockers
+        assert expected_blocker in blockers
+        assert "operator pending route recompute certification" not in captured.out
+        assert "secret-token" not in captured.out
+        assert "secret-token" not in captured.err
+        assert exception_type.__name__ not in captured.out
+        assert exception_type.__name__ not in captured.err
+        assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_route_allowlist_recompute_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route recompute certification"]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    for seed in range(0xC7, 0x1C7):
+        forged_route_hash = hex32(seed)
+        if forged_route_hash not in taken_hashes:
+            break
+    else:
+        raise AssertionError("could not forge distinct active route hash")
+
+    route = eth_lane["route_allowlist"]
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}].route_allowlist."
+        "route_allowlist_hash must recompute from source material, source "
+        "adapter deployment, and destination binding hashes"
+    ) in blockers
+    assert "operator pending active route recompute certification" not in captured.out
+    assert forged_route_hash not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_route_allowlist_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route-allowlist field audit"]
+    route = eth_lane["route_allowlist"]
+    missing_fields = tuple(module.PUBLIC_LANE_ROUTE_ALLOWLIST_FIELDS)
+    for field in missing_fields:
+        route.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in missing_fields:
+        assert (
+            f"all-lanes summary lanes[{eth_index}]."
+            f"route_allowlist missing field {field}"
+        ) in blockers
+    assert (
+        "operator pending active route-allowlist field audit"
+        not in captured.out
+    )
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_destination_binding_recompute_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending destination recompute certification"]
+
+    def replacement_hash(current: str, seed: int) -> str:
+        candidate = hex32(seed)
+        return hex32(seed + 1) if candidate == current else candidate
+
+    destination = bsc_lane["destination_binding"]
+    forged_destination_hash = replacement_hash(
+        destination["destination_binding_hash"],
+        0xD0,
+    )
+    destination["destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash_matches"] = True
+    destination["recomputed"] = True
+
+    route = bsc_lane["route_allowlist"]
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_BSC]
+    source_record_hashes = bsc_lane["source_record_hashes"]
+    forged_route_hash = "0x" + module.route_allowlist_hash_for_lane_evidence(
+        profile,
+        raw_hex(source_record_hashes["source_verifier_material_hash"]),
+        raw_hex(source_record_hashes["source_adapter_engine_deployment_hash"]),
+        raw_hex(forged_destination_hash),
+    ).hex()
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+    route["route_canary"]["destination_binding_hash"] = forged_destination_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    # Source-inventory marker: destination_binding_hash must recompute from destination_binding_key
+    assert (
+        f"all-lanes summary lanes[{bsc_index}].destination_binding."
+        "destination_binding_hash must recompute from destination_binding_key"
+    ) in blockers
+    assert "operator pending destination recompute certification" not in captured.out
+    assert forged_destination_hash not in captured.out
+    assert forged_route_hash not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_destination_binding_recompute_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = [
+        "operator pending active destination recompute certification"
+    ]
+
+    taken_hashes: set[str] = set()
+
+    def collect_hashes(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                collect_hashes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_hashes(child)
+        elif isinstance(value, str) and value.startswith("0x") and len(value) == 66:
+            taken_hashes.add(value)
+
+    collect_hashes(summary)
+    destination = eth_lane["destination_binding"]
+    route = eth_lane["route_allowlist"]
+    source_record_hashes = eth_lane["source_record_hashes"]
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    for seed in range(0xD7, 0x1D7):
+        forged_destination_hash = hex32(seed)
+        if forged_destination_hash in taken_hashes:
+            continue
+        forged_route_hash = "0x" + module.route_allowlist_hash_for_lane_evidence(
+            profile,
+            raw_hex(source_record_hashes["source_verifier_material_hash"]),
+            raw_hex(source_record_hashes["source_adapter_engine_deployment_hash"]),
+            raw_hex(forged_destination_hash),
+        ).hex()
+        if forged_route_hash not in taken_hashes | {forged_destination_hash}:
+            break
+    else:
+        raise AssertionError("could not forge distinct active destination hash")
+
+    destination["destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash"] = forged_destination_hash
+    destination["expected_destination_binding_hash_matches"] = True
+    destination["recomputed"] = True
+    route["route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash"] = forged_route_hash
+    route["expected_route_allowlist_hash_matches"] = True
+    route["route_canary"]["route_allowlist_hash"] = forged_route_hash
+    route["route_canary"]["destination_binding_hash"] = forged_destination_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}].destination_binding."
+        "destination_binding_hash must recompute from destination_binding_key"
+    ) in blockers
+    assert (
+        "operator pending active destination recompute certification"
+        not in captured.out
+    )
+    assert forged_destination_hash not in captured.out
+    assert forged_route_hash not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_route_canary_hash_role_reuse(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    for lane in (bsc_lane, sol_lane, ton_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending route-canary role audit"]
+
+    bsc_canary = bsc_lane["route_allowlist"]["route_canary"]
+    bsc_canary["evidence_hash"] = bsc_lane["route_allowlist"][
+        "route_allowlist_hash"
+    ]
+    bsc_canary["message_id"] = bsc_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ]
+    sol_canary = sol_lane["route_allowlist"]["route_canary"]
+    sol_canary["evidence_hash"] = sol_lane["source_adapter_gate"]["gate_hash"]
+    ton_canary = ton_lane["route_allowlist"]["route_canary"]
+    ton_canary["ton_account_state_hash"] = ton_lane["destination_binding"][
+        "destination_binding_hash"
+    ]
+    forged_values = {
+        bsc_canary["evidence_hash"],
+        bsc_canary["message_id"],
+        sol_canary["evidence_hash"],
+        ton_canary["ton_account_state_hash"],
+    }
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    # Source-inventory marker: route_allowlist.route_canary hash role evidence_hash must not reuse route_allowlist_hash
+    # Source-inventory marker: route_allowlist.route_canary hash role message_id must not reuse source_verifier_material_hash
+    # Source-inventory marker: route_allowlist.route_canary hash role evidence_hash must not reuse source_adapter_gate_hash
+    # Source-inventory marker: route_allowlist.route_canary hash role ton_account_state_hash must not reuse destination_binding_hash
+    expected_blockers = (
+        (
+            bsc_index,
+            "route_allowlist.route_canary hash role evidence_hash must not "
+            "reuse route_allowlist_hash",
+        ),
+        (
+            bsc_index,
+            "route_allowlist.route_canary hash role message_id must not reuse "
+            "source_verifier_material_hash",
+        ),
+        (
+            sol_index,
+            "route_allowlist.route_canary hash role evidence_hash must not "
+            "reuse source_adapter_gate_hash",
+        ),
+        (
+            ton_index,
+            "route_allowlist.route_canary hash role ton_account_state_hash must "
+            "not reuse destination_binding_hash",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending route-canary role audit" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_route_canary_hash_role_reuse_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active route-canary role audit"]
+
+    eth_canary = eth_lane["route_allowlist"]["route_canary"]
+    eth_canary["evidence_hash"] = eth_lane["route_allowlist"][
+        "route_allowlist_hash"
+    ]
+    eth_canary["message_id"] = eth_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ]
+    forged_values = {
+        eth_canary["evidence_hash"],
+        eth_canary["message_id"],
+    }
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    # Source-inventory marker: active route_canary hash role evidence_hash must not reuse route_allowlist_hash
+    # Source-inventory marker: active route_canary hash role message_id must not reuse source_verifier_material_hash
+    expected_blockers = (
+        "route_allowlist.route_canary hash role evidence_hash must not "
+        "reuse route_allowlist_hash",
+        "route_allowlist.route_canary hash role message_id must not reuse "
+        "source_verifier_material_hash",
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active route-canary role audit" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_claimed_ready_evm_metadata_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    assert eth_lane["production_ready"] is True
+    assert bsc_lane["production_ready"] is True
+
+    evm_metadata = eth_lane["evm_live_metadata"]
+    evm_metadata.pop("required", None)
+    evm_metadata["ready"] = False
+    evm_metadata.pop("source_rpc_chain_id", None)
+    evm_metadata["destination_rpc_chain_id"] = "2"
+    evm_metadata.pop("source_block_tag", None)
+    evm_metadata["destination_block_tag"] = "safe-block-tag"
+    eth_lane["destination_binding"].pop("destination_binding_key", None)
+    bsc_lane["evm_live_metadata"].pop("ready", None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        "evm_live_metadata.required must be a boolean",
+        "evm_live_metadata.ready must be true",
+        (
+            "evm_live_metadata.source_rpc_chain_id must be a canonical "
+            "positive decimal string"
+        ),
+        "evm_live_metadata.destination_rpc_chain_id must be 1",
+        "evm_live_metadata.source_block_tag must be a non-empty canonical string",
+        "evm_live_metadata.destination_block_tag must be finalized",
+        "destination_binding.destination_binding_key must be a non-empty canonical string",
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    bsc_ready_blocker = "evm_live_metadata.ready must be a boolean"
+    assert f"all-lanes summary lanes[{bsc_index}].{bsc_ready_blocker}" in blockers
+    assert "safe-block-tag" not in captured.out
+    assert '"2"' not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_evm_metadata_drift_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active EVM metadata audit"]
+
+    evm_metadata = eth_lane["evm_live_metadata"]
+    evm_metadata["required"] = False
+    evm_metadata["ready"] = False
+    evm_metadata["source_rpc_chain_id"] = "0x1"
+    evm_metadata["destination_rpc_chain_id"] = "2"
+    evm_metadata["source_block_tag"] = "latest"
+    evm_metadata["destination_block_tag"] = "safe-block-tag"
+    forged_values = {
+        "0x1",
+        '"2"',
+        "latest",
+        "safe-block-tag",
+    }
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        "evm_live_metadata.required must be true",
+        "evm_live_metadata.ready must be true",
+        (
+            "evm_live_metadata.source_rpc_chain_id must be a canonical "
+            "positive decimal string"
+        ),
+        "evm_live_metadata.destination_rpc_chain_id must be 1",
+        "evm_live_metadata.source_block_tag must be finalized",
+        "evm_live_metadata.destination_block_tag must be finalized",
+    )
+    for expected in expected_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    assert "operator pending active EVM metadata audit" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_evm_metadata_missing_fields_when_lane_not_ready(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    assert eth_lane["production_ready"] is True
+
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active EVM metadata field audit"]
+    evm_metadata = eth_lane["evm_live_metadata"]
+    missing_fields = tuple(module.PUBLIC_LANE_EVM_LIVE_METADATA_FIELDS)
+    for field in missing_fields:
+        evm_metadata.pop(field, None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    for field in missing_fields:
+        assert (
+            f"all-lanes summary lanes[{eth_index}]."
+            f"evm_live_metadata missing field {field}"
+        ) in blockers
+    assert "operator pending active EVM metadata field audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_non_evm_metadata_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    assert sol_lane["production_ready"] is True
+    assert ton_lane["production_ready"] is True
+    assert tron_lane["production_ready"] is True
+
+    sol_metadata = sol_lane["evm_live_metadata"]
+    sol_metadata["required"] = True
+    sol_metadata["ready"] = False
+    sol_metadata["source_rpc_chain_id"] = "999999"
+    sol_metadata["source_block_tag"] = "safe-solana-block-tag"
+    ton_metadata = ton_lane["evm_live_metadata"]
+    ton_metadata.pop("required", None)
+    ton_metadata.pop("ready", None)
+    tron_metadata = tron_lane["evm_live_metadata"]
+    tron_metadata["destination_rpc_chain_id"] = "888888"
+    tron_metadata["destination_block_tag"] = "safe-tron-block-tag"
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (sol_index, "evm_live_metadata.required must be false for non-EVM lanes"),
+        (sol_index, "evm_live_metadata.ready must be true for non-EVM lanes"),
+        (
+            sol_index,
+            "evm_live_metadata.source_rpc_chain_id must be empty for non-EVM lanes",
+        ),
+        (
+            sol_index,
+            "evm_live_metadata.source_block_tag must be empty for non-EVM lanes",
+        ),
+        (ton_index, "evm_live_metadata.required must be false for non-EVM lanes"),
+        (ton_index, "evm_live_metadata.ready must be true for non-EVM lanes"),
+        (
+            tron_index,
+            "evm_live_metadata.destination_rpc_chain_id must be empty for non-EVM lanes",
+        ),
+        (
+            tron_index,
+            "evm_live_metadata.destination_block_tag must be empty for non-EVM lanes",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "safe-solana-block-tag" not in captured.out
+    assert "safe-tron-block-tag" not in captured.out
+    assert "999999" not in captured.out
+    assert "888888" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_route_canary_domain_field_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (bsc_lane, sol_lane, ton_lane, tron_lane):
+        assert lane["production_ready"] is True
+
+    bsc_lane["route_allowlist"]["route_canary"]["solana_programdata_slot"] = (
+        "777777"
+    )
+    sol_lane["route_allowlist"]["route_canary"]["transaction_hash"] = hex32(0xC1)
+    ton_lane["route_allowlist"]["route_canary"]["transaction_id"] = hex32(0xC2)
+    tron_lane["route_allowlist"]["route_canary"]["ton_last_transaction_lt"] = (
+        "888888"
+    )
+    forged_values = {
+        "777777",
+        "888888",
+        hex32(0xC1),
+        hex32(0xC2),
+    }
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            bsc_index,
+            "route_allowlist.route_canary unexpected field solana_programdata_slot",
+        ),
+        (sol_index, "route_allowlist.route_canary unexpected field transaction_hash"),
+        (ton_index, "route_allowlist.route_canary unexpected field transaction_id"),
+        (
+            tron_index,
+            "route_allowlist.route_canary unexpected field ton_last_transaction_lt",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_route_canary_missing_fields(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (eth_lane, bsc_lane, sol_lane, ton_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+
+    eth_lane["route_allowlist"]["route_canary"].pop("transaction_hash", None)
+    eth_lane["route_allowlist"]["route_canary"].pop("message_proof_used", None)
+    bsc_lane["route_allowlist"]["route_canary"].pop(
+        "receipt_block_finalized",
+        None,
+    )
+    sol_lane["route_allowlist"]["route_canary"].pop(
+        "solana_programdata_address",
+        None,
+    )
+    ton_lane["route_allowlist"]["route_canary"].pop(
+        "ton_last_transaction_hash",
+        None,
+    )
+    tron_lane["route_allowlist"]["route_canary"].pop("signature_sha256", None)
+    tron_lane["route_allowlist"]["route_canary"].pop("message_proof_used", None)
+    tron_lane["route_allowlist"]["route_canary"].pop(
+        "raw_data_owner_matches_transaction",
+        None,
+    )
+    tron_lane["route_allowlist"]["route_canary"].pop(
+        "signature_recovers_to_owner",
+        None,
+    )
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    # Source-inventory marker: missing field: message_proof_used
+    # Source-inventory marker: missing field: receipt_block_finalized
+    # Source-inventory marker: missing field: raw_data_owner_matches_transaction
+    # Source-inventory marker: missing field: signature_recovers_to_owner
+    expected_blockers = (
+        (eth_index, "route_allowlist.route_canary missing field transaction_hash"),
+        (eth_index, "route_allowlist.route_canary missing field message_proof_used"),
+        (
+            bsc_index,
+            "route_allowlist.route_canary missing field receipt_block_finalized",
+        ),
+        (
+            sol_index,
+            "route_allowlist.route_canary missing field solana_programdata_address",
+        ),
+        (
+            ton_index,
+            "route_allowlist.route_canary missing field ton_last_transaction_hash",
+        ),
+        (tron_index, "route_allowlist.route_canary missing field signature_sha256"),
+        (tron_index, "route_allowlist.route_canary missing field message_proof_used"),
+        (
+            tron_index,
+            "route_allowlist.route_canary missing field raw_data_owner_matches_transaction",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary missing field signature_recovers_to_owner",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_nested_missing_fields(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (eth_lane, bsc_lane, sol_lane, ton_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+    bsc_gate_field, _bsc_audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_BSC
+    )
+
+    eth_lane["source_record_hashes"].pop("source_verifier_material_hash", None)
+    bsc_lane["source_adapter_gate"].pop("gate_hash", None)
+    bsc_lane["source_adapter_gate"]["audit_hashes"].pop(bsc_gate_field, None)
+    sol_lane["evm_live_metadata"].pop("source_block_tag", None)
+    ton_lane["destination_binding"].pop("expected_destination_binding_hash", None)
+    tron_lane["route_allowlist"].pop("route_canary", None)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            eth_index,
+            "source_record_hashes missing field source_verifier_material_hash",
+        ),
+        (bsc_index, "source_adapter_gate missing field gate_hash"),
+        (
+            bsc_index,
+            f"source_adapter_gate.audit_hashes missing field {bsc_gate_field}",
+        ),
+        (sol_index, "evm_live_metadata missing field source_block_tag"),
+        (
+            ton_index,
+            "destination_binding missing field expected_destination_binding_hash",
+        ),
+        (tron_index, "route_allowlist missing field route_canary"),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_false_record_structural_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (bsc_lane, sol_lane, ton_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+        lane["records"] = {
+            field: False for field in module.PUBLIC_LANE_RECORD_FIELDS
+        }
+
+    bsc_gate_field, _bsc_audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["source_record_hashes"].pop("source_verifier_material_hash", None)
+    bsc_lane["source_adapter_gate"].pop("gate_hash", None)
+    bsc_lane["source_adapter_gate"]["audit_hashes"].pop(bsc_gate_field, None)
+    sol_lane["destination_binding"].pop("expected_destination_binding_hash", None)
+    ton_lane["route_allowlist"].pop("route_canary", None)
+    tron_lane["route_allowlist"]["route_canary"]["destination_binding_hash"] = ""
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            bsc_index,
+            "source_record_hashes missing field source_verifier_material_hash",
+        ),
+        (bsc_index, "source_adapter_gate missing field gate_hash"),
+        (
+            bsc_index,
+            f"source_adapter_gate.audit_hashes missing field {bsc_gate_field}",
+        ),
+        (
+            sol_index,
+            "destination_binding missing field expected_destination_binding_hash",
+        ),
+        (ton_index, "route_allowlist missing field route_canary"),
+        (
+            tron_index,
+            "route_allowlist.route_canary.destination_binding_hash must be a canonical non-zero bytes32",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_required_hash_empties(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (eth_lane, bsc_lane, sol_lane, ton_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+
+    eth_lane["source_record_hashes"]["source_verifier_material_hash"] = ""
+    bsc_lane["destination_binding"]["expected_destination_binding_hash"] = ""
+    sol_lane["route_allowlist"]["route_allowlist_hash"] = ""
+    ton_lane["route_allowlist"]["route_canary"]["evidence_hash"] = ""
+    tron_lane["route_allowlist"]["route_canary"]["destination_binding_hash"] = ""
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            eth_index,
+            "source_record_hashes.source_verifier_material_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            bsc_index,
+            "destination_binding.expected_destination_binding_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            sol_index,
+            "route_allowlist.route_allowlist_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            ton_index,
+            "route_allowlist.route_canary.evidence_hash must be a canonical non-zero bytes32",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.destination_binding_hash must be a canonical non-zero bytes32",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_evm_required_field_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (eth_lane, bsc_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending lane certification"]
+
+    eth_lane["evm_live_metadata"]["source_rpc_chain_id"] = ""
+    eth_lane["evm_live_metadata"]["source_block_tag"] = ""
+    bsc_lane["evm_live_metadata"]["destination_rpc_chain_id"] = ""
+    bsc_lane["evm_live_metadata"]["destination_block_tag"] = ""
+    bsc_lane["destination_binding"].pop("destination_network_id", None)
+    bsc_lane["destination_binding"].pop("destination_bridge_address", None)
+    tron_lane["destination_binding"].pop("destination_network_id", None)
+    tron_lane["destination_binding"]["destination_bridge_address"] = "0x" + "55" * 20
+    forged_values = {"0x" + "55" * 20}
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    expected_blockers = (
+        (
+            eth_index,
+            "evm_live_metadata.source_rpc_chain_id must be a canonical positive decimal string",
+        ),
+        (
+            eth_index,
+            "evm_live_metadata.source_block_tag must be a non-empty canonical string",
+        ),
+        (
+            bsc_index,
+            "evm_live_metadata.destination_rpc_chain_id must be a canonical positive decimal string",
+        ),
+        (
+            bsc_index,
+            "evm_live_metadata.destination_block_tag must be a non-empty canonical string",
+        ),
+        (
+            bsc_index,
+            "destination_binding.destination_network_id is required for EVM-family lanes",
+        ),
+        (
+            bsc_index,
+            "destination_binding.destination_bridge_address is required for EVM-family lanes",
+        ),
+        (
+            tron_index,
+            "destination_binding.destination_network_id is required for TRON lanes",
+        ),
+        (
+            tron_index,
+            "destination_binding.destination_bridge_address is only valid for EVM-family lanes",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending lane certification" not in captured.out
+    for forged_value in forged_values:
+        assert forged_value not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_ready_route_canary_scalar_drift(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    eth_index, eth_lane = lanes[module.SCCP_DOMAIN_ETH]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    eth_canary = eth_lane["route_allowlist"]["route_canary"]
+    eth_canary["status"] = "forged-status"
+    eth_canary["evidence_source"] = "forged-source"
+    eth_canary["evidence_bound"] = False
+    eth_canary["receipt_block_number"] = "123"
+    eth_canary["log_index"] = -1
+    eth_canary["target_domain"] = module.SCCP_DOMAIN_BSC
+    eth_canary["proof_version"] = 2
+    eth_canary["proof_source_domain"] = module.SCCP_DOMAIN_ETH
+    eth_canary["message_proof_used"] = "true"
+    eth_canary["receipt_block_finalized"] = False
+    tron_canary = tron_lane["route_allowlist"]["route_canary"]
+    tron_canary["block_number"] = 0
+    tron_canary["block_timestamp"] = -1
+    tron_canary["raw_data_owner_matches_transaction"] = "yes"
+    tron_canary["signature_recovers_to_owner"] = False
+    tron_canary["signature_recovered_address"] = "0x41" + "99" * 20
+    sol_canary = sol_lane["route_allowlist"]["route_canary"]
+    sol_canary["solana_programdata_address"] = " forged-address "
+    sol_canary["solana_programdata_slot"] = 42
+    ton_lane["route_allowlist"]["route_canary"]["ton_last_transaction_lt"] = 0
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    eth_scalar_blockers = (
+        "route_allowlist.route_canary.status must be passed",
+        "route_allowlist.route_canary.evidence_source must be "
+        "evm_message_proof_accepted_transaction",
+        "route_allowlist.route_canary.evidence_bound must be true",
+        "route_allowlist.route_canary.receipt_block_number must be a positive integer",
+        "route_allowlist.route_canary.log_index must be a u32 integer",
+        "route_allowlist.route_canary.target_domain must match lane domain",
+        "route_allowlist.route_canary.proof_version must be 1",
+        "route_allowlist.route_canary.proof_source_domain must be SORA domain",
+        "route_allowlist.route_canary.message_proof_used must be a boolean",
+        "route_allowlist.route_canary.receipt_block_finalized must be true",
+    )
+    for expected in eth_scalar_blockers:
+        assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
+    tron_scalar_blockers = (
+        "route_allowlist.route_canary.block_number must be a positive integer",
+        "route_allowlist.route_canary.block_timestamp must be a non-negative integer",
+        "route_allowlist.route_canary.raw_data_owner_matches_transaction must be a boolean",
+        "route_allowlist.route_canary.signature_recovers_to_owner must be true",
+        "route_allowlist.route_canary.signature_recovered_address must match "
+        "transaction_owner_address",
+    )
+    for expected in tron_scalar_blockers:
+        assert f"all-lanes summary lanes[{tron_index}].{expected}" in blockers
+    sol_scalar_blockers = (
+        "route_allowlist.route_canary.solana_programdata_address must be a "
+        "non-empty canonical string",
+        "route_allowlist.route_canary.solana_programdata_slot must be a "
+        "canonical positive decimal string",
+    )
+    for expected in sol_scalar_blockers:
+        assert f"all-lanes summary lanes[{sol_index}].{expected}" in blockers
+    ton_scalar_blockers = (
+        "route_allowlist.route_canary.ton_last_transaction_lt must be a "
+        "canonical positive decimal string",
+    )
+    for expected in ton_scalar_blockers:
+        assert f"all-lanes summary lanes[{ton_index}].{expected}" in blockers
+    assert "forged-status" not in captured.out
+    assert "forged-source" not in captured.out
+    assert "forged-address" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_empty_copied_release_checklist_without_leaking(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending copied checklist certification"]
+    summary["release_checklist"] = {}
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "release_checklist" not in payload
+    assert "operator pending copied checklist certification" in blockers
+    assert "all-lanes summary release_checklist ready must be a boolean" in blockers
+    assert "all-lanes summary release_checklist items must be a list" in blockers
+    assert "all-lanes summary release_checklist is invalid" in blockers
     assert "Traceback" not in captured.err
 
 
@@ -8351,9 +11705,7 @@ def test_all_lanes_release_checklist_rejects_source_gate_template_replays():
 
             gate_checklist = module._release_checklist([gate_lane], [])
             gate_items = {item["id"]: item for item in gate_checklist["items"]}
-            gate_blockers = "\n".join(
-                gate_items["governed_deployment_evidence"]["blockers"]
-            )
+            gate_blockers = gate_items["governed_deployment_evidence"]["blockers"]
 
             assert gate_checklist["ready"] is False, (domain, template_field)
             assert (
@@ -8375,9 +11727,9 @@ def test_all_lanes_release_checklist_rejects_source_gate_template_replays():
 
                 audit_checklist = module._release_checklist([audit_lane], [])
                 audit_items = {item["id"]: item for item in audit_checklist["items"]}
-                audit_blockers = "\n".join(
-                    audit_items["governed_deployment_evidence"]["blockers"]
-                )
+                audit_blockers = audit_items["governed_deployment_evidence"][
+                    "blockers"
+                ]
 
                 assert audit_checklist["ready"] is False, (
                     domain,
@@ -8868,10 +12220,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
                 "evidence_hash": hex32(0x5C),
                 "evidence_source": "evm_message_proof_accepted_transaction",
                 "evidence_bound": True,
+                "message_proof_used": True,
+                "receipt_block_finalized": True,
             },
         },
         "blockers": [],
     }
+    route_canary_missing_scalar_cases = (
+        "missing.evidence_bound",
+        "missing.message_proof_used",
+        "missing.receipt_block_finalized",
+    )
     cases = (
         (
             "status",
@@ -8894,6 +12253,16 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
             "domain 1 (eth): live route canary evidence source must be a non-empty canonical string",
         ),
         (
+            "evidence_source",
+            None,
+            "domain 1 (eth): live route canary evidence source is missing",
+        ),
+        (
+            "evidence_source",
+            "",
+            "domain 1 (eth): live route canary evidence source is missing",
+        ),
+        (
             "evidence_bound",
             "true",
             "domain 1 (eth): route canary evidence_bound must be boolean",
@@ -8905,7 +12274,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         ),
         (
             "evidence_bound",
+            None,
+            "domain 1 (eth): route canary evidence_bound must be boolean",
+        ),
+        (
+            "evidence_bound",
             False,
+            "domain 1 (eth): route canary evidence is not bound",
+        ),
+        (
+            "missing.evidence_bound",
+            None,
             "domain 1 (eth): route canary evidence is not bound",
         ),
         (
@@ -8920,7 +12299,17 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         ),
         (
             "message_proof_used",
+            None,
+            "domain 1 (eth): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
             False,
+            "domain 1 (eth): route canary message proof must be used",
+        ),
+        (
+            "missing.message_proof_used",
+            None,
             "domain 1 (eth): route canary message proof must be used",
         ),
         (
@@ -8935,14 +12324,29 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
         ),
         (
             "receipt_block_finalized",
+            None,
+            "domain 1 (eth): route canary receipt_block_finalized must be boolean",
+        ),
+        (
+            "receipt_block_finalized",
             False,
+            "domain 1 (eth): route canary receipt block must be finalized",
+        ),
+        (
+            "missing.receipt_block_finalized",
+            None,
             "domain 1 (eth): route canary receipt block must be finalized",
         ),
     )
 
     for field, value, expected in cases:
         lane = copy.deepcopy(base_lane)
-        lane["route_allowlist"]["route_canary"][field] = value
+        canary = lane["route_allowlist"]["route_canary"]
+        if field in route_canary_missing_scalar_cases:
+            _, target_field = field.split(".", 1)
+            canary.pop(target_field)
+        else:
+            canary[field] = value
 
         checklist = module._release_checklist([lane], [])
         items = {item["id"]: item for item in checklist["items"]}
@@ -9008,7 +12412,32 @@ def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean
         },
         "blockers": [],
     }
+    route_canary_missing_scalar_cases = (
+        "missing.message_proof_used",
+        "missing.raw_data_owner_matches_transaction",
+        "missing.signature_recovers_to_owner",
+    )
     cases = (
+        (
+            "message_proof_used",
+            "true",
+            "domain 5 (tron): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            None,
+            "domain 5 (tron): route canary message_proof_used must be boolean",
+        ),
+        (
+            "message_proof_used",
+            False,
+            "domain 5 (tron): route canary message proof must be used",
+        ),
+        (
+            "missing.message_proof_used",
+            None,
+            "domain 5 (tron): route canary message proof must be used",
+        ),
         (
             "raw_data_owner_matches_transaction",
             "true",
@@ -9021,7 +12450,17 @@ def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean
         ),
         (
             "raw_data_owner_matches_transaction",
+            None,
+            "domain 5 (tron): route canary raw_data_owner_matches_transaction must be boolean",
+        ),
+        (
+            "raw_data_owner_matches_transaction",
             False,
+            "domain 5 (tron): route canary raw_data owner must match transaction",
+        ),
+        (
+            "missing.raw_data_owner_matches_transaction",
+            None,
             "domain 5 (tron): route canary raw_data owner must match transaction",
         ),
         (
@@ -9036,14 +12475,29 @@ def test_all_lanes_release_checklist_rejects_malformed_tron_route_canary_boolean
         ),
         (
             "signature_recovers_to_owner",
+            None,
+            "domain 5 (tron): route canary signature_recovers_to_owner must be boolean",
+        ),
+        (
+            "signature_recovers_to_owner",
             False,
+            "domain 5 (tron): route canary signature must recover to owner",
+        ),
+        (
+            "missing.signature_recovers_to_owner",
+            None,
             "domain 5 (tron): route canary signature must recover to owner",
         ),
     )
 
     for field, value, expected in cases:
         lane = copy.deepcopy(base_lane)
-        lane["route_allowlist"]["route_canary"][field] = value
+        canary = lane["route_allowlist"]["route_canary"]
+        if field in route_canary_missing_scalar_cases:
+            _, target_field = field.split(".", 1)
+            canary.pop(target_field)
+        else:
+            canary[field] = value
 
         checklist = module._release_checklist([lane], [])
         items = {item["id"]: item for item in checklist["items"]}
@@ -9251,6 +12705,96 @@ def test_all_lanes_evidence_rejects_cross_lane_route_canary_governed_hash_replay
         "route canary evidence hash for domain 5 must be distinct from "
         "route_allowlist_hash for domain 3"
     ) in "\n".join(tron_lane["blockers"])
+
+
+def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_gate_replay():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_deployment = records["sccp_source_adapter_engine_deployments"][0]
+    bsc_route = records["sccp_route_allowlists"][1]
+    bsc_route["_comment_route_canary_evidence_hash"] = eth_deployment[
+        "evm_source_gate_hash"
+    ]
+    sol_deployment = records["sccp_source_adapter_engine_deployments"][2]
+    tron_route = records["sccp_route_allowlists"][4]
+    tron_route["_comment_route_canary_evidence_hash"] = sol_deployment[
+        "solana_tower_replay_verifier_hash"
+    ]
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    bsc_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    tron_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_TRON
+    )
+    assert bsc_lane["production_ready"] is False
+    assert tron_lane["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert (
+        "route canary evidence hash for domain 2 must be distinct from "
+        "source_adapter_gate_hash for domain 1"
+    ) in blockers
+    assert (
+        "route canary evidence hash for domain 5 must be distinct from "
+        "source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash for "
+        "domain 3"
+    ) in blockers
+    assert (
+        "route canary evidence hash for domain 2 must be distinct from "
+        "source_adapter_gate_hash for domain 1"
+    ) in "\n".join(bsc_lane["blockers"])
+    assert (
+        "route canary evidence hash for domain 5 must be distinct from "
+        "source_adapter_gate.audit_hashes.solana_tower_replay_verifier_hash for "
+        "domain 3"
+    ) in "\n".join(tron_lane["blockers"])
+
+
+def test_all_lanes_evidence_rejects_cross_lane_route_canary_transcript_replay():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_route = records["sccp_route_allowlists"][0]
+    bsc_route = records["sccp_route_allowlists"][1]
+    bsc_route["_comment_route_canary_evidence_hash"] = eth_route[
+        "_comment_evm_route_canary_message_id"
+    ]
+    tron_route_source = records["sccp_route_allowlists"][4]
+    ton_route = records["sccp_route_allowlists"][3]
+    ton_route["_comment_route_canary_evidence_hash"] = tron_route_source[
+        "_comment_tron_route_canary_transaction_id"
+    ]
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    bsc_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_BSC
+    )
+    ton_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_TON
+    )
+    assert bsc_lane["production_ready"] is False
+    assert ton_lane["production_ready"] is False
+    blockers = "\n".join(summary["blockers"])
+    assert (
+        "route canary evidence hash for domain 2 must be distinct from "
+        "route_canary.message_id for domain 1"
+    ) in blockers
+    assert (
+        "route canary evidence hash for domain 4 must be distinct from "
+        "route_canary.transaction_id for domain 5"
+    ) in blockers
+    assert (
+        "route canary evidence hash for domain 2 must be distinct from "
+        "route_canary.message_id for domain 1"
+    ) in "\n".join(bsc_lane["blockers"])
+    assert (
+        "route canary evidence hash for domain 4 must be distinct from "
+        "route_canary.transaction_id for domain 5"
+    ) in "\n".join(ton_lane["blockers"])
 
 
 def test_all_lanes_evidence_requires_route_component_hashes():

@@ -140,7 +140,14 @@ moderation ledger publication service described by the original plan.
   operator-supplied canary source-event and publish-due payloads through those
   signed routes, records request/response sizes, status, and BLAKE3 hashes, and
   emits `sorafs.transparency.privacy_aggregate.canary.v1` evidence without
-  archiving raw metric arrays, metric names, or response bodies.
+  archiving raw metric arrays, metric names, or response bodies. The rollout
+  gate requires the canary probe array to carry both action labels,
+  `source_event` and `publish_due`, so top-level probe counts cannot stand in
+  for deployed producer and scheduler evidence. Source-entry, privacy-aggregate,
+  and proof-token issuance probe entries must also carry request and response
+  BLAKE3 hashes. Publication and explorer route entries must carry response
+  BLAKE3 hashes, keeping replay evidence payload-free while still binding it to
+  the exact deployed exchanges.
 - `sorafs_node` can publish a validated
   `ModerationLedgerCyclePublicationV1` bundle through the configured local
   Governance DAG filesystem sink. The publisher writes `.to` and `.json`
@@ -277,11 +284,15 @@ moderation ledger publication service described by the original plan.
   [--summary-out PATH]` validates collected SFM-4c rollout artifacts and emits
   `sorafs.transparency.rollout_evidence_gate.v1` summary JSON. The gate
   requires source-entry, publication, privacy aggregate, proof-token issuance,
-  and explorer canary schemas, requires every included canary to pass, verifies
-  all supported source-entry producer kinds, requires publication list and
+  and explorer canary schemas, requires every included canary to pass, requires
+  reviewed `deployment_id`/`environment` context on every artifact, verifies all
+  supported source-entry producer kinds, requires publication list and
   cycle-detail probes, verifies publication anchor/publisher/verification
-  signals, requires both aggregate source-event and publish-due probes, checks
-  the explorer snapshot/UI/proof-token index routes, and recursively rejects raw
+  signals, requires both action-labeled aggregate source-event and publish-due
+  probes, requires request/response hash binding for probe evidence, requires
+  response hash binding for publication and explorer route evidence, checks the
+  explorer snapshot/UI/proof-token index routes, and
+  recursively rejects raw
   payload, request/response body, bearer-token, signed-transaction,
   proof-token frame, private-key, and private digest-key fields. Publication
   evidence must match a valid source-entry `source_batch_digest_hex`, and
@@ -299,8 +310,10 @@ moderation ledger publication service described by the original plan.
   publication cycle-detail ids are missing, accepts repeated `--iroha-arg ARG`
   values for runtime-only client config/signing options that must be passed
   before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
-  operator inputs, and `--dry-run` emits the command plan without contacting
-  live services. `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
+  operator inputs, requires a reviewed `--deployment-id` plus `--environment`,
+  stamps that context onto generated canary artifacts before verification, and
+  `--dry-run` emits the command plan without contacting live services.
+  `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
   documents the required source-entry kinds, aggregate probes, proof-token
   issuance probe, cycle id, Torii URL, and runtime-only client-config path
   without storing signing material.

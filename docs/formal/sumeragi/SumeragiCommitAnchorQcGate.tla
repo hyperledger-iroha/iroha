@@ -214,6 +214,10 @@ CommitAnchorQcPromotionExactness ==
   /\ CommitAnchorPruneExact
   /\ CommitAnchorStatusPublicationExact
 
+CommitAnchorQcPromotionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitAnchorQcPromotionExactness
+
 NoBugInvariant == CommitAnchorQcCoreSafety
 
 SafetyFast == CommitAnchorQcCoreSafety

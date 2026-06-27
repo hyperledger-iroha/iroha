@@ -5846,6 +5846,8 @@ pub struct Torii {
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
     pub tx_history: Option<ToriiTxHistory>,
+    /// Retail recipient lookup route configuration.
+    pub recipient_lookup: ToriiRecipientLookup,
     /// App-facing query/backpressure limits.
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
@@ -5883,6 +5885,37 @@ pub struct ToriiTxHistoryJwt {
     pub issuer: Option<String>,
     /// Optional audience constraint.
     pub audience: Option<String>,
+}
+
+/// Retail recipient lookup route configuration for Torii app API.
+#[derive(Debug, Clone)]
+pub struct ToriiRecipientLookup {
+    /// HTTP request timeout applied to upstream bank Core API calls.
+    pub request_timeout: Duration,
+    /// Configured bank Core API routes keyed by canonical FI id.
+    pub routes: Vec<ToriiRecipientLookupRoute>,
+}
+
+impl Default for ToriiRecipientLookup {
+    fn default() -> Self {
+        Self {
+            request_timeout: Duration::from_millis(
+                defaults::torii::recipient_lookup::REQUEST_TIMEOUT_MS,
+            ),
+            routes: Vec::new(),
+        }
+    }
+}
+
+/// Single bank Core API route used by the retail recipient lookup endpoint.
+#[derive(Debug, Clone)]
+pub struct ToriiRecipientLookupRoute {
+    /// Canonical FI identifier, for example `hbl.sbp` or `ubl.sbp`.
+    pub fi_id: String,
+    /// Bank Core API base URL.
+    pub base_url: Url,
+    /// Service bearer token used only by Torii when calling the bank Core API.
+    pub bearer_token: String,
 }
 
 /// Execution mode for attachment sanitization.
@@ -8264,8 +8297,27 @@ pub struct SccpRouteAllowlist {
     pub blockers: Vec<String>,
 }
 
+/// Route-bound browser prover manifest reference advertised to wallet clients.
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
+pub struct SccpRouteBrowserProverManifestRef {
+    /// Browser-safe prover module URL.
+    pub module_url: String,
+    /// Optional package/module specifier for reproducible builds.
+    pub module_specifier: Option<String>,
+    /// Hex-encoded SHA-256 digest of the browser module bytes.
+    pub module_hash: String,
+    /// Hex-encoded SHA-256 digest of the public browser prover manifest.
+    pub manifest_hash: String,
+    /// Expected exported symbols in the browser module.
+    pub expected_exports: Vec<String>,
+    /// Hex-encoded route/deployment hash this prover manifest is bound to.
+    pub bound_route_hash: String,
+    /// Hex-encoded proof/material hash this prover manifest is bound to.
+    pub bound_proof_hash: String,
+}
+
 /// Configured SCCP route manifest material advertised to wallet clients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteManifest {
     /// Material format version.
     pub version: u8,
@@ -8279,6 +8331,14 @@ pub struct SccpRouteManifest {
     pub chain: String,
     /// CAIP-compatible TRON chain id hex.
     pub chain_id_hex: String,
+    /// Canonical counterparty explorer base URL.
+    pub explorer_url: Option<String>,
+    /// Canonical counterparty explorer host.
+    pub explorer_host: Option<String>,
+    /// SCCP counterparty account codec id.
+    pub counterparty_account_codec: Option<u8>,
+    /// Stable logical key for the counterparty account codec.
+    pub counterparty_account_codec_key: Option<String>,
     /// SCCP counterparty domain identifier.
     pub counterparty_domain: u32,
     /// Destination verifier target name.
@@ -8305,6 +8365,14 @@ pub struct SccpRouteManifest {
     pub proof_artifact_hash: Option<String>,
     /// Optional hex-encoded proving key digest.
     pub proving_key_hash: Option<String>,
+    /// Optional hex-encoded native EVM prover bundle digest.
+    pub native_evm_prover_bundle_hash: Option<String>,
+    /// Optional canonical native EVM prover bundle JSON.
+    pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
+    /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
+    pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
+    /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
+    pub source_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional hash of the normalized deployment evidence used to build this route.
     pub deployment_evidence_sha256: Option<String>,
     /// Canonical destination binding key.
@@ -8622,8 +8690,6 @@ pub struct Offline {
     /// `KagemushaTransfer` enforces this gate before forwarding to the shared
     /// shielded ZK asset accumulator.
     pub kagemusha_enabled: bool,
-    /// Whether nodes force legacy bearer-audit lineage during migration.
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8636,7 +8702,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: defaults::settlement::offline::KAGEMUSHA_FORCE_LEGACY,
         }
     }
 }
@@ -9793,10 +9858,6 @@ mod tests {
         assert!(
             offline.kagemusha_enabled,
             "Kagemusha must remain enabled by default"
-        );
-        assert!(
-            !offline.kagemusha_force_legacy,
-            "legacy Kagemusha fallback must remain opt-in"
         );
     }
 

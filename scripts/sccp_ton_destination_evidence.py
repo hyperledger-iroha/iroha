@@ -65,8 +65,15 @@ class TonBocComputedCell(NamedTuple):
     depths: tuple[int, int, int, int]
 
 
-def _strip_0x(value: str) -> str:
-    return value[2:] if value.lower().startswith("0x") else value
+def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if value.startswith("0X"):
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
+    if not value.startswith("0x"):
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
+    text = value[2:]
+    if text != text.lower():
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
+    return text
 
 
 def parse_hex_bytes(
@@ -80,12 +87,12 @@ def parse_hex_bytes(
 
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = _strip_0x(value)
+    text = _strip_lower_0x_hex(value, label=label)
     if len(text) != byte_length * 2:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -97,15 +104,14 @@ def parse_code_boc_hex(value: str, *, label: str) -> bytes:
 
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = value
-    text = _strip_0x(text)
+    text = _strip_lower_0x_hex(value, label=label)
     if not text:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     if len(text) % 2 != 0:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -124,7 +130,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         raw = base64.b64decode(text, validate=True)
         if base64.b64encode(raw).decode("ascii") != text:
             raise argparse.ArgumentTypeError(f"{label} must be canonical base64")
-    except (TypeError, ValueError, binascii.Error):
+    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         if any(symbol not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for symbol in text):
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
@@ -132,7 +138,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         padded = text + ("=" * ((4 - len(text) % 4) % 4))
         try:
             raw = base64.urlsafe_b64decode(padded)
-        except (TypeError, ValueError, binascii.Error):
+        except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
             ) from None
@@ -279,7 +285,7 @@ def _require_distinct_hash_roles(
 def _require_ton_raw_address(value: str, *, label: str) -> str:
     try:
         return normalize_ton_raw_address(value, label=label)
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"{label} metadata is invalid") from None
 
 
@@ -950,7 +956,7 @@ def ton_route_canary_evidence_hash(
             account_status,
             label="account_status",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("account_status must be active") from None
     account_state_hash = _require_fixed_bytes(
         account_state_hash,
@@ -964,7 +970,7 @@ def ton_route_canary_evidence_hash(
             last_transaction_lt,
             label="last_transaction_lt",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("last_transaction_lt must be a positive decimal") from None
     last_transaction_hash = _require_fixed_bytes(
         last_transaction_hash,
@@ -1287,7 +1293,7 @@ def _require_toml_account_metadata(
             last_transaction_lt,
             label="last transaction LT",
         )
-    except (argparse.ArgumentTypeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError(f"--{output} requires --last-transaction-lt") from None
     if canonical_last_transaction_lt != last_transaction_lt:
         raise ValueError(f"--{output} requires --last-transaction-lt")
@@ -1334,7 +1340,7 @@ def _require_code_boc_root_metadata(
                     code_boc_base64,
                     label="verifier_code_boc_base64",
                 )
-            except (argparse.ArgumentTypeError, TypeError, ValueError):
+            except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
                 raise ValueError(
                     f"--{output} has invalid verifier code BoC base64 evidence"
                 ) from None

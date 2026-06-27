@@ -230,8 +230,21 @@ public enum SorafsReferenceValidators {
     public static func validateOrderbookPayloadJSON(
         kind: SorafsOrderbookPayloadKind,
         payload: Data,
+        label: String? = nil
+    ) throws -> String {
+        try validateOrderbookPayloadJSON(
+            kind: kind,
+            payload: payload,
+            label: label,
+            generatedAtUnix: currentEpochSeconds()
+        )
+    }
+
+    public static func validateOrderbookPayloadJSON(
+        kind: SorafsOrderbookPayloadKind,
+        payload: Data,
         label: String? = nil,
-        generatedAtUnix: UInt64 = currentEpochSeconds()
+        generatedAtUnix: UInt64
     ) throws -> String {
         let resolvedLabel = try validatorLabel(label, fallback: kind.defaultLabel)
         guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateOrderbook(
@@ -398,8 +411,21 @@ public enum SorafsReferenceValidators {
     public static func validatePdpPayloadJSON(
         kind: SorafsPdpPayloadKind,
         payload: Data,
+        label: String? = nil
+    ) throws -> String {
+        try validatePdpPayloadJSON(
+            kind: kind,
+            payload: payload,
+            label: label,
+            generatedAtUnix: currentEpochSeconds()
+        )
+    }
+
+    public static func validatePdpPayloadJSON(
+        kind: SorafsPdpPayloadKind,
+        payload: Data,
         label: String? = nil,
-        generatedAtUnix: UInt64 = currentEpochSeconds()
+        generatedAtUnix: UInt64
     ) throws -> String {
         let resolvedLabel = try validatorLabel(label, fallback: kind.defaultLabel)
         guard let json = NoritoNativeBridge.shared.sorafsReferenceValidatePdpPayload(
@@ -417,8 +443,23 @@ public enum SorafsReferenceValidators {
         commitment: Data,
         challenge: Data,
         commitmentLabel: String? = nil,
+        challengeLabel: String? = nil
+    ) throws -> String {
+        try validatePdpCommitmentChallengeJSON(
+            commitment: commitment,
+            challenge: challenge,
+            commitmentLabel: commitmentLabel,
+            challengeLabel: challengeLabel,
+            generatedAtUnix: currentEpochSeconds()
+        )
+    }
+
+    public static func validatePdpCommitmentChallengeJSON(
+        commitment: Data,
+        challenge: Data,
+        commitmentLabel: String? = nil,
         challengeLabel: String? = nil,
-        generatedAtUnix: UInt64 = currentEpochSeconds()
+        generatedAtUnix: UInt64
     ) throws -> String {
         let resolvedCommitmentLabel = try validatorLabel(
             commitmentLabel,
@@ -444,8 +485,23 @@ public enum SorafsReferenceValidators {
         challenge: Data,
         proof: Data,
         challengeLabel: String? = nil,
+        proofLabel: String? = nil
+    ) throws -> String {
+        try validatePdpChallengeProofJSON(
+            challenge: challenge,
+            proof: proof,
+            challengeLabel: challengeLabel,
+            proofLabel: proofLabel,
+            generatedAtUnix: currentEpochSeconds()
+        )
+    }
+
+    public static func validatePdpChallengeProofJSON(
+        challenge: Data,
+        proof: Data,
+        challengeLabel: String? = nil,
         proofLabel: String? = nil,
-        generatedAtUnix: UInt64 = currentEpochSeconds()
+        generatedAtUnix: UInt64
     ) throws -> String {
         let resolvedChallengeLabel = try validatorLabel(
             challengeLabel,
@@ -470,8 +526,27 @@ public enum SorafsReferenceValidators {
         proof: Data,
         commitmentLabel: String? = nil,
         challengeLabel: String? = nil,
+        proofLabel: String? = nil
+    ) throws -> String {
+        try validatePdpBundleJSON(
+            commitment: commitment,
+            challenge: challenge,
+            proof: proof,
+            commitmentLabel: commitmentLabel,
+            challengeLabel: challengeLabel,
+            proofLabel: proofLabel,
+            generatedAtUnix: currentEpochSeconds()
+        )
+    }
+
+    public static func validatePdpBundleJSON(
+        commitment: Data,
+        challenge: Data,
+        proof: Data,
+        commitmentLabel: String? = nil,
+        challengeLabel: String? = nil,
         proofLabel: String? = nil,
-        generatedAtUnix: UInt64 = currentEpochSeconds()
+        generatedAtUnix: UInt64
     ) throws -> String {
         let resolvedCommitmentLabel = try validatorLabel(
             commitmentLabel,
@@ -496,7 +571,7 @@ public enum SorafsReferenceValidators {
         return json
     }
 
-    private static func currentEpochSeconds() -> UInt64 {
+    public static func currentEpochSeconds() -> UInt64 {
         let seconds = Date().timeIntervalSince1970
         return seconds > 0 ? UInt64(seconds) : 0
     }

@@ -202,6 +202,10 @@ PendingFastPathTimeoutExactness ==
   /\ PendingFastPathTimeoutDerivationExact
   /\ PendingFastPathInlineFallbackExact
 
+PendingFastPathTimeoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingFastPathTimeoutExactness
+
 SafetyFast ==
   PendingFastPathTimeoutExactness
 

@@ -620,10 +620,10 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Offline note issuance starts with the Torii issuer flow, where wallets supply
-their own canonical note commitment to `/v1/offline/v2/notes/issue`.
-Redemption and audit payloads are submitted as direct transaction instructions.
-The Swift SDK no longer publishes legacy offline HTTP helpers.
+Classic Offline Note issuance, audit, redeem, and defund transaction paths are
+retired. The Swift builders and default submitters fail closed before signing or
+submitting; production offline payments use Kagemusha top-up, transfer, and
+recursive redeem flows.
 
 ### Offline transaction queue
 
@@ -646,44 +646,24 @@ apps can decide how to remediate.
 ### Offline APIs
 
 Torii exposes `/v1/offline/readiness` for offline HTTP discovery and keeps
-the issuer POST flow for key refill plus note issuance. Wallets derive note
-commitments locally and pass the bare 64-character commitment hex to
-`/v1/offline/v2/notes/issue`; Torii returns settlement lineage metadata without
-deriving the note commitment from `settlement.entry_hash`. Redemption and audit
-payloads are submitted as direct transaction instructions; the legacy legacy
-offline HTTP routes are no longer published.
+body-signed key refill for compatibility. Classic note issue, redemption, audit,
+and defund submission paths are retired; the Swift SDK surfaces their historical
+models for fixture compatibility while default builders and submitters fail
+closed. Production offline payments use Kagemusha transaction builders.
 Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
-models plus `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
-`buildAuditOfflineNote`, and `buildDefundOfflineNote` transaction builders on
-`IrohaSDK`. Redeem and audit builders verify that the recursive proof's public-input hash
-matches the canonical Swift/Rust Norito payload before signing, so callers pass prover output
-that is bound to the exact public inputs being submitted.
+models plus retired `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
+`buildAuditOfflineNote`, and `buildDefundOfflineNote` compatibility methods on
+`IrohaSDK`.
 
-`buildRedeemOfflineNote` signs a single redeem instruction. It is only appropriate when the
-source note's issued claim is already recorded on-chain, such as issuer-loaded notes or outputs
-whose audit lineage has already been published. P2P offline cash is a bearer transfer: the
-recipient must not require the note to have been pre-issued on-chain before accepting or
-redeeming it. For bearer defunding, use `DefundOfflineNoteRequest` through
-`buildDefundOfflineNote` or `submit(defundOfflineNote:...)`; it puts the ordered
-`bearerAuditTrail` audits before the final `RedeemOfflineNote` instruction in the same signed
-transaction, so the output claim is anchored and redeemed atomically.
+The legacy `buildRedeemOfflineNote`, `buildAuditOfflineNote`,
+`buildIssueOfflineNote`, and `buildDefundOfflineNote` methods are retained only
+for source compatibility and now throw before signing. Do not use them for new
+wallet flows.
 
-`OfflineNoteWallet` adds the app-facing one-call flow for load, receive
-request preparation, P2P pay, accept, optional audit publication, redeem
-submission, and sync. Offline-to-offline pay/accept is local-final and
-irrevocable: the sender immediately records spent inputs and spendable change,
-while the recipient marks the matched pending output spendable after local
-token and proof verification. No online sync is required for the value transfer.
-Payment tokens carry the bearer audit trail needed to defund received notes; accepted P2P notes
-persist that trail locally, and wallet `redeem(_:)` submits an atomic defund instead of a naked
-redeem. `publishAudit` is a separate online evidence-submission step and does not change
-wallet note spendability. The first release surface is dependency-injected:
-apps provide Torii canonical auth, device binding, attestation, proof
-generation/verification, transaction submission, and persistent storage.
-`sync()` can also use an app-provided transaction-outcome resolver to finalize
-redeem-pending note records after redeem finality. The SDK includes an in-memory store, a
-`ToriiOfflineNoteIssuerClient` for body-signed key-refill plus note-issue
-loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
+`OfflineNoteWallet` remains available for historical model and fixture
+compatibility, but its default issuer and transaction submitter surfaces fail
+closed for classic note issue, audit, redeem, and defund paths. Production
+offline payments use Kagemusha flows.
 `KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
@@ -799,6 +779,12 @@ lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base
 verifier-witness batch, transition-profile, append-opening-preflight,
 append-boundary, scalar-projection, and previous/resulting accumulator digests);
 SDK code must not derive, supply, or patch accumulator state.
+generic proof-state (`proofState`, `ProofState`, `proof_state`),
+recursive/lineage proof-state, aggregation-transcript, fixed-window
+table-schedule/shared-manifest/table-base, verifier-witness batch,
+transition-profile binding, append-opening preflight, recursive verifier
+scalar-projection, and previous/resulting accumulator aliases are native-owned
+material, not Swift request fields.
 Verify request archives must pass the
 same public-binding preflight before the native bridge returns a
 `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a

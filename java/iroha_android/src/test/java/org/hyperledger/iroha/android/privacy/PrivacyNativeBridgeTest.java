@@ -269,37 +269,45 @@ public final class PrivacyNativeBridgeTest {
       PrivacyNativeBridge::verifyProof
     };
     for (final PrivacyNativeBridge.NativeCall helper : helpers) {
-      assertThrows(() -> helper.run(new byte[0]));
-      assertThrows(() -> helper.run(null));
+      assertIllegalArgument(
+          () -> helper.run(new byte[0]), "requestArchive must not be empty");
+      assertIllegalArgument(
+          () -> helper.run(null), "requestArchive must not be empty");
     }
     final byte[] oversized = new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1];
     for (final PrivacyNativeBridge.NativeCall helper : helpers) {
-      assertThrows(() -> helper.run(oversized));
-      assertThrows(() -> helper.run(privacyNoritoFrame(0x52)));
+      assertIllegalArgument(
+          () -> helper.run(oversized), "requestArchive must not exceed 67108864 bytes");
+      assertIllegalArgument(
+          () -> helper.run(privacyNoritoFrame(0x52)),
+          "requestArchive must contain a non-empty privacy request payload");
     }
   }
 
   private static void rejectsInvalidProofRequestComponentsBeforeNativeDispatch() {
-    assertThrows(
+    assertIllegalArgument(
         () -> PrivacyNativeBridge.privacyProofRequestV1(
             null,
             "buildZkAceAuthorizationProofV1",
             "stark-fri:zk_ace_pq_authorization_v0",
-            "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-    assertThrows(
+            "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+        "algorithmId must not be null");
+    assertIllegalArgument(
         () -> PrivacyNativeBridge.privacyProofRequestV1(
             "zk-ace-pq-authorization-v0",
             "buildZkAceAuthorizationProofV1",
             "stark-fri:zk_ace_pq_authorization_v0",
-            new byte[0]));
-    assertThrows(
+            new byte[0]),
+        "publicInputs must not be empty");
+    assertIllegalArgument(
         () -> PrivacyNativeBridge.privacyProofRequestV1(
             "zk-ace-pq-authorization-v0",
             "buildZkAceAuthorizationProofV1",
             "stark-fri:zk_ace_pq_authorization_v0",
             "public-inputs".getBytes(java.nio.charset.StandardCharsets.UTF_8),
             new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES / 2 + 1],
-            new byte[0]));
+            new byte[0]),
+        "witness must not exceed 33554432 bytes");
   }
 
   private static void typedConfidentialWitnessBuildersEncodeNativeReadyRequests() {
@@ -367,19 +375,23 @@ public final class PrivacyNativeBridgeTest {
     final PrivacyConfidentialWitness.WitnessV1 transferWitness = sampleTransferWitness();
     final PrivacyConfidentialWitness.WitnessV1 unshieldWitness = sampleUnshieldWitness();
 
-    assertThrows(
+    assertIllegalArgument(
         () ->
             PrivacyConfidentialWitness.buildConfidentialTransferProofRequestV1(
-                transferWitness, "halo2-ipa-pasta:confidential_unshield_v3"));
-    assertThrows(
+                transferWitness, "halo2-ipa-pasta:confidential_unshield_v3"),
+        "vkRef must be halo2-ipa-pasta:confidential_transfer_v2");
+    assertIllegalArgument(
         () ->
             PrivacyConfidentialWitness.buildConfidentialUnshieldProofRequestV1(
-                unshieldWitness, "halo2-ipa-pasta:confidential_transfer_v2"));
-    assertThrows(
-        () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[0]));
-    assertThrows(
-        () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[0]));
-    assertThrows(
+                unshieldWitness, "halo2-ipa-pasta:confidential_transfer_v2"),
+        "vkRef must be halo2-ipa-pasta:confidential_unshield_v3");
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialTransferVerifyRequestV1(new byte[0]),
+        "proof must not be empty");
+    assertIllegalArgument(
+        () -> PrivacyConfidentialWitness.buildConfidentialUnshieldVerifyRequestV1(new byte[0]),
+        "proof must not be empty");
+    assertIllegalArgument(
         () ->
             PrivacyConfidentialWitness.encodeTransferWitness(
                 new PrivacyConfidentialWitness.WitnessV1(
@@ -391,8 +403,9 @@ public final class PrivacyNativeBridgeTest {
                     Collections.emptyList(),
                     Collections.emptyList(),
                     "0",
-                    transferWitness.rootHint())));
-    assertThrows(
+                    transferWitness.rootHint())),
+        "confidential transfer witness must include one or two transferOutputs");
+    assertIllegalArgument(
         () ->
             PrivacyConfidentialWitness.encodeUnshieldWitness(
                 new PrivacyConfidentialWitness.WitnessV1(
@@ -404,8 +417,9 @@ public final class PrivacyNativeBridgeTest {
                     transferWitness.transferOutputs(),
                     Collections.emptyList(),
                     "0",
-                    unshieldWitness.rootHint())));
-    assertThrows(
+                    unshieldWitness.rootHint())),
+        "confidential unshield witness must not include transferOutputs");
+    assertIllegalArgument(
         () ->
             new PrivacyConfidentialWitness.WitnessV1(
                 transferWitness.chainId(),
@@ -416,8 +430,9 @@ public final class PrivacyNativeBridgeTest {
                 transferWitness.transferOutputs(),
                 Collections.emptyList(),
                 "0",
-                transferWitness.rootHint()));
-    assertThrows(
+                transferWitness.rootHint()),
+        "inputs[1].leafIndex duplicates inputs[0]");
+    assertIllegalArgument(
         () ->
             new PrivacyConfidentialWitness.WitnessV1(
                 transferWitness.chainId(),
@@ -430,7 +445,8 @@ public final class PrivacyNativeBridgeTest {
                 transferWitness.transferOutputs(),
                 Collections.emptyList(),
                 "0",
-                transferWitness.rootHint()));
+                transferWitness.rootHint()),
+        "inputs[0].leafIndex must reference treeCommitments");
   }
 
   private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {

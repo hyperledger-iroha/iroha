@@ -4,11 +4,44 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
+
+from sorafs_path_identity import resolve_path_identity
+
+
+RUNNER_ARG_FIELD_RE = re.compile(r"[a-z][a-z0-9_]*\Z")
+
+
+def _require_error_list(errors: Any) -> list[str]:
+    if not isinstance(errors, list):
+        raise ValueError("runner preflight errors must be a list of strings")
+    for error in errors:
+        if not isinstance(error, str):
+            raise ValueError("runner preflight errors must be a list of strings")
+    return errors
+
+
+def _require_label(label: Any) -> str:
+    if (
+        not isinstance(label, str)
+        or not label.strip()
+        or label != label.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in label)
+    ):
+        raise ValueError("runner preflight label must be a non-empty canonical string")
+    return label
+
+
+def _require_runner_arg_field(field: Any) -> str:
+    if not isinstance(field, str) or RUNNER_ARG_FIELD_RE.fullmatch(field) is None:
+        raise ValueError("runner argument field must be a snake_case string")
+    return field
 
 
 def inspect_runner_path_exists(
@@ -19,10 +52,15 @@ def inspect_runner_path_exists(
 ) -> bool | None:
     """Return whether a runner path exists, recording inspection failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.exists()
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
 
 
@@ -34,10 +72,15 @@ def inspect_runner_path_is_symlink(
 ) -> bool | None:
     """Return whether a runner path is a symlink, recording failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.is_symlink()
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
 
 
@@ -49,10 +92,15 @@ def inspect_runner_path_is_file(
 ) -> bool | None:
     """Return whether a runner path is a file, recording inspection failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.is_file()
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
 
 
@@ -64,10 +112,15 @@ def inspect_runner_path_size(
 ) -> int | None:
     """Return a path size in bytes, recording inspection failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.stat().st_size
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
 
 
@@ -79,11 +132,107 @@ def inspect_runner_path_is_dir(
 ) -> bool | None:
     """Return whether a runner path is a directory, recording failures."""
 
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{path_label} `{path}` must be a path")
+        return None
     try:
         return path.is_dir()
     except (OSError, RuntimeError) as error:
-        errors.append(f"{label} `{path}` cannot be inspected: {error}")
+        error_list.append(f"{path_label} `{path}` cannot be inspected: {error}")
         return None
+
+
+def validate_runner_output_parent(
+    path: Path,
+    errors: list[str],
+    *,
+    label: str,
+) -> bool:
+    """Validate an output path's parent chain before creating files."""
+
+    error_list = _require_error_list(errors)
+    output_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{output_label} `{path}` must be a path")
+        return False
+    for parent in (path.parent, *path.parent.parents):
+        parent_label = f"{output_label} parent"
+        parent_is_symlink = inspect_runner_path_is_symlink(
+            parent,
+            error_list,
+            label=parent_label,
+        )
+        if parent_is_symlink is None:
+            return False
+        if parent_is_symlink:
+            error_list.append(f"{parent_label} `{parent}` must not be a symlink")
+            return False
+        parent_exists = inspect_runner_path_exists(
+            parent,
+            error_list,
+            label=parent_label,
+        )
+        if parent_exists is None:
+            return False
+        if parent_exists:
+            parent_is_dir = inspect_runner_path_is_dir(
+                parent,
+                error_list,
+                label=parent_label,
+            )
+            if parent_is_dir is None:
+                return False
+            if parent_is_dir is False:
+                error_list.append(
+                    f"{parent_label} `{parent}` must be a directory when it exists"
+                )
+                return False
+    return True
+
+
+def validate_runner_output_dir(
+    out_dir: Path,
+    errors: list[str],
+    *,
+    label: str = "--out-dir",
+) -> bool:
+    """Validate a runner output directory target before command execution."""
+
+    error_list = _require_error_list(errors)
+    output_label = _require_label(label)
+    if not isinstance(out_dir, Path):
+        error_list.append(f"{output_label} `{out_dir}` must be a path")
+        return False
+    out_dir_is_symlink = inspect_runner_path_is_symlink(
+        out_dir,
+        error_list,
+        label=output_label,
+    )
+    if out_dir_is_symlink is None:
+        return False
+    if out_dir_is_symlink:
+        error_list.append(f"{output_label} `{out_dir}` must not be a symlink")
+        return False
+    out_dir_exists = inspect_runner_path_exists(out_dir, error_list, label=output_label)
+    if out_dir_exists is None:
+        return False
+    if out_dir_exists:
+        out_dir_is_dir = inspect_runner_path_is_dir(
+            out_dir,
+            error_list,
+            label=output_label,
+        )
+        if out_dir_is_dir is None:
+            return False
+        if out_dir_is_dir is False:
+            error_list.append(
+                f"{output_label} `{out_dir}` must be a directory when it exists"
+            )
+            return False
+        return True
+    return validate_runner_output_parent(out_dir, error_list, label=output_label)
 
 
 def validate_runner_preflight(
@@ -111,38 +260,22 @@ def validate_runner_preflight(
         errors.append(f"--out-dir `{out_dir}` must be a path")
         return errors
     out_dir_identity = resolve_runner_output_path(out_dir, errors)
-    out_dir_exists = inspect_runner_path_exists(out_dir, errors, label="--out-dir")
-    if out_dir_exists:
-        out_dir_is_dir = inspect_runner_path_is_dir(
-            out_dir,
-            errors,
-            label="--out-dir",
-        )
-        if out_dir_is_dir is False:
-            errors.append(f"--out-dir `{out_dir}` must be a directory when it exists")
-    elif out_dir_exists is False:
-        out_dir_parent = out_dir.parent
-        parent_exists = inspect_runner_path_exists(
-            out_dir_parent,
-            errors,
-            label="--out-dir parent",
-        )
-        if parent_exists:
-            parent_is_dir = inspect_runner_path_is_dir(
-                out_dir_parent,
-                errors,
-                label="--out-dir parent",
-            )
-            if parent_is_dir is False:
-                errors.append(
-                    f"--out-dir parent `{out_dir_parent}` "
-                    "must be a directory when it exists"
-                )
+    out_dir_valid = validate_runner_output_dir(out_dir, errors)
 
-    summary_out = getattr(args, "summary_out", None) or out_dir / summary_filename
+    configured_summary_out = getattr(args, "summary_out", None)
+    if configured_summary_out is None and not out_dir_valid:
+        return errors
+    summary_out = configured_summary_out or out_dir / summary_filename
     if not isinstance(summary_out, Path):
         errors.append(f"--summary-out `{summary_out}` must be a path")
     else:
+        summary_out_is_symlink = inspect_runner_path_is_symlink(
+            summary_out,
+            errors,
+            label="--summary-out",
+        )
+        if summary_out_is_symlink:
+            errors.append(f"--summary-out `{summary_out}` must not be a symlink")
         summary_out_exists = inspect_runner_path_exists(
             summary_out,
             errors,
@@ -169,23 +302,7 @@ def validate_runner_preflight(
                         )
                     )
         elif summary_out_exists is False:
-            summary_parent = summary_out.parent
-            summary_parent_exists = inspect_runner_path_exists(
-                summary_parent,
-                errors,
-                label="--summary-out parent",
-            )
-            if summary_parent_exists:
-                summary_parent_is_dir = inspect_runner_path_is_dir(
-                    summary_parent,
-                    errors,
-                    label="--summary-out parent",
-                )
-                if summary_parent_is_dir is False:
-                    errors.append(
-                        f"--summary-out parent `{summary_parent}` "
-                        "must be a directory when it exists"
-                    )
+            validate_runner_output_parent(summary_out, errors, label="--summary-out")
             summary_out_identity = resolve_runner_output_path(summary_out, errors)
             if (
                 out_dir_identity is not None
@@ -203,22 +320,30 @@ def validate_runner_preflight(
 def resolve_runner_input_file(path: Path, errors: list[str]) -> Path | None:
     """Return a canonical runner input path identity, recording resolver failures."""
 
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError) as error:
-        errors.append(f"input file `{path}` cannot be resolved: {error}")
-        return None
+    return resolve_path_identity(path, errors, label="input file")
 
 
 InputFileIdentities = dict[Path, tuple[str, Path]]
 InputDirIdentities = dict[Path, tuple[str, Path]]
 RESERVED_OUTPUT_ARTIFACT_DIAGNOSTIC = "must not be the same path as reserved output"
+COMMAND_PLAN_SHAPE_DIAGNOSTIC = "command plan must be a sequence of steps"
+
+
+def command_plan_steps(plan: Any) -> Sequence[Any] | None:
+    """Return command-plan steps or reject scalar/object containers."""
+
+    if isinstance(plan, (str, bytes, bytearray, Mapping)) or not isinstance(
+        plan, Sequence
+    ):
+        return None
+    return plan
 
 
 def runner_arg_label(field: str) -> str:
     """Return the CLI option label for an argparse namespace field."""
 
-    return f"--{field.replace('_', '-')}"
+    field_name = _require_runner_arg_field(field)
+    return f"--{field_name.replace('_', '-')}"
 
 
 def require_runner_positive_int(
@@ -230,13 +355,15 @@ def require_runner_positive_int(
 ) -> bool:
     """Require a direct runner namespace value to be a positive integer."""
 
-    value = getattr(args, field, None)
+    error_list = _require_error_list(errors)
+    field_name = _require_runner_arg_field(field)
+    value = getattr(args, field_name, None)
     if value is None and allow_none:
         return True
     valid = isinstance(value, int) and not isinstance(value, bool) and value > 0
     if not valid:
         suffix = " when supplied" if allow_none else ""
-        errors.append(f"{runner_arg_label(field)} must be positive{suffix}")
+        error_list.append(f"{runner_arg_label(field_name)} must be positive{suffix}")
     return valid
 
 
@@ -247,10 +374,12 @@ def require_runner_non_negative_int(
 ) -> bool:
     """Require a direct runner namespace value to be a non-negative integer."""
 
-    value = getattr(args, field, None)
+    error_list = _require_error_list(errors)
+    field_name = _require_runner_arg_field(field)
+    value = getattr(args, field_name, None)
     valid = isinstance(value, int) and not isinstance(value, bool) and value >= 0
     if not valid:
-        errors.append(f"{runner_arg_label(field)} must be non-negative")
+        error_list.append(f"{runner_arg_label(field_name)} must be non-negative")
     return valid
 
 
@@ -355,21 +484,20 @@ def require_existing_dirs(
 def resolve_runner_output_path(path: Path, errors: list[str]) -> Path | None:
     """Return a canonical runner output path identity, recording resolver failures."""
 
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError) as error:
-        errors.append(f"output path `{path}` cannot be resolved: {error}")
-        return None
+    return resolve_path_identity(path, errors, label="output path")
 
 
 def validate_command_plan_artifacts(
-    plan: Sequence[Any],
+    plan: Any,
     *,
     reserved_output_paths: Sequence[Path] = (),
 ) -> list[str]:
     """Reject ambiguous planned artifact outputs before executing commands."""
 
     errors: list[str] = []
+    steps = command_plan_steps(plan)
+    if steps is None:
+        return [COMMAND_PLAN_SHAPE_DIAGNOSTIC]
     seen: dict[Path, tuple[str, Path]] = {}
     reserved: dict[Path, Path] = {}
     for path in reserved_output_paths:
@@ -377,7 +505,7 @@ def validate_command_plan_artifacts(
         if resolved is not None:
             reserved[resolved] = path
 
-    for step in plan:
+    for step in steps:
         artifact = getattr(step, "artifact", None)
         if artifact is None:
             continue
@@ -394,6 +522,22 @@ def validate_command_plan_artifacts(
             continue
         if artifact_is_symlink:
             errors.append(f"{label} artifact `{artifact}` must not be a symlink")
+            continue
+        artifact_exists = inspect_runner_path_exists(
+            artifact,
+            errors,
+            label=f"{label} artifact",
+        )
+        if artifact_exists is None:
+            continue
+        if artifact_exists:
+            errors.append(f"{label} artifact `{artifact}` must not already exist")
+            continue
+        if not validate_runner_output_parent(
+            artifact,
+            errors,
+            label=f"{label} artifact",
+        ):
             continue
         resolved = resolve_runner_output_path(artifact, errors)
         if resolved is None:
@@ -454,13 +598,21 @@ def emit_runner_notice(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def run_command_plan(plan: Sequence[Any], out_dir: Path) -> int:
+def run_command_plan(plan: Any, out_dir: Path) -> int:
     """Run a SoraFS collection command plan with structured launch/output errors."""
 
-    errors = validate_command_plan_artifacts(
-        plan,
-        reserved_output_paths=(out_dir,),
-    )
+    errors: list[str] = []
+    steps = command_plan_steps(plan)
+    if steps is None:
+        emit_runner_error_lines((COMMAND_PLAN_SHAPE_DIAGNOSTIC,))
+        return 1
+    if validate_runner_output_dir(out_dir, errors):
+        errors.extend(
+            validate_command_plan_artifacts(
+                steps,
+                reserved_output_paths=(out_dir,),
+            )
+        )
     if errors:
         emit_runner_error_lines(errors)
         return 1
@@ -471,7 +623,7 @@ def run_command_plan(plan: Sequence[Any], out_dir: Path) -> int:
         emit_runner_error_lines((f"failed to create --out-dir `{out_dir}`: {error}",))
         return 1
 
-    for step in plan:
+    for step in steps:
         label = str(getattr(step, "label", "<unknown>"))
         artifact = getattr(step, "artifact", None)
         command = getattr(step, "command", None)

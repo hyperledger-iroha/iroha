@@ -60,7 +60,7 @@ def parse_hex_bytes(value: str, *, label: str, byte_length: int, nonzero: bool =
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (TypeError, ValueError):
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -206,7 +206,12 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned odd-length hex")
     if any(symbol not in "0123456789abcdef" for symbol in text):
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
-    return bytes.fromhex(text)
+    try:
+        return bytes.fromhex(text)
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        raise RuntimeError(
+            f"{method} returned non-canonical lowercase 0x hex data"
+        ) from None
 
 
 def _rpc_fixed_hex_data(

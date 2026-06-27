@@ -23,11 +23,19 @@ NOW_UNIX = 1_800_300_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+DEPLOYMENT_ID = "moderation-panel-staging-a"
+ENVIRONMENT = "staging"
 
 
 def write_json(path: Path, payload: dict) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+def with_context(payload: dict) -> dict:
+    payload["deployment_id"] = DEPLOYMENT_ID
+    payload["environment"] = ENVIRONMENT
+    return payload
 
 
 def route(name: str) -> dict:
@@ -43,7 +51,7 @@ def route(name: str) -> dict:
 
 def appeal_intake() -> dict:
     routes = [route(name) for name in ("appeal_submit", "case_status", "deposit_quote", "deposit_confirm")]
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.appeal_intake_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -61,11 +69,11 @@ def appeal_intake() -> dict:
         "invalid_payload_rejected": True,
         "payloads_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def sortition_roster(*, panel_size: int = 7) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.sortition_roster_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -80,11 +88,11 @@ def sortition_roster(*, panel_size: int = 7) -> dict:
         "failover_plan_present": True,
         "roster_privacy_preserved": True,
         "juror_private_data_included": False,
-    }
+    })
 
 
 def evidence_viewer() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.evidence_viewer_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -142,12 +150,12 @@ def evidence_viewer() -> dict:
         "signed_urls_included": False,
         "watermark_secrets_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def operator_workflow() -> dict:
     routes = [route(name) for name in ("operator_panel", "bridge_plan", "juror_plan", "commit_reveal_status")]
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.operator_workflow_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -162,11 +170,11 @@ def operator_workflow() -> dict:
         "mutation_forwarding_signed": True,
         "payload_bytes_rejected": True,
         "response_bodies_included": False,
-    }
+    })
 
 
 def juror_notifications() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.juror_notifications_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -181,7 +189,7 @@ def juror_notifications() -> dict:
         "private_payloads_rejected": True,
         "message_bodies_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def commit_reveal(*, lag: int = 60) -> dict:
@@ -192,7 +200,7 @@ def commit_reveal(*, lag: int = 60) -> dict:
         route("ballot_tally"),
         route("ballot_events"),
     ]
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.commit_reveal_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -234,12 +242,12 @@ def commit_reveal(*, lag: int = 60) -> dict:
         "tally_digest_hex": DIGEST,
         "commit_payloads_included": False,
         "reveal_payloads_included": False,
-    }
+    })
 
 
 def decision_publication() -> dict:
     routes = [route(name) for name in ("decision_publish", "decision_status", "challenge_status")]
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.decision_publication_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -255,11 +263,11 @@ def decision_publication() -> dict:
         "public_decision_trail_published": True,
         "challenge_dag_bound": True,
         "raw_decision_included": False,
-    }
+    })
 
 
 def settlement_integration() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.settlement_integration_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -274,11 +282,11 @@ def settlement_integration() -> dict:
         "reputation_penalty_handoff_present": True,
         "signed_transaction_included": False,
         "raw_ledger_included": False,
-    }
+    })
 
 
 def transparency_reputation() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.transparency_reputation_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -298,11 +306,11 @@ def transparency_reputation() -> dict:
         "reputation_delta_applied": True,
         "gateway_compliance_cache_updated": True,
         "payloads_included": False,
-    }
+    })
 
 
 def e2e_panel(*, peer_count: int = 4) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.e2e_panel_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
@@ -321,11 +329,11 @@ def e2e_panel(*, peer_count: int = 4) -> dict:
         "all_peers_reconciled": True,
         "unexpected_failure_count": 0,
         "raw_evidence_included": False,
-    }
+    })
 
 
 def metrics_alerts() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.metrics_alert_canary.v1",
         "status": "passed",
         "case_digest_hex": DIGEST,
@@ -344,11 +352,11 @@ def metrics_alerts() -> dict:
             "sorafs_moderation_panel_no_show_total",
         ],
         "response_bodies_included": False,
-    }
+    })
 
 
 def governance_approval() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.moderation_panel.governance_approval.v1",
         "status": "passed",
         "case_digest_hex": DIGEST,
@@ -366,7 +374,7 @@ def governance_approval() -> dict:
         "e2e_panel_evidence_accepted": True,
         "config_source": "iroha_config",
         "policy_digest_hex": DIGEST,
-    }
+    })
 
 
 def write_complete_evidence(root: Path) -> None:
@@ -412,7 +420,70 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "tally_digest_hex": DIGEST,
         }
     ]
+    assert payload["required"]["appeal_intake"]["artifacts"][0]["fingerprint"][
+        "deployment_id"
+    ] == DEPLOYMENT_ID
+    assert payload["deployment_context"] == {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
+    }
     assert len(payload["valid_e2e_runs"]) == 1
+
+
+def test_deployment_context_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    del payload["deployment_id"]
+    write_json(tmp_path / "appeal-intake.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["appeal_intake"]["artifacts"][0]
+    assert "deployment_id must be a non-empty string" in artifact["errors"]
+
+
+def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["deployment_id"] = "moderation-panel-dev-a"
+    payload["environment"] = "dev"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact_errors = result["required"]["governance_approval"]["artifacts"][0][
+        "errors"
+    ]
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in artifact_errors
+    )
+    assert "environment must be one of" in "\n".join(artifact_errors)
+
+
+def test_mixed_reviewed_deployment_context_fails(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["deployment_id"] = "moderation-panel-staging-b"
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["deployment_context"] == {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
+    }
+    assert (
+        "e2e_panel.deployment_id `moderation-panel-staging-b` does not match "
+        f"`{DEPLOYMENT_ID}`"
+        in result["errors"]
+    )
 
 
 def test_missing_e2e_panel_fails(tmp_path: Path) -> None:

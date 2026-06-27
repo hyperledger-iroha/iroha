@@ -23,6 +23,8 @@ NOW_UNIX = 1_800_100_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "ef" * 32
+DEPLOYMENT_ID = "hedging-staging-a"
+ENVIRONMENT = "staging"
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -30,8 +32,14 @@ def write_json(path: Path, payload: dict) -> Path:
     return path
 
 
+def with_context(payload: dict) -> dict:
+    payload["deployment_id"] = DEPLOYMENT_ID
+    payload["environment"] = ENVIRONMENT
+    return payload
+
+
 def feed_collector(*, lag: int = 60) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.hedging.feed_collector_canary.v1",
         "status": "passed",
         "feed_count": 3,
@@ -43,11 +51,11 @@ def feed_collector(*, lag: int = 60) -> dict:
         "feed_lag_seconds": lag,
         "payload_bytes_included": False,
         "response_bodies_included": False,
-    }
+    })
 
 
 def reference_price(*, divergence_bps: int = 50) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.hedging.reference_price_canary.v1",
         "status": "passed",
         "decision_id_hex": DIGEST,
@@ -62,11 +70,11 @@ def reference_price(*, divergence_bps: int = 50) -> dict:
         "decision_lag_seconds": 60,
         "degraded": False,
         "payload_bytes_included": False,
-    }
+    })
 
 
 def billing_cycle(cycle_id: str, cycle_index: int, *, generated_at: int = GENERATED_AT) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.billing.cycle_canary.v1",
         "status": "passed",
         "cycle_id": cycle_id,
@@ -87,7 +95,7 @@ def billing_cycle(cycle_id: str, cycle_index: int, *, generated_at: int = GENERA
         "statement_bodies_included": False,
         "raw_financial_records_included": False,
         "statement_digests_hex": [DIGEST, "cd" * 32],
-    }
+    })
 
 
 def statement_publication() -> dict:
@@ -101,7 +109,7 @@ def statement_publication() -> dict:
         }
         for name in ("statements_list", "statement_fetch", "statement_acknowledgement")
     ]
-    return {
+    return with_context({
         "schema": "sorafs.billing.statement_publication_canary.v1",
         "status": "passed",
         "statement_bundle_digest_hex": DIGEST,
@@ -111,11 +119,11 @@ def statement_publication() -> dict:
         "acknowledgement_probe_count": 1,
         "response_bodies_included": False,
         "routes": routes,
-    }
+    })
 
 
 def reconciliation(*, mismatch_count: int = 0) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.billing.reconciliation_canary.v1",
         "status": "passed",
         "statement_bundle_digest_hex": DIGEST,
@@ -133,11 +141,11 @@ def reconciliation(*, mismatch_count: int = 0) -> dict:
         "mismatch_count": mismatch_count,
         "unmatched_event_count": 0,
         "raw_financial_records_included": False,
-    }
+    })
 
 
 def metrics_alerts(*, critical: bool = False) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.hedging_billing.metrics_alert_canary.v1",
         "status": "passed",
         "statement_bundle_digest_hex": DIGEST,
@@ -154,11 +162,11 @@ def metrics_alerts(*, critical: bool = False) -> dict:
             "escrow_runway_seconds",
         ],
         "response_bodies_included": False,
-    }
+    })
 
 
 def native_bridge_release(*, abi: int = 12) -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.hedging_billing.native_bridge_release.v1",
         "status": "passed",
         "bridge_abi_version": abi,
@@ -170,11 +178,11 @@ def native_bridge_release(*, abi: int = 12) -> dict:
             {"id": "NoritoBridge.xcframework", "sha256": DIGEST},
             {"id": "connect-norito-jni-macos-arm64", "sha256": "ef" * 32},
         ],
-    }
+    })
 
 
 def governance_approval() -> dict:
-    return {
+    return with_context({
         "schema": "sorafs.hedging_billing.governance_approval.v1",
         "status": "passed",
         "statement_bundle_digest_hex": DIGEST,
@@ -187,7 +195,7 @@ def governance_approval() -> dict:
         "config_source": "iroha_config",
         "policy_digest_hex": DIGEST,
         "hedge_execution_enabled": False,
-    }
+    })
 
 
 def write_complete_evidence(root: Path) -> None:
@@ -223,6 +231,9 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "reconciliation_digest_hex": DIGEST,
         }
     ]
+    assert payload["required"]["feed_collector"]["artifacts"][0]["fingerprint"][
+        "deployment_id"
+    ] == DEPLOYMENT_ID
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -234,6 +245,41 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     )
 
     assert MODULE.main([f"@{args}"]) == 0
+
+
+def test_deployment_context_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_collector()
+    del payload["deployment_id"]
+    write_json(tmp_path / "feed-collector.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["feed_collector"]["artifacts"][0]
+    assert "deployment_id must be a non-empty string" in artifact["errors"]
+
+
+def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["deployment_id"] = "hedging-dev-a"
+    payload["environment"] = "dev"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact_errors = result["required"]["governance_approval"]["artifacts"][0][
+        "errors"
+    ]
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in artifact_errors
+    )
+    assert "environment must be one of" in "\n".join(artifact_errors)
 
 
 def test_missing_second_billing_cycle_fails(tmp_path: Path) -> None:

@@ -16,19 +16,28 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_SOURCE_KINDS,
+    MAX_EVIDENCE_BYTES,
     SUMMARY_SCHEMA,
 )
+from sorafs_evidence_json import load_evidence_json  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_evidence_validation import (  # noqa: E402
+    require_rollout_deployment_id,
+    require_rollout_environment,
+)
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
+    inspect_runner_path_is_file,
+    inspect_runner_path_is_symlink,
     run_command_plan,
     require_existing_files,
     require_runner_positive_int,
+    render_runner_plan,
     validate_runner_preflight,
     write_runner_plan,
 )
@@ -41,8 +50,6 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
-
-
 
 
 def normalize_iroha_arg_values(args: Sequence[str]) -> list[str]:
@@ -72,6 +79,8 @@ def split_source_entry_spec(spec: str) -> tuple[str, Path]:
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    require_rollout_deployment_id({"deployment_id": args.deployment_id}, errors)
+    require_rollout_environment({"environment": args.environment}, errors)
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     source_entries: list[tuple[str, Path]] = []
     for spec in args.source_entry:
@@ -204,10 +213,14 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     ]
 
 
-def plan_json(plan: Sequence[CommandPlan]) -> dict[str, object]:
+def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
         "schema": "sorafs.transparency.rollout_evidence_collection_plan.v1",
         "verifier_summary_schema": SUMMARY_SCHEMA,
+        "deployment_context": {
+            "deployment_id": args.deployment_id,
+            "environment": args.environment.lower(),
+        },
         "steps": [
             {
                 "label": step.label,
@@ -219,8 +232,93 @@ def plan_json(plan: Sequence[CommandPlan]) -> dict[str, object]:
     }
 
 
-def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
-    return run_command_plan(plan, out_dir)
+def annotate_evidence_artifact(
+    path: Path,
+    *,
+    deployment_id: str,
+    environment: str,
+) -> list[str]:
+    """Attach reviewed rollout context to a generated canary artifact."""
+
+    errors: list[str] = []
+    artifact_is_symlink = inspect_runner_path_is_symlink(
+        path,
+        errors,
+        label="deployment-context artifact",
+    )
+    if artifact_is_symlink:
+        errors.append(f"deployment-context artifact `{path}` must not be a symlink")
+    artifact_is_file = inspect_runner_path_is_file(
+        path,
+        errors,
+        label="deployment-context artifact",
+    )
+    if artifact_is_file is False:
+        errors.append(f"deployment-context artifact `{path}` must exist and be a file")
+    if errors:
+        return errors
+
+    try:
+        payload = load_evidence_json(path, MAX_EVIDENCE_BYTES)
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as error:
+        return [f"failed to read generated evidence artifact `{path}`: {error}"]
+
+    for field, value in (
+        ("deployment_id", deployment_id),
+        ("environment", environment),
+    ):
+        existing = payload.get(field)
+        if existing is not None and existing != value:
+            return [
+                f"generated evidence artifact `{path}` field `{field}` "
+                f"must be `{value}`, got `{existing}`"
+            ]
+        payload[field] = value
+
+    try:
+        path.write_text(render_runner_plan(payload), encoding="utf-8")
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        return [f"failed to write deployment context into `{path}`: {error}"]
+    return []
+
+
+def annotate_evidence_artifacts(
+    plan: Sequence[CommandPlan],
+    *,
+    deployment_id: str,
+    environment: str,
+) -> list[str]:
+    """Attach rollout context to generated canary artifacts before verification."""
+
+    errors: list[str] = []
+    for step in plan:
+        if step.artifact is None:
+            continue
+        errors.extend(
+            annotate_evidence_artifact(
+                step.artifact,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        )
+    return errors
+
+
+def run_plan(plan: Sequence[CommandPlan], out_dir: Path, args: argparse.Namespace) -> int:
+    canary_plan = plan[:-1]
+    verifier_plan = plan[-1:]
+    exit_code = run_command_plan(canary_plan, out_dir)
+    if exit_code != 0:
+        return exit_code
+    annotation_errors = annotate_evidence_artifacts(
+        canary_plan,
+        deployment_id=args.deployment_id,
+        environment=args.environment.lower(),
+    )
+    if annotation_errors:
+        emit_runner_error_lines(annotation_errors)
+        return 1
+    return run_command_plan(verifier_plan, out_dir)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -244,6 +342,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--torii-url",
         required=True,
         help="Deployed Torii or public transparency gateway base URL.",
+    )
+    parser.add_argument(
+        "--deployment-id",
+        required=True,
+        help="Reviewed production/staging deployment id to stamp onto generated evidence.",
+    )
+    parser.add_argument(
+        "--environment",
+        required=True,
+        help="Reviewed rollout environment label: staging, production, prod, or release.",
     )
     parser.add_argument(
         "--out-dir",
@@ -327,12 +435,12 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     if args.dry_run:
-        plan_errors = write_runner_plan(plan_json(plan))
+        plan_errors = write_runner_plan(plan_json(plan, args))
         if plan_errors:
             emit_runner_error_lines(plan_errors)
             return 2
         return 0
-    return run_plan(plan, args.out_dir)
+    return run_plan(plan, args.out_dir, args)
 
 
 if __name__ == "__main__":

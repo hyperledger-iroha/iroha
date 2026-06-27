@@ -106,12 +106,13 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
 
         @JvmStatic
-        @Suppress("UNUSED_PARAMETER")
         fun preferredMode(
             recursiveCompactAvailable: Boolean,
             recursiveSpendAvailable: Boolean,
         ): Mode {
-            // ABI-7 compact mode is not a production default yet.
+            if (recursiveCompactAvailable) {
+                return Mode.RECURSIVE_COMPACT_V1
+            }
             return if (recursiveSpendAvailable) {
                 Mode.RECURSIVE_SPEND_V1
             } else {

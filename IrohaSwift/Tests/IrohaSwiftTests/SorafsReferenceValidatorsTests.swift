@@ -35,6 +35,55 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
+    func testDefaultTimestampOverloadsValidateLabelsBeforeNativeDispatch() {
+        func assertInvalidLabel(_ operation: () throws -> String, line: UInt = #line) {
+            XCTAssertThrowsError(try operation(), line: line) { error in
+                XCTAssertEqual(
+                    error as? SorafsReferenceValidationError,
+                    .invalidLabel("label must not be blank"),
+                    line: line
+                )
+            }
+        }
+
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+                kind: .orderRequest,
+                payload: Data(),
+                label: " "
+            )
+        }
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validatePdpPayloadJSON(
+                kind: .proof,
+                payload: Data(),
+                label: " "
+            )
+        }
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validatePdpCommitmentChallengeJSON(
+                commitment: Data(),
+                challenge: Data(),
+                commitmentLabel: " "
+            )
+        }
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validatePdpChallengeProofJSON(
+                challenge: Data(),
+                proof: Data(),
+                challengeLabel: " "
+            )
+        }
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validatePdpBundleJSON(
+                commitment: Data(),
+                challenge: Data(),
+                proof: Data(),
+                commitmentLabel: " "
+            )
+        }
+    }
+
     func testRejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
         XCTAssertThrowsError(
             try SorafsReferenceValidators.signOrderbookPayload(

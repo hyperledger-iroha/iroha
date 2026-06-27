@@ -477,4 +477,8 @@ NearQuorumPreemptiveEscalationExactness ==
   /\ NearQuorumPerTickCapExact
   /\ NearQuorumProgressCounterExact
 
+NearQuorumPreemptiveEscalationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NearQuorumPreemptiveEscalationExactness
+
 ====

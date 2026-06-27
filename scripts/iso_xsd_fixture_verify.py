@@ -43,7 +43,7 @@ from typing import Any
 
 
 MANIFEST_VERSION = 1
-SUMMARY_VERSION = 2
+SUMMARY_VERSION = 3
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 ISO_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:"
@@ -54,6 +54,16 @@ UNSUPPORTED_SCHEMA_COMPOSITION_CHILDREN = {
     "override",
 }
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
+MAX_JSON_ARRAY_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
+ISO_SCHEMA_DOWNLOAD_PATH_RE = re.compile(r"^/message/[1-9][0-9]*/download$")
+ISO_SCHEMA_ARCHIVE_QUERY_RE = re.compile(r"^page=[1-9][0-9]*$")
+ISO_MESSAGE_NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9]*V[0-9]{2}$")
+ISO_MESSAGE_NAME_VERSION_RE = re.compile(r"V([0-9]{2})$")
+ISO_SUBMITTING_ORGANISATION_PART_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9&'().-]*(?:(?: |/)[A-Za-z0-9][A-Za-z0-9&'().-]*)*$"
+)
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 PROFILE_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
@@ -114,8 +124,10 @@ REPOSITORY_XML_FIXTURE_PARTS = (
     "iso20022",
 )
 MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
+MAX_PENDING_SCHEMA_ORGANISATION_CHARS = 256
 MAX_XML_IDENTIFIER_CHARS = 256
 MAX_PROFILE_CATALOG_IDENTIFIER_CHARS = 128
 DEFAULT_XMLLINT_TIMEOUT_SECS = 30.0
@@ -279,7 +291,13 @@ def _contains_secret_identifier_material(value: str) -> bool:
         for candidate in _secret_scan_values(value)
     )
 
-TOP_LEVEL_KEYS = {"version", "schemas", "fixtures", "blocked_schema_sources"}
+TOP_LEVEL_KEYS = {
+    "version",
+    "schemas",
+    "fixtures",
+    "blocked_schema_sources",
+    "pending_schema_sources",
+}
 SCHEMA_KEYS = {"path", "message_def_id", "payload_root", "source", "schema_only_reason"}
 SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
 BLOCKED_SCHEMA_SOURCE_KEYS = {
@@ -289,6 +307,81 @@ BLOCKED_SCHEMA_SOURCE_KEYS = {
     "restriction_markers",
 }
 BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS = {"repository", "commit", "path", "sha256"}
+PENDING_SCHEMA_SOURCE_KEYS = {
+    "message_def_id",
+    "source",
+    "reason",
+}
+PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS = {
+    "catalogue_url",
+    "download_url",
+    "download_type",
+    "message_name",
+    "submitting_organisation",
+}
+PENDING_SCHEMA_DOWNLOAD_TYPES = {"XSD"}
+KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
+    "colr.012.001.05": {
+        "catalogue_url": "https://www.iso20022.org/iso-20022-message-definitions",
+        "download_url": "https://www.iso20022.org/message/22504/download",
+        "download_type": "XSD",
+        "message_name": "CollateralSubstitutionConfirmationV05",
+        "submitting_organisation": "SWIFT, FPL, ISDA/FpML, ISITC",
+    },
+    "sese.023.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17196/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.023.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22545/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionInstructionV11",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.09": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17236/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV09",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.024.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17241/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionStatusAdviceV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.08": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/17286/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV08",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.10": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/21776/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV10",
+        "submitting_organisation": "SWIFT",
+    },
+    "sese.025.001.11": {
+        "catalogue_url": "https://www.iso20022.org/catalogue-messages/iso-20022-messages-archive?page=8",
+        "download_url": "https://www.iso20022.org/message/22547/download",
+        "download_type": "XSD",
+        "message_name": "SecuritiesSettlementTransactionConfirmationV11",
+        "submitting_organisation": "SWIFT",
+    },
+}
+ISO_SCHEMA_CATALOGUE_PATHS = {
+    "/iso-20022-message-definitions",
+    "/catalogue-messages/iso-20022-messages-archive",
+}
 BLOCKED_SCHEMA_RESTRICTION_MARKERS = {
     "swift-copyright-header",
     "licensed-product-redistribution-agreement",
@@ -353,6 +446,36 @@ def _canonical_json_bytes(value: Any) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise FixtureManifestError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise FixtureManifestError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise FixtureManifestError(f"{label} must be a path") from error
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("require_schema_backed_fixtures", "--require-schema-backed-fixtures"),
+        ("require_fixture_for_schema", "--require-fixture-for-schema"),
+        (
+            "require_profile_schema_backed_versions",
+            "--require-profile-schema-backed-versions",
+        ),
+        ("validate_xml_schema", "--validate-xml-schema"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
 
 
 def _read_regular_file(
@@ -662,20 +785,75 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_summary_output_input_alias(
+    summary_out: Path | None,
+    inputs: tuple[tuple[str, Path | None], ...],
+) -> None:
+    if summary_out is None:
+        return
+    for label, path in inputs:
+        if path is None:
+            continue
+        if str(summary_out) == str(path) or _same_existing_file(summary_out, path):
+            raise FixtureManifestError(f"summary_out must not reuse {label} path")
+
+
+def _summary_material_input_paths(
+    manifest_path: Path,
+    summary: dict[str, Any],
+) -> tuple[tuple[str, Path], ...]:
+    manifest_dir = manifest_path.resolve().parent
+    material_paths: list[tuple[str, Path]] = []
+    for offset, schema in enumerate(summary.get("schemas", [])):
+        path = schema.get("path") if isinstance(schema, dict) else None
+        if isinstance(path, str):
+            material_paths.append(
+                (f"manifest.schemas[{offset}].path", manifest_dir / path)
+            )
+    for offset, fixture in enumerate(summary.get("fixtures", [])):
+        path = fixture.get("path") if isinstance(fixture, dict) else None
+        if isinstance(path, str):
+            material_paths.append(
+                (f"manifest.fixtures[{offset}].path", manifest_dir / path)
+            )
+    return tuple(material_paths)
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
     label = display_label if display_label is not None else "output path"
     _reject_output_path_smuggling(path, label)
     _reject_repository_output_path(path, label)
-    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError as error:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
         raise FixtureManifestError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
-    if stat.S_ISLNK(parent_mode):
-        raise FixtureManifestError(f"{label} must not be a symlink")
-    if not stat.S_ISDIR(parent_mode):
-        raise FixtureManifestError(f"{label} must be a directory")
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise FixtureManifestError(f"{label} must be a directory") from error
+    if path.parent.exists() or path.parent.is_symlink():
+        parent_mode = path.parent.lstat().st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise FixtureManifestError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise FixtureManifestError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
@@ -684,6 +862,11 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise FixtureManifestError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
             raise FixtureManifestError(f"{label} must not be hard-linked")
+
+
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -789,6 +972,10 @@ def _load_json_bytes(
         )
     except json.JSONDecodeError as error:
         raise FixtureManifestError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
@@ -827,18 +1014,28 @@ def _run_command_bounded(
         timeout_secs,
         "xmllint timeout seconds",
     )
-    process = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        raise FixtureManifestError("xmllint could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
+    read_failed = False
 
     def read_stream(name: str, pipe: Any) -> None:
+        nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
+        except OSError:
+            read_failed = True
         finally:
-            pipe.close()
+            try:
+                pipe.close()
+            except OSError:
+                read_failed = True
 
     assert process.stdout is not None
     assert process.stderr is not None
@@ -864,6 +1061,8 @@ def _run_command_bounded(
         returncode = 124
     stdout_thread.join()
     stderr_thread.join()
+    if read_failed:
+        raise FixtureManifestError("xmllint output could not be read") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (
@@ -895,6 +1094,10 @@ def _require_bounded_xmllint_timeout_secs(value: Any, label: str) -> float:
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise FixtureManifestError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -907,17 +1110,29 @@ def _reject_json_constant(value: str) -> None:
     raise FixtureManifestError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise FixtureManifestError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_ARRAY_ITEMS:
+            raise FixtureManifestError(
+                f"JSON array must contain at most {MAX_JSON_ARRAY_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise FixtureManifestError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _rust_raw_string_end(text: str, start: int) -> int | None:
@@ -1038,6 +1253,10 @@ def _load_profile_catalog(
         raise FixtureManifestError(
             f"{label} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
         ) from error
+    except RecursionError as error:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(catalog)
     return (
         _require_array(catalog, f"{label}.DEFAULT_PROFILES_JSON"),
@@ -1137,6 +1356,10 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _require_array(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise FixtureManifestError(f"{label} must be a JSON array")
+    if len(value) > MAX_JSON_ARRAY_ITEMS:
+        raise FixtureManifestError(
+            f"{label} must contain at most {MAX_JSON_ARRAY_ITEMS} items"
+        )
     return value
 
 
@@ -1235,49 +1458,61 @@ def _reject_overlong_xml_identifier(value: str, label: str) -> None:
         )
 
 
-def _reject_non_ascii_xml_identifiers(element: ET.Element, path: Path, label: str) -> None:
+def _reject_non_ascii_xml_identifiers(element: ET.Element, display_label: str, label: str) -> None:
     if isinstance(element.tag, str):
         namespace, local = _split_xml_name(element.tag)
         if namespace is not None:
-            _reject_overlong_xml_identifier(namespace, f"{path} {label} namespace")
-            _reject_non_ascii_identifier(namespace, f"{path} {label} namespace")
-        _reject_overlong_xml_identifier(local, f"{path} {label} element")
-        _reject_non_ascii_identifier(local, f"{path} {label} element")
+            _reject_overlong_xml_identifier(namespace, f"{display_label} {label} namespace")
+            _reject_non_ascii_identifier(namespace, f"{display_label} {label} namespace")
+        _reject_overlong_xml_identifier(local, f"{display_label} {label} element")
+        _reject_non_ascii_identifier(local, f"{display_label} {label} element")
     for attr_name in element.attrib:
-        _reject_overlong_xml_identifier(attr_name, f"{path} {label} attribute")
-        _reject_non_ascii_identifier(attr_name, f"{path} {label} attribute")
+        _reject_overlong_xml_identifier(attr_name, f"{display_label} {label} attribute")
+        _reject_non_ascii_identifier(attr_name, f"{display_label} {label} attribute")
     for offset, child in enumerate(element):
-        _reject_non_ascii_xml_identifiers(child, path, f"{label}[{offset}]")
+        _reject_non_ascii_xml_identifiers(child, display_label, f"{label}[{offset}]")
 
 
-def _reject_secret_looking_xml_content(element: ET.Element, path: Path, label: str) -> None:
+def _reject_secret_looking_xml_content(element: ET.Element, display_label: str, label: str) -> None:
     if isinstance(element.tag, str):
         namespace, local = _split_xml_name(element.tag)
         if namespace is not None:
-            _reject_secret_looking_identifier(namespace, f"{path} {label} namespace")
-        _reject_secret_looking_identifier(local, f"{path} {label} element")
+            _reject_secret_looking_identifier(namespace, f"{display_label} {label} namespace")
+        _reject_secret_looking_identifier(local, f"{display_label} {label} element")
     for attr_name, attr_value in element.attrib.items():
-        _reject_secret_looking_identifier(attr_name, f"{path} {label} attribute")
-        _reject_secret_looking_material(attr_value, f"{path} {label} attribute value")
+        _reject_secret_looking_identifier(attr_name, f"{display_label} {label} attribute")
+        _reject_secret_looking_material(attr_value, f"{display_label} {label} attribute value")
     if element.text:
-        _reject_secret_looking_material(element.text, f"{path} {label} text")
+        _reject_secret_looking_material(element.text, f"{display_label} {label} text")
     if element.tail:
-        _reject_secret_looking_material(element.tail, f"{path} {label} tail")
+        _reject_secret_looking_material(element.tail, f"{display_label} {label} tail")
     for offset, child in enumerate(element):
-        _reject_secret_looking_xml_content(child, path, f"{label}[{offset}]")
+        _reject_secret_looking_xml_content(child, display_label, f"{label}[{offset}]")
 
 
-def _check_no_secret_material(value: Any, label: str = "$") -> None:
+def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise FixtureManifestError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise FixtureManifestError(
+                f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(str(key)):
                 raise FixtureManifestError(f"{label} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise FixtureManifestError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}")
+            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_ARRAY_ITEMS:
+            raise FixtureManifestError(
+                f"{label} must contain at most {MAX_JSON_ARRAY_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{label}[{offset}]")
+            _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise FixtureManifestError(f"{label} contains unsafe control characters")
@@ -2004,6 +2239,246 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
     }
 
 
+def _validate_iso_catalogue_url(raw: str, label: str) -> str:
+    """Validate an official ISO catalogue URL used as pending-source evidence."""
+
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters"
+        )
+    _reject_non_ascii_identifier(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    if "%" in raw:
+        raise FixtureManifestError(f"{label} must not contain percent escapes")
+    parsed = urllib.parse.urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.iso20022.org"
+        or parsed.path not in ISO_SCHEMA_CATALOGUE_PATHS
+        or parsed.params
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise FixtureManifestError(
+            f"{label} must be an official ISO 20022 catalogue URL"
+        )
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if parsed.path == "/iso-20022-message-definitions":
+        if query or "?" in raw:
+            raise FixtureManifestError(f"{label} must not include query parameters")
+    else:
+        if (
+            ISO_SCHEMA_ARCHIVE_QUERY_RE.fullmatch(parsed.query) is None
+            or len(query) != 1
+            or query[0][0] != "page"
+            or not query[0][1].isdigit()
+        ):
+            raise FixtureManifestError(f"{label} archive URL must set one numeric page")
+    return raw
+
+
+def _validate_iso_download_url(raw: str, label: str) -> str:
+    """Validate an official direct ISO schema download URL."""
+
+    if len(raw) > MAX_SOURCE_URL_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters"
+        )
+    _reject_non_ascii_identifier(raw, label)
+    _reject_secret_looking_identifier(raw, label)
+    if any(ch.isspace() for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain whitespace")
+    if "%" in raw:
+        raise FixtureManifestError(f"{label} must not contain percent escapes")
+    parsed = urllib.parse.urlparse(raw)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "www.iso20022.org"
+        or not ISO_SCHEMA_DOWNLOAD_PATH_RE.fullmatch(parsed.path)
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise FixtureManifestError(
+            f"{label} must be an official ISO 20022 XSD download URL"
+        )
+    return raw
+
+
+def _validate_iso_message_name_version(
+    message_name: str,
+    message_def_id: str,
+    label: str,
+) -> None:
+    """Validate that ISO message-name VNN suffix matches the definition id."""
+
+    if ISO_MESSAGE_NAME_RE.fullmatch(message_name) is None:
+        raise FixtureManifestError(
+            f"{label} must be a canonical ISO message name ending in VNN"
+        )
+    match = ISO_MESSAGE_NAME_VERSION_RE.search(message_name)
+    expected_version = message_def_id.rsplit(".", 1)[-1]
+    if match is None or match.group(1) != expected_version:
+        raise FixtureManifestError(
+            f"{label} version suffix must match message_def_id version"
+        )
+
+
+def _pending_schema_organisation_is_placeholder(raw: str) -> bool:
+    """Return whether an ISO submitting-organisation label is placeholder data."""
+
+    lowered = raw.casefold()
+    tokens = tuple(token for token in re.split(r"[^a-z0-9]+", lowered) if token)
+    joined_windows = {
+        "".join(tokens[start:end])
+        for start in range(len(tokens))
+        for end in range(start + 1, len(tokens) + 1)
+    }
+    if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        return True
+    if any(token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS for token in tokens):
+        return True
+    for marker in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        marker_tokens = tuple(
+            token for token in re.split(r"[^a-z0-9]+", marker.casefold()) if token
+        )
+        if marker_tokens and "".join(marker_tokens) in joined_windows:
+            return True
+    return False
+
+
+def _validate_iso_submitting_organisation(raw: str, label: str) -> str:
+    """Validate a pending-source ISO submitting organisation label."""
+
+    if len(raw) > MAX_PENDING_SCHEMA_ORGANISATION_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than "
+            f"{MAX_PENDING_SCHEMA_ORGANISATION_CHARS} characters"
+        )
+    _reject_reviewed_gap_reason_material(raw, label)
+    if any(ch.isspace() and ch != " " for ch in raw):
+        raise FixtureManifestError(f"{label} must use printable ASCII spaces")
+    if "  " in raw:
+        raise FixtureManifestError(f"{label} must use single spaces")
+    if "%" in raw:
+        raise FixtureManifestError(f"{label} must not contain percent escapes")
+    if ";" in raw:
+        raise FixtureManifestError(
+            f"{label} must not contain semicolon path parameters"
+        )
+    if ":" in raw or "\\" in raw or "@" in raw:
+        raise FixtureManifestError(
+            f"{label} must not contain URI or contact delimiters"
+        )
+    if "//" in raw or "/ " in raw or " /" in raw:
+        raise FixtureManifestError(
+            f"{label} must use slash only inside organization tokens"
+        )
+    parts = raw.split(", ")
+    if any(not part or "," in part for part in parts):
+        raise FixtureManifestError(
+            f"{label} must be a comma-space separated list of organization names"
+        )
+    for part in parts:
+        if ISO_SUBMITTING_ORGANISATION_PART_RE.fullmatch(part) is None:
+            raise FixtureManifestError(
+                f"{label} must be a canonical ISO submitting organisation label"
+            )
+        if _pending_schema_organisation_is_placeholder(part):
+            raise FixtureManifestError(
+                f"{label} must not use placeholder organization metadata"
+            )
+    return raw
+
+
+def _validate_known_pending_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    label: str,
+) -> None:
+    """Validate exact official coordinates for known pending schema sources."""
+
+    expected = KNOWN_PENDING_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    for key, expected_value in expected.items():
+        if source[key] != expected_value:
+            raise FixtureManifestError(
+                f"{label}.source.{key} must match known official ISO pending-source metadata"
+            )
+
+
+def _verify_pending_schema_source(value: Any, label: str) -> dict[str, Any]:
+    """Verify one official-but-not-yet-checked-in schema source record."""
+
+    entry = _require_object(value, label)
+    _reject_unknown_keys(entry, PENDING_SCHEMA_SOURCE_KEYS, label)
+    message_def_id = _require_message_def_id(
+        _required_string(entry, "message_def_id", label),
+        f"{label}.message_def_id",
+    )
+    reason = _required_string(entry, "reason", label)
+    _reject_reviewed_gap_reason_material(reason, f"{label}.reason")
+    if "source" not in entry:
+        raise FixtureManifestError(f"{label}.source must be recorded")
+    source = _require_object(entry["source"], f"{label}.source")
+    _reject_unknown_keys(
+        source,
+        PENDING_SCHEMA_SOURCE_PROVENANCE_KEYS,
+        f"{label}.source",
+    )
+    catalogue_url = _validate_iso_catalogue_url(
+        _required_string(source, "catalogue_url", f"{label}.source"),
+        f"{label}.source.catalogue_url",
+    )
+    download_url = _validate_iso_download_url(
+        _required_string(source, "download_url", f"{label}.source"),
+        f"{label}.source.download_url",
+    )
+    download_type = _required_string(source, "download_type", f"{label}.source")
+    if download_type not in PENDING_SCHEMA_DOWNLOAD_TYPES:
+        raise FixtureManifestError(
+            f"{label}.source.download_type must be one of "
+            + ", ".join(sorted(PENDING_SCHEMA_DOWNLOAD_TYPES))
+        )
+    message_name = _required_string(source, "message_name", f"{label}.source")
+    _reject_reviewed_gap_reason_material(message_name, f"{label}.source.message_name")
+    _validate_iso_message_name_version(
+        message_name,
+        message_def_id,
+        f"{label}.source.message_name",
+    )
+    submitting_organisation = _required_string(
+        source,
+        "submitting_organisation",
+        f"{label}.source",
+    )
+    submitting_organisation = _validate_iso_submitting_organisation(
+        submitting_organisation,
+        f"{label}.source.submitting_organisation",
+    )
+    normalized_source = {
+        "catalogue_url": catalogue_url,
+        "download_url": download_url,
+        "download_type": download_type,
+        "message_name": message_name,
+        "submitting_organisation": submitting_organisation,
+    }
+    _validate_known_pending_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        label,
+    )
+    return {
+        "message_def_id": message_def_id,
+        "source": normalized_source,
+        "reason": reason,
+    }
+
+
 def _split_xml_name(name: str) -> tuple[str | None, str]:
     if name.startswith("{"):
         namespace, local = name[1:].split("}", 1)
@@ -2043,35 +2518,35 @@ def _schema_children(parent: ET.Element, local_name: str, **attrs: str) -> list[
     return result
 
 
-def _schema_child_locals(parent: ET.Element, path: Path, label: str) -> list[str]:
+def _schema_child_locals(parent: ET.Element, display_label: str, label: str) -> list[str]:
     locals_: list[str] = []
     for child in parent:
         if not isinstance(child.tag, str):
             continue
         namespace, local = _split_xml_name(child.tag)
         if namespace != XML_SCHEMA_NS:
-            raise FixtureManifestError(f"{path} {label} contains unsupported child")
+            raise FixtureManifestError(f"{display_label} {label} contains unsupported child")
         locals_.append(local)
     return locals_
 
 
-def _reject_unsupported_schema_composition(root: ET.Element, path: Path) -> None:
+def _reject_unsupported_schema_composition(root: ET.Element, display_label: str) -> None:
     for child in root:
         if not isinstance(child.tag, str):
             continue
         namespace, local = _split_xml_name(child.tag)
         if namespace != XML_SCHEMA_NS:
             raise FixtureManifestError(
-                f"{path} xs:schema contains unsupported foreign child"
+                f"{display_label} xs:schema contains unsupported foreign child"
             )
         if local in UNSUPPORTED_SCHEMA_COMPOSITION_CHILDREN:
-            raise FixtureManifestError(f"{path} xs:schema must not contain xs:{local}")
+            raise FixtureManifestError(f"{display_label} xs:schema must not contain xs:{local}")
 
 
 def _require_schema_attributes(
     element: ET.Element,
     expected: set[str],
-    path: Path,
+    display_label: str,
     label: str,
 ) -> None:
     actual = set(element.attrib)
@@ -2094,100 +2569,100 @@ def _require_schema_attributes(
                 details.append("unexpected " + ", ".join(extra))
         suffix = ": " + "; ".join(details) if details else ""
         raise FixtureManifestError(
-            f"{path} {label} must declare exactly {', '.join(sorted(expected))}{suffix}"
+            f"{display_label} {label} must declare exactly {', '.join(sorted(expected))}{suffix}"
         )
 
 
-def _schema_payload_root(root: ET.Element, path: Path) -> str:
+def _schema_payload_root(root: ET.Element, display_label: str) -> str:
     document_elements = _schema_children(root, "element", name="Document")
     if not document_elements:
-        raise FixtureManifestError(f"{path} has no top-level xs:element name='Document'")
+        raise FixtureManifestError(f"{display_label} has no top-level xs:element name='Document'")
     if len(document_elements) != 1:
         raise FixtureManifestError(
-            f"{path} must contain exactly one top-level xs:element name='Document'"
+            f"{display_label} must contain exactly one top-level xs:element name='Document'"
         )
     document_element = document_elements[0]
     _require_schema_attributes(
         document_element,
         {"name", "type"},
-        path,
+        display_label,
         "Document element",
     )
     document_type = document_element.attrib.get("type")
     if not document_type:
-        raise FixtureManifestError(f"{path} Document element does not declare a type")
-    _reject_overlong_xml_identifier(document_type, f"{path} Document element type")
-    _reject_non_ascii_identifier(document_type, f"{path} Document element type")
-    _reject_secret_looking_identifier(document_type, f"{path} Document element type")
+        raise FixtureManifestError(f"{display_label} Document element does not declare a type")
+    _reject_overlong_xml_identifier(document_type, f"{display_label} Document element type")
+    _reject_non_ascii_identifier(document_type, f"{display_label} Document element type")
+    _reject_secret_looking_identifier(document_type, f"{display_label} Document element type")
     if document_type != "Document":
         raise FixtureManifestError(
-            f"{path} Document element type must be exactly 'Document'"
+            f"{display_label} Document element type must be exactly 'Document'"
         )
     document_complexes = _schema_children(root, "complexType", name=document_type)
     if not document_complexes:
-        raise FixtureManifestError(f"{path} has no document xs:complexType")
+        raise FixtureManifestError(f"{display_label} has no document xs:complexType")
     if len(document_complexes) != 1:
         raise FixtureManifestError(
-            f"{path} must contain exactly one document xs:complexType"
+            f"{display_label} must contain exactly one document xs:complexType"
         )
     document_complex = document_complexes[0]
-    if _schema_child_locals(document_complex, path, "Document complex type") != [
+    if _schema_child_locals(document_complex, display_label, "Document complex type") != [
         "sequence"
     ]:
         raise FixtureManifestError(
-            f"{path} Document complex type must contain only one direct xs:sequence"
+            f"{display_label} Document complex type must contain only one direct xs:sequence"
         )
     sequences = _schema_children(document_complex, "sequence")
     if not sequences:
-        raise FixtureManifestError(f"{path} Document complex type has no xs:sequence")
+        raise FixtureManifestError(f"{display_label} Document complex type has no xs:sequence")
     if len(sequences) != 1:
         raise FixtureManifestError(
-            f"{path} Document complex type must contain exactly one xs:sequence"
+            f"{display_label} Document complex type must contain exactly one xs:sequence"
         )
     sequence = sequences[0]
     payload_elements = _schema_children(sequence, "element")
     if len(payload_elements) != 1:
         raise FixtureManifestError(
-            f"{path} Document sequence must contain exactly one payload element"
+            f"{display_label} Document sequence must contain exactly one payload element"
         )
-    if _schema_child_locals(sequence, path, "Document sequence") != ["element"]:
+    if _schema_child_locals(sequence, display_label, "Document sequence") != ["element"]:
         raise FixtureManifestError(
-            f"{path} Document sequence must contain only one direct xs:element"
+            f"{display_label} Document sequence must contain only one direct xs:element"
         )
     payload_element = payload_elements[0]
     _require_schema_attributes(
         payload_element,
         {"name", "type"},
-        path,
+        display_label,
         "Document payload element",
     )
     payload = payload_element.attrib.get("name")
     if not payload:
-        raise FixtureManifestError(f"{path} Document payload element has no name")
-    _reject_overlong_xml_identifier(payload, f"{path} Document payload element name")
-    _reject_non_ascii_identifier(payload, f"{path} Document payload element name")
-    _reject_secret_looking_identifier(payload, f"{path} Document payload element name")
+        raise FixtureManifestError(f"{display_label} Document payload element has no name")
+    _reject_overlong_xml_identifier(payload, f"{display_label} Document payload element name")
+    _reject_non_ascii_identifier(payload, f"{display_label} Document payload element name")
+    _reject_secret_looking_identifier(payload, f"{display_label} Document payload element name")
     payload_type = payload_element.attrib.get("type")
     if not payload_type:
-        raise FixtureManifestError(f"{path} Document payload element does not declare a type")
-    _reject_overlong_xml_identifier(payload_type, f"{path} Document payload element type")
-    _reject_non_ascii_identifier(payload_type, f"{path} Document payload element type")
-    _reject_secret_looking_identifier(payload_type, f"{path} Document payload element type")
+        raise FixtureManifestError(f"{display_label} Document payload element does not declare a type")
+    _reject_overlong_xml_identifier(payload_type, f"{display_label} Document payload element type")
+    _reject_non_ascii_identifier(payload_type, f"{display_label} Document payload element type")
+    _reject_secret_looking_identifier(payload_type, f"{display_label} Document payload element type")
     if ":" in payload_type:
         raise FixtureManifestError(
-            f"{path} Document payload element type must be local and unprefixed"
+            f"{display_label} Document payload element type must be local and unprefixed"
         )
     payload_complexes = _schema_children(root, "complexType", name=payload_type)
     if not payload_complexes:
-        raise FixtureManifestError(f"{path} has no payload xs:complexType")
+        raise FixtureManifestError(f"{display_label} has no payload xs:complexType")
     if len(payload_complexes) != 1:
-        raise FixtureManifestError(f"{path} must contain exactly one payload xs:complexType")
+        raise FixtureManifestError(f"{display_label} must contain exactly one payload xs:complexType")
     payload_complex = payload_complexes[0]
-    if _schema_child_locals(payload_complex, path, "payload complex type") != [
+    if _schema_child_locals(payload_complex, display_label, "payload complex type") != [
         "sequence"
     ]:
         raise FixtureManifestError(
-            f"{path} payload complex type must contain only one direct xs:sequence"
+            f"{display_label} payload complex type must contain only one direct xs:sequence"
         )
     return payload
 
@@ -2301,27 +2776,27 @@ def verify_schema_entry(
     root = _parse_xml_bytes(schema_bytes, path, display_label=source_label)
     namespace, local = _split_xml_name(root.tag)
     if namespace != XML_SCHEMA_NS or local != "schema":
-        raise FixtureManifestError(f"{path} root must be xs:schema")
+        raise FixtureManifestError(f"{source_label} root must be xs:schema")
     _require_schema_attributes(
         root,
         {"elementFormDefault", "targetNamespace"},
-        path,
+        source_label,
         "xs:schema root",
     )
     target_namespace = root.attrib.get("targetNamespace")
     if isinstance(target_namespace, str):
-        _reject_overlong_xml_identifier(target_namespace, f"{path} targetNamespace")
-        _reject_non_ascii_identifier(target_namespace, f"{path} targetNamespace")
-        _reject_secret_looking_identifier(target_namespace, f"{path} targetNamespace")
+        _reject_overlong_xml_identifier(target_namespace, f"{source_label} targetNamespace")
+        _reject_non_ascii_identifier(target_namespace, f"{source_label} targetNamespace")
+        _reject_secret_looking_identifier(target_namespace, f"{source_label} targetNamespace")
     expected_namespace = _namespace_for(message_def_id)
     if target_namespace != expected_namespace:
-        raise FixtureManifestError(f"{path} targetNamespace does not match manifest message_def_id")
+        raise FixtureManifestError(f"{source_label} targetNamespace does not match manifest message_def_id")
     if root.attrib.get("elementFormDefault") != "qualified":
-        raise FixtureManifestError(f"{path} elementFormDefault must be qualified")
-    _reject_unsupported_schema_composition(root, path)
-    payload_root = _schema_payload_root(root, path)
+        raise FixtureManifestError(f"{source_label} elementFormDefault must be qualified")
+    _reject_unsupported_schema_composition(root, source_label)
+    payload_root = _schema_payload_root(root, source_label)
     if payload_root != expected_payload_root:
-        raise FixtureManifestError(f"{path} payload root does not match manifest payload_root")
+        raise FixtureManifestError(f"{source_label} payload root does not match manifest payload_root")
     return {
         "path": rel_path,
         "message_def_id": message_def_id,
@@ -2334,16 +2809,16 @@ def verify_schema_entry(
     }
 
 
-def _first_element_child(root: ET.Element, path: Path) -> ET.Element:
+def _first_element_child(root: ET.Element, display_label: str) -> ET.Element:
     children = [child for child in list(root) if isinstance(child.tag, str)]
     if len(children) != 1:
-        raise FixtureManifestError(f"{path} Document must contain exactly one payload element")
+        raise FixtureManifestError(f"{display_label} Document must contain exactly one payload element")
     return children[0]
 
 
-def _require_no_xml_attributes(element: ET.Element, path: Path, label: str) -> None:
+def _require_no_xml_attributes(element: ET.Element, display_label: str, label: str) -> None:
     if element.attrib:
-        raise FixtureManifestError(f"{path} {label} must not declare attributes")
+        raise FixtureManifestError(f"{display_label} {label} must not declare attributes")
 
 
 def _validate_fixture_xml_schema(
@@ -2381,8 +2856,14 @@ def _validate_fixture_xml_schema(
             f"{label} xmllint timed out after {xmllint_timeout_secs:g} seconds"
         )
     output_truncated = stdout_truncated or stderr_truncated
+    local_paths = (
+        str(schema_path),
+        str(schema_path.resolve()),
+        str(fixture_path),
+        str(fixture_path.resolve()),
+    )
     if returncode != 0:
-        detail = _xmllint_output_detail(stderr or stdout)
+        detail = _xmllint_output_detail(stderr or stdout, local_paths=local_paths)
         if detail:
             detail = ": " + detail
         if output_truncated:
@@ -2397,7 +2878,7 @@ def _validate_fixture_xml_schema(
         )
     unexpected_output = _unexpected_xmllint_success_output(stdout, stderr, fixture_path)
     if unexpected_output is not None:
-        detail = _xmllint_output_detail(unexpected_output)
+        detail = _xmllint_output_detail(unexpected_output, local_paths=local_paths)
         raise FixtureManifestError(
             f"{label} xmllint emitted unexpected output on successful XML schema "
             f"validation: {detail}"
@@ -2417,10 +2898,16 @@ def _unexpected_xmllint_success_output(
     return None
 
 
-def _xmllint_output_detail(output: str) -> str:
+def _xmllint_output_detail(
+    output: str,
+    *,
+    local_paths: tuple[str, ...] = (),
+) -> str:
     detail = output.strip()
     if not detail:
         return ""
+    if any(path and path in detail for path in local_paths):
+        return "[xmllint output redacted: local paths]"
     if _contains_secret_material(detail) or _contains_secret_identifier_material(detail):
         return "[xmllint output redacted: secret-looking material]"
     if _contains_unsafe_diagnostic_control(detail):
@@ -2488,27 +2975,27 @@ def verify_fixture_entry(
         display_label=source_label,
     )
     root = _parse_xml_bytes(fixture_bytes, path, display_label=source_label)
-    _reject_non_ascii_xml_identifiers(root, path, "XML fixture")
-    _reject_secret_looking_xml_content(root, path, "XML fixture")
+    _reject_non_ascii_xml_identifiers(root, source_label, "XML fixture")
+    _reject_secret_looking_xml_content(root, source_label, "XML fixture")
     namespace, local = _split_xml_name(root.tag)
     if local != "Document":
-        raise FixtureManifestError(f"{path} root element must be Document")
-    namespace_message_id = _message_id_from_namespace(namespace, str(path))
+        raise FixtureManifestError(f"{source_label} root element must be Document")
+    namespace_message_id = _message_id_from_namespace(namespace, source_label)
     if namespace_message_id != message_def_id:
         raise FixtureManifestError(
-            f"{path} namespace message id does not match manifest fixture"
+            f"{source_label} namespace message id does not match manifest fixture"
         )
-    _require_no_xml_attributes(root, path, "Document element")
-    payload = _first_element_child(root, path)
+    _require_no_xml_attributes(root, source_label, "Document element")
+    payload = _first_element_child(root, source_label)
     payload_namespace, payload_local = _split_xml_name(payload.tag)
     if payload_namespace != namespace:
-        raise FixtureManifestError(f"{path} payload namespace must match Document namespace")
-    _reject_overlong_xml_identifier(payload_local, f"{path} payload root")
-    _reject_non_ascii_identifier(payload_local, f"{path} payload root")
-    _reject_secret_looking_identifier(payload_local, f"{path} payload root")
+        raise FixtureManifestError(f"{source_label} payload namespace must match Document namespace")
+    _reject_overlong_xml_identifier(payload_local, f"{source_label} payload root")
+    _reject_non_ascii_identifier(payload_local, f"{source_label} payload root")
+    _reject_secret_looking_identifier(payload_local, f"{source_label} payload root")
     if payload_local != expected_payload_root:
-        raise FixtureManifestError(f"{path} payload root does not match manifest fixture")
-    _require_no_xml_attributes(payload, path, "payload element")
+        raise FixtureManifestError(f"{source_label} payload root does not match manifest fixture")
+    _require_no_xml_attributes(payload, source_label, "payload element")
 
     schema_backed = False
     schema_validated = False
@@ -2704,6 +3191,7 @@ def _missing_profile_schema_message_ids(
     missing_schema_fixtures: list[dict[str, Any]],
     schema_only: list[dict[str, Any]],
     blocked_schema_sources: list[dict[str, Any]],
+    pending_schema_sources: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Return unique missing profile message ids with reviewed-gap context."""
 
@@ -2719,6 +3207,9 @@ def _missing_profile_schema_message_ids(
     blocked_source_ids = {
         blocked["message_def_id"] for blocked in blocked_schema_sources
     }
+    pending_source_ids = {
+        pending["message_def_id"] for pending in pending_schema_sources
+    }
     return [
         {
             "message_def_id": message_def_id,
@@ -2726,9 +3217,80 @@ def _missing_profile_schema_message_ids(
             "reviewed_missing_schema_fixture": message_def_id in missing_schema_ids,
             "reviewed_schema_only": message_def_id in schema_only_ids,
             "blocked_source": message_def_id in blocked_source_ids,
+            "pending_source": message_def_id in pending_source_ids,
         }
         for message_def_id in sorted(counts)
     ]
+
+
+def _unreviewed_profile_schema_message_ids(
+    missing_profile_schema_message_ids: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return unique missing profile message ids without reviewed evidence."""
+
+    return [
+        {
+            "message_def_id": entry["message_def_id"],
+            "profile_version_count": entry["profile_version_count"],
+        }
+        for entry in missing_profile_schema_message_ids
+        if not (
+            entry["reviewed_missing_schema_fixture"]
+            or entry["reviewed_schema_only"]
+            or entry["blocked_source"]
+            or entry["pending_source"]
+        )
+    ]
+
+
+def _schema_summary_order_key(schema: dict[str, Any]) -> tuple[str, str]:
+    return (schema["message_def_id"], schema["path"])
+
+
+def _fixture_summary_order_key(fixture: dict[str, Any]) -> tuple[str, str]:
+    return (fixture["message_def_id"], fixture["path"])
+
+
+def _blocked_schema_source_order_key(entry: dict[str, Any]) -> tuple[str, str, str, str]:
+    source = entry["source"]
+    return (
+        entry["message_def_id"],
+        source["repository"],
+        source["commit"],
+        source["path"],
+    )
+
+
+def _pending_schema_source_order_key(
+    entry: dict[str, Any],
+) -> tuple[str, str, str, str, str, str]:
+    source = entry["source"]
+    return (
+        entry["message_def_id"],
+        source["catalogue_url"],
+        source["download_url"],
+        source["download_type"],
+        source["message_name"],
+        source["submitting_organisation"],
+    )
+
+
+def _profile_catalog_version_order_key(entry: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        entry["profile_id"],
+        entry["message_type"],
+        entry["direction"],
+        entry["message_def_id"],
+    )
+
+
+def _profile_catalog_skipped_order_key(entry: dict[str, str]) -> tuple[str, str, str, str]:
+    return (
+        entry["profile_id"],
+        entry["message_type"],
+        entry["direction"],
+        entry["version"],
+    )
 
 
 def verify_manifest(
@@ -2769,9 +3331,17 @@ def verify_manifest(
         raise FixtureManifestError(
             f"{label}.blocked_schema_sources must be recorded as an array"
         )
+    if "pending_schema_sources" not in manifest:
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources must be recorded as an array"
+        )
     raw_blocked_schema_sources = _require_array(
         manifest["blocked_schema_sources"],
         f"{label}.blocked_schema_sources",
+    )
+    raw_pending_schema_sources = _require_array(
+        manifest["pending_schema_sources"],
+        f"{label}.pending_schema_sources",
     )
     schemas = [
         verify_schema_entry(
@@ -2833,12 +3403,73 @@ def verify_manifest(
             f"{label}.blocked_schema_sources contains candidate SHA-256 values "
             "that already identify checked-in schemas"
         )
+    blocked_message_id_list = [
+        blocked["message_def_id"] for blocked in blocked_schema_sources
+    ]
+    if len(blocked_message_id_list) != len(set(blocked_message_id_list)):
+        raise FixtureManifestError(
+            f"{label}.blocked_schema_sources contains duplicate message_def_id values"
+        )
     blocked_message_ids = {
         blocked["message_def_id"] for blocked in blocked_schema_sources
     }
     for message_def_id in sorted(blocked_message_ids & set(schema_ids)):
         raise FixtureManifestError(
             f"{label}.blocked_schema_sources includes an already checked-in schema"
+        )
+
+    pending_schema_sources = [
+        _verify_pending_schema_source(
+            entry,
+            f"{label}.pending_schema_sources[{offset}]",
+        )
+        for offset, entry in enumerate(raw_pending_schema_sources)
+    ]
+    pending_source_provenance = [
+        (
+            pending["source"]["catalogue_url"],
+            pending["source"]["download_url"],
+            pending["source"]["download_type"],
+            pending["source"]["message_name"],
+            pending["source"]["submitting_organisation"],
+        )
+        for pending in pending_schema_sources
+    ]
+    if len(pending_source_provenance) != len(set(pending_source_provenance)):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources contains duplicate source provenance"
+        )
+    pending_download_urls = [
+        pending["source"]["download_url"] for pending in pending_schema_sources
+    ]
+    if len(pending_download_urls) != len(set(pending_download_urls)):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources contains duplicate download_url values"
+        )
+    pending_message_names = [
+        pending["source"]["message_name"] for pending in pending_schema_sources
+    ]
+    if len(pending_message_names) != len(set(pending_message_names)):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources contains duplicate message_name values"
+        )
+    pending_message_id_list = [
+        pending["message_def_id"] for pending in pending_schema_sources
+    ]
+    if len(pending_message_id_list) != len(set(pending_message_id_list)):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources contains duplicate message_def_id values"
+        )
+    pending_message_ids = {
+        pending["message_def_id"] for pending in pending_schema_sources
+    }
+    for message_def_id in sorted(pending_message_ids & set(schema_ids)):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources includes an already checked-in schema"
+        )
+    for message_def_id in sorted(pending_message_ids & blocked_message_ids):
+        raise FixtureManifestError(
+            f"{label}.pending_schema_sources includes an already blocked schema source"
         )
 
     fixtures = [
@@ -2855,6 +3486,11 @@ def verify_manifest(
     fixture_paths = [fixture["path"] for fixture in fixtures]
     if len(fixture_paths) != len(set(fixture_paths)):
         raise FixtureManifestError(f"{label}.fixtures contains duplicate fixture paths")
+    fixture_ids = [fixture["message_def_id"] for fixture in fixtures]
+    if len(fixture_ids) != len(set(fixture_ids)):
+        raise FixtureManifestError(
+            f"{label}.fixtures contains duplicate message_def_id values"
+        )
     fixture_digests = [fixture["sha256"] for fixture in fixtures]
     if len(fixture_digests) != len(set(fixture_digests)):
         raise FixtureManifestError(f"{label}.fixtures contains duplicate fixture SHA-256 values")
@@ -2877,6 +3513,14 @@ def verify_manifest(
     missing_schema_fixtures = [
         fixture for fixture in fixtures if not fixture["schema_backed"]
     ]
+    missing_schema_fixture_ids = {
+        fixture["message_def_id"] for fixture in missing_schema_fixtures
+    }
+    if missing_schema_fixture_ids & set(schema_ids):
+        raise FixtureManifestError(
+            f"{label}.fixtures contains missing-schema fixture for an already "
+            "checked-in schema"
+        )
     if args.require_schema_backed_fixtures and missing_schema_fixtures:
         first = missing_schema_fixtures[0]
         raise FixtureManifestError(
@@ -2902,6 +3546,19 @@ def verify_manifest(
         if profile_catalog_path is not None
         else None
     )
+    if profile_catalog is not None:
+        profile_catalog["versions"] = sorted(
+            profile_catalog["versions"],
+            key=_profile_catalog_version_order_key,
+        )
+        profile_catalog["missing_schema_versions"] = sorted(
+            profile_catalog["missing_schema_versions"],
+            key=_profile_catalog_version_order_key,
+        )
+        profile_catalog["skipped_family_versions"] = sorted(
+            profile_catalog["skipped_family_versions"],
+            key=_profile_catalog_skipped_order_key,
+        )
     missing_profile_schema_versions = (
         profile_catalog["missing_schema_versions"] if profile_catalog else []
     )
@@ -2925,6 +3582,26 @@ def verify_manifest(
                     f"{label}.blocked_schema_sources includes an entry "
                     "without a current missing schema/profile gap"
                 )
+    if pending_message_ids:
+        pending_gap_message_ids = {
+            fixture["message_def_id"] for fixture in missing_schema_fixtures
+        } | {schema["message_def_id"] for schema in schema_only}
+        if profile_catalog is not None:
+            pending_gap_message_ids |= {
+                missing["message_def_id"] for missing in missing_profile_schema_versions
+            }
+        for message_def_id in sorted(pending_message_ids - pending_gap_message_ids):
+            if profile_catalog is None:
+                raise FixtureManifestError(
+                    f"{label}.pending_schema_sources includes an entry "
+                    "without a current missing fixture/schema gap; pass "
+                    "--profile-catalog to prove profile-version gaps"
+                )
+            else:
+                raise FixtureManifestError(
+                    f"{label}.pending_schema_sources includes an entry "
+                    "without a current missing schema/profile gap"
+                )
     if args.require_profile_schema_backed_versions and missing_profile_schema_versions:
         missing_count = len(missing_profile_schema_versions)
         raise FixtureManifestError(
@@ -2933,6 +3610,32 @@ def verify_manifest(
             "checked-in XML fixture"
         )
 
+    missing_profile_schema_message_ids = _missing_profile_schema_message_ids(
+        missing_profile_schema_versions,
+        missing_schema_fixtures,
+        schema_only,
+        blocked_schema_sources,
+        pending_schema_sources,
+    )
+    unreviewed_profile_schema_message_ids = _unreviewed_profile_schema_message_ids(
+        missing_profile_schema_message_ids
+    )
+    compact_schemas = sorted(schemas, key=_schema_summary_order_key)
+    compact_fixtures = sorted(fixtures, key=_fixture_summary_order_key)
+    compact_blocked_schema_sources = sorted(
+        blocked_schema_sources,
+        key=_blocked_schema_source_order_key,
+    )
+    compact_pending_schema_sources = sorted(
+        pending_schema_sources,
+        key=_pending_schema_source_order_key,
+    )
+    compact_missing_schema_fixtures = [
+        fixture for fixture in compact_fixtures if not fixture["schema_backed"]
+    ]
+    compact_schema_only = [
+        schema for schema in compact_schemas if schema["path"] not in backed_schema_paths
+    ]
     summary: dict[str, Any] = {
         "version": SUMMARY_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
@@ -2941,6 +3644,7 @@ def verify_manifest(
         "verified_schemas": len(schemas),
         "verified_fixtures": len(fixtures),
         "blocked_schema_source_count": len(blocked_schema_sources),
+        "pending_schema_source_count": len(pending_schema_sources),
         "schema_backed_fixtures": len(fixtures) - len(missing_schema_fixtures),
         "schema_validated_fixtures": sum(
             1 for fixture in fixtures if fixture["schema_validated"]
@@ -2957,7 +3661,7 @@ def verify_manifest(
                 "message_def_id": fixture["message_def_id"],
                 "reason": fixture["missing_schema_reason"],
             }
-            for fixture in missing_schema_fixtures
+            for fixture in compact_missing_schema_fixtures
         ],
         "schema_only_entries": [
             {
@@ -2965,18 +3669,18 @@ def verify_manifest(
                 "message_def_id": schema["message_def_id"],
                 "reason": schema["schema_only_reason"],
             }
-            for schema in schema_only
+            for schema in compact_schema_only
         ],
         "missing_profile_schema_versions": missing_profile_schema_versions,
-        "missing_profile_schema_message_ids": _missing_profile_schema_message_ids(
-            missing_profile_schema_versions,
-            missing_schema_fixtures,
-            schema_only,
-            blocked_schema_sources,
+        "missing_profile_schema_message_ids": missing_profile_schema_message_ids,
+        "unreviewed_profile_schema_message_id_count": len(
+            unreviewed_profile_schema_message_ids
         ),
-        "blocked_schema_sources": blocked_schema_sources,
-        "schemas": schemas,
-        "fixtures": fixtures,
+        "unreviewed_profile_schema_message_ids": unreviewed_profile_schema_message_ids,
+        "blocked_schema_sources": compact_blocked_schema_sources,
+        "pending_schema_sources": compact_pending_schema_sources,
+        "schemas": compact_schemas,
+        "fixtures": compact_fixtures,
         "profile_catalog": profile_catalog,
         "strict": {
             "require_schema_backed_fixtures": args.require_schema_backed_fixtures,
@@ -2992,6 +3696,14 @@ def verify_manifest(
 
 
 def run(args: argparse.Namespace) -> int:
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
+    args.manifest = _optional_cli_path(getattr(args, "manifest", None), "--manifest")
+    args.profile_catalog = _optional_cli_path(
+        getattr(args, "profile_catalog", None),
+        "--profile-catalog",
+    )
+    if args.manifest is None:
+        raise FixtureManifestError("provide --manifest")
     if args.summary_out is not None:
         _reject_output_path_smuggling(args.summary_out, "summary_out")
         _reject_repository_output_path(args.summary_out, "summary_out")
@@ -2999,7 +3711,28 @@ def run(args: argparse.Namespace) -> int:
     if args.profile_catalog is not None:
         _reject_output_path_smuggling(args.profile_catalog, "--profile-catalog")
         _reject_repository_input_path(args.profile_catalog, "--profile-catalog")
+    _require_policy_booleans(args)
+    profile_catalog_path = args.profile_catalog
+    if profile_catalog_path is None and args.require_profile_schema_backed_versions:
+        profile_catalog_path = DEFAULT_PROFILE_CATALOG
+    _reject_summary_output_input_alias(
+        args.summary_out,
+        (
+            ("--manifest", args.manifest),
+            ("--profile-catalog", profile_catalog_path),
+        ),
+    )
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
+        )
     summary = verify_manifest(args.manifest, args, display_label="manifest")
+    _reject_summary_output_input_alias(
+        args.summary_out,
+        _summary_material_input_paths(args.manifest, summary),
+    )
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     if args.summary_out is not None:
         _write_text_output(args.summary_out, text, display_label="summary_out")

@@ -31,7 +31,10 @@ use mv::storage::StorageReadOnly;
 use crate::{
     smartcontracts::Execute,
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{StateTransaction, WorldReadOnly},
+    state::{
+        StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+    },
 };
 
 const DELIMITER: char = '/';
@@ -947,8 +950,8 @@ fn replace_account_id_in_public_lane(
     new: &AccountId,
 ) {
     let mut validator_updates = Vec::new();
-    for (key, _) in state_transaction.world.public_lane_validators.iter() {
-        if key.1 == *old {
+    for (key, record) in state_transaction.world.public_lane_validators.iter() {
+        if public_lane_validator_record_matches_key(key, record) && key.1 == *old {
             validator_updates.push((key.clone(), (key.0, new.clone())));
         }
     }
@@ -974,14 +977,19 @@ fn replace_account_id_in_public_lane(
         .map(|(key, _)| key.clone())
         .collect();
     for key in validator_keys {
-        if let Some(record) = state_transaction.world.public_lane_validators.get_mut(&key) {
+        if let Some(record) = state_transaction.world.public_lane_validators.get_mut(&key)
+            && public_lane_validator_record_matches_key(&key, record)
+        {
             replace_account_id(&mut record.validator, old, new);
             replace_account_id(&mut record.stake_account, old, new);
         }
     }
 
     let mut stake_updates = Vec::new();
-    for (key, _) in state_transaction.world.public_lane_stake_shares.iter() {
+    for (key, record) in state_transaction.world.public_lane_stake_shares.iter() {
+        if !public_lane_stake_share_matches_key(key, record) {
+            continue;
+        }
         if key.1 == *old || key.2 == *old {
             let new_validator = if key.1 == *old {
                 new.clone()
@@ -1018,7 +1026,9 @@ fn replace_account_id_in_public_lane(
         .map(|(key, _)| key.clone())
         .collect();
     for key in reward_keys {
-        if let Some(record) = state_transaction.world.public_lane_rewards.get_mut(&key) {
+        if let Some(record) = state_transaction.world.public_lane_rewards.get_mut(&key)
+            && public_lane_reward_record_matches_key(&key, record)
+        {
             record.asset = replace_account_id_in_asset_id(&record.asset, old, new);
             for share in &mut record.shares {
                 replace_account_id(&mut share.account, old, new);
@@ -4344,6 +4354,91 @@ mod tests {
         );
 
         let _ = domain_id;
+    }
+
+    #[test]
+    fn rekey_public_lane_validators_ignores_mismatched_rows() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-rekey-public-lane-validators"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let old_key = checked_keypair();
+        let old_account = new_account_id(&old_key);
+        let new_key = checked_keypair();
+        let new_account = new_account_id(&new_key);
+        let valid_lane = iroha_data_model::nexus::LaneId::new(8);
+        let malformed_lane = iroha_data_model::nexus::LaneId::new(9);
+        let active = iroha_data_model::nexus::PublicLaneValidatorStatus::Active;
+
+        state_transaction.world.public_lane_validators.insert(
+            (valid_lane, old_account.clone()),
+            iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id: valid_lane,
+                validator: old_account.clone(),
+                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                stake_account: old_account.clone(),
+                total_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+                self_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+                metadata: Metadata::default(),
+                status: active.clone(),
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_validators.insert(
+            (malformed_lane, new_account.clone()),
+            iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id: malformed_lane,
+                validator: old_account.clone(),
+                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                stake_account: old_account.clone(),
+                total_stake: iroha_primitives::numeric::Numeric::new(2, 0),
+                self_stake: iroha_primitives::numeric::Numeric::new(2, 0),
+                metadata: Metadata::default(),
+                status: active,
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+
+        replace_account_id_in_public_lane(&mut state_transaction, &old_account, &new_account);
+
+        assert!(
+            state_transaction
+                .world
+                .public_lane_validators
+                .get(&(valid_lane, old_account.clone()))
+                .is_none(),
+            "matching validator row should move away from the old key"
+        );
+        let moved = state_transaction
+            .world
+            .public_lane_validators
+            .get(&(valid_lane, new_account.clone()))
+            .expect("matching validator row should move to the new key");
+        assert_eq!(moved.validator, new_account);
+        assert_eq!(moved.stake_account, new_account);
+
+        let malformed = state_transaction
+            .world
+            .public_lane_validators
+            .get(&(malformed_lane, moved.validator.clone()))
+            .expect("malformed row keyed by the new account should remain present");
+        assert_eq!(
+            malformed.validator, old_account,
+            "mismatched row must not be repaired into a live matching validator"
+        );
+        assert_eq!(malformed.stake_account, old_account);
     }
 
     #[test]

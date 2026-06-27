@@ -19,6 +19,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     count_evidence_files,
     count_recognized_evidence_artifacts,
     distinct_evidence_values_are_consistent,
+    deployment_context_summary,
     evidence_artifact_digest_set,
     evidence_artifact_detail,
     evidence_artifact_fingerprint,
@@ -94,12 +95,15 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string_equal,
     require_string_in,
     require_string_not_equal,
+    require_string_tuple_in,
     require_string_type,
     require_string_value_equal,
+    require_string_value_in,
     require_string_coverage,
     require_sum_equal,
     require_zero_count,
     required_evidence_kind_names,
+    record_consistent_deployment_context,
     validate_snapshot_bound_evidence_artifacts,
     validate_standard_evidence_payload,
 )
@@ -150,6 +154,111 @@ def test_build_evidence_artifact_preserves_invalid_error_bucket() -> None:
     assert artifact["valid"] is False
     assert artifact["errors"] is validation_errors
     assert artifact["fingerprint"] == {"status": "failed"}
+
+
+def test_build_evidence_artifact_rejects_malformed_error_buckets() -> None:
+    for validation_errors in ("bad", ["bad", 7], None):
+        artifact = build_evidence_artifact(
+            Path("bad.json"),
+            "c" * 64,
+            {"schema": "example.schema.v1", "status": "failed"},
+            validation_errors,
+            ("status",),
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == [
+            "artifact validation errors must be a sequence of strings"
+        ]
+
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": "failed"},
+        ("status must be `passed`",),
+        ("status",),
+    )
+
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["status must be `passed`"]
+
+
+def test_build_evidence_artifact_rejects_malformed_payload_or_fingerprint_fields() -> None:
+    validation_errors: list[str] = []
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        "not-an-object",
+        validation_errors,
+        ("status",),
+    )
+
+    assert artifact["schema"] is None
+    assert artifact["status"] is None
+    assert artifact["fingerprint"] == {}
+    assert artifact["valid"] is False
+    assert artifact["errors"] is validation_errors
+    assert artifact["errors"] == ["artifact fingerprint payload must be an object"]
+
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": "failed"},
+        [],
+        "status",
+    )
+
+    assert artifact["fingerprint"] == {}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact fingerprint fields must be a sequence of strings"
+    ]
+
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": "failed"},
+        [],
+        ("status", ""),
+    )
+
+    assert artifact["fingerprint"] == {}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact fingerprint fields must be non-empty strings"
+    ]
+
+
+def test_build_evidence_artifact_rejects_malformed_sha256() -> None:
+    validation_errors: list[str] = []
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "not-a-digest",
+        {"schema": "example.schema.v1", "status": "passed"},
+        validation_errors,
+        ("status",),
+    )
+
+    assert artifact["sha256"] == ""
+    assert artifact["valid"] is False
+    assert artifact["errors"] is validation_errors
+    assert artifact["errors"] == [
+        "artifact sha256 must be a 64-character lowercase hex string"
+    ]
+
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "A" * 64,
+        {"schema": "example.schema.v1", "status": "passed"},
+        [],
+        ("status",),
+    )
+
+    assert artifact["sha256"] == ""
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact sha256 must be a 64-character lowercase hex string"
+    ]
 
 
 def test_build_kinded_evidence_artifact_records_snapshot_fingerprint() -> None:
@@ -206,15 +315,178 @@ def test_build_kinded_evidence_artifact_preserves_invalid_error_bucket() -> None
     assert artifact["fingerprint"] == {"provider_id": ""}
 
 
+def test_build_kinded_evidence_artifact_rejects_malformed_error_buckets() -> None:
+    for validation_errors in ("bad", ["bad", 7], None):
+        artifact = build_kinded_evidence_artifact(
+            kind_name="provider",
+            path=Path("provider.json"),
+            digest="e" * 64,
+            payload={"provider_id": ""},
+            validation_errors=validation_errors,
+            fingerprint_fields=("provider_id",),
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == [
+            "artifact validation errors must be a sequence of strings"
+        ]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": ""},
+        validation_errors=("provider_id must be a non-empty string",),
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["provider_id must be a non-empty string"]
+
+
+def test_build_kinded_evidence_artifact_rejects_malformed_fingerprint_inputs() -> None:
+    validation_errors: list[str] = []
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload="not-an-object",
+        validation_errors=validation_errors,
+        fingerprint_fields=("provider_id",),
+        fingerprint_values={"snapshot_id_hex": "a" * 64},
+    )
+
+    assert artifact["fingerprint"] == {"snapshot_id_hex": "a" * 64}
+    assert artifact["valid"] is False
+    assert artifact["errors"] is validation_errors
+    assert artifact["errors"] == ["artifact fingerprint payload must be an object"]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields="provider_id",
+    )
+
+    assert artifact["fingerprint"] == {}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact fingerprint fields must be a sequence of strings"
+    ]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+        fingerprint_values=[("snapshot_id_hex", "a" * 64)],
+    )
+
+    assert artifact["fingerprint"] == {"provider_id": "provider-a"}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact fingerprint values must be a mapping"
+    ]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+        fingerprint_values={1: "bad"},
+    )
+
+    assert artifact["fingerprint"] == {"provider_id": "provider-a"}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact fingerprint value keys must be non-empty strings"
+    ]
+
+
+def test_build_kinded_evidence_artifact_rejects_malformed_kind_or_sha256() -> None:
+    validation_errors: list[str] = []
+    artifact = build_kinded_evidence_artifact(
+        kind_name="",
+        path=Path("provider.json"),
+        digest="not-a-digest",
+        payload={"provider_id": "provider-a"},
+        validation_errors=validation_errors,
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["kind"] == "<unknown>"
+    assert artifact["sha256"] == ""
+    assert artifact["valid"] is False
+    assert artifact["errors"] is validation_errors
+    assert artifact["errors"] == [
+        "artifact kind must be a non-empty string",
+        "artifact sha256 must be a 64-character lowercase hex string",
+    ]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name=7,
+        path=Path("provider.json"),
+        digest="E" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["kind"] == "<unknown>"
+    assert artifact["sha256"] == ""
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact kind must be a non-empty string",
+        "artifact sha256 must be a 64-character lowercase hex string",
+    ]
+
+
 def test_record_evidence_artifact_appends_to_kind_bucket() -> None:
     buckets = init_evidence_artifact_buckets(("route", "manifest"))
     artifact = {"valid": True, "path": "route.json"}
+    errors: list[str] = []
 
-    record_evidence_artifact(buckets, "route", artifact)
+    assert record_evidence_artifact(buckets, "route", artifact, errors) is True
 
     assert buckets["route"] == [artifact]
     assert buckets["route"][0] is artifact
     assert buckets["manifest"] == []
+    assert errors == []
+
+
+def test_record_evidence_artifact_reports_missing_kind_bucket() -> None:
+    buckets = init_evidence_artifact_buckets(("route",))
+    artifact = {"valid": True, "path": "manifest.json"}
+    errors: list[str] = []
+
+    assert record_evidence_artifact(buckets, "manifest", artifact, errors) is False
+
+    assert buckets["route"] == []
+    assert errors == ["recognized evidence kind `manifest` has no artifact bucket"]
+
+
+def test_record_evidence_artifact_rejects_malformed_inputs() -> None:
+    errors: list[str] = []
+    assert record_evidence_artifact("bad", "route", {"valid": True}, errors) is False
+    assert record_evidence_artifact({}, "", {"valid": True}, errors) is False
+    assert record_evidence_artifact({}, 7, {"valid": True}, errors) is False
+
+    buckets = init_evidence_artifact_buckets(("route",))
+    assert record_evidence_artifact(buckets, "route", "bad", errors) is False
+
+    assert buckets == {"route": []}
+    assert errors == [
+        "recognized evidence artifacts by kind must be a mapping",
+        "recognized evidence kind must be a non-empty string",
+        "recognized evidence kind must be a non-empty string",
+        "recognized `route` evidence artifact must be an object",
+    ]
 
 
 def test_evidence_artifact_is_valid_requires_explicit_true() -> None:
@@ -229,6 +501,16 @@ def test_evidence_artifact_kind_returns_string_or_none() -> None:
     assert evidence_artifact_kind({"kind": ""}) == ""
     assert evidence_artifact_kind({"kind": None}) is None
     assert evidence_artifact_kind({}) is None
+
+
+def test_evidence_artifact_accessors_reject_non_mapping_without_traceback() -> None:
+    artifact = "not an artifact row"
+
+    assert evidence_artifact_is_valid(artifact) is False
+    assert evidence_artifact_kind(artifact) is None
+    assert evidence_artifact_fingerprint(artifact) == {}
+    assert evidence_artifact_detail(artifact, "cycle") == {}
+    assert evidence_artifact_schema(artifact) == "<unknown>"
 
 
 def test_mark_required_evidence_invalid_creates_row_and_returns_errors() -> None:
@@ -255,7 +537,23 @@ def test_mark_required_evidence_invalid_rebuilds_malformed_errors() -> None:
     errors.append("new")
 
     assert required["latest"]["valid"] is False
-    assert required["latest"]["errors"] == ["new"]
+    assert required["latest"]["errors"] == [
+        "required `latest` errors must be a list",
+        "new",
+    ]
+
+
+def test_mark_required_evidence_invalid_repairs_malformed_row() -> None:
+    required = {"latest": "bad"}
+
+    errors = mark_required_evidence_invalid(required, "latest")
+    errors.append("new")
+
+    assert required["latest"] == {
+        "valid": False,
+        "errors": ["required `latest` row must be an object", "new"],
+        "artifacts": [],
+    }
 
 
 def test_mark_required_evidence_summary_invalid_marks_every_row() -> None:
@@ -264,12 +562,15 @@ def test_mark_required_evidence_summary_invalid_marks_every_row() -> None:
         "latest": {"valid": True, "errors": "old", "artifacts": []},
     }
 
-    mark_required_evidence_summary_invalid(required)
+    mark_required_evidence_summary_invalid(required, "summary mismatch")
 
     assert required["provider"]["valid"] is False
-    assert required["provider"]["errors"] == []
+    assert required["provider"]["errors"] == ["summary mismatch"]
     assert required["latest"]["valid"] is False
-    assert required["latest"]["errors"] == []
+    assert required["latest"]["errors"] == [
+        "required `latest` errors must be a list",
+        "summary mismatch",
+    ]
 
 
 def test_mark_required_evidence_invalid_if_present_skips_unknown_kind() -> None:
@@ -294,6 +595,13 @@ def test_required_evidence_summary_is_valid_requires_explicit_true() -> None:
     assert required_evidence_summary_is_valid({"route": {}}) is False
 
 
+def test_required_evidence_summary_is_valid_fails_closed_on_malformed_rows() -> None:
+    assert required_evidence_summary_is_valid(None) is False
+    assert required_evidence_summary_is_valid("bad") is False
+    assert required_evidence_summary_is_valid({"route": "bad"}) is False
+    assert required_evidence_summary_is_valid({"route": None}) is False
+
+
 def test_required_evidence_has_any_kind_matches_candidates() -> None:
     assert required_evidence_has_any_kind(
         ("publish", "latest", "provider"),
@@ -305,6 +613,19 @@ def test_required_evidence_has_any_kind_matches_candidates() -> None:
     )
     assert not required_evidence_has_any_kind(("publish", "latest"), ("provider",))
     assert not required_evidence_has_any_kind((), ("provider",))
+
+
+def test_required_evidence_has_any_kind_fails_closed_on_malformed_kinds() -> None:
+    assert required_evidence_has_any_kind("provider", ("provider",)) is False
+    assert required_evidence_has_any_kind(("provider",), "provider") is False
+    assert (
+        required_evidence_has_any_kind({"provider": True}, ("provider",)) is False
+    )
+    assert (
+        required_evidence_has_any_kind(("provider",), {"provider": True}) is False
+    )
+    assert required_evidence_has_any_kind(("provider", None), ("provider",)) is False
+    assert required_evidence_has_any_kind(("provider",), ("",)) is False
 
 
 def test_required_evidence_has_all_kinds_matches_candidates() -> None:
@@ -321,6 +642,31 @@ def test_required_evidence_has_all_kinds_matches_candidates() -> None:
         ("billing_cycle",),
         ("billing_cycle", "reference_price"),
     )
+
+
+def test_required_evidence_has_all_kinds_fails_closed_on_malformed_kinds() -> None:
+    assert (
+        required_evidence_has_all_kinds("billing_cycle", ("billing_cycle",)) is False
+    )
+    assert (
+        required_evidence_has_all_kinds(("billing_cycle",), "billing_cycle") is False
+    )
+    assert (
+        required_evidence_has_all_kinds(
+            {"billing_cycle": True},
+            ("billing_cycle",),
+        )
+        is False
+    )
+    assert (
+        required_evidence_has_all_kinds(
+            ("billing_cycle",),
+            {"billing_cycle": True},
+        )
+        is False
+    )
+    assert required_evidence_has_all_kinds((None,), ()) is False
+    assert required_evidence_has_all_kinds(("billing_cycle",), ("",)) is False
 
 
 def test_missing_required_evidence_values_preserves_required_order() -> None:
@@ -341,11 +687,31 @@ def test_hashable_evidence_values_skips_falsey_and_unhashable_values() -> None:
     ) == {"provider-a", 3}
 
 
+def test_hashable_evidence_values_rejects_scalar_or_mapping_containers() -> None:
+    assert hashable_evidence_values("provider-a") == set()
+    assert hashable_evidence_values(b"provider-a") == set()
+    assert hashable_evidence_values({"provider_id": "provider-a"}) == set()
+    assert hashable_evidence_values(None) == set()
+
+
 def test_missing_required_evidence_values_skips_unhashable_observed_values() -> None:
     assert missing_required_evidence_values(
         ("provider-a", "provider-b"),
         (["provider-a"], {"provider_id": "provider-b"}, "provider-a"),
     ) == ["provider-b"]
+
+
+def test_missing_required_evidence_values_rejects_scalar_containers() -> None:
+    assert missing_required_evidence_values("provider-a", {"provider-a"}) == [
+        "provider-a"
+    ]
+    assert missing_required_evidence_values(["provider-a"], "provider-a") == [
+        "provider-a"
+    ]
+    assert missing_required_evidence_values(
+        {"provider_id": "provider-a"},
+        {"provider-a"},
+    ) == [{"provider_id": "provider-a"}]
 
 
 def test_missing_required_evidence_values_fails_closed_on_unhashable_required_values() -> None:
@@ -413,6 +779,8 @@ def test_required_or_observed_evidence_values_ignore_malformed_values() -> None:
         ("", {"provider_id": "provider-a"}),
         ([],),
     )
+    assert not required_or_observed_evidence_values_are_present("provider-a", set())
+    assert not required_or_observed_evidence_values_are_present((), "provider-a")
 
 
 def test_record_missing_required_or_observed_evidence_error_marks_empty_values() -> None:
@@ -490,6 +858,13 @@ def test_distinct_evidence_values_are_consistent_allows_zero_or_one_value() -> N
     assert not distinct_evidence_values_are_consistent({3, 4})
 
 
+def test_distinct_evidence_values_are_consistent_fails_closed_on_malformed_values() -> None:
+    assert not distinct_evidence_values_are_consistent(None)
+    assert not distinct_evidence_values_are_consistent("")
+    assert not distinct_evidence_values_are_consistent("a")
+    assert not distinct_evidence_values_are_consistent({"provider": "provider-a"})
+
+
 def test_record_inconsistent_evidence_values_error_marks_summary_invalid() -> None:
     required = {
         "latest": {"valid": True, "errors": [], "artifacts": []},
@@ -510,6 +885,27 @@ def test_record_inconsistent_evidence_values_error_marks_summary_invalid() -> No
         "provider counts differ across rollout evidence"
     ]
     assert required["provider"]["errors"] == []
+
+
+def test_record_inconsistent_evidence_values_error_marks_malformed_values() -> None:
+    required = {
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    recorded = record_inconsistent_evidence_values_error(
+        required,
+        "provider-a",
+        "latest",
+        "provider counts differ across rollout evidence",
+    )
+
+    assert recorded is True
+    assert required["latest"]["valid"] is False
+    assert required["provider"]["valid"] is False
+    assert required["latest"]["errors"] == [
+        "provider counts differ across rollout evidence"
+    ]
 
 
 def test_record_inconsistent_evidence_values_error_skips_consistent_values() -> None:
@@ -585,6 +981,41 @@ def test_record_string_tuple_binding_errors_rejects_empty_values() -> None:
     assert errors == ["cycle-bound.json: cycle tuple must match"]
 
 
+def test_record_string_tuple_binding_errors_rejects_malformed_artifact_rows() -> None:
+    errors: list[str] = []
+
+    binding = record_string_tuple_binding_errors(
+        "bad",
+        ("AA", None),
+        {("aa", "bb")},
+        errors,
+        message="cycle tuple must match",
+    )
+
+    assert binding is None
+    assert errors == ["<unknown>: cycle tuple must match"]
+
+
+def test_require_string_tuple_in_rejects_malformed_containers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_tuple_in("AB", {("a", "b")}, errors, message="cycle tuple")
+        is None
+    )
+    assert (
+        require_string_tuple_in(
+            ("AA", "BB"),
+            {("aa", "bb"): True},
+            errors,
+            message="cycle tuple",
+        )
+        is None
+    )
+
+    assert errors == ["cycle tuple", "cycle tuple"]
+
+
 def test_record_string_value_binding_errors_returns_normalized_value() -> None:
     artifact = {"path": "public-head-bound.json", "valid": True, "errors": []}
     errors: list[str] = []
@@ -637,6 +1068,54 @@ def test_record_string_value_binding_errors_rejects_empty_values() -> None:
     assert artifact["valid"] is False
     assert artifact["errors"] == ["public head must match"]
     assert errors == ["public-head-bound.json: public head must match"]
+
+
+def test_record_string_value_binding_errors_rejects_malformed_artifact_rows() -> None:
+    errors: list[str] = []
+
+    binding = record_string_value_binding_errors(
+        ["bad"],
+        None,
+        {"aa"},
+        errors,
+        message="public head must match",
+    )
+
+    assert binding is None
+    assert errors == ["<unknown>: public head must match"]
+
+
+def test_require_string_value_in_rejects_malformed_allowed_containers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_value_in("AA", "aabb", errors, message="public head must match")
+        is None
+    )
+    assert (
+        require_string_value_in(
+            "AA",
+            {"aa": True},
+            errors,
+            message="public head must match",
+        )
+        is None
+    )
+    assert (
+        require_string_value_in(
+            "AA",
+            {"aa", 1},
+            errors,
+            message="public head must match",
+        )
+        is None
+    )
+
+    assert errors == [
+        "public head must match",
+        "public head must match",
+        "public head must match",
+    ]
 
 
 def test_evidence_artifact_digest_set_collects_valid_digests() -> None:
@@ -859,6 +1338,55 @@ def test_validate_bound_evidence_digest_references_skips_optional_missing_anchor
     assert errors == []
 
 
+def test_validate_bound_evidence_digest_references_rejects_malformed_artifact_pairs() -> None:
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts="observability",
+        valid_anchor_digests={"aa"},
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+
+    assert errors == [
+        "bound evidence artifacts must be a sequence of (kind, artifact) pairs"
+    ]
+
+
+def test_validate_bound_evidence_digest_references_rejects_malformed_missing_anchor_pairs() -> None:
+    artifact = {
+        "kind": "observability",
+        "path": "observability.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", artifact)],
+        missing_anchor_artifacts={"observability": artifact},
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+        missing_anchor_summary_error="bundle anchor missing",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == [
+        "missing-anchor evidence artifacts must be a sequence of (kind, artifact) pairs"
+    ]
+
+
 def test_validate_bound_evidence_tuple_references_accepts_valid_anchor() -> None:
     artifact = {
         "kind": "cycle_bound",
@@ -980,6 +1508,25 @@ def test_validate_bound_evidence_tuple_references_skips_optional_missing_anchor(
     assert errors == []
 
 
+def test_validate_bound_evidence_tuple_references_rejects_malformed_artifact_pairs() -> None:
+    errors: list[str] = []
+
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", "not an artifact")],
+        valid_anchor_bindings={("aa", "bb")},
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+    )
+
+    assert errors == [
+        "bound evidence artifacts must be a sequence of (kind, artifact) pairs"
+    ]
+
+
 def test_record_consistent_evidence_value_reports_mismatches() -> None:
     values: dict[str, str] = {}
     errors: list[str] = []
@@ -1022,7 +1569,7 @@ def test_record_consistent_evidence_value_reports_mismatches() -> None:
     ]
 
 
-def test_record_consistent_evidence_value_ignores_malformed_values() -> None:
+def test_record_consistent_evidence_value_reports_malformed_values() -> None:
     values: dict[str, str] = {}
     errors: list[str] = []
 
@@ -1042,7 +1589,78 @@ def test_record_consistent_evidence_value_ignores_malformed_values() -> None:
     )
 
     assert values == {}
+    assert errors == [
+        "publish.snapshot_id_hex must be a string",
+        "latest.snapshot_id_hex must be a string",
+    ]
+
+
+def test_record_consistent_deployment_context_records_summary() -> None:
+    values: dict[str, str] = {}
+    errors: list[str] = []
+    artifact = {
+        "fingerprint": {
+            "deployment_id": "sorafs-staging-a",
+            "environment": "staging",
+        },
+    }
+
+    record_consistent_deployment_context(values, artifact, "gateway", errors)
+    record_consistent_deployment_context(values, artifact, "settlement", errors)
+
+    assert values == {
+        "deployment_id": "sorafs-staging-a",
+        "environment": "staging",
+    }
+    assert deployment_context_summary(values) == {
+        "deployment_id": "sorafs-staging-a",
+        "environment": "staging",
+    }
     assert errors == []
+
+
+def test_record_consistent_deployment_context_reports_mixed_context() -> None:
+    values: dict[str, str] = {}
+    errors: list[str] = []
+    gateway = {
+        "path": "gateway.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "sorafs-staging-a",
+            "environment": "staging",
+        },
+    }
+    settlement = {
+        "path": "settlement.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "sorafs-staging-b",
+            "environment": "release",
+        },
+    }
+
+    record_consistent_deployment_context(values, gateway, "gateway", errors)
+    record_consistent_deployment_context(values, settlement, "settlement", errors)
+
+    assert deployment_context_summary(values) == {
+        "deployment_id": "sorafs-staging-a",
+        "environment": "staging",
+    }
+    assert gateway["valid"] is True
+    assert gateway["errors"] == []
+    assert settlement["valid"] is False
+    assert settlement["errors"] == [
+        "settlement.deployment_id `sorafs-staging-b` does not match "
+        "`sorafs-staging-a`",
+        "settlement.environment `release` does not match `staging`",
+    ]
+    assert errors == [
+        "settlement.json: settlement.deployment_id `sorafs-staging-b` does not match "
+        "`sorafs-staging-a`",
+        "settlement.json: settlement.environment `release` does not match `staging`",
+    ]
 
 
 def test_record_observed_evidence_value_records_truthy_values() -> None:
@@ -1173,6 +1791,38 @@ def test_record_snapshot_bound_evidence_artifact_ignores_malformed_anchor_values
     assert snapshot_bound_artifacts == []
 
 
+def test_record_snapshot_bound_evidence_artifact_rejects_malformed_kind_containers() -> None:
+    valid_snapshot_bindings: set[tuple[str, str]] = set()
+    snapshot_bound_artifacts: list[dict[str, object]] = []
+    provider_record = {"kind": "provider"}
+
+    record_snapshot_bound_evidence_artifact(
+        kind_name="publish",
+        artifact={"kind": "publish"},
+        snapshot_id="AA",
+        merkle_root="BB",
+        valid=True,
+        anchor_kinds="publish",
+        bound_kinds=("provider",),
+        valid_snapshot_bindings=valid_snapshot_bindings,
+        snapshot_bound_artifacts=snapshot_bound_artifacts,
+    )
+    record_snapshot_bound_evidence_artifact(
+        kind_name="provider",
+        artifact=provider_record,
+        snapshot_id="AA",
+        merkle_root="BB",
+        valid=True,
+        anchor_kinds=("publish",),
+        bound_kinds={"provider": True},
+        valid_snapshot_bindings=valid_snapshot_bindings,
+        snapshot_bound_artifacts=snapshot_bound_artifacts,
+    )
+
+    assert valid_snapshot_bindings == set()
+    assert snapshot_bound_artifacts == []
+
+
 def test_validate_snapshot_bound_evidence_artifacts_records_mismatches() -> None:
     required = {
         "provider": {"valid": True, "errors": [], "artifacts": []},
@@ -1267,8 +1917,37 @@ def test_finalize_custom_required_evidence_rows_fails_closed() -> None:
     assert required["latest"]["errors"] == ["missing required `latest` evidence"]
     assert required["metrics"]["valid"] is False
     assert required["metrics"]["artifacts"] == []
-    assert required["metrics"]["errors"] == ["missing required `metrics` evidence"]
+    assert required["metrics"]["errors"] == [
+        "required `metrics` errors must be a list",
+        "missing required `metrics` evidence",
+    ]
     assert required["transport"]["valid"] is False
+
+
+def test_finalize_custom_required_evidence_rows_rejects_error_shape_drift() -> None:
+    required = {
+        "provider": {"valid": True, "errors": "bad", "artifacts": [{"valid": True}]},
+    }
+
+    finalize_custom_required_evidence_rows(required, evidence_label="evidence")
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "required `provider` errors must be a list"
+    ]
+    assert required["provider"]["artifacts"] == [{"valid": True}]
+
+
+def test_finalize_custom_required_evidence_rows_rejects_malformed_rows() -> None:
+    required = {"provider": "bad"}
+
+    finalize_custom_required_evidence_rows(required, evidence_label="evidence")
+
+    assert required["provider"] == {
+        "valid": False,
+        "errors": ["required `provider` row must be an object"],
+        "artifacts": [],
+    }
 
 
 def test_record_custom_required_evidence_artifact_updates_existing_rows() -> None:
@@ -1278,22 +1957,71 @@ def test_record_custom_required_evidence_artifact_updates_existing_rows() -> Non
         "latest": {"valid": False, "errors": [], "artifacts": []},
     }
 
-    record_custom_required_evidence_artifact(
+    assert record_custom_required_evidence_artifact(
         required,
         "provider",
         artifact,
         ("provider proof failed",),
-    )
-    record_custom_required_evidence_artifact(
+    ) is True
+    assert record_custom_required_evidence_artifact(
         required,
         "ignored",
         {"valid": True},
         ("ignored",),
-    )
+    ) is False
 
     assert required["provider"]["artifacts"] == [artifact]
-    assert required["provider"]["errors"] == ["provider proof failed"]
+    assert required["provider"]["errors"] == [
+        "required `provider` errors must be a list",
+        "provider proof failed",
+    ]
     assert required["latest"]["artifacts"] == []
+
+
+def test_record_custom_required_evidence_artifact_repairs_malformed_row() -> None:
+    artifact = {"valid": True, "path": "provider.json"}
+    required = {"provider": "bad"}
+
+    assert record_custom_required_evidence_artifact(
+        required,
+        "provider",
+        artifact,
+        (),
+    ) is True
+
+    assert required["provider"] == {
+        "valid": False,
+        "errors": ["required `provider` row must be an object"],
+        "artifacts": [artifact],
+    }
+
+
+def test_record_custom_required_evidence_artifact_rejects_error_shape_drift() -> None:
+    artifact = {"valid": False, "path": "provider.json"}
+    required = {
+        "provider": {"valid": False, "errors": [], "artifacts": []},
+        "metrics": {"valid": False, "errors": [], "artifacts": []},
+    }
+
+    assert record_custom_required_evidence_artifact(
+        required,
+        "provider",
+        artifact,
+        "bad",
+    ) is True
+    assert record_custom_required_evidence_artifact(
+        required,
+        "metrics",
+        {"valid": False, "path": "metrics.json"},
+        ("ok", 1),
+    ) is True
+
+    assert required["provider"]["errors"] == [
+        "required `provider` artifact errors must be a sequence of strings"
+    ]
+    assert required["metrics"]["errors"] == [
+        "required `metrics` artifact errors must be a sequence of strings"
+    ]
 
 
 def test_evidence_artifact_fingerprint_returns_mapping_or_empty() -> None:
@@ -1331,11 +2059,24 @@ def test_count_evidence_artifacts_sums_all_kind_buckets() -> None:
     ) == 3
 
 
+def test_count_evidence_artifacts_rejects_malformed_buckets_without_traceback() -> None:
+    assert count_evidence_artifacts("bad") == 0
+    assert count_evidence_artifacts({"routes": "bad"}) == 0
+    assert count_evidence_artifacts({"routes": b"bad"}) == 0
+    assert count_evidence_artifacts({"routes": None}) == 0
+
+
 def test_count_recognized_evidence_artifacts_counts_custom_rows() -> None:
     assert count_recognized_evidence_artifacts(
         ({"path": "one.json"}, {"path": "two.json"})
     ) == 2
     assert count_recognized_evidence_artifacts(()) == 0
+
+
+def test_count_recognized_evidence_artifacts_rejects_strings_without_traceback() -> None:
+    assert count_recognized_evidence_artifacts("bad") == 0
+    assert count_recognized_evidence_artifacts(b"bad") == 0
+    assert count_recognized_evidence_artifacts(None) == 0
 
 
 def test_recognized_evidence_artifacts_are_valid_requires_explicit_true() -> None:
@@ -1345,11 +2086,19 @@ def test_recognized_evidence_artifacts_are_valid_requires_explicit_true() -> Non
     assert recognized_evidence_artifacts_are_valid(({"valid": 1},)) is False
     assert recognized_evidence_artifacts_are_valid(({},)) is False
     assert recognized_evidence_artifacts_are_valid(("bad",)) is False
+    assert recognized_evidence_artifacts_are_valid("bad") is False
+    assert recognized_evidence_artifacts_are_valid(None) is False
 
 
 def test_count_evidence_files_counts_discovered_paths() -> None:
     assert count_evidence_files([Path("one.json"), Path("two.json")]) == 2
     assert count_evidence_files(()) == 0
+
+
+def test_count_evidence_files_rejects_strings_without_traceback() -> None:
+    assert count_evidence_files("evidence.json") == 0
+    assert count_evidence_files(b"evidence.json") == 0
+    assert count_evidence_files(None) == 0
 
 
 def test_init_evidence_artifact_buckets_returns_empty_kind_lists() -> None:
@@ -1359,9 +2108,23 @@ def test_init_evidence_artifact_buckets_returns_empty_kind_lists() -> None:
     assert buckets["route"] is not buckets["manifest"]
 
 
+def test_init_evidence_artifact_buckets_rejects_malformed_kind_names() -> None:
+    assert init_evidence_artifact_buckets("route") == {}
+    assert init_evidence_artifact_buckets({"route": True}) == {}
+    assert init_evidence_artifact_buckets(()) == {}
+    assert init_evidence_artifact_buckets(("route", "route")) == {}
+    assert init_evidence_artifact_buckets(("route", 1)) == {}
+
+
 def test_evidence_gate_status_reflects_summary_errors() -> None:
     assert evidence_gate_status([]) == "ready"
     assert evidence_gate_status(["missing required route rollout evidence"]) == "blocked"
+
+
+def test_evidence_gate_status_fails_closed_on_malformed_errors() -> None:
+    assert evidence_gate_status(None) == "blocked"
+    assert evidence_gate_status("") == "blocked"
+    assert evidence_gate_status(b"") == "blocked"
 
 
 def test_record_evidence_validation_errors_adds_path_prefixes() -> None:
@@ -1377,6 +2140,36 @@ def test_record_evidence_validation_errors_adds_path_prefixes() -> None:
         "existing",
         "evidence.json: schema must be a string",
         "evidence.json: status must be `passed`",
+    ]
+
+
+def test_record_evidence_validation_errors_rejects_string_without_character_split() -> None:
+    errors: list[str] = []
+
+    record_evidence_validation_errors(Path("evidence.json"), "bad", errors)
+
+    assert errors == [
+        "evidence.json: validation errors must be a sequence of strings"
+    ]
+
+
+def test_record_evidence_validation_errors_rejects_scalar_without_traceback() -> None:
+    errors: list[str] = []
+
+    record_evidence_validation_errors(Path("evidence.json"), None, errors)
+
+    assert errors == [
+        "evidence.json: validation errors must be a sequence of strings"
+    ]
+
+
+def test_record_evidence_validation_errors_rejects_non_string_entry() -> None:
+    errors: list[str] = []
+
+    record_evidence_validation_errors(Path("evidence.json"), ["schema", 7], errors)
+
+    assert errors == [
+        "evidence.json: validation errors must be a sequence of strings"
     ]
 
 
@@ -1423,6 +2216,7 @@ def test_build_required_evidence_summary_reports_present_valid_and_missing() -> 
         "valid": True,
         "artifact_count": 1,
         "artifacts": [artifact],
+        "errors": [],
     }
     assert summary["missing"] == {
         "schema": "sorafs.missing.v1",
@@ -1430,6 +2224,7 @@ def test_build_required_evidence_summary_reports_present_valid_and_missing() -> 
         "valid": False,
         "artifact_count": 0,
         "artifacts": [],
+        "errors": [],
     }
     assert errors == ["missing required missing rollout evidence"]
 
@@ -1453,6 +2248,122 @@ def test_build_required_evidence_summary_reports_invalid_release_artifacts() -> 
     assert errors == ["archive release evidence has invalid artifact(s)"]
 
 
+def test_build_required_evidence_summary_rejects_missing_schema_metadata() -> None:
+    errors: list[str] = []
+    artifact = {"valid": True, "path": "ready.json", "errors": []}
+
+    summary = build_required_evidence_summary(
+        ("ready", "blank"),
+        {"ready": [artifact], "blank": [artifact]},
+        {"blank": ""},
+        errors,
+        evidence_label="rollout",
+    )
+
+    assert summary["ready"] == {
+        "schema": None,
+        "present": True,
+        "valid": False,
+        "artifact_count": 1,
+        "artifacts": [artifact],
+        "errors": ["required `ready` schema must be configured"],
+    }
+    assert summary["blank"] == {
+        "schema": None,
+        "present": True,
+        "valid": False,
+        "artifact_count": 1,
+        "artifacts": [artifact],
+        "errors": ["required `blank` schema must be configured"],
+    }
+    assert errors == [
+        "required ready rollout schema must be configured",
+        "required blank rollout schema must be configured",
+    ]
+
+
+def test_build_required_evidence_summary_rejects_malformed_metadata_maps() -> None:
+    errors: list[str] = []
+
+    summary = build_required_evidence_summary(
+        ("ready",),
+        "not-a-map",
+        ["not", "a", "map"],
+        errors,
+        evidence_label="release",
+    )
+
+    assert summary["ready"] == {
+        "schema": None,
+        "present": False,
+        "valid": False,
+        "artifact_count": 0,
+        "artifacts": [],
+        "errors": ["required `ready` schema must be configured"],
+    }
+    assert errors == [
+        "release artifacts by kind must be a mapping",
+        "release schema by kind must be a mapping",
+        "required ready release schema must be configured",
+        "missing required ready release evidence",
+    ]
+
+
+def test_build_required_evidence_summary_rejects_mixed_deployments() -> None:
+    errors: list[str] = []
+    gateway = {
+        "valid": True,
+        "path": "gateway.json",
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "sorafs-staging-a",
+            "environment": "staging",
+        },
+    }
+    settlement = {
+        "valid": True,
+        "path": "settlement.json",
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "sorafs-staging-b",
+            "environment": "release",
+        },
+    }
+
+    summary = build_required_evidence_summary(
+        ("gateway", "settlement"),
+        {"gateway": [gateway], "settlement": [settlement]},
+        {
+            "gateway": "sorafs.gateway.v1",
+            "settlement": "sorafs.settlement.v1",
+        },
+        errors,
+        evidence_label="rollout",
+    )
+
+    assert summary["gateway"]["valid"] is False
+    assert summary["settlement"]["valid"] is False
+    assert summary["gateway"]["errors"] == [
+        "rollout evidence deployment context must match across artifacts"
+    ]
+    assert summary["settlement"]["errors"] == [
+        "rollout evidence deployment context must match across artifacts"
+    ]
+    assert summary["gateway"]["artifacts"][0]["valid"] is True
+    assert summary["gateway"]["artifacts"][0]["errors"] == []
+    assert summary["settlement"]["artifacts"][0]["valid"] is False
+    assert summary["settlement"]["artifacts"][0]["errors"] == [
+        "settlement.deployment_id `sorafs-staging-b` does not match "
+        "`sorafs-staging-a`",
+        "settlement.environment `release` does not match `staging`",
+    ]
+    assert errors == [
+        "settlement.json: settlement.deployment_id `sorafs-staging-b` does not match "
+        "`sorafs-staging-a`",
+        "settlement.json: settlement.environment `release` does not match `staging`",
+    ]
+
+
 def test_build_required_evidence_summary_uses_fail_closed_validity() -> None:
     errors: list[str] = []
     artifacts = [{"path": "missing-valid.json"}, {"valid": 1, "path": "truthy.json"}]
@@ -1472,6 +2383,126 @@ def test_build_required_evidence_summary_uses_fail_closed_validity() -> None:
     assert errors == ["archive release evidence has invalid artifact(s)"]
 
 
+def test_build_required_evidence_summary_rejects_malformed_required_kinds() -> None:
+    errors: list[str] = []
+    artifact = {"valid": True, "path": "ready.json"}
+
+    assert (
+        build_required_evidence_summary(
+            "ready",
+            {"ready": [artifact]},
+            {"ready": "sorafs.ready.v1"},
+            errors,
+            evidence_label="rollout",
+        )
+        == {}
+    )
+    assert (
+        build_required_evidence_summary(
+            {"ready": True},
+            {"ready": [artifact]},
+            {"ready": "sorafs.ready.v1"},
+            errors,
+            evidence_label="release",
+        )
+        == {}
+    )
+    assert (
+        build_required_evidence_summary(
+            ("ready", 1),
+            {"ready": [artifact]},
+            {"ready": "sorafs.ready.v1"},
+            errors,
+            evidence_label="canary",
+        )
+        == {}
+    )
+
+    assert errors == [
+        "rollout required evidence kinds must be a sequence of strings",
+        "release required evidence kinds must be a sequence of strings",
+        "canary required evidence kinds must be a sequence of strings",
+    ]
+
+
+def test_build_required_evidence_summary_rejects_empty_required_kinds() -> None:
+    errors: list[str] = []
+
+    assert (
+        build_required_evidence_summary(
+            (),
+            {},
+            {},
+            errors,
+            evidence_label="rollout",
+        )
+        == {}
+    )
+    assert errors == ["rollout required evidence kinds must not be empty"]
+
+
+def test_build_required_evidence_summary_rejects_duplicate_required_kinds() -> None:
+    errors: list[str] = []
+
+    assert (
+        build_required_evidence_summary(
+            ("ready", "ready", "archive", "archive"),
+            {
+                "ready": [{"valid": True}],
+                "archive": [{"valid": True}],
+            },
+            {
+                "ready": "sorafs.ready.v1",
+                "archive": "sorafs.archive.v1",
+            },
+            errors,
+            evidence_label="release",
+        )
+        == {}
+    )
+    assert errors == [
+        "release required evidence kinds must not contain duplicates "
+        "['archive', 'ready']"
+    ]
+
+
+def test_build_required_evidence_summary_rejects_malformed_artifact_buckets() -> None:
+    errors: list[str] = []
+
+    summary = build_required_evidence_summary(
+        ("text", "mapping", "missing"),
+        {
+            "text": "bad",
+            "mapping": {"valid": True},
+        },
+        {
+            "text": "sorafs.text.v1",
+            "mapping": "sorafs.mapping.v1",
+            "missing": "sorafs.missing.v1",
+        },
+        errors,
+        evidence_label="rollout",
+    )
+
+    for name in ("text", "mapping", "missing"):
+        assert summary[name]["present"] is False
+        assert summary[name]["valid"] is False
+        assert summary[name]["artifact_count"] == 0
+        assert summary[name]["artifacts"] == []
+    assert summary["text"]["errors"] == [
+        "required `text` artifacts must be a sequence"
+    ]
+    assert summary["mapping"]["errors"] == [
+        "required `mapping` artifacts must be a sequence"
+    ]
+    assert summary["missing"]["errors"] == []
+    assert errors == [
+        "required text rollout artifacts must be a sequence",
+        "required mapping rollout artifacts must be a sequence",
+        "missing required missing rollout evidence",
+    ]
+
+
 def test_required_evidence_kind_names_returns_summary_copy() -> None:
     required_kinds = ["route", "manifest"]
 
@@ -1479,6 +2510,18 @@ def test_required_evidence_kind_names_returns_summary_copy() -> None:
     required_kinds.append("late")
 
     assert names == ["route", "manifest"]
+
+
+def test_required_evidence_kind_names_rejects_malformed_containers() -> None:
+    assert required_evidence_kind_names("route") == []
+    assert required_evidence_kind_names({"route": True}) == []
+    assert required_evidence_kind_names(("route", 1)) == []
+
+
+def test_required_evidence_kind_names_rejects_empty_or_duplicate_kinds() -> None:
+    assert required_evidence_kind_names(()) == []
+    assert required_evidence_kind_names(("route", "route")) == []
+    assert required_evidence_kind_names(["route", "manifest", "route"]) == []
 
 
 def test_evidence_schema_by_kind_extracts_kind_schema_map() -> None:
@@ -1495,6 +2538,28 @@ def test_evidence_schema_by_kind_extracts_kind_schema_map() -> None:
         "route": "sorafs.route.v1",
         "manifest": "sorafs.manifest.v1",
     }
+
+
+def test_evidence_schema_by_kind_rejects_malformed_kind_registry() -> None:
+    class Kind:
+        def __init__(self, schema: object) -> None:
+            self.schema = schema
+
+    class MissingSchema:
+        pass
+
+    assert evidence_schema_by_kind("route") == {}
+    assert evidence_schema_by_kind({1: Kind("sorafs.route.v1")}) == {}
+    assert evidence_schema_by_kind({"": Kind("sorafs.route.v1")}) == {}
+    assert evidence_schema_by_kind({"route": MissingSchema()}) == {}
+    assert evidence_schema_by_kind({"route": Kind("")}) == {}
+    assert evidence_schema_by_kind({"route": Kind(1)}) == {}
+    assert evidence_schema_by_kind(
+        {
+            "route": Kind("sorafs.route.v1"),
+            "manifest": Kind(""),
+        }
+    ) == {}
 
 
 def test_require_object_returns_object_values() -> None:
@@ -1542,6 +2607,14 @@ def test_require_object_array_reports_non_object_items() -> None:
     assert errors == ["routes[0] must be an object"]
 
 
+def test_require_object_array_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert require_object_array("bad", "routes", errors) == []
+
+    assert errors == ["payload must be an object"]
+
+
 def test_require_string_returns_stripped_non_empty_values() -> None:
     errors: list[str] = []
 
@@ -1580,6 +2653,18 @@ def test_require_string_type_reports_non_string_values_with_path() -> None:
     assert errors == [
         "schema must be a string",
         "artifact.schema must be a string",
+    ]
+
+
+def test_require_string_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert require_string("bad", "schema", errors) == ""
+    assert require_string_type("bad", "schema", errors) is None
+
+    assert errors == [
+        "payload must be an object",
+        "payload must be an object",
     ]
 
 
@@ -1656,6 +2741,22 @@ def test_require_known_schema_reports_type_and_unknown_schema_errors() -> None:
     ]
 
 
+def test_require_known_schema_rejects_malformed_schema_registry() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_known_schema(
+            {"schema": "sorafs.test.v1"},
+            "bad-registry",
+            "SoraFS test artifact",
+            errors,
+        )
+        is None
+    )
+
+    assert errors == ["SoraFS test artifact schema registry must be a mapping"]
+
+
 def test_validate_standard_evidence_payload_runs_shared_wrapper_checks() -> None:
     class Kind:
         name = "route"
@@ -1690,6 +2791,48 @@ def test_validate_standard_evidence_payload_runs_shared_wrapper_checks() -> None
     ]
 
 
+def test_validate_standard_evidence_payload_rejects_malformed_payload() -> None:
+    kind_name, errors = validate_standard_evidence_payload(
+        "bad-payload",
+        {"sorafs.test.v1": object()},
+        "SoraFS test artifact",
+        set(),
+        "rollout evidence",
+        lambda _kind, _payload, _errors: None,
+    )
+
+    assert kind_name is None
+    assert errors == ["payload must be an object"]
+
+
+def test_validate_standard_evidence_payload_rejects_malformed_kind_name() -> None:
+    class MissingName:
+        pass
+
+    called = False
+
+    def validate_kind(
+        _kind: MissingName,
+        _payload: dict[str, object],
+        _errors: list[str],
+    ) -> None:
+        nonlocal called
+        called = True
+
+    kind_name, errors = validate_standard_evidence_payload(
+        {"schema": "sorafs.test.v1"},
+        {"sorafs.test.v1": MissingName()},
+        "SoraFS test artifact",
+        set(),
+        "rollout evidence",
+        validate_kind,
+    )
+
+    assert kind_name is None
+    assert called is False
+    assert errors == ["SoraFS test artifact schema kind must have a non-empty name"]
+
+
 def test_require_string_equal_accepts_exact_matches() -> None:
     errors: list[str] = []
 
@@ -1719,6 +2862,14 @@ def test_require_string_equal_supports_path_and_unquoted_expected_label() -> Non
     )
 
     assert errors == ["artifact.schema must be sorafs.test.v1"]
+
+
+def test_require_string_equal_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_string_equal("bad", "schema", "expected", errors)
+
+    assert errors == ["payload must be an object"]
 
 
 def test_require_string_value_equal_accepts_matching_values() -> None:
@@ -1837,6 +2988,48 @@ def test_require_string_in_reports_disallowed_values() -> None:
     )
 
     assert errors == ["manual_trigger_route_state must be `wired` or `retired`"]
+
+
+def test_require_string_in_rejects_malformed_allowed_containers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": "wired"},
+            "manual_trigger_route_state",
+            "wired-retired",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": "wired"},
+            "manual_trigger_route_state",
+            {"wired": True},
+            errors,
+            path="archive.manual_trigger_route_state",
+        )
+        == ""
+    )
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": "wired"},
+            "manual_trigger_route_state",
+            ("wired", 1),
+            errors,
+        )
+        == ""
+    )
+
+    assert errors == [
+        "manual_trigger_route_state allowed values must be a sequence of strings",
+        (
+            "archive.manual_trigger_route_state allowed values must be a "
+            "sequence of strings"
+        ),
+        "manual_trigger_route_state allowed values must be a sequence of strings",
+    ]
 
 
 def test_require_rollout_deployment_id_accepts_reviewed_ids() -> None:
@@ -2050,6 +3243,16 @@ def test_require_config_backed_governance_approval_reports_missing_contract() ->
     ]
 
 
+def test_config_and_governance_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_iroha_config_binding("bad", errors)
+    require_governance_approval([], errors)
+    require_config_backed_governance_approval(None, errors)
+
+    assert errors == ["payload must be an object"] * 3
+
+
 def test_require_rollout_environment_accepts_reviewed_labels() -> None:
     errors: list[str] = []
 
@@ -2136,6 +3339,49 @@ def test_require_status_in_reports_disallowed_statuses() -> None:
     ]
 
 
+def test_require_status_in_rejects_malformed_allowed_containers() -> None:
+    errors: list[str] = []
+
+    assert require_status_in({"status": "verified"}, "verified", errors) == ""
+    assert (
+        require_status_in(
+            {"status": "verified"},
+            {"verified": True},
+            errors,
+            path="snapshot.status",
+        )
+        == ""
+    )
+    assert (
+        require_status_in(
+            {},
+            ("verified", 1),
+            errors,
+            path="optional.status",
+            allow_absent=True,
+        )
+        == ""
+    )
+
+    assert errors == [
+        "status allowed statuses must be a sequence of strings",
+        "snapshot.status allowed statuses must be a sequence of strings",
+        "optional.status allowed statuses must be a sequence of strings",
+    ]
+
+
+def test_require_status_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_passed_status("bad", errors)
+    assert require_status_in("bad", ("verified",), errors) == ""
+
+    assert errors == [
+        "payload must be an object",
+        "payload must be an object",
+    ]
+
+
 def test_is_hex_accepts_exact_hex_lengths() -> None:
     assert is_hex("abcdef012345", 12)
     assert is_hex("ABCDEF012345", 12)
@@ -2165,6 +3411,28 @@ def test_require_hex_reports_missing_or_invalid_values() -> None:
         "digest must be 12 hex characters",
         "missing must be a non-empty string",
     ]
+
+
+def test_require_hex_uses_path_override_for_errors() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_hex({"digest": "not-hex"}, "digest", 12, errors, path="items[0].digest")
+        == ""
+    )
+    assert require_hex({}, "digest", 12, errors, path="items[1].digest") == ""
+    assert errors == [
+        "items[0].digest must be 12 hex characters",
+        "items[1].digest must be a non-empty string",
+    ]
+
+
+def test_require_hex_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert require_hex("bad", "digest", 12, errors) == ""
+
+    assert errors == ["payload must be an object"]
 
 
 def test_require_policy_digest_normalizes_valid_digest() -> None:
@@ -2206,6 +3474,14 @@ def test_require_optional_hex_reports_invalid_values() -> None:
         "digest must be null or 12 hex characters",
         "other must be null or 12 hex characters",
     ]
+
+
+def test_require_optional_hex_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_optional_hex("bad", "digest", 12, errors)
+
+    assert errors == ["payload must be an object"]
 
 
 def test_require_hex_string_array_accepts_optional_arrays() -> None:
@@ -2276,6 +3552,14 @@ def test_require_hex_string_array_uses_path_override() -> None:
     assert errors == ["proof.siblings_hex[0] must be 12 hex characters"]
 
 
+def test_require_hex_string_array_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert require_hex_string_array("bad", "siblings_hex", 12, errors) == []
+
+    assert errors == ["payload must be an object"]
+
+
 def test_require_bool_true_accepts_true() -> None:
     errors: list[str] = []
 
@@ -2306,6 +3590,14 @@ def test_require_bool_true_uses_path_override_in_errors() -> None:
     assert errors == ["routes[0].passed must be true"]
 
 
+def test_require_bool_true_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_bool_true("bad", "ready", errors)
+
+    assert errors == ["payload must be an object"]
+
+
 def test_require_false_accepts_false() -> None:
     errors: list[str] = []
 
@@ -2321,6 +3613,14 @@ def test_require_false_rejects_true_or_missing_values() -> None:
     require_false({}, "missing", errors)
 
     assert errors == ["included must be false", "missing must be false"]
+
+
+def test_require_false_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_false("bad", "included", errors)
+
+    assert errors == ["payload must be an object"]
 
 
 def test_require_false_or_absent_accepts_false_or_missing_values() -> None:
@@ -2347,6 +3647,14 @@ def test_require_false_or_absent_rejects_non_false_values() -> None:
         "numeric must be false when present",
         "object must be false when present",
     ]
+
+
+def test_require_false_or_absent_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_false_or_absent("bad", "debug", errors)
+
+    assert errors == ["payload must be an object"]
 
 
 def test_require_false_or_governed_accepts_false_or_governed_true() -> None:
@@ -2389,6 +3697,14 @@ def test_require_false_or_governed_rejects_ungoverned_or_non_bool_values() -> No
     ]
 
 
+def test_require_false_or_governed_rejects_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_false_or_governed("bad", "execution_enabled", "execution_governed", errors)
+
+    assert errors == ["payload must be an object"]
+
+
 def test_require_positive_int_returns_positive_integers() -> None:
     errors: list[str] = []
 
@@ -2407,6 +3723,29 @@ def test_require_positive_int_rejects_bool_zero_and_negative_values() -> None:
         "zero must be a positive integer",
         "negative must be a positive integer",
     ]
+
+
+def test_require_numeric_integer_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert require_positive_int("bad", "count", errors) == 0
+    assert require_minimum_int([], "provider_count", 3, errors) == 0
+    assert require_non_negative_int(None, "lag", errors) == 0
+    assert (
+        require_int_range(
+            7,
+            "score",
+            errors,
+            min_value=2,
+            max_value=10,
+            path="provider.score_bps",
+        )
+        == 2
+    )
+    assert require_advancing_int_pair("bad", "since", "next_since", errors) == (0, 0)
+    assert require_maximum_int(("bad",), "latency", 10, errors, minimum=1) == 1
+
+    assert errors == ["payload must be an object"] * 6
 
 
 def test_require_minimum_int_accepts_values_at_or_above_minimum() -> None:
@@ -2715,6 +4054,16 @@ def test_require_2xx_status_uses_path_override_in_errors() -> None:
     assert errors == ["routes[0].status_code must be a 2xx status"]
 
 
+def test_require_status_and_number_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    require_2xx_status("bad", "status_code", errors)
+    assert require_non_negative_number([], "latency_ms", errors) == 0.0
+    assert require_maximum_number(None, "lag_seconds", 10, errors) == 0.0
+
+    assert errors == ["payload must be an object"] * 3
+
+
 def test_require_non_negative_number_returns_numeric_values_as_float() -> None:
     errors: list[str] = []
 
@@ -2906,6 +4255,16 @@ def test_require_count_match_reports_passed_count_mismatch() -> None:
     require_count_match({"total": 2, "passed": 1}, "total", "passed", errors)
 
     assert errors == ["passed must equal total"]
+
+
+def test_require_count_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert require_count_equal("bad", "total", "passed", errors) == 0
+    require_count_value_equal([], "logged_session_count", 2, "session_count", errors)
+    require_count_match(None, "total", "passed", errors)
+
+    assert errors == ["payload must be an object"] * 3
 
 
 def test_require_count_length_match_accepts_matching_collection_lengths() -> None:
@@ -3100,6 +4459,15 @@ def test_collect_string_values_exact_scalar_mode_ignores_blank_values() -> None:
     assert collect_string_values(payload, "items", "", trim_values=False) == {" alpha "}
 
 
+def test_string_coverage_helpers_reject_malformed_payloads() -> None:
+    errors: list[str] = []
+
+    assert collect_string_values("bad", "items", "name") == set()
+    require_string_coverage("bad", "routes", "name", ("healthz",), errors)
+
+    assert errors == ["payload must be an object"]
+
+
 def test_require_string_coverage_reports_missing_value_label() -> None:
     errors: list[str] = []
 
@@ -3126,3 +4494,35 @@ def test_require_string_coverage_reports_missing_field_label() -> None:
     )
 
     assert errors == ["routes must include name `healthz`"]
+
+
+def test_require_string_coverage_rejects_malformed_required_values() -> None:
+    errors: list[str] = []
+
+    require_string_coverage(
+        {"routes": [{"name": "status"}]},
+        "routes",
+        "name",
+        "status",
+        errors,
+    )
+    require_string_coverage(
+        {"routes": [{"name": "status"}]},
+        "routes",
+        "name",
+        {"status": True},
+        errors,
+    )
+    require_string_coverage(
+        {"routes": [{"name": "status"}]},
+        "routes",
+        "name",
+        ("status", ""),
+        errors,
+    )
+
+    assert errors == [
+        "routes required values must be a sequence of strings",
+        "routes required values must be a sequence of strings",
+        "routes required values must be a sequence of strings",
+    ]

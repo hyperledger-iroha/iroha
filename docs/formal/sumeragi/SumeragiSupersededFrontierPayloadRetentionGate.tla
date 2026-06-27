@@ -244,6 +244,10 @@ SafetyAnchors ==
 
 SafetyFast == SupersededFrontierPayloadRetentionCoreSafety
 
+SupersededFrontierPayloadRetentionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyAnchors
+
 BugRetainDaDisabled == NoBugInvariant
 BugRetainIncomingMaterialized == NoBugInvariant
 BugRetainInvalidPending == NoBugInvariant

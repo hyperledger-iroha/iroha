@@ -45,6 +45,10 @@ MAX_DER_BLOBS = 8
 MAX_DER_BYTES = 1024 * 1024
 MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
+MAX_BUNDLE_INPUT_PATHS = 64
+MAX_JSON_LIST_ITEMS = 8192
+MAX_JSON_OBJECT_MEMBERS = 8192
+MAX_JSON_NESTING_DEPTH = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
 MAX_CLEAN_STRING_CHARS = 4096
@@ -538,20 +542,70 @@ def _reject_repository_output_path(path: Path, label: str) -> None:
         )
 
 
-def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+def _same_existing_file(left: Path, right: Path) -> bool:
+    try:
+        left_stat = left.stat()
+        right_stat = right.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return os.path.samestat(left_stat, right_stat)
+
+
+def _reject_output_input_alias(
+    output_path: Path | None,
+    output_label: str,
+    inputs: tuple[tuple[str, Path], ...],
+) -> None:
+    if output_path is None:
+        return
+    for input_label, input_path in inputs:
+        if str(output_path) == str(input_path) or _same_existing_file(
+            output_path,
+            input_path,
+        ):
+            raise TrustBundleError(
+                f"{output_label} must not reuse {input_label} path"
+            )
+
+
+def _reject_output_output_alias(
+    left: Path | None,
+    left_label: str,
+    right: Path | None,
+    right_label: str,
+) -> None:
+    if left is None or right is None:
+        return
+    if str(left) == str(right) or _same_existing_file(left, right):
+        raise TrustBundleError(f"{left_label} and {right_label} must be different paths")
+
+
+def _ensure_text_output_target(
+    path: Path,
+    *,
+    display_label: str | None = None,
+    create_parent: bool = True,
+) -> None:
     label = display_label if display_label is not None else "output path"
     _reject_output_path_smuggling(path, label)
     _reject_repository_output_path(path, label)
-    _reject_symlinked_existing_ancestors(path.parent, display_label=label)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError as error:
+        _reject_symlinked_existing_ancestors(path.parent, display_label=label)
+    except NotADirectoryError as error:
         raise TrustBundleError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
-    if stat.S_ISLNK(parent_mode):
-        raise TrustBundleError(f"{label} must not be a symlink")
-    if not stat.S_ISDIR(parent_mode):
-        raise TrustBundleError(f"{label} must be a directory")
+    if create_parent:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as error:
+            raise TrustBundleError(f"{label} must be a directory") from error
+    if path.parent.exists() or path.parent.is_symlink():
+        parent_mode = path.parent.lstat().st_mode
+        if stat.S_ISLNK(parent_mode):
+            raise TrustBundleError(f"{label} must not be a symlink")
+        if not stat.S_ISDIR(parent_mode):
+            raise TrustBundleError(f"{label} must be a directory")
     if path.exists() or path.is_symlink():
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode):
@@ -560,6 +614,11 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise TrustBundleError(f"{label} must be a regular file")
         if metadata.st_nlink > 1:
             raise TrustBundleError(f"{label} must not be hard-linked")
+
+
+def _write_text_output(path: Path, text: str, *, display_label: str | None = None) -> None:
+    label = display_label if display_label is not None else "output path"
+    _ensure_text_output_target(path, display_label=label)
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -650,11 +709,19 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
         )
     except json.JSONDecodeError as error:
         raise TrustBundleError(f"{label} is not valid JSON: {error}") from error
+    except RecursionError as error:
+        raise TrustBundleError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        ) from error
     _reject_json_surrogates(value)
     return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    if len(pairs) > MAX_JSON_OBJECT_MEMBERS:
+        raise TrustBundleError(
+            f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+        )
     seen: set[str] = set()
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -669,17 +736,29 @@ def _reject_json_constant(value: str) -> None:
     raise TrustBundleError("JSON contains non-finite numeric constant")
 
 
-def _reject_json_surrogates(value: Any) -> None:
+def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise TrustBundleError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, str):
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise TrustBundleError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise TrustBundleError(
+                f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for item in value:
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise TrustBundleError(
+                f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
+            )
         for key, item in value.items():
-            _reject_json_surrogates(key)
-            _reject_json_surrogates(item)
+            _reject_json_surrogates(key, _depth=_depth + 1)
+            _reject_json_surrogates(item, _depth=_depth + 1)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -787,17 +866,29 @@ def _required_context_string(bundle: dict[str, Any], key: str, label: str) -> st
     return raw
 
 
-def _check_no_secret_material(value: Any, path: str = "$") -> None:
+def _check_no_secret_material(value: Any, path: str = "$", *, _depth: int = 0) -> None:
+    if _depth > MAX_JSON_NESTING_DEPTH:
+        raise TrustBundleError(
+            f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
+        )
     if isinstance(value, dict):
+        if len(value) > MAX_JSON_OBJECT_MEMBERS:
+            raise TrustBundleError(
+                f"{path} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
+            )
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise TrustBundleError(f"{path} contains forbidden secret-looking field")
             if _is_control_bearing_key(key):
                 raise TrustBundleError(f"{path} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{path}.{key}")
+            _check_no_secret_material(child, f"{path}.{key}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if len(value) > MAX_JSON_LIST_ITEMS:
+            raise TrustBundleError(
+                f"{path} must contain at most {MAX_JSON_LIST_ITEMS} items"
+            )
         for offset, child in enumerate(value):
-            _check_no_secret_material(child, f"{path}[{offset}]")
+            _check_no_secret_material(child, f"{path}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
         if _contains_unsafe_json_control(value):
             raise TrustBundleError(f"{path} contains unsafe control characters")
@@ -945,6 +1036,50 @@ def _optional_positive_cli_int(value: Any, label: str) -> int | None:
     return parsed
 
 
+def _required_cli_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise TrustBundleError(f"{label} must be a boolean")
+    return value
+
+
+def _optional_cli_path(value: Any, label: str) -> Path | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        raise TrustBundleError(f"{label} must be a path")
+    try:
+        return Path(value)
+    except TypeError as error:
+        raise TrustBundleError(f"{label} must be a path") from error
+
+
+def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise TrustBundleError(f"{label} must be a repeatable path list")
+    if len(value) > MAX_BUNDLE_INPUT_PATHS:
+        raise TrustBundleError(f"{label} accepts at most {MAX_BUNDLE_INPUT_PATHS} paths")
+    paths: list[Path] = []
+    for offset, entry in enumerate(value):
+        if isinstance(entry, bytes):
+            raise TrustBundleError(f"{label}[{offset}] must be a path")
+        try:
+            paths.append(Path(entry))
+        except TypeError as error:
+            raise TrustBundleError(f"{label}[{offset}] must be a path") from error
+    return paths
+
+
+def _require_policy_booleans(args: argparse.Namespace) -> None:
+    for attr, label in (
+        ("allow_record_only", "--allow-record-only"),
+        ("allow_insecure_source_url", "--allow-insecure-source-url"),
+        ("allow_synthetic_der", "--allow-synthetic-der"),
+    ):
+        setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
+
+
 def _required_bool(bundle: dict[str, Any], key: str, label: str) -> bool:
     raw = bundle.get(key)
     if not isinstance(raw, bool):
@@ -977,7 +1112,14 @@ def _required_list_field(
 ) -> Any:
     if key not in bundle:
         raise TrustBundleError(f"{label}.{key} must be recorded as an array of {description}")
-    return bundle[key]
+    value = bundle[key]
+    if not isinstance(value, list):
+        return value
+    if len(value) > MAX_JSON_LIST_ITEMS:
+        raise TrustBundleError(
+            f"{label}.{key} must contain at most {MAX_JSON_LIST_ITEMS} items"
+        )
+    return value
 
 
 def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
@@ -996,7 +1138,7 @@ def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates SHA-256")
         seen.add(digest)
         result.append(digest)
-    return result
+    return sorted(result)
 
 
 def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
@@ -1022,7 +1164,7 @@ def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates OID")
         seen.add(value)
         result.append(value)
-    return result
+    return sorted(result)
 
 
 def _valid_oid(value: str) -> bool:
@@ -1239,7 +1381,6 @@ def _der_objects(
     if len(raw) > MAX_DER_BLOBS:
         raise TrustBundleError(f"{label}.{key} must not contain more than {MAX_DER_BLOBS} entries")
     entries: list[dict[str, Any]] = []
-    base64_values: list[str] = []
     seen: set[str] = set()
     seen_labels: set[str] = set()
     uses_synthetic_der = False
@@ -1295,8 +1436,13 @@ def _der_objects(
         if name is not None:
             entry["label"] = name
         entries.append(entry)
-        base64_values.append(canonical_b64)
+    entries.sort(key=_der_summary_order_key)
+    base64_values = [str(entry["der_base64"]) for entry in entries]
     return entries, base64_values, uses_synthetic_der
+
+
+def _der_summary_order_key(entry: dict[str, Any]) -> tuple[str, int]:
+    return str(entry["sha256"]), int(entry["byte_len"])
 
 
 def _source(
@@ -1578,6 +1724,14 @@ def _public_bundle_summary(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _bundle_summary_order_key(summary: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(summary["profile_id"]),
+        str(summary["path"]),
+        str(summary["bundle_sha256"]),
+    )
+
+
 def _reject_profile_emission_blockers(
     args: argparse.Namespace,
     summaries: list[dict[str, Any]],
@@ -1727,7 +1881,7 @@ def _merge_unique(values: list[str], additions: list[str], label: str) -> list[s
             raise TrustBundleError(f"{label} duplicates SHA-256")
         seen.add(value)
         result.append(value)
-    return result
+    return sorted(result)
 
 
 def _reject_overlap(left: list[str], right: list[str], label: str) -> None:
@@ -1959,32 +2113,55 @@ def verify_bundle(
 
 
 def run(args: argparse.Namespace) -> int:
+    args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
+    args.emit_profile_json = _optional_cli_path(
+        getattr(args, "emit_profile_json", None),
+        "emit_profile_json",
+    )
     if args.summary_out is not None:
         _reject_output_path_smuggling(args.summary_out, "summary_out")
         _reject_repository_output_path(args.summary_out, "summary_out")
     if args.emit_profile_json is not None:
         _reject_output_path_smuggling(args.emit_profile_json, "emit_profile_json")
         _reject_repository_output_path(args.emit_profile_json, "emit_profile_json")
-    bundle_paths = list(args.bundle or [])
+    bundle_paths = _required_cli_path_sequence(getattr(args, "bundle", None), "--bundle")
     for offset, path in enumerate(bundle_paths):
         _reject_output_path_smuggling(path, f"--bundle[{offset}]")
+    _require_policy_booleans(args)
     if not bundle_paths:
         raise TrustBundleError("provide at least one --bundle")
     args.max_source_age_days = _optional_positive_cli_int(
-        args.max_source_age_days,
+        getattr(args, "max_source_age_days", None),
         "--max-source-age-days",
     )
     if args.allow_synthetic_der and args.emit_profile_json is not None:
         raise TrustBundleError(
             "--allow-synthetic-der cannot be combined with --emit-profile-json; "
             "replace template DER with real rail material before emitting profile overrides"
+    )
+    bundle_inputs = tuple(
+        (f"--bundle[{offset}]", path) for offset, path in enumerate(bundle_paths)
+    )
+    _reject_output_output_alias(
+        args.summary_out,
+        "--summary-out",
+        args.emit_profile_json,
+        "--emit-profile-json",
+    )
+    _reject_output_input_alias(args.summary_out, "summary_out", bundle_inputs)
+    _reject_output_input_alias(args.emit_profile_json, "emit_profile_json", bundle_inputs)
+    if args.summary_out is not None:
+        _ensure_text_output_target(
+            args.summary_out,
+            display_label="summary_out",
+            create_parent=False,
         )
-    if (
-        args.summary_out is not None
-        and args.emit_profile_json is not None
-        and args.summary_out.resolve() == args.emit_profile_json.resolve()
-    ):
-        raise TrustBundleError("--summary-out and --emit-profile-json must be different paths")
+    if args.emit_profile_json is not None:
+        _ensure_text_output_target(
+            args.emit_profile_json,
+            display_label="emit_profile_json",
+            create_parent=False,
+        )
     _reject_duplicate_paths([path.resolve() for path in bundle_paths], "--bundle")
     summaries = []
     for offset, path in enumerate(bundle_paths):
@@ -2002,11 +2179,16 @@ def run(args: argparse.Namespace) -> int:
     _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")
     _reject_duplicate_summary_field(summaries, "profile_id", "bundles")
     profile_json_emittable = _profile_json_emittable(args, summaries)
-    public_summaries = [_public_bundle_summary(summary) for summary in summaries]
+    canonical_summaries = sorted(summaries, key=_bundle_summary_order_key)
+    public_summaries = [
+        _public_bundle_summary(summary) for summary in canonical_summaries
+    ]
     profile_text = None
     profile_json_sha256 = None
     if args.emit_profile_json is not None:
-        profile_config = [summary["profile_overrides"] for summary in summaries]
+        profile_config = [
+            summary["profile_overrides"] for summary in canonical_summaries
+        ]
         profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
         profile_json_sha256 = sha256_hex(profile_text.encode("utf-8"))
     output: dict[str, Any] = {

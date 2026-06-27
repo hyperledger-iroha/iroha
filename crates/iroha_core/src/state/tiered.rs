@@ -1506,6 +1506,85 @@ impl TieredStateBackend {
         }
     }
 
+    /// Validate lane snapshot geometry changes that can fail without mutating tiered state.
+    ///
+    /// # Errors
+    /// Returns an error if a required tiered snapshot, relabel, or retirement path is blocked by
+    /// an incompatible filesystem entry.
+    pub fn preflight_lane_geometry(
+        &self,
+        previous: &LaneConfig,
+        current: &LaneConfig,
+        relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
+    ) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        let Some(root) = self.primary_cold_root().cloned() else {
+            return Ok(());
+        };
+        self.preflight_cold_roots()?;
+
+        let mut previous_map = BTreeMap::new();
+        for entry in previous.entries() {
+            previous_map.insert(entry.lane_id, entry);
+        }
+        let mut current_map = BTreeMap::new();
+        for entry in current.entries() {
+            current_map.insert(entry.lane_id, entry);
+        }
+
+        let lanes_root = root.join("lanes");
+        Self::preflight_dir_path(&lanes_root)?;
+
+        for (id, entry) in &current_map {
+            let dir = lane_snapshot_dir(&lanes_root, entry);
+            if previous_map.contains_key(id) && dir.exists() {
+                Self::preflight_dir_path(&dir)?;
+                continue;
+            }
+            if previous_map
+                .get(id)
+                .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists())
+            {
+                continue;
+            }
+            Self::preflight_dir_path(&dir)?;
+        }
+
+        let retired_root = root.join("retired").join("lanes");
+        for (id, entry) in &previous_map {
+            if current_map.contains_key(id) {
+                continue;
+            }
+            let dir = lane_snapshot_dir(&lanes_root, entry);
+            if dir.exists() {
+                Self::preflight_dir_path(&retired_root)?;
+            }
+        }
+
+        for (previous, current) in relabelled {
+            let old_dir = lane_snapshot_dir(&lanes_root, previous);
+            let new_dir = lane_snapshot_dir(&lanes_root, current);
+            if old_dir == new_dir || !old_dir.exists() {
+                continue;
+            }
+            if let Some(parent) = new_dir.parent() {
+                Self::preflight_dir_path(parent)?;
+            }
+            if new_dir.exists() {
+                return Err(eyre::eyre!(
+                    "tiered-state: lane snapshot relabel target already exists: {path}",
+                    path = new_dir.display()
+                ));
+            }
+            Self::preflight_dir_path(&new_dir)?;
+        }
+
+        Ok(())
+    }
+
     /// Ensure tiered snapshot directories reflect the configured lane geometry.
     pub fn reconcile_lane_geometry(
         &mut self,
@@ -1694,6 +1773,23 @@ impl TieredStateBackend {
                     path = root.display()
                 )
             })?;
+        }
+        Ok(())
+    }
+
+    fn preflight_cold_roots(&self) -> Result<()> {
+        for root in self.cold_store_root.iter().chain(self.da_store_root.iter()) {
+            Self::preflight_dir_path(root)?;
+        }
+        Ok(())
+    }
+
+    fn preflight_dir_path(path: &Path) -> Result<()> {
+        if path.exists() && !path.is_dir() {
+            return Err(eyre::eyre!(
+                "tiered-state: expected directory path: {path}",
+                path = path.display()
+            ));
         }
         Ok(())
     }
@@ -5593,6 +5689,106 @@ mod tests {
         assert!(
             !old_dir.exists(),
             "old snapshot directory should be moved away"
+        );
+    }
+
+    #[test]
+    fn preflight_lane_geometry_rejects_relabel_target_snapshot_dir() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
+
+        let initial_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                alias: "Alpha Lane".to_string(),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("initial catalog");
+        let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
+        backend
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg)
+            .expect("provision initial snapshot");
+        let old_entry = initial_cfg
+            .entry(LaneId::SINGLE)
+            .expect("initial lane entry");
+
+        let updated_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                alias: "Payments Lane".to_string(),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("updated catalog");
+        let updated_cfg = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let new_entry = updated_cfg
+            .entry(LaneId::SINGLE)
+            .expect("updated lane entry");
+        let lanes_root = temp.path().join("lanes");
+        let target_dir = lane_snapshot_dir(&lanes_root, new_entry);
+        fs::create_dir_all(&target_dir).expect("seed conflicting relabel target");
+
+        let err = backend
+            .preflight_lane_geometry(&initial_cfg, &updated_cfg, &[(old_entry, new_entry)])
+            .expect_err("occupied relabel target must fail preflight");
+
+        assert!(
+            format!("{err:?}").contains("lane snapshot relabel target already exists"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            lane_snapshot_dir(&lanes_root, old_entry).exists(),
+            "preflight must not move source snapshot dir"
+        );
+        assert!(
+            target_dir.exists(),
+            "preflight must leave conflicting target dir in place"
+        );
+    }
+
+    #[test]
+    fn preflight_lane_geometry_rejects_retired_lane_root_file() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
+
+        let lane1 = LaneConfig {
+            id: LaneId::from(1),
+            alias: "beta".to_string(),
+            ..LaneConfig::default()
+        };
+        let two_lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane1])
+                .expect("two-lane catalog");
+        let two_lane_cfg = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
+        backend
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &two_lane_cfg)
+            .expect("provision lane snapshots");
+
+        let retired_lane_root = temp.path().join("retired").join("lanes");
+        if let Some(parent) = retired_lane_root.parent() {
+            fs::create_dir_all(parent).expect("retired parent");
+        }
+        fs::write(&retired_lane_root, b"blocker").expect("retired root blocker");
+
+        let err = backend
+            .preflight_lane_geometry(&two_lane_cfg, &RuntimeLaneConfig::default(), &[])
+            .expect_err("retired root file must fail preflight");
+
+        assert!(
+            format!("{err:?}").contains("expected directory path"),
+            "unexpected error: {err:?}"
+        );
+        let lane1_entry = two_lane_cfg.entry(LaneId::from(1)).expect("lane 1 entry");
+        assert!(
+            lane_snapshot_dir(&temp.path().join("lanes"), lane1_entry).exists(),
+            "preflight must not retire source snapshot dir"
+        );
+        assert!(
+            retired_lane_root.is_file(),
+            "preflight must leave conflicting retired root in place"
         );
     }
 }

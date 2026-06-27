@@ -416,4 +416,9 @@ SafetyAnchors ==
   /\ LockedSameTupleAnchors
   /\ LockedSnapshotAnchors
 
+QcStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ Safety
+  /\ SafetyAnchors
+
 ====

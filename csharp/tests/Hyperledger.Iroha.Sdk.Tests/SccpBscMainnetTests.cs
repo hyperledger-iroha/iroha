@@ -302,6 +302,9 @@ public sealed class SccpBscMainnetTests
             FinalityHeight: 42,
             FinalityBlockHash: SampleOutboundFinalityBlockHash);
 
+    private static string UpperFixedHex(string value)
+        => "0X" + value[2..].ToUpperInvariant();
+
     private static BscMainnetOutboundProofRequestInput SampleOutboundInput(
         BscMainnetSccpDestinationBinding? binding = null,
         BscMainnetTransparentPublicInputs? publicInputs = null)
@@ -412,10 +415,22 @@ public sealed class SccpBscMainnetTests
             BscMainnetSccp.DestinationBinding(
                 "0X" + new string('1', 40).ToUpperInvariant(),
                 "0X" + new string('2', 40).ToUpperInvariant(),
-                "0X" + new string('b', 64).ToUpperInvariant(),
-                "0X" + new string('c', 64).ToUpperInvariant(),
+                "0x" + new string('b', 64),
+                "0x" + new string('c', 64),
                 expectedBindingHash: binding.BindingHash,
                 expectedKey: binding.Key).BindingHash);
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.DestinationBinding(
+                "0x" + new string('1', 40),
+                "0x" + new string('2', 40),
+                "0X" + new string('b', 64).ToUpperInvariant(),
+                "0x" + new string('c', 64)));
+        Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.DestinationBinding(
+                "0x" + new string('1', 40),
+                "0x" + new string('2', 40),
+                "0x" + new string('b', 64),
+                "0X" + new string('c', 64).ToUpperInvariant()));
 
         Assert.Throws<ArgumentOutOfRangeException>(
             () => BscMainnetSccp.RequireMainnetChainId(1));
@@ -1259,6 +1274,70 @@ public sealed class SccpBscMainnetTests
                 submitter));
         Assert.NotNull(submitter.Submission);
         Assert.Equal(submission.CallDataHex, submitter.Submission.CallDataHex);
+    }
+
+    [Fact]
+    public void OutboundProofRequestRejectsNonCanonicalFixedHexFields()
+    {
+        var binding = SampleDestinationBinding();
+        var publicInputs = SamplePublicInputs();
+        var input = SampleOutboundInput(binding, publicInputs);
+
+        static void AssertCanonicalHex(Action action, string field)
+        {
+            var error = Assert.Throws<ArgumentException>(action);
+            Assert.Contains(field, error.Message);
+            Assert.Contains("canonical lowercase 0x-prefixed 32-byte hex", error.Message);
+        }
+
+        AssertCanonicalHex(
+            () => BscMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    MessageId = UpperFixedHex(publicInputs.MessageId),
+                },
+            }),
+            "MessageId");
+        AssertCanonicalHex(
+            () => BscMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    PayloadHash = UpperFixedHex(publicInputs.PayloadHash),
+                },
+            }),
+            "PayloadHash");
+        AssertCanonicalHex(
+            () => BscMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    CommitmentRoot = UpperFixedHex(publicInputs.CommitmentRoot),
+                },
+            }),
+            "CommitmentRoot");
+        AssertCanonicalHex(
+            () => BscMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                PublicInputs = publicInputs with
+                {
+                    FinalityBlockHash = UpperFixedHex(publicInputs.FinalityBlockHash),
+                },
+            }),
+            "FinalityBlockHash");
+        AssertCanonicalHex(
+            () => BscMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                StatementHash = UpperFixedHex(input.StatementHash),
+            }),
+            "StatementHash");
+        AssertCanonicalHex(
+            () => BscMainnetSccp.BuildOutboundProofRequest(input with
+            {
+                DestinationBindingHash = UpperFixedHex(binding.BindingHash),
+            }),
+            "DestinationBindingHash");
     }
 
     [Fact]

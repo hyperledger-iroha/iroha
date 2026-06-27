@@ -362,6 +362,11 @@ FrontierSameSlotActivitySafetyAnchors ==
   /\ MissingCommitQcRepairAnchors
   /\ MissingPayloadRecoveryAnchors
 
+FrontierSameSlotActivityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ FrontierSameSlotActivitySafetyAnchors
+
 Safety == FrontierSameSlotActivitySafetyAnchors
 
 ====

@@ -417,6 +417,10 @@ CommittedHeightQcAdmissionExactness ==
   /\ CommittedHeightValidationExact
   /\ CommittedHeightEvidenceExact
 
+CommittedHeightQcAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommittedHeightQcAdmissionExactness
+
 NoBugInvariant == CommittedHeightQcCoreSafety
 
 SafetyFast == CommittedHeightQcCoreSafety

@@ -52,6 +52,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     required_evidence_kind_names,
     require_passed_status,
     require_positive_int,
+    require_recent_timestamp,
     require_string,
     require_string_coverage,
     validate_bound_evidence_digest_references,
@@ -128,6 +129,7 @@ REQUIRED_EXPLORER_ROUTES = (
     "browser_ui",
     "proof_token_issuance_index",
 )
+REQUIRED_PRIVACY_AGGREGATE_ACTIONS = ("source_event", "publish_due")
 SOURCE_BOUND_KINDS = ("publication",)
 CYCLE_BOUND_KINDS = (
     "privacy_aggregate",
@@ -158,7 +160,12 @@ SENSITIVE_KEYS = {
 
 
 
-FINGERPRINT_FIELDS: tuple[str, ...] = ("source_batch_digest_hex", "cycle_digest_hex")
+FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
+    "source_batch_digest_hex",
+    "cycle_digest_hex",
+)
 
 
 def validate_probe_array(
@@ -181,6 +188,20 @@ def validate_probe_array(
             status_field,
             errors,
             path=f"{field}[{index}].{status_field}",
+        )
+        require_hex(
+            record,
+            "request_body_blake3",
+            HEX64_LEN,
+            errors,
+            path=f"{field}[{index}].request_body_blake3",
+        )
+        require_hex(
+            record,
+            "response_body_blake3",
+            HEX64_LEN,
+            errors,
+            path=f"{field}[{index}].response_body_blake3",
         )
 
 
@@ -205,6 +226,13 @@ def validate_routes(
             "status_code",
             errors,
             path=f"routes[{index}].status_code",
+        )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
         )
         if publication:
             for field in (
@@ -266,6 +294,15 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         require_count_match(payload, "probe_count", "passed_probe_count", errors)
         require_positive_int(payload, "source_event_probe_count", errors)
         require_positive_int(payload, "publish_due_probe_count", errors)
+        require_string_coverage(
+            payload,
+            "probes",
+            "action",
+            REQUIRED_PRIVACY_AGGREGATE_ACTIONS,
+            errors,
+            allow_scalar_items=False,
+            trim_values=False,
+        )
         validate_probe_array(
             payload,
             "probes",
@@ -308,6 +345,7 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         SENSITIVE_KEYS,
         "rollout evidence",
         validate_kind_specific,
+        require_reviewed_deployment_context=True,
     )
 
 
@@ -365,7 +403,7 @@ def build_summary(
                 publication_cycle_artifacts.append(artifact)
             elif kind_name in CYCLE_BOUND_KINDS:
                 cycle_bound_artifacts.append((kind_name, artifact))
-        record_evidence_artifact(artifacts_by_kind, kind_name, artifact)
+        record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
 

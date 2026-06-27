@@ -2401,6 +2401,45 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(facts["device_model"], "Pixel 6")
         self.assertEqual(facts["device_codename"], "oriole")
 
+    def test_kagemusha_slot_assembler_zero_adb_getprop_timeout_disables_timeout(
+        self,
+    ) -> None:
+        outputs = {
+            "ro.build.fingerprint": "google/oriole/oriole:16/test:user/release-keys\n",
+            "ro.build.id": "CP1A.260405.005\n",
+            "ro.product.model": "Pixel 6\n",
+            "ro.product.device": "oriole\n",
+        }
+        timeouts: list[object] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            timeouts.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=outputs[command[-1]],
+                stderr="",
+            )
+
+        errors: list[str] = []
+        with mock.patch.object(slot_assembler.subprocess, "run", side_effect=fake_run):
+            facts = slot_assembler.read_device_identity(
+                adb="adb",
+                serial="ABC123",
+                device_fingerprint=None,
+                os_build_id=None,
+                device_model=None,
+                device_codename=None,
+                adb_timeout_seconds=0,
+                identity_hints={},
+                errors=errors,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(timeouts, [None, None, None, None])
+        self.assertEqual(facts["device_model"], "Pixel 6")
+        self.assertEqual(facts["device_codename"], "oriole")
+
     def test_kagemusha_slot_assembler_reports_adb_getprop_timeout(self) -> None:
         calls: list[list[str]] = []
 
@@ -2500,7 +2539,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("getprop-secret", rendered)
         self.assertNotIn("\x1b", rendered)
 
-    def test_kagemusha_slot_assembler_rejects_nonpositive_adb_timeout_before_root_classify(
+    def test_kagemusha_slot_assembler_rejects_negative_adb_timeout_before_root_classify(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2513,7 +2552,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                         source_slot=temp_path / "source",
                     ),
                     "--adb-timeout-seconds",
-                    "0",
+                    "-1",
                 ]
             )
 
@@ -2526,7 +2565,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(status, 1)
         self.assertIsNone(slot_path)
-        self.assertEqual(errors, ["--adb-timeout-seconds must be positive"])
+        self.assertEqual(errors, ["--adb-timeout-seconds must be non-negative"])
         self.assertFalse(slot_root.exists())
 
     def test_kagemusha_slot_assembler_rejects_padded_adb_identity(self) -> None:
@@ -6367,6 +6406,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 self.assertNotIn("\x00", rendered)
                 self.assertNotIn("\x1b", rendered)
                 self.assertEqual(runner.calls, [])  # type: ignore[attr-defined]
+
+    def test_kagemusha_android_raw_puller_zero_adb_timeout_disables_timeout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out_root = Path(temp) / "raw"
+            args = raw_pull_args(out_root)
+            args.adb_timeout_seconds = 0
+            tar_bytes = raw_slot_tar_bytes("pixel6")
+            timeouts: list[object] = []
+
+            def runner(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                timeouts.append(kwargs["timeout"])
+                if "cat" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="pixel6\n",
+                        stderr="",
+                    )
+                if "exec-out" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=tar_bytes,
+                        stderr=b"",
+                    )
+                return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"")
+
+            status, slot_path, errors = raw_puller.pull_raw_slot(args, runner=runner)
+
+        self.assertEqual(status, 0, errors)
+        self.assertIsNotNone(slot_path)
+        self.assertEqual(timeouts, [None, None])
 
     def test_kagemusha_android_raw_puller_rejects_disruptive_latest_query_before_runner(
         self,
@@ -26258,6 +26331,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             rendered = stdout.getvalue() + stderr.getvalue()
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
 
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for family in device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+            for transport in sorted(device_lab.D2D_PAYMENT_TRANSPORTS)
+            if transport != "nfc_hce"
+        ]
         self.assertEqual(status, 1)
         self.assertIn(
             "missing Kagemusha production evidence for standard-family D2D payment transports:",
@@ -26273,9 +26352,71 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             summary["kagemusha"]["missing_d2d_payment_transports"],
             ["nearby_offline", "qr"],
         )
-        self.assertGreater(
-            len(summary["kagemusha"]["missing_d2d_payment_transport_pairs"]),
-            0,
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
+        )
+
+    def test_standard_matrix_rejects_aggregate_d2d_transport_without_family_pairs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            summary_path = Path(temp) / "summary.json"
+            signer = create_test_signer(Path(temp) / "keys")
+            transports = tuple(sorted(device_lab.D2D_PAYMENT_TRANSPORTS))
+            for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
+                create_slot(
+                    root,
+                    f"slot-{index}",
+                    family,
+                    signer,
+                    d2d_payment_transport=transports[index % len(transports)],
+                )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = device_lab.main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-slot",
+                        "--require-kagemusha-standard-matrix",
+                        "--trusted-signer-public-key",
+                        str(signer["public_key"]),
+                        "--json-out",
+                        str(summary_path),
+                    ]
+                )
+            rendered = stdout.getvalue() + stderr.getvalue()
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        first_family = device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0]
+        expected_missing_pairs = [
+            {"device_family": family, "transport": transport}
+            for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES)
+            for transport in transports
+            if transport != transports[index % len(transports)]
+        ]
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "missing Kagemusha production evidence for standard-family D2D payment transports:",
+            rendered,
+        )
+        self.assertIn(f"{first_family}={transports[1]}", rendered)
+        self.assertEqual(
+            summary["kagemusha"]["covered_device_families"],
+            sorted(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+        )
+        self.assertEqual(
+            summary["kagemusha"]["covered_d2d_payment_transports"],
+            list(transports),
+        )
+        self.assertEqual(summary["kagemusha"]["missing_d2d_payment_transports"], [])
+        self.assertEqual(
+            summary["kagemusha"]["missing_d2d_payment_transport_pairs"],
+            expected_missing_pairs,
         )
 
     def test_standard_matrix_rejects_duplicate_device_fingerprint(self) -> None:
@@ -29177,6 +29318,106 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
         self.assertIn("--adb-timeout-seconds", command)
         self.assertEqual(command[command.index("--adb-timeout-seconds") + 1], "17")
 
+    def test_android_capture_zero_adb_timeout_disables_preflight_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp, ["--adb-timeout-seconds", "0"])
+            timeouts: list[object] = []
+
+            def fake_run(command, **kwargs):
+                timeouts.append(kwargs["timeout"])
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="device\n",
+                    stderr="",
+                )
+
+            errors = capture_runner._run_adb_visibility_preflight(
+                args,
+                env=capture_runner._capture_env(args),
+                runner=fake_run,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(timeouts, [None])
+
+    def test_android_capture_zero_step_timeout_disables_subprocess_timeout(self) -> None:
+        timeouts: list[object] = []
+
+        def fake_run(command, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(command, 0)
+
+        errors = capture_runner._run_step(
+            label="Android helper",
+            command=["python3", "-m", "kagemusha.helper"],
+            cwd=None,
+            env=None,
+            timeout_seconds=0,
+            runner=fake_run,
+        )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(timeouts, [None])
+
+    def test_android_capture_rejects_negative_timeouts_before_adb(self) -> None:
+        cases = (
+            ("--gradle-timeout-seconds", "gradle"),
+            ("--instrumentation-timeout-seconds", "instrumentation"),
+            ("--adb-timeout-seconds", "adb"),
+            ("--adb-visibility-wait-seconds", "adb visibility wait"),
+            ("--helper-timeout-seconds", "helper"),
+        )
+        for flag, name in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_text:
+                    temp = Path(temp_text)
+                    args = self.capture_args(temp, [flag, "-1"])
+                    commands: list[list[str]] = []
+
+                    def forbidden_run(command, **_kwargs):
+                        commands.append(list(command))
+                        return subprocess.CompletedProcess(command, 0)
+
+                    status, summary, errors = capture_runner.capture_device_lab_slot(
+                        args,
+                        runner=forbidden_run,
+                    )
+
+                self.assertEqual(status, 1)
+                self.assertIsNone(summary)
+                self.assertEqual(commands, [])
+                self.assertEqual(errors, [f"{flag} must be non-negative"])
+
+    def test_android_capture_rejects_nonpositive_adb_visibility_poll_before_adb(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                ["--adb-visibility-poll-interval-seconds", "0"],
+            )
+            commands: list[list[str]] = []
+
+            def forbidden_run(command, **_kwargs):
+                commands.append(list(command))
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=forbidden_run,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [])
+        self.assertEqual(
+            errors,
+            ["--adb-visibility-poll-interval-seconds must be positive"],
+        )
+
     def test_android_capture_expected_family_preflight_runs_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
             temp = Path(temp_text)
@@ -29736,6 +29977,330 @@ class KagemushaAndroidDeviceLabCaptureTest(unittest.TestCase):
             ],
         )
         self.assertNotIn("SERIAL123", "\n".join(errors))
+
+    def test_android_capture_waits_for_adb_visibility_before_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                [
+                    "--adb-visibility-wait-seconds",
+                    "10",
+                    "--adb-visibility-poll-interval-seconds",
+                    "3",
+                    "--skip-build-install",
+                    "--skip-instrumentation",
+                    "--capture-summary-out",
+                    str(temp / "capture.json"),
+                ],
+            )
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            validation_summary = capture_runner._default_validation_summary_path(
+                args.slot_root
+            )
+            commands: list[list[str]] = []
+            state_attempts = 0
+
+            def fake_run(command, **kwargs):
+                nonlocal state_attempts
+                command = list(command)
+                commands.append(command)
+                if command == ["adb", "-s", "SERIAL123", "get-state"]:
+                    state_attempts += 1
+                    if state_attempts == 1:
+                        return subprocess.CompletedProcess(
+                            command,
+                            1,
+                            stdout="",
+                            stderr="error: device not found\n",
+                        )
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="device\n",
+                        stderr="",
+                    )
+                if command == ["adb", "devices", "-l"]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="List of devices attached\n\n",
+                        stderr="",
+                    )
+                script = Path(command[1]).name if len(command) > 1 else ""
+                if script == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(args.raw_root, raw_summary)
+                elif script == "kagemusha_android_attestation_report.py":
+                    out_path = Path(command[command.index("--out") + 1])
+                    write_json(out_path, {"schema": "test-report"})
+                elif script == "check_android_device_lab_slot.py":
+                    write_json(validation_summary, {"ok": 1, "failed": 0})
+                return subprocess.CompletedProcess(command, 0)
+
+            with (
+                mock.patch.object(
+                    capture_runner.time,
+                    "monotonic",
+                    side_effect=[100.0, 100.0],
+                ),
+                mock.patch.object(capture_runner.time, "sleep") as sleep_mock,
+            ):
+                status, summary, errors = capture_runner.capture_device_lab_slot(
+                    args,
+                    runner=fake_run,
+                )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(status, 0)
+        self.assertIsNotNone(summary)
+        sleep_mock.assert_called_once_with(3.0)
+        self.assertEqual(
+            commands[:3],
+            [
+                ["adb", "-s", "SERIAL123", "get-state"],
+                ["adb", "devices", "-l"],
+                ["adb", "-s", "SERIAL123", "get-state"],
+            ],
+        )
+        self.assertEqual(
+            [Path(command[1]).name for command in commands[3:]],
+            [
+                "kagemusha_pull_android_device_lab_raw_slot.py",
+                "kagemusha_android_attestation_report.py",
+                "kagemusha_android_device_lab_slot.py",
+                "check_android_device_lab_slot.py",
+            ],
+        )
+
+    def test_android_capture_adb_visibility_wait_expiry_keeps_diagnostic_redacted(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                [
+                    "--adb-visibility-wait-seconds",
+                    "1",
+                    "--adb-visibility-poll-interval-seconds",
+                    "1",
+                ],
+            )
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if command == ["adb", "devices", "-l"]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout=(
+                            "List of devices attached\n"
+                            "TOKEN=adb-visible-secret device usb:1-1 model:Pixel_6\n"
+                        ),
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr="error: device SERIAL123 not found\n",
+                )
+
+            with (
+                mock.patch.object(
+                    capture_runner.time,
+                    "monotonic",
+                    side_effect=[0.0, 0.0, 2.0],
+                ),
+                mock.patch.object(capture_runner.time, "sleep") as sleep_mock,
+            ):
+                status, summary, errors = capture_runner.capture_device_lab_slot(
+                    args,
+                    runner=fake_run,
+                )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        sleep_mock.assert_called_once_with(1.0)
+        self.assertEqual(
+            commands,
+            [
+                ["adb", "-s", "SERIAL123", "get-state"],
+                ["adb", "devices", "-l"],
+                ["adb", "-s", "SERIAL123", "get-state"],
+                ["adb", "devices", "-l"],
+            ],
+        )
+        self.assertIn("ADB device visibility wait expired after 1 seconds", rendered)
+        self.assertIn("states=device=1", rendered)
+        self.assertNotIn("SERIAL123", rendered)
+        self.assertNotIn("adb-visible-secret", rendered)
+
+    def test_android_capture_auto_serial_resolves_single_device_before_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                [
+                    "--skip-build-install",
+                    "--skip-instrumentation",
+                    "--capture-summary-out",
+                    str(temp / "capture.json"),
+                ],
+            )
+            args.serial = "auto"
+            raw_summary = capture_runner._default_raw_summary_path(args.raw_root)
+            validation_summary = capture_runner._default_validation_summary_path(
+                args.slot_root
+            )
+            commands: list[list[str]] = []
+            envs: list[dict[str, str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                envs.append(dict(kwargs["env"]))
+                if command == ["adb", "devices", "-l"]:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="List of devices attached\nSERIAL123 device model:Pixel_6\n",
+                        stderr="",
+                    )
+                if command == ["adb", "-s", "SERIAL123", "get-state"]:
+                    return subprocess.CompletedProcess(command, 0, stdout="device\n", stderr="")
+                script = Path(command[1]).name if len(command) > 1 else ""
+                if script == "kagemusha_pull_android_device_lab_raw_slot.py":
+                    self.write_raw_capture_slot(args.raw_root, raw_summary)
+                elif script == "kagemusha_android_attestation_report.py":
+                    out_path = Path(command[command.index("--out") + 1])
+                    write_json(out_path, {"schema": "test-report"})
+                elif script == "check_android_device_lab_slot.py":
+                    write_json(validation_summary, {"ok": 1, "failed": 0})
+                return subprocess.CompletedProcess(command, 0)
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(status, 0)
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual(summary["adb_serial"], "SERIAL123")
+        self.assertNotIn("ANDROID_SERIAL", envs[0])
+        self.assertEqual(
+            commands[:2],
+            [["adb", "devices", "-l"], ["adb", "-s", "SERIAL123", "get-state"]],
+        )
+        self.assertEqual(
+            [Path(command[1]).name for command in commands[2:]],
+            [
+                "kagemusha_pull_android_device_lab_raw_slot.py",
+                "kagemusha_android_attestation_report.py",
+                "kagemusha_android_device_lab_slot.py",
+                "check_android_device_lab_slot.py",
+            ],
+        )
+
+    def test_android_capture_auto_serial_rejects_multiple_devices_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(temp)
+            args.serial = "auto"
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout=(
+                        "List of devices attached\n"
+                        "SERIAL123 device model:Pixel_6\n"
+                        "SERIAL456 device model:Pixel_7\n"
+                    ),
+                    stderr="",
+                )
+
+            status, summary, errors = capture_runner.capture_device_lab_slot(
+                args,
+                runner=fake_run,
+            )
+
+        rendered = "\n".join(errors)
+        self.assertEqual(status, 1)
+        self.assertIsNone(summary)
+        self.assertEqual(commands, [["adb", "devices", "-l"]])
+        self.assertEqual(
+            errors,
+            [
+                "ADB auto-serial resolution requires exactly one visible device, "
+                "got rows=2; states=device=2"
+            ],
+        )
+        self.assertNotIn("SERIAL123", rendered)
+        self.assertNotIn("SERIAL456", rendered)
+
+    def test_android_capture_auto_serial_waits_for_single_device(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            temp = Path(temp_text)
+            args = self.capture_args(
+                temp,
+                [
+                    "--adb-visibility-wait-seconds",
+                    "5",
+                    "--adb-visibility-poll-interval-seconds",
+                    "2",
+                ],
+            )
+            args.serial = "auto"
+            commands: list[list[str]] = []
+
+            def fake_run(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                if len(commands) == 1:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        stdout="List of devices attached\n\n",
+                        stderr="",
+                    )
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="List of devices attached\nSERIAL123 device model:Pixel_6\n",
+                    stderr="",
+                )
+
+            with (
+                mock.patch.object(
+                    capture_runner.time,
+                    "monotonic",
+                    side_effect=[10.0, 10.0],
+                ),
+                mock.patch.object(capture_runner.time, "sleep") as sleep_mock,
+            ):
+                errors = capture_runner._resolve_auto_adb_serial(
+                    args,
+                    env={},
+                    runner=fake_run,
+                )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(args.serial, "SERIAL123")
+        self.assertEqual(commands, [["adb", "devices", "-l"], ["adb", "devices", "-l"]])
+        sleep_mock.assert_called_once_with(2.0)
 
     def test_android_capture_classifies_adb_devices_diagnostic_states(self) -> None:
         cases = (

@@ -372,6 +372,10 @@ CommitInflightTimeoutExactness ==
   /\ CommitInflightTimeoutAttachabilityExact
   /\ CommitInflightTimeoutNoSideEffectsExact
 
+CommitInflightTimeoutCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitInflightTimeoutExactness
+
 Safety ==
   CommitInflightTimeoutExactness
 

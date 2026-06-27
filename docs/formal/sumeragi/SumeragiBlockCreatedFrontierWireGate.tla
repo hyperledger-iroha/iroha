@@ -341,6 +341,10 @@ BlockCreatedFrontierWireExactness ==
   /\ BlockCreatedRebroadcastExactness
   /\ BlockCreatedFrontierWireSafetyAnchors
 
+BlockCreatedFrontierWireCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockCreatedFrontierWireExactness
+
 Safety == BlockCreatedFrontierWireExactness
 
 ====

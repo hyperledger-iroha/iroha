@@ -462,4 +462,9 @@ SafetyAnchors ==
   /\ ReadyCooldownAnchors
   /\ ReadyStateReplacementAnchors
 
+RbcDeferralThrottleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SafetyFast
+  /\ SafetyAnchors
+
 ====

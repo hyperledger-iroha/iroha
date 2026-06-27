@@ -22,6 +22,8 @@ SPEC.loader.exec_module(MODULE)
 NOW = 1_800_006_000
 HEX = "ab" * 32
 HEX_2 = "cd" * 32
+DEPLOYMENT_ID = "pop-staging-a"
+ENVIRONMENT = "staging"
 
 
 def write_json(path: Path, payload: dict[str, object]) -> Path:
@@ -40,7 +42,7 @@ def route(name: str) -> dict[str, object]:
 
 
 def complete_payloads() -> dict[str, dict[str, object]]:
-    return {
+    payloads = {
         "issuer_bundle": {
             "schema": "sorafs.pop.issuer_bundle_canary.v1",
             "status": "passed",
@@ -176,6 +178,10 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "policy_digest_hex": HEX,
         },
     }
+    for payload in payloads.values():
+        payload["deployment_id"] = DEPLOYMENT_ID
+        payload["environment"] = ENVIRONMENT
+    return payloads
 
 
 def write_complete_evidence(tmp_path: Path) -> Path:
@@ -231,6 +237,9 @@ def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
     assert payload["recognized_artifact_count"] == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert payload["valid_root_digests"] == [HEX]
     assert payload["valid_revocation_list_digests"] == [HEX_2]
+    assert payload["required"]["issuer_bundle"]["artifacts"][0]["fingerprint"][
+        "deployment_id"
+    ] == DEPLOYMENT_ID
 
 
 def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
@@ -244,6 +253,65 @@ def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> Non
     assert "is ready" in capsys.readouterr().err
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["status"] == "ready"
+
+
+def test_deployment_context_is_required(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    del issuer["deployment_id"]
+    write_json(evidence_dir / "issuer_bundle.json", issuer)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
+    assert "deployment_id must be a non-empty string" in artifact["errors"]
+
+
+def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    governance = complete_payloads()["governance_approval"]
+    governance["deployment_id"] = "pop-dev-a"
+    governance["environment"] = "dev"
+    write_json(evidence_dir / "governance_approval.json", governance)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact_errors = payload["required"]["governance_approval"]["artifacts"][0][
+        "errors"
+    ]
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in artifact_errors
+    )
+    assert "environment must be one of" in "\n".join(artifact_errors)
 
 
 def test_missing_verifier_service_blocks_rollout(tmp_path: Path, capsys) -> None:

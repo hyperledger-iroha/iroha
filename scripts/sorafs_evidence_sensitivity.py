@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 
 COMMON_SENSITIVE_KEYS = frozenset(
@@ -60,8 +61,23 @@ def normalize_sensitive_key(key: str) -> str:
     return "".join(char.lower() for char in key if char.isalnum())
 
 
-def _key_forms(sensitive_keys: Iterable[str]) -> tuple[frozenset[str], frozenset[str]]:
-    exact_keys = frozenset(key.lower() for key in sensitive_keys) | COMMON_SENSITIVE_KEYS
+def _key_forms(
+    sensitive_keys: Any,
+    errors: list[str],
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    if isinstance(sensitive_keys, (str, bytes, bytearray)) or not isinstance(
+        sensitive_keys,
+        Iterable,
+    ):
+        errors.append("sensitive keys must be a sequence of strings")
+        return None
+    provided_keys: set[str] = set()
+    for key in sensitive_keys:
+        if not isinstance(key, str) or not key:
+            errors.append("sensitive keys must be non-empty strings")
+            return None
+        provided_keys.add(key.lower())
+    exact_keys = frozenset(provided_keys) | COMMON_SENSITIVE_KEYS
     normalized_keys = frozenset(normalize_sensitive_key(key) for key in exact_keys)
     return exact_keys, normalized_keys
 
@@ -117,9 +133,21 @@ def _visit_sensitive_fields(
             )
         )
         return
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         for key, child in value.items():
-            child_path = f"{path}.{key}" if path else key
+            child_path = f"{path}.{key}" if path else str(key)
+            if not isinstance(key, str):
+                errors.append(f"{child_path} key must be a string")
+                _visit_sensitive_fields(
+                    child,
+                    child_path,
+                    errors,
+                    exact_keys=exact_keys,
+                    normalized_keys=normalized_keys,
+                    evidence_label=evidence_label,
+                    depth=depth + 1,
+                )
+                continue
             key_lower = key.lower()
             normalized_key = normalize_sensitive_key(key)
             if _is_sensitive_key(
@@ -160,12 +188,15 @@ def visit_sensitive_fields(
     path: str,
     errors: list[str],
     *,
-    sensitive_keys: Iterable[str],
+    sensitive_keys: Any,
     evidence_label: str = "rollout evidence",
 ) -> None:
     """Reject sensitive fields and non-false payload-inclusion markers."""
 
-    exact_keys, normalized_keys = _key_forms(sensitive_keys)
+    key_forms = _key_forms(sensitive_keys, errors)
+    if key_forms is None:
+        return
+    exact_keys, normalized_keys = key_forms
     _visit_sensitive_fields(
         value,
         path,

@@ -293,4 +293,8 @@ RbcAvailabilityRescheduleExactness ==
   /\ RbcAvailabilityPendingBlocksExact
   /\ RbcAvailabilityDeficitBlocksExact
 
+RbcAvailabilityRescheduleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcAvailabilityRescheduleExactness
+
 ====

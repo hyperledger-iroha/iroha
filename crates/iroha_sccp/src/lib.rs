@@ -12930,6 +12930,7 @@ fn sccp_source_bridge_config_hash_fields_are_consistent(
                 return false;
             };
             address20_is_nonzero(&source_bridge_owner_address)
+                && source_bridge_owner_address != source_bridge_address
                 && h256_is_nonzero(&source_bridge_network_id)
                 && h256_is_nonzero(&source_bridge_config_hash)
                 && sccp_tron_source_bridge_config_hash_v1(
@@ -16448,7 +16449,7 @@ pub fn sccp_source_adapter_deployment_binding_hash(
 pub fn sccp_source_adapter_deployment_binding_from_deployment_v1(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> Option<SccpSourceAdapterDeploymentBindingV1> {
-    if deployment.version != 1 || !h256_is_nonzero(&deployment.deployment_receipt_hash) {
+    if !source_adapter_deployment_has_standalone_valid_shape(deployment) {
         return None;
     }
     let binding = SccpSourceAdapterDeploymentBindingV1 {
@@ -40408,7 +40409,9 @@ mod tests {
         );
         if sccp_source_state_verifier_required(source_domain) {
             material.source_state_verifier_id =
-                format!("sccp:{chain}:source-state-verifier:mainnet:v1");
+                sccp_source_state_verifier_id_for_domain(source_domain)
+                    .expect("source-state verifier profile id")
+                    .to_owned();
             material.source_state_verifier_hash = prefixed_blake2b(
                 b"sccp:test:ready-source-material:source-state-verifier",
                 &source_domain.to_le_bytes(),
@@ -49236,7 +49239,10 @@ mod tests {
                 adapter.masterchain_config_proof.validator_set_payload_hash,
             )
         );
-        let material = sample_ready_source_verifier_material(SCCP_DOMAIN_TON);
+        let mut material = sample_ready_source_verifier_material(SCCP_DOMAIN_TON);
+        material.source_state_verifier_id.clear();
+        material.source_state_verifier_hash = [0u8; 32];
+        assert!(!sccp_source_state_verifier_is_production_ready(&material));
         assert!(verify_sccp_ton_masterchain_validator_signatures_proof(
             adapter, &valid, &material,
         ));
@@ -58549,6 +58555,42 @@ mod tests {
             sccp_source_adapter_deployment_binding_hash(&non_sora_target).is_none(),
             "source-adapter deployment binding hashes must reject non-SORA targets"
         );
+
+        let material = sample_production_source_verifier_material(SCCP_DOMAIN_TON);
+        let deployment = sample_production_source_adapter_deployment(&material);
+        let derived = sccp_source_adapter_deployment_binding_from_deployment_v1(&deployment)
+            .expect("standalone-valid TON deployment binding");
+        assert_eq!(derived.source_domain, SCCP_DOMAIN_TON);
+        assert_eq!(derived.target_domain, SCCP_DOMAIN_SORA);
+        assert_eq!(
+            derived.source_adapter_deployment_hash,
+            sccp_source_adapter_engine_deployment_hash(&deployment)
+        );
+        assert_eq!(
+            derived.source_adapter_deployment_receipt_hash,
+            deployment.deployment_receipt_hash
+        );
+
+        let mut partial_ton_audit = deployment.clone();
+        partial_ton_audit.ton_masterchain_config_verifier_hash = [0u8; 32];
+        assert!(
+            sccp_source_adapter_deployment_binding_from_deployment_v1(&partial_ton_audit).is_none(),
+            "source-adapter deployment bindings must not be minted from partial TON audit descriptors"
+        );
+
+        let mut replayed_receipt = deployment.clone();
+        replayed_receipt.deployment_receipt_hash = deployment.adapter_verifier_vk_hash;
+        assert!(
+            sccp_source_adapter_deployment_binding_from_deployment_v1(&replayed_receipt).is_none(),
+            "source-adapter deployment bindings must not be minted from receipt/VK role replay"
+        );
+
+        let mut drifted_vk = deployment;
+        drifted_vk.adapter_verifier_vk_hash[0] ^= 0x01;
+        assert!(
+            sccp_source_adapter_deployment_binding_from_deployment_v1(&drifted_vk).is_none(),
+            "source-adapter deployment bindings must not be minted from verifier-key drift"
+        );
     }
 
     #[test]
@@ -65797,6 +65839,24 @@ mod tests {
         }
     }
 
+    fn different_source_proof_plan(current: SccpSourceProofPlanV1) -> SccpSourceProofPlanV1 {
+        match current {
+            SccpSourceProofPlanV1::EthereumBeaconReceiptProof => {
+                SccpSourceProofPlanV1::BscValidatorSetReceiptProof
+            }
+            _ => SccpSourceProofPlanV1::EthereumBeaconReceiptProof,
+        }
+    }
+
+    fn different_finality_model(current: SccpProofFinalityModelV1) -> SccpProofFinalityModelV1 {
+        match current {
+            SccpProofFinalityModelV1::EthereumBeaconExecution => {
+                SccpProofFinalityModelV1::BscValidatorSet
+            }
+            _ => SccpProofFinalityModelV1::EthereumBeaconExecution,
+        }
+    }
+
     #[test]
     fn source_verifier_material_production_gate_rejects_builtin_placeholder_role_replay() {
         for source_domain in [
@@ -66069,6 +66129,107 @@ mod tests {
                         &replayed_deployment,
                     ),
                     "domain {source_domain} readiness must reject built-in placeholder {label} replay"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_adapter_deployment_descriptors_reject_cross_lane_control_field_drift() {
+        for source_domain in SCCP_CORE_REMOTE_DOMAINS {
+            let material = sample_production_source_verifier_material(source_domain);
+            let deployment = sample_production_source_adapter_deployment(&material);
+            assert!(
+                source_adapter_deployment_has_standalone_valid_shape(&deployment),
+                "domain {source_domain} fixture must start standalone-valid"
+            );
+            assert!(
+                sccp_source_adapter_engine_deployment_matches_material(&material, &deployment),
+                "domain {source_domain} fixture must match governed material"
+            );
+            assert!(
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    source_domain,
+                    &material,
+                    &deployment,
+                ),
+                "domain {source_domain} fixture must open the source-adapter gate"
+            );
+
+            let mut drift_cases: Vec<(&str, SccpSourceAdapterEngineDeploymentV1)> = Vec::new();
+            let mut drift = deployment.clone();
+            drift.version = 2;
+            drift_cases.push(("version", drift));
+            let mut drift = deployment.clone();
+            drift.target_domain = source_domain;
+            drift_cases.push(("target_domain", drift));
+            let mut drift = deployment.clone();
+            drift.source_chain.push_str("-fork");
+            drift_cases.push(("source_chain", drift));
+            let mut drift = deployment.clone();
+            drift.source_proof_plan = different_source_proof_plan(deployment.source_proof_plan);
+            drift_cases.push(("source_proof_plan", drift));
+            let mut drift = deployment.clone();
+            drift.finality_model = different_finality_model(deployment.finality_model);
+            drift_cases.push(("finality_model", drift));
+            let mut drift = deployment.clone();
+            drift.adapter_proof_family = "debug-proof-family".to_owned();
+            drift_cases.push(("adapter_proof_family", drift));
+            let mut drift = deployment.clone();
+            drift.adapter_circuit_id.push_str("-fork");
+            drift_cases.push(("adapter_circuit_id", drift));
+            let mut drift = deployment.clone();
+            drift.adapter_verifier_vk_hash = [0u8; 32];
+            drift_cases.push(("adapter_verifier_vk_hash", drift));
+            let mut drift = deployment.clone();
+            drift.deployment_receipt_hash = [0u8; 32];
+            drift_cases.push(("deployment_receipt_hash_zero", drift));
+            let mut drift = deployment.clone();
+            drift.deployment_receipt_hash = deployment.source_trust_anchor_hash;
+            drift_cases.push(("deployment_receipt_hash_role_replay", drift));
+
+            if source_domain != SCCP_DOMAIN_SOL {
+                let mut drift = deployment.clone();
+                drift.solana_tower_replay_verifier_hash = [0xA7; 32];
+                drift_cases.push(("foreign_solana_audit_hash", drift));
+            }
+            if source_domain != SCCP_DOMAIN_TON {
+                let mut drift = deployment.clone();
+                drift.ton_masterchain_config_verifier_hash = [0xB8; 32];
+                drift_cases.push(("foreign_ton_audit_hash", drift));
+            }
+            if source_domain == SCCP_DOMAIN_SOL {
+                let mut drift = deployment.clone();
+                drift.solana_bank_fork_choice_verifier_hash =
+                    drift.solana_tower_replay_verifier_hash;
+                drift_cases.push(("solana_audit_hash_replay", drift));
+            }
+            if source_domain == SCCP_DOMAIN_TON {
+                let mut drift = deployment.clone();
+                drift.ton_shard_accounts_dictionary_verifier_hash =
+                    drift.ton_masterchain_config_verifier_hash;
+                drift_cases.push(("ton_audit_hash_replay", drift));
+            }
+
+            for (label, drifted_deployment) in drift_cases {
+                assert!(
+                    !source_adapter_deployment_has_standalone_valid_shape(&drifted_deployment),
+                    "domain {source_domain} standalone descriptor shape must reject {label} drift"
+                );
+                assert!(
+                    !sccp_source_adapter_engine_deployment_matches_material(
+                        &material,
+                        &drifted_deployment,
+                    ),
+                    "domain {source_domain} material/deployment match must reject {label} drift"
+                );
+                assert!(
+                    !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                        source_domain,
+                        &material,
+                        &drifted_deployment,
+                    ),
+                    "domain {source_domain} readiness must reject {label} drift"
                 );
             }
         }
@@ -68891,6 +69052,14 @@ mod tests {
         assert!(!material.placeholder_material);
         assert!(!sccp_source_verifier_material_uses_builtin_placeholder_components(&material));
         assert!(sccp_source_verifier_material_is_production_ready(&material));
+        let mut reused_owner_material = material.clone();
+        reused_owner_material.source_bridge_owner_address =
+            sample_tron_message_emitter_address().to_vec();
+        reused_owner_material.source_bridge_config_hash = reused_owner_config_hash;
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&reused_owner_material),
+            "TRON production readiness must reject owner/emitter address reuse"
+        );
         let retired_suffix = ["receipt-root", "branch-mainnet:v1"].join("-");
         let mut retired_receipt_root_profile = material.clone();
         retired_receipt_root_profile.message_inclusion_verifier_id =
@@ -69847,6 +70016,10 @@ mod tests {
         assert!(
             !sccp_source_verifier_material_is_production_ready(&material),
             "generic SOL source material must stay fail-closed until it matches the deployed mainnet profile"
+        );
+        assert!(
+            verify_message_bundle_structure_with_source_verifier_material(&bundle, &material),
+            "diagnostic SOL material must still bind the fixture source proof structurally"
         );
         assert!(!manifest.production_ready);
         assert!(

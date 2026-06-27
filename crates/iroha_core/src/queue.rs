@@ -5097,7 +5097,11 @@ impl Queue {
 
     fn decrease_per_user_tx_count(&self, account_id: &AccountId) {
         let Entry::Occupied(mut occupied) = self.txs_per_user.entry(account_id.clone()) else {
-            panic!("Call to decrease always should be paired with increase count. This is a bug.")
+            warn!(
+                %account_id,
+                "per-user transaction count was already absent during queue removal"
+            );
+            return;
         };
 
         let count = occupied.get_mut();
@@ -6462,6 +6466,21 @@ pub mod tests {
                 .expect("rerouted decision"),
             RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
         );
+        let rerouted_plan = queue
+            .routing_plans
+            .get(&tx_hash)
+            .expect("rerouted plan")
+            .clone();
+        assert_eq!(
+            rerouted_plan.coordinator_route(),
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL),
+            "autoscale scale-out must refresh the full proposal routing plan"
+        );
+        assert_eq!(
+            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
+            Some(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)),
+            "autoscale scale-out must refresh the local routing ledger plan"
+        );
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
     }
 
@@ -6601,7 +6620,21 @@ pub mod tests {
                 .dataspace_id,
             rerouted.dataspace_id
         );
-        assert!(routing_ledger::get_plan(&tx_hash).is_some());
+        let rerouted_plan = queue
+            .routing_plans
+            .get(&tx_hash)
+            .expect("rerouted plan")
+            .clone();
+        assert_eq!(
+            rerouted_plan.coordinator_route(),
+            rerouted,
+            "autoscale scale-in must refresh the full proposal routing plan"
+        );
+        assert_eq!(
+            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
+            Some(rerouted),
+            "autoscale scale-in must refresh the local routing ledger plan"
+        );
         assert!(
             queue
                 .lane_catalog
@@ -11219,6 +11252,66 @@ pub mod tests {
     }
 
     #[test]
+    fn proposal_pop_refreshes_stale_native_amx_participant_plan() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut fixture = native_amx_participant_drift_fixture(&time_source);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan, fixture.current_plan);
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let hash = fixture.tx.hash();
+        queue
+            .push_with_gossip_payload_with_state_and_routing_plan(
+                fixture.tx.clone(),
+                &fixture.state,
+                fixture.current_plan.clone(),
+                None,
+            )
+            .expect("current Native AMX plan should enqueue");
+        queue.routing_plans.insert(hash, fixture.stale_plan.clone());
+        queue
+            .routing_decisions
+            .insert(hash, fixture.stale_plan.coordinator_route());
+        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+
+        let state_view = fixture.state.view();
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state_view, &mut expired)
+            .expect("proposal pop should refresh stale Native AMX plan");
+        drop(state_view);
+
+        assert!(expired.is_empty());
+        assert_eq!(guard.as_ref().hash(), hash);
+        assert_eq!(guard.routing(), fixture.current_plan.coordinator_route());
+        assert_eq!(guard.routing_plan(), fixture.current_plan);
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&hash)
+                .map(|entry| entry.value().clone()),
+            Some(fixture.current_plan.clone())
+        );
+        assert_eq!(
+            crate::queue::routing_ledger::get_plan(&hash),
+            Some(fixture.current_plan)
+        );
+        drop(guard);
+        let _ = crate::queue::routing_ledger::take_plan(&hash);
+        let _ = crate::queue::routing_ledger::take(&hash);
+    }
+
+    #[test]
     fn push_with_gossip_payload_with_state_and_routing_rejects_native_amx_participant_drift() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let fixture = native_amx_participant_drift_fixture(&time_source);
@@ -13696,6 +13789,29 @@ pub mod tests {
             queue.removed_hashes.contains_key(&hash),
             "removed hash marker set for committed tx"
         );
+    }
+
+    #[test]
+    fn remove_committed_hashes_tolerates_missing_per_user_counter() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let authority = tx.as_ref().authority().clone();
+        queue.push(tx, state.view()).expect("push succeeds");
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 1);
+
+        queue.txs_per_user.clear();
+        let removed = queue.remove_committed_hashes([hash], None);
+
+        assert_eq!(removed, 1, "committed hash should still be removed");
+        assert_eq!(queue.active_len(), 0, "queue no longer tracks tx");
+        assert_eq!(queue.queued_tx_count_for_user(&authority), 0);
+        queue.assert_pressure_counters_consistent_for_tests();
     }
 
     #[test]

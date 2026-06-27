@@ -321,11 +321,16 @@ KuraRetryStateExactness ==
   /\ KuraRetryAbortBoundaryExact
   /\ KuraRetryDelayReportingExact
 
+KuraRetryStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KuraRetryStateExactness
+
 SafetyFast ==
   /\ NoBugInvariant
   /\ DueSemantics
   /\ ResetSemantics
   /\ FailureSemantics
   /\ KuraRetryStateExactness
+  /\ KuraRetryStateCorrectnessEnvelope
 
 ====

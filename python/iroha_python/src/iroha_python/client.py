@@ -11766,6 +11766,7 @@ class ToriiClient(_BaseToriiClient):
         account_id: str,
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
@@ -11783,6 +11784,7 @@ class ToriiClient(_BaseToriiClient):
             self._ensure_no_query_args(
                 envelope=envelope,
                 filter=filter,
+                select=select,
                 sort=sort,
                 limit=limit,
                 offset=offset,
@@ -11794,6 +11796,7 @@ class ToriiClient(_BaseToriiClient):
         else:
             body = self._build_query_envelope(
                 filter=filter,
+                select=select,
                 sort=sort,
                 limit=limit,
                 offset=offset,
@@ -11818,6 +11821,7 @@ class ToriiClient(_BaseToriiClient):
         account_id: str,
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
@@ -11831,6 +11835,7 @@ class ToriiClient(_BaseToriiClient):
         payload = self.query_account_assets(
             account_id,
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -11846,6 +11851,7 @@ class ToriiClient(_BaseToriiClient):
         account_id: str,
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
@@ -11863,6 +11869,7 @@ class ToriiClient(_BaseToriiClient):
             self._ensure_no_query_args(
                 envelope=envelope,
                 filter=filter,
+                select=select,
                 sort=sort,
                 limit=limit,
                 offset=offset,
@@ -11874,6 +11881,7 @@ class ToriiClient(_BaseToriiClient):
         else:
             body = self._build_query_envelope(
                 filter=filter,
+                select=select,
                 sort=sort,
                 limit=limit,
                 offset=offset,
@@ -11898,10 +11906,12 @@ class ToriiClient(_BaseToriiClient):
         account_id: str,
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
         envelope: Optional[Mapping[str, Any]] = None,
     ) -> AccountTransactionsPage:
@@ -11910,10 +11920,12 @@ class ToriiClient(_BaseToriiClient):
         payload = self.query_account_transactions(
             account_id,
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
             envelope=envelope,
         )
@@ -14207,6 +14219,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14218,6 +14231,7 @@ class ToriiClient(_BaseToriiClient):
 
         body = rwa_query_envelope(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14241,6 +14255,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14252,6 +14267,7 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self.query_rwas(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14323,6 +14339,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14334,6 +14351,7 @@ class ToriiClient(_BaseToriiClient):
 
         body = account_query_envelope(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14357,6 +14375,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14368,6 +14387,7 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self.query_accounts(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14491,6 +14511,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14502,6 +14523,7 @@ class ToriiClient(_BaseToriiClient):
 
         body = asset_definitions_query_envelope(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14525,6 +14547,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14536,6 +14559,7 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self.query_asset_definitions(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14604,6 +14628,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14615,6 +14640,7 @@ class ToriiClient(_BaseToriiClient):
 
         body = domain_query_envelope(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14638,6 +14664,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14649,6 +14676,7 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self.query_domains(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14663,6 +14691,7 @@ class ToriiClient(_BaseToriiClient):
         asset_definition_id: str,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14674,6 +14703,7 @@ class ToriiClient(_BaseToriiClient):
 
         body = asset_holders_query_envelope(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -14698,6 +14728,7 @@ class ToriiClient(_BaseToriiClient):
         asset_definition_id: str,
         *,
         filter: Optional[Dict[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -14710,6 +14741,7 @@ class ToriiClient(_BaseToriiClient):
         payload = self.query_asset_holders(
             asset_definition_id,
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -16517,6 +16549,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
@@ -16526,31 +16559,27 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/triggers/query` with a structured envelope."""
 
-        body: Dict[str, Any] = {}
         if filter is not None:
             if not isinstance(filter, Mapping):
                 raise TypeError("query_triggers.filter must be a mapping")
-            body["filter"] = dict(filter)
-        if sort is not None:
-            body["sort"] = sort
-        limit_value = _coerce_int(limit, "query_triggers.limit") if limit is not None else None
-        if limit_value is not None:
-            body["limit"] = limit_value
-        offset_value = (
-            _coerce_int(offset, "query_triggers.offset", allow_zero=True)
-            if offset is not None
-            else None
+        body = self._build_query_envelope(
+            filter=filter,
+            select=select,
+            sort=sort,
+            limit=_coerce_int(limit, "query_triggers.limit") if limit is not None else None,
+            offset=(
+                _coerce_int(offset, "query_triggers.offset", allow_zero=True)
+                if offset is not None
+                else None
+            ),
+            fetch_size=(
+                _coerce_int(fetch_size, "query_triggers.fetch_size")
+                if fetch_size is not None
+                else None
+            ),
+            count_mode=count_mode,
+            query_name=query_name,
         )
-        if offset_value is not None:
-            body["offset"] = offset_value
-        fetch_size_value = (
-            _coerce_int(fetch_size, "query_triggers.fetch_size") if fetch_size is not None else None
-        )
-        if fetch_size_value is not None:
-            body["fetch_size"] = fetch_size_value
-        query_name_value = _normalize_optional_string(query_name, "query_triggers.query_name")
-        if query_name_value is not None:
-            body["query_name"] = query_name_value
         response = self._request(
             "POST",
             "/v1/triggers/query",
@@ -16567,20 +16596,24 @@ class ToriiClient(_BaseToriiClient):
         self,
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> TriggerListPage:
         """Typed wrapper for :meth:`query_triggers`."""
 
         payload = self.query_triggers(
             filter=filter,
+            select=select,
             sort=sort,
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         return TriggerListPage.from_payload(payload)
@@ -16761,34 +16794,65 @@ class ToriiClient(_BaseToriiClient):
     def _build_query_envelope(
         *,
         filter: Optional[Mapping[str, Any]] = None,
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]] = None,
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {}
         if filter is not None:
             body["filter"] = dict(filter)
+        normalized_select = ToriiClient._normalize_query_select(select)
+        if normalized_select is not None:
+            body["select"] = normalized_select
         if sort is not None:
             body["sort"] = sort
+        pagination: Dict[str, int] = {}
         if limit is not None:
-            body["limit"] = int(limit)
+            pagination["limit"] = int(limit)
         if offset is not None:
-            body["offset"] = int(offset)
+            pagination["offset"] = int(offset)
+        if pagination:
+            body["pagination"] = pagination
         if fetch_size is not None:
             body["fetch_size"] = int(fetch_size)
         if count_mode is not None:
             body["count_mode"] = _normalize_count_mode_arg(count_mode)
-        if query_name is not None:
-            body["query_name"] = query_name
+        query_name_value = _normalize_optional_string(query_name, "query_name")
+        if query_name_value is not None:
+            body["query"] = query_name_value
         return body
+
+    @staticmethod
+    def _normalize_query_select(
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
+    ) -> Optional[List[Union[str, Dict[str, Any]]]]:
+        if select is None:
+            return None
+        if isinstance(select, (str, bytes, bytearray)):
+            raise TypeError("select must be a sequence of field paths or objects")
+        normalized: List[Union[str, Dict[str, Any]]] = []
+        for index, entry in enumerate(select):
+            if isinstance(entry, str):
+                field_path = entry.strip()
+                if not field_path:
+                    raise ValueError(f"select[{index}] must be a non-empty field path")
+                normalized.append(field_path)
+            elif isinstance(entry, Mapping):
+                normalized.append(dict(entry))
+            else:
+                raise TypeError(f"select[{index}] must be a field-path string or mapping")
+        return normalized
 
     @staticmethod
     def _ensure_no_query_args(
         *,
         envelope: Mapping[str, Any],
         filter: Optional[Mapping[str, Any]],
+        select: Optional[Iterable[Union[str, Mapping[str, Any]]]],
         sort: Optional[Any],
         limit: Optional[int],
         offset: Optional[int],
@@ -16798,10 +16862,10 @@ class ToriiClient(_BaseToriiClient):
     ) -> None:
         if any(
             value is not None
-            for value in (filter, sort, limit, offset, fetch_size, count_mode, query_name)
+            for value in (filter, select, sort, limit, offset, fetch_size, count_mode, query_name)
         ):
             raise ValueError(
-                "provide either `envelope` or builder arguments (filter/sort/limit/offset/fetch_size/count_mode/query_name), not both"
+                "provide either `envelope` or builder arguments (filter/select/sort/limit/offset/fetch_size/count_mode/query_name), not both"
             )
 
 

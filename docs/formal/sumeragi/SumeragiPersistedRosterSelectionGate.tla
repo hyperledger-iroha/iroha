@@ -384,6 +384,10 @@ PersistedRosterSelectionExactness ==
   /\ PersistedRosterPreviousEvidenceSelectionExact
   /\ PersistedRosterNoSourceExact
 
+PersistedRosterSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PersistedRosterSelectionExactness
+
 BugPermissionedUsesNposTag ==
   ImplementationActions(ModeTagPermissioned) = SpecActions(ModeTagPermissioned)
 
