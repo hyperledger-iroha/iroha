@@ -17765,6 +17765,41 @@ mod torii_routed_read_tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn execute_account_history_single_route_preserves_index_metadata() {
+        let authority = routed_read_test_account(0x91);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+
+        let response = execute_torii_account_history_read_for_routes(
+            &app,
+            vec![route],
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            vec![authority.to_string()],
+            Some("limit=10&count_mode=exact".to_owned()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(
+            json.get("query_source").and_then(Value::as_str),
+            Some("account_history_index")
+        );
+        assert!(json.get("indexed_height").and_then(Value::as_u64).is_some());
+        assert!(
+            json.as_object()
+                .is_some_and(|object| object.contains_key("indexed_block_hash"))
+        );
+        assert_eq!(
+            json.get("count_mode").and_then(Value::as_str),
+            Some("exact")
+        );
+        assert_eq!(json.get("has_more").and_then(Value::as_bool), Some(false));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn collect_torii_list_json_payloads_starts_all_routes_concurrently() {
         let routes = [
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
@@ -21848,6 +21883,30 @@ async fn execute_torii_account_history_read_for_resolved_routes(
     params.limit = Some(page_limit);
     let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
     let routed_by = routed_by_for_routes(app, &routes);
+    if routes.len() == 1 {
+        let query_string = match encode_torii_proxy_query(&params) {
+            Ok(query_string) => query_string,
+            Err(error) => return error.into_response(),
+        };
+        let mut diagnostics = ToriiFanoutDiagnostics::default();
+        diagnostics.record_attempt();
+        let response = execute_torii_single_route_read(
+            app,
+            routes[0],
+            ToriiReadEndpointV1::AccountHistoryGet,
+            vec![account_id],
+            query_string,
+            Vec::new(),
+        )
+        .await;
+        if response.status().is_success() {
+            diagnostics.record_success();
+        } else {
+            diagnostics.record_skipped_response(&response);
+        }
+        return with_torii_fanout_headers(response, diagnostics);
+    }
+
     let (payloads, diagnostics) = match collect_torii_account_history_json_payloads(
         &routes,
         &params,
@@ -22348,7 +22407,7 @@ async fn execute_torii_account_history_read_for_routes(
         execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
-            ToriiReadFanoutMergeV1::List,
+            ToriiReadFanoutMergeV1::AccountHistory,
             ToriiReadEndpointV1::AccountHistoryGet,
             path_args,
             query_string,
@@ -35275,6 +35334,64 @@ fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
 }
 
 #[cfg(feature = "app_api")]
+fn recipient_lookup_alias_is_public(app: &AppState, alias: &AccountAlias) -> bool {
+    torii_visible_account_read_routes(app, None)
+        .into_iter()
+        .any(|route| route.dataspace_id == alias.dataspace)
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_signed_alias_access_allowed(
+    app: &AppState,
+    caller: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    torii_visible_account_read_routes(app, Some(caller))
+        .into_iter()
+        .any(|route| route.dataspace_id == alias.dataspace)
+        || {
+            let state_view = app.state.view();
+            torii_authority_can_resolve_account_alias(state_view.world(), caller, alias)
+        }
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_permission_gate_response(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+    alias: &AccountAlias,
+) -> Result<Option<AxResponse>, Error> {
+    if recipient_lookup_alias_is_public(app.as_ref(), alias) {
+        return Ok(None);
+    }
+
+    let visibility = torii_visibility_account_from_headers(
+        app,
+        headers,
+        method,
+        uri,
+        body,
+        "v1/retail/recipients/lookup",
+    )?;
+    let Some(caller) = visibility.caller() else {
+        return Ok(Some(torii_alias_permission_denied_response(
+            "recipient lookup requires canonical request signing for restricted aliases",
+        )));
+    };
+
+    if recipient_lookup_signed_alias_access_allowed(app.as_ref(), caller, alias) {
+        return Ok(None);
+    }
+
+    Ok(Some(torii_alias_permission_denied_response(
+        "caller lacks account-alias resolve permission for restricted recipient lookup",
+    )))
+}
+
+#[cfg(feature = "app_api")]
 fn recipient_lookup_response(
     resolved: bool,
     account_id: String,
@@ -35316,6 +35433,9 @@ fn recipient_lookup_unresolved_response(
 #[cfg(feature = "app_api")]
 async fn handler_retail_recipient_lookup(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     let request: routing::RetailRecipientLookupRequestDto = norito::json::from_slice(body.as_ref())
@@ -35360,6 +35480,16 @@ async fn handler_retail_recipient_lookup(
             "recipient lookup is only available for hbl.sbp and ubl.sbp aliases",
         ));
     };
+    if let Some(response) = recipient_lookup_permission_gate_response(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        &alias_label,
+    )? {
+        return Ok(response);
+    }
 
     match resolve_alias_label_on_chain(&app, canonical_alias.clone(), &alias_label)? {
         Some((_, bound_account_id, _)) if bound_account_id == account_id => {}
@@ -63459,6 +63589,196 @@ mod tests {
         block
             .commit()
             .expect("commit should persist alias dataspace resolve permission");
+    }
+
+    fn recipient_lookup_sbp_dataspace_for_test() -> DataSpaceId {
+        DataSpaceId::new(20)
+    }
+
+    fn configure_recipient_lookup_sbp_dataspace_for_test(
+        app: &mut SharedAppState,
+        visibility: iroha_data_model::nexus::LaneVisibility,
+    ) {
+        let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
+        let sbp_lane = LaneId::new(1);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            std::num::NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: sbp_lane,
+                    dataspace_id: sbp_dataspace,
+                    alias: "sbp".to_owned(),
+                    visibility,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: sbp_dataspace,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..actual::Nexus::default()
+        };
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        let state_view = app_state.state.view();
+        app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_allows_unsigned_public_alias() {
+        let authority = checked_torii_test_account_id(
+            0x91,
+            "derive recipient lookup public target fixture key",
+        );
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Public,
+        );
+        bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: authority.to_string(),
+            alias_fqn: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode request");
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/lookup"
+                .parse()
+                .expect("recipient lookup uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("public lookup should reach route configuration")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("recipient_lookup_not_configured")
+        );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_rejects_unsigned_restricted_alias() {
+        let authority = checked_torii_test_account_id(
+            0x92,
+            "derive recipient lookup restricted target fixture key",
+        );
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: authority.to_string(),
+            alias_fqn: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode request");
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/lookup"
+                .parse()
+                .expect("recipient lookup uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("restricted lookup should return a permission response")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("permission_denied")
+        );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_allows_signed_alias_permission() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x93,
+            "derive recipient lookup permission caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x94,
+            "derive recipient lookup permission target fixture key",
+        );
+        let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::recipient-lookup-auth"));
+        let mut app = mk_app_state_for_tests_with_world(
+            world_with_target_and_caller_bound_to_dataspace(&target, &caller, uaid, sbp_dataspace),
+        );
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        bind_account_alias_for_test(&app, &target, "payee@hbl.sbp");
+        let alias = AccountAlias::from_literal(
+            "payee@hbl.sbp",
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("recipient alias should parse");
+        grant_alias_resolve_permissions(&app, &caller, &alias);
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: target.to_string(),
+            alias_fqn: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/retail/recipients/lookup"
+            .parse()
+            .expect("recipient lookup uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("permissioned lookup should reach route configuration")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("recipient_lookup_not_configured")
+        );
     }
 
     #[tokio::test]

@@ -2,6 +2,23 @@
 
 Last updated: 2026-06-27
 
+## 2026-06-27 Torii Recipient Lookup and Genesis Resign Review Fixes
+
+- Restricted retail recipient lookups now require canonical request signing
+  only when the alias dataspace is not public; public HBL/UBL recipient lookup
+  remains unsigned. Signed callers can use existing dataspace visibility or
+  `CanResolveAccountAlias` grants for restricted alias lookups.
+- Account-history fanout now preserves single-route upstream pagination and
+  index metadata instead of rebuilding the body as a generic `{items,total}`
+  list.
+- `genesis_resign --zk-policy-hash-hex` now replaces only the ZK policy hash,
+  preserving existing confidential verifier and parameter commitments.
+- Validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii recipient_lookup --lib`
+  - `cargo test -p iroha_torii account_history --lib`
+  - `cargo test -p iroha_genesis --bin genesis_resign`
+
 ## 2026-06-27 Readiness Section Guard Pinning
 
 - Extended the recursive Kagemusha policy guard so the production-readiness

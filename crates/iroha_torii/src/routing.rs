@@ -63022,16 +63022,26 @@ mod validation_fee_torii_ingress_tests {
             genesis_hash,
             policy_version: 1,
             previous_policy_hash: None,
-            fee_asset_definition_id: fee_asset,
-            fee_asset_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            sbd_asset_id: fee_asset.to_string(),
+            sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
-            treasury_account_id: treasury,
+            treasury_account_id: treasury.to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 3,
             expires_after_height: Some(100),
             governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
         }
+    }
+
+    fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
+        policy.sbd_asset_id.parse().expect("policy SBD asset id")
+    }
+
+    fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
+        AccountId::parse_encoded(policy.treasury_account_id.as_str())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("policy treasury account id")
     }
 
     fn signed_policy(
@@ -63144,7 +63154,7 @@ mod validation_fee_torii_ingress_tests {
                 Transfer::asset_numeric(
                     AssetId::new(fee_asset.clone(), user.clone()),
                     policy.fee_amount_numeric(),
-                    policy.treasury_account_id.clone(),
+                    validation_fee_policy_treasury(policy),
                 )
                 .into(),
             );
@@ -63337,7 +63347,7 @@ mod validation_fee_torii_ingress_tests {
             &user,
             &user_key_pair,
             &recipient,
-            &policy.fee_asset_definition_id,
+            &validation_fee_policy_asset(&policy),
             &policy,
             false,
         );
@@ -63361,7 +63371,7 @@ mod validation_fee_torii_ingress_tests {
             &user,
             &user_key_pair,
             &recipient,
-            &policy.fee_asset_definition_id,
+            &validation_fee_policy_asset(&policy),
             &policy,
             true,
         );
@@ -63385,7 +63395,7 @@ mod validation_fee_torii_ingress_tests {
             &user,
             &user_key_pair,
             &recipient,
-            &policy.fee_asset_definition_id,
+            &validation_fee_policy_asset(&policy),
             &policy,
             false,
         );
@@ -63411,7 +63421,7 @@ mod validation_fee_torii_ingress_tests {
             &user,
             &user_key_pair,
             &recipient,
-            &policy.fee_asset_definition_id,
+            &validation_fee_policy_asset(&policy),
             &policy,
             true,
         );
@@ -63438,7 +63448,7 @@ mod validation_fee_torii_ingress_tests {
             &user,
             &user_key_pair,
             &recipient,
-            &policy.fee_asset_definition_id,
+            &validation_fee_policy_asset(&policy),
             &policy,
             false,
         );
@@ -63464,7 +63474,7 @@ mod validation_fee_torii_ingress_tests {
             &user,
             &user_key_pair,
             &recipient,
-            &policy.fee_asset_definition_id,
+            &validation_fee_policy_asset(&policy),
             &policy,
             true,
         );
