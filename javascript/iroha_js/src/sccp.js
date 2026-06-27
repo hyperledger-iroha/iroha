@@ -3761,6 +3761,28 @@ const normalizeTairaXorBurnRecordAmount = (value) => {
   return amount;
 };
 
+const normalizeTairaXorBurnRecordSettlementAmount = (input, fallbackAmount) => {
+  const amount = strictOptionalResultField(
+    input,
+    "settlementAmount",
+    "settlementAmount",
+    "settlement_amount",
+    "burnAmount",
+    "burn_amount",
+  );
+  if (amount === SCCP_OPTIONAL_FIELD_MISSING || amount == null) {
+    return fallbackAmount.toString();
+  }
+  const normalized = normalizeNonEmptyString(amount, "settlementAmount");
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,28})?$/u.test(normalized)) {
+    throw new TypeError("settlementAmount must be a positive decimal amount");
+  }
+  if (/^0(?:\.0+)?$/u.test(normalized)) {
+    throw new RangeError("settlementAmount must be greater than zero");
+  }
+  return normalized;
+};
+
 const normalizeTairaXorBurnRecordAuthority = (input, sender) => {
   const authority = strictOptionalResultField(input, "authority", "authority");
   if (authority === SCCP_OPTIONAL_FIELD_MISSING || authority == null) {
@@ -4241,13 +4263,17 @@ export const buildTairaXorSccpBurnRecordContractPayload = (input) => {
   const sender = descriptor.payload.sender;
   normalizeTairaXorBurnRecordAuthority(input, sender);
   const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
+  const settlementAmount = normalizeTairaXorBurnRecordSettlementAmount(
+    input,
+    amount,
+  );
   const recordInstructionBytes = buildRecordSccpMessageInstructionBytes(
     descriptor.canonicalPayloadBytes,
   );
   const payload = {
     sender,
     settlement_asset: settlementAssetDefinitionId,
-    amount: amount.toString(),
+    amount: settlementAmount,
     record_instruction: bytesToHex(recordInstructionBytes),
   };
   return Object.freeze({
@@ -4280,13 +4306,17 @@ export const buildTairaXorBscSccpBurnRecordContractPayload = (input) => {
   const sender = descriptor.payload.sender;
   normalizeTairaXorBurnRecordAuthority(input, sender);
   const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
+  const settlementAmount = normalizeTairaXorBurnRecordSettlementAmount(
+    input,
+    amount,
+  );
   const recordInstructionBytes = buildRecordSccpMessageInstructionBytes(
     descriptor.canonicalPayloadBytes,
   );
   const payload = {
     sender,
     settlement_asset: settlementAssetDefinitionId,
-    amount: amount.toString(),
+    amount: settlementAmount,
     record_instruction: bytesToHex(recordInstructionBytes),
   };
   return Object.freeze({

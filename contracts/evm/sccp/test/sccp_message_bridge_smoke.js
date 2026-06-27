@@ -3840,7 +3840,9 @@ async function main() {
   assert.equal(await bscSourceBridge.owner(), bscRouteBridgeAddress);
 
   const bscRecipient = ethers.getAddress(await outsider.getAddress());
+  const bscTairaToTokenScale = 1_000_000_000n;
   const bscMintAmount = 45_678n;
+  const bscMintTokenAmount = bscMintAmount * bscTairaToTokenScale;
   const bscPayloadInput = {
     tairaAccountId,
     bscRecipient,
@@ -3936,8 +3938,8 @@ async function main() {
     bscCanonicalPayload
   );
   await bscMintTx.wait();
-  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintAmount);
-  assert.equal(await bscToken.totalSupply(), bscMintAmount);
+  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintTokenAmount);
+  assert.equal(await bscToken.totalSupply(), bscMintTokenAmount);
   await assert.rejects(
     async () => {
       const replayBscMintTx = await bscRouteBridge.finalizeFromTaira(
@@ -3954,6 +3956,7 @@ async function main() {
   const bscBurnRecipient = ethers.toUtf8Bytes("testu-bsc@taira");
   const bscBurnRecipientHash = ethers.keccak256(bscBurnRecipient);
   const bscBurnAmount = 333n;
+  const bscBurnTokenAmount = bscBurnAmount * bscTairaToTokenScale;
   const expectedBscBurnDigest = computeTairaXorBscBurnSourceEventDigest(abi, {
     routeIdHash: bscRouteIdHash,
     assetKeyHash,
@@ -3974,14 +3977,36 @@ async function main() {
     ),
     expectedBscBurnDigest
   );
+  await assert.rejects(
+    async () => {
+      const unalignedBscBurnTx = await bscRouteBridge
+        .connect(outsider)
+        .burnToTaira(
+          bscRouteIdHash,
+          assetKeyHash,
+          bscBurnRecipient,
+          bscBurnTokenAmount + 1n
+        );
+      await unalignedBscBurnTx.wait();
+    },
+    callExceptionWithReason("Amount must align to TAIRA scale")
+  );
   const bscBurnTx = await bscRouteBridge
     .connect(outsider)
-    .burnToTaira(bscRouteIdHash, assetKeyHash, bscBurnRecipient, bscBurnAmount);
+    .burnToTaira(
+      bscRouteIdHash,
+      assetKeyHash,
+      bscBurnRecipient,
+      bscBurnTokenAmount
+    );
   const bscBurnReceipt = await bscBurnTx.wait();
   assert.equal(await bscRouteBridge.burnNonce(), 1n);
   assert.equal(await bscSourceBridge.submittedSourceEvents(expectedBscBurnDigest), true);
-  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintAmount - bscBurnAmount);
-  assert.equal(await bscToken.totalSupply(), bscMintAmount - bscBurnAmount);
+  assert.equal(
+    await bscToken.balanceOf(bscRecipient),
+    bscMintTokenAmount - bscBurnTokenAmount
+  );
+  assert.equal(await bscToken.totalSupply(), bscMintTokenAmount - bscBurnTokenAmount);
   const bscSourceEventLogs = bscBurnReceipt.logs
     .filter(
       (log) =>

@@ -1197,6 +1197,10 @@ export interface TairaXorSccpBurnRecordInput
   settlement_asset_definition_id?: string;
   settlementAsset?: string;
   settlement_asset?: string;
+  settlementAmount?: string;
+  settlement_amount?: string;
+  burnAmount?: string;
+  burn_amount?: string;
   authority?: string;
 }
 
@@ -1209,6 +1213,10 @@ export interface TairaXorBscSccpBurnRecordInput
   settlement_asset_definition_id?: string;
   settlementAsset?: string;
   settlement_asset?: string;
+  settlementAmount?: string;
+  settlement_amount?: string;
+  burnAmount?: string;
+  burn_amount?: string;
   authority?: string;
 }
 
