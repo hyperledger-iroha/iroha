@@ -499,7 +499,15 @@ TypeInvariant ==
 SelectedQcMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == SelectedQcMatchesSpec
+BlockSyncSelectedQcExactness ==
+  SelectedQcMatchesSpec
+
+BlockSyncSelectedQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedQcExactness
+
+SafetyFast ==
+  BlockSyncSelectedQcExactness
 
 SourcePrecedence ==
   Matches("incoming_preempts_selection")

@@ -325,6 +325,13 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+IngressStatusCountersExactness ==
+  Safety
+
+IngressStatusCountersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ IngressStatusCountersExactness
+
 BugResetGossipKeepsCounters ==
   ImplementationActions(ResetGossipClearsCounters) =
     SpecActions(ResetGossipClearsCounters)

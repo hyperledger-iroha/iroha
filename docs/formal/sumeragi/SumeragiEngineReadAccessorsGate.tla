@@ -324,6 +324,12 @@ EngineReadAccessorsCoreSafety ==
   /\ AccessorsEmitNoOutputs
   /\ AllTriedCasesRemainModeled
 
-Safety == EngineReadAccessorsCoreSafety
+EngineReadAccessorsExactness == EngineReadAccessorsCoreSafety
+
+EngineReadAccessorsCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineReadAccessorsExactness
+
+Safety == EngineReadAccessorsExactness
 
 ====

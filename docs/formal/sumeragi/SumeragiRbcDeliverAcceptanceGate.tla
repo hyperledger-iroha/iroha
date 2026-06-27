@@ -272,7 +272,7 @@ AcceptRequiresAllGatesOpen ==
     /\ ~ChunkBlocks(candidate)
     /\ ~RootBlocks(candidate)
 
-Safety ==
+RbcDeliverAcceptanceExactness ==
   /\ DecisionMatchesSpec
   /\ ReadyQuorumDefersFirst
   /\ ZeroRequiredReadyDoesNotDefer
@@ -285,5 +285,11 @@ Safety ==
   /\ AbsentExpectedRootDoesNotReject
   /\ AbsentComputedRootDoesNotReject
   /\ AcceptRequiresAllGatesOpen
+
+RbcDeliverAcceptanceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcDeliverAcceptanceExactness
+
+Safety == RbcDeliverAcceptanceExactness
 
 ====

@@ -149,7 +149,14 @@ TypeInvariant ==
 DispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DispatchMatchesSpec
+BackgroundFallbackExactness ==
+  DispatchMatchesSpec
+
+BackgroundFallbackCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BackgroundFallbackExactness
+
+SafetyFast == BackgroundFallbackExactness
 
 PostsStayPosts ==
   \A c \in Cases:

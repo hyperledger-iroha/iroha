@@ -253,6 +253,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+ModeStatusExactness ==
+  Safety
+
+ModeStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ModeStatusExactness
+
 BugPrfInitialSeedSet ==
   ImplementationActions(PrfInitialEmpty) = SpecActions(PrfInitialEmpty)
 

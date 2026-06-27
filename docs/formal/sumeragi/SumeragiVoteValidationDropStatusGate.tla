@@ -269,6 +269,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+VoteValidationDropStatusExactness ==
+  Safety
+
+VoteValidationDropStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteValidationDropStatusExactness
+
 BugResetKeepsTotal ==
   ImplementationActions(ResetClearsState) = SpecActions(ResetClearsState)
 

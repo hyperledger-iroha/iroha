@@ -276,7 +276,15 @@ TypeInvariant ==
 SnapshotHintMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == SnapshotHintMatchesSpec
+BlockSyncSnapshotHintExactness ==
+  SnapshotHintMatchesSpec
+
+BlockSyncSnapshotHintCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSnapshotHintExactness
+
+SafetyFast ==
+  BlockSyncSnapshotHintExactness
 
 UnknownDoesNotUseSnapshot ==
   Matches("unknown_snapshot_hints")

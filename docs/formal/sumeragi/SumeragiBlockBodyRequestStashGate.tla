@@ -136,7 +136,14 @@ TypeInvariant ==
 StashWindowMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == StashWindowMatchesSpec
+BlockBodyRequestStashExactness ==
+  StashWindowMatchesSpec
+
+BlockBodyRequestStashCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockBodyRequestStashExactness
+
+SafetyFast == BlockBodyRequestStashExactness
 
 ZeroMarginNextAllowed ==
   Matches("zero_margin_next")

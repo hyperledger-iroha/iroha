@@ -237,7 +237,15 @@ TypeInvariant ==
 VotePlaceholderMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == VotePlaceholderMatchesSpec
+BlockSyncVotePlaceholderExactness ==
+  VotePlaceholderMatchesSpec
+
+BlockSyncVotePlaceholderCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncVotePlaceholderExactness
+
+SafetyFast ==
+  BlockSyncVotePlaceholderExactness
 
 NoVotesNoPlaceholder ==
   Matches("no_votes")

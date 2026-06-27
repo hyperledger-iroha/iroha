@@ -339,7 +339,14 @@ TypeInvariant ==
 DeferredHelperMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DeferredHelperMatchesSpec
+DeferredBlockSyncHelperExactness ==
+  DeferredHelperMatchesSpec
+
+DeferredBlockSyncHelperCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DeferredBlockSyncHelperExactness
+
+SafetyFast == DeferredBlockSyncHelperExactness
 
 ValidationNoInflightAllows ==
   Matches("validation_no_inflight")

@@ -294,7 +294,14 @@ TypeInvariant ==
 FramePreparationMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == FramePreparationMatchesSpec
+BackgroundFrameCapExactness ==
+  FramePreparationMatchesSpec
+
+BackgroundFrameCapCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BackgroundFrameCapExactness
+
+SafetyFast == BackgroundFrameCapExactness
 
 FetchRequestUsesControlCap ==
   Matches("fetch_request_control_cap")

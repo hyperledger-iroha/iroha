@@ -309,6 +309,10 @@ ProposalLivenessExactness ==
   /\ ProposalLivenessEnsureExact
   /\ ProposalLivenessMarkExact
 
+ProposalLivenessCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalLivenessExactness
+
 SafetyFast ==
   ProposalLivenessExactness
 

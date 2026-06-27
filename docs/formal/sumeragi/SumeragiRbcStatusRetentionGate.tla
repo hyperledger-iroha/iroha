@@ -179,8 +179,13 @@ RbcStatusRetentionMatchesSpec ==
        /\ ActualUpdatedTimestamp(c) = SpecUpdatedTimestamp(c)
        /\ ActualSummaryTag(c) = SpecSummaryTag(c)
 
-SafetyFast ==
-  RbcStatusRetentionMatchesSpec
+RbcStatusRetentionExactness == RbcStatusRetentionMatchesSpec
+
+RbcStatusRetentionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStatusRetentionExactness
+
+SafetyFast == RbcStatusRetentionExactness
 
 BugLimitTtlZeroClears ==
   ActualLimit("ttl_zero_keeps_all") = SpecLimit("ttl_zero_keeps_all")

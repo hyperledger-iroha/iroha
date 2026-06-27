@@ -1188,9 +1188,6 @@ def _source_adapter_gate_semantic_errors(
     audit_hashes = source_gate.get("audit_hashes")
     blockers = source_gate.get("blockers")
 
-    if type(required) is not bool:
-        return []
-
     errors: list[str] = []
     audit_label = f"{label}.source_adapter_gate audit_hashes"
     expected_audit_keys = (
@@ -1198,6 +1195,25 @@ def _source_adapter_gate_semantic_errors(
         if type(domain) is int
         else None
     )
+    if type(required) is not bool:
+        if expected_audit_keys is not None:
+            errors.extend(
+                _source_adapter_gate_template_hash_errors(
+                    f"{label}.source_adapter_gate gate_hash",
+                    domain,
+                    gate_hash,
+                )
+            )
+            if isinstance(audit_hashes, dict):
+                errors.extend(
+                    _source_adapter_gate_template_audit_errors(
+                        audit_label,
+                        domain,
+                        audit_hashes,
+                    )
+                )
+        return errors
+
     if expected_audit_keys is None:
         if required:
             errors.append(
@@ -1231,6 +1247,21 @@ def _source_adapter_gate_semantic_errors(
         errors.append(
             f"{label}.source_adapter_gate required must be true for this lane domain"
         )
+        errors.extend(
+            _source_adapter_gate_template_hash_errors(
+                f"{label}.source_adapter_gate gate_hash",
+                domain,
+                gate_hash,
+            )
+        )
+        if isinstance(audit_hashes, dict):
+            errors.extend(
+                _source_adapter_gate_template_audit_errors(
+                    audit_label,
+                    domain,
+                    audit_hashes,
+                )
+            )
         return errors
 
     errors.extend(
@@ -1371,15 +1402,31 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
     domain = payload.get("domain")
     required = payload.get("source_adapter_gate_required")
     gate_hash = payload.get("source_adapter_gate_hash")
-    if type(required) is not bool:
-        return []
-
     errors: list[str] = []
     expected_audit_keys = (
         _source_adapter_gate_audit_keys_for_domain_chain(domain, payload.get("chain"))
         if type(domain) is int
         else None
     )
+    if type(required) is not bool:
+        if expected_audit_keys is not None:
+            errors.extend(
+                _source_adapter_gate_template_hash_errors(
+                    f"{label} source_adapter_gate_hash",
+                    domain,
+                    gate_hash,
+                )
+            )
+            if isinstance(audit_hashes, dict):
+                errors.extend(
+                    _source_adapter_gate_template_audit_errors(
+                        f"{label} source_adapter_gate_audit_hashes",
+                        domain,
+                        audit_hashes,
+                    )
+                )
+        return errors
+
     if required:
         if expected_audit_keys is None:
             errors.append(
@@ -1462,6 +1509,21 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
             errors.append(
                 f"{label} source_adapter_gate_required must be true for this domain"
             )
+            errors.extend(
+                _source_adapter_gate_template_hash_errors(
+                    f"{label} source_adapter_gate_hash",
+                    domain,
+                    gate_hash,
+                )
+            )
+            if isinstance(audit_hashes, dict):
+                errors.extend(
+                    _source_adapter_gate_template_audit_errors(
+                        f"{label} source_adapter_gate_audit_hashes",
+                        domain,
+                        audit_hashes,
+                    )
+                )
         if gate_hash not in (None, ""):
             errors.append(
                 f"{label} source_adapter_gate_hash must be empty when gate is not required"
@@ -4370,7 +4432,7 @@ def _submission_surface_binding_bundle_errors(
     errors: list[str] = []
     try:
         expected_surfaces = _verify_module()._expected_submission_surfaces(report)
-    except Exception:
+    except (Exception, SystemExit):
         return [f"{label}.user_prover_submission_surfaces cannot be recomputed"]
 
     expected_by_lanes = {
@@ -4534,7 +4596,7 @@ def _native_evm_prover_binding_bundle_errors(
             report,
             evidence,
         )
-    except Exception:
+    except (Exception, SystemExit):
         return [f"{label}.native_evm_prover_bundle cannot be recomputed"]
 
     errors = [
@@ -4565,7 +4627,7 @@ def _copied_evidence_binding_bundle_errors(
             report,
             recompute_errors,
         )
-    except Exception:
+    except (Exception, SystemExit):
         return [f"{label}.evidence cannot be recomputed from copied inputs"]
 
     errors = [
@@ -4586,7 +4648,7 @@ def _release_checklist_binding_bundle_errors(
         return []
     try:
         expected_checklist = _verify_module()._expected_release_checklist(report)
-    except Exception:
+    except (Exception, SystemExit):
         return [f"{label}.release_checklist cannot be recomputed"]
     if checklist != expected_checklist:
         return [f"{label}.release_checklist does not match embedded evidence"]
@@ -4626,7 +4688,7 @@ def _corridor_phase_transcript_bundle_errors(
                 phase,
                 evidence_artifacts.get(phase),
             )
-        except Exception:
+        except (Exception, SystemExit):
             errors.append(f"{label}.corridor phase transcript cannot be checked")
         else:
             errors.extend(phase_errors)
@@ -4782,7 +4844,7 @@ def _readiness_markdown_bundle_errors(
     errors = verifier._readiness_markdown_invariant_errors(report, markdown)
     try:
         expected_markdown = verifier._expected_readiness_markdown(report)
-    except Exception:
+    except (Exception, SystemExit):
         errors.append(f"{label}.markdown cannot be rendered canonically")
     else:
         if markdown != expected_markdown:
@@ -5904,7 +5966,7 @@ def _release_notes_attachment_bundle_errors(
     )
     try:
         expected_notes = verifier._expected_release_notes_attachment(report, artifacts)
-    except Exception:
+    except (Exception, SystemExit):
         errors.append(f"{label}.release_notes_attachment cannot be rendered")
     else:
         if notes != expected_notes:
@@ -5969,7 +6031,8 @@ def _release_notes_artifact_rows(artifacts: Any) -> list[list[str]]:
     for artifact in artifacts:
         if (
             isinstance(artifact, dict)
-            and artifact.get("path") == "sccp-release-notes-attachment.md"
+            and artifact.get("path")
+            in {"manifest.json", "sccp-release-notes-attachment.md"}
         ):
             continue
         rows.append(_release_notes_artifact_row_cells(artifact))
@@ -6088,7 +6151,7 @@ def _release_bundle_manifest_errors(
         errors.append("manifest missing readiness report referenced artifact")
     try:
         expected_order = verifier._expected_manifest_artifact_order(report)
-    except Exception as exc:
+    except (Exception, SystemExit):
         errors.append("cannot compute canonical manifest artifact order")
     else:
         if verifier._manifest_artifact_paths_in_order(artifacts) != expected_order:
@@ -6228,12 +6291,19 @@ def _strict_verifier_summary_errors(summary: Any) -> list[str]:
     ):
         errors.append(f"{label} errors must not be empty when verified is false")
 
-    if summary.get("verified") is True and not _is_nonzero_canonical_sha256_text(
-        summary.get("manifest_sha256")
+    manifest_sha256 = summary.get("manifest_sha256")
+    if summary.get("verified") is True and not _is_canonical_sha256_text(
+        manifest_sha256
     ):
         # Source-inventory markers:
         # strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string
         # strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string
+        errors.append(
+            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string"
+        )
+    elif summary.get("verified") is True and not _is_nonzero_canonical_sha256_text(
+        manifest_sha256
+    ):
         errors.append(
             "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string"
         )
@@ -6568,6 +6638,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
+    if isinstance(exc, SystemExit):
+        return fallback
     if isinstance(exc, OSError) and (
         getattr(exc, "filename", None) is not None
         or getattr(exc, "filename2", None) is not None
@@ -6729,11 +6801,12 @@ def main(argv: list[str] | None = None) -> int:
         if report["production_ready"] is True:
             verification_summary = _verify_generated_bundle(args.output_dir)
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

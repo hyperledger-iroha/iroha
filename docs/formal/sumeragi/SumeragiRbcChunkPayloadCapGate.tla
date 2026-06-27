@@ -173,9 +173,15 @@ RbcChunkPayloadCapCoreSafety ==
     /\ ActualCap(c) = SpecCap(c)
     /\ ActualFit(c)
 
-NoBugInvariant == RbcChunkPayloadCapCoreSafety
+RbcChunkPayloadCapExactness == RbcChunkPayloadCapCoreSafety
 
-SafetyFast == RbcChunkPayloadCapCoreSafety
+RbcChunkPayloadCapCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcChunkPayloadCapExactness
+
+NoBugInvariant == RbcChunkPayloadCapExactness
+
+SafetyFast == RbcChunkPayloadCapExactness
 
 BugBaseOverflowReturnsPositive == NoBugInvariant
 BugBaseEqualReturnsOne == NoBugInvariant

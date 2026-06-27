@@ -236,7 +236,14 @@ TypeInvariant ==
 BypassMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == BypassMatchesSpec
+BackgroundBypassExactness ==
+  BypassMatchesSpec
+
+BackgroundBypassCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BackgroundBypassExactness
+
+SafetyFast == BackgroundBypassExactness
 
 PostBypassMatrix ==
   \A c \in Cases:

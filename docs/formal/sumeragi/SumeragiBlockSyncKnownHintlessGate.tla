@@ -161,7 +161,15 @@ TypeInvariant ==
 KnownHintlessMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == KnownHintlessMatchesSpec
+BlockSyncKnownHintlessExactness ==
+  KnownHintlessMatchesSpec
+
+BlockSyncKnownHintlessCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncKnownHintlessExactness
+
+SafetyFast ==
+  BlockSyncKnownHintlessExactness
 
 KnownHintlessFastPath ==
   Matches("known_no_hint")

@@ -345,6 +345,12 @@ RbcChunkAllocationCoreSafety ==
   /\ MinWrapperReverseTrimMatchesSpec
   /\ AllocationEntriesBoundedByTotalWhenPositive
 
-Safety == RbcChunkAllocationCoreSafety
+RbcChunkAllocationExactness == RbcChunkAllocationCoreSafety
+
+RbcChunkAllocationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcChunkAllocationExactness
+
+Safety == RbcChunkAllocationExactness
 
 ====

@@ -361,7 +361,15 @@ MatchesSpec ==
   /\ wakeAttempted = SpecWakeAttempted(candidate)
   /\ wakeResultIgnored = SpecWakeResultIgnored(candidate)
 
-SafetyFast == MatchesSpec
+KnownBlockQcEnqueueExactness ==
+  MatchesSpec
+
+KnownBlockQcEnqueueCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KnownBlockQcEnqueueExactness
+
+SafetyFast ==
+  KnownBlockQcEnqueueExactness
 
 BugKeyOmitsPhase == ActualKeyPhase("new_without_wake")
 BugKeyOmitsHash == ActualKeyHash("new_without_wake")

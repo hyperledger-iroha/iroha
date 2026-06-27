@@ -352,7 +352,15 @@ TypeInvariant ==
 NoRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == NoRosterMatchesSpec
+BlockSyncNoRosterExactness ==
+  NoRosterMatchesSpec
+
+BlockSyncNoRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncNoRosterExactness
+
+SafetyFast ==
+  BlockSyncNoRosterExactness
 
 KnownVoteOnlyProcessesWithoutSnapshot ==
   Matches("known_vote_no_snapshot")

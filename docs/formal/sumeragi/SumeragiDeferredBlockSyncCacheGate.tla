@@ -314,7 +314,14 @@ TypeInvariant ==
 DeferredBlockSyncCacheMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DeferredBlockSyncCacheMatchesSpec
+DeferredBlockSyncCacheExactness ==
+  DeferredBlockSyncCacheMatchesSpec
+
+DeferredBlockSyncCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DeferredBlockSyncCacheExactness
+
+SafetyFast == DeferredBlockSyncCacheExactness
 
 CacheNewClearsCommitVotes ==
   Matches("cache_new_entry")

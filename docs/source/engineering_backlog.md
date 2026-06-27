@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-26
+Last updated: 2026-06-27
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -362,6 +362,18 @@ All canonical `.NET` SCCP marker lines must use a single literal space after
 the colon; VSTest summary label/value and number/unit separators must be
 present, padding must use ordinary spaces only, and tab/control-whitespace
 separators remain forged evidence.
+TRON route-config production manifests now follow the BSC handoff-placeholder
+boundary: production-ready route manifests reject `todo`, `example`,
+`replace-me`, `changeme`, `sample`, `stub`, `test-only`, and `your-*`
+placeholder material in both string values and field names before TOML
+rendering, and the strict release/source-inventory gates pin the implementation
+plus direct adversarial tests.
+TRON route-config handoff also rejects duplicate camelCase/snake_case aliases
+for required route-manifest containers and scalars, including production flags,
+post-deploy evidence, destination rollout/binding domains and hashes, fixed
+TRON addresses, burn-record VK/artifact/hash material, destination verifier
+aliases, and settlement route/submit aliases; release inventory pins those
+adversarial cases before production evidence can pass.
 Future SCCP SDK route-canary helpers must be added to the same release
 source-inventory marker set before they are advertised as production-ready.
 Future SCCP source-verifier material families must also join the
@@ -988,7 +1000,39 @@ redistributable schemas, and official trust/revocation bundles.
   derivation, and full-bootstrap sample-extraction switch-key derivation now use
   exact/bounded mode-separated deterministic RNG streams so same-seed artifacts
   do not reuse public limbs, ephemeral masks, or refresh-round seeds across
-  modes.
+  modes, including same-public-key exact/bounded bootstrap refresh derivations
+  that are accepted only by their matching transcript validators, transcript
+  digests, and transcript-bound proof statements; crypto regressions now pin
+  the bootstrap round seed preimage to `domain || key_id || max_rounds || seed
+  || round_index` and prove it is distinct from rotation seed derivation. The
+  Soracloud bootstrap-key proof public-input schema now advertises those
+  exact/bounded rotation and bootstrap refresh-round seed-derivation domains,
+  with its regression parsing seed-domain, statement-domain,
+  refresh-transcript-domain, refresh-material, and proof-statement-material
+  objects and binding their fields to the authoritative `iroha_crypto`
+  constants. The full-bootstrap material/execution schema regressions also
+  parse proof-key commitment-domain objects and bind material/pair fields to
+  the same crypto constants, and structurally parse release-audit evidence,
+  signoff, record, manifest, and package metadata so
+  versions, field counts, digest domains, manifest scope, reviewer-id bounds,
+  and audit byte bounds stay tied to crypto constants. The execution schema
+  regression now also parses the execution witness, arithmetic trace, arithmetic
+  AIR, native AIR envelope, artifact bundle, and release-prover input sections
+  so row-shape constants, composition challenge layout, and verifier-obligation
+  flags stay tied to `iroha_crypto`; the material schema regression parses
+  `material_proof_input` so its proof-input material layout and required
+  material/artifact/statement obligations are structurally pinned too. The
+  input-admission and public-key schema regressions now parse their small
+  bound/domain/material objects so exact/bounded proof domains and statement
+  material layouts stay tied to the same constants. The typed crypto proof
+  public-input schema artifact now carries the same release-prover digest-domain
+  labels, proof-key material/pair commitment domains, and explicit
+  separated-domain flags, with adversarial validation rejecting
+  placeholder/canonical drift before those domains can diverge from the
+  Soracloud execution schema. Release-audit proof-profile records now mirror
+  those release-prover digest-domain and proof-key commitment-domain labels,
+  advertise field count `53`, and reject stale, placeholder, or non-separated
+  domain metadata before release evidence can be digested or accepted.
   Parameter validation now also requires enough ciphertext-modulus
   headroom to keep the configured positive and negative plaintext-multiple
   error representatives distinct. Secret-key diagnostics now expose the exact
@@ -1028,12 +1072,16 @@ redistributable schemas, and official trust/revocation bundles.
   bootstrap-key zero-refresh proof statement digests that bind parameters,
   public key, evaluation-key digest, refresh-transcript digest, bootstrap
   transcript seed/key id/round capacity, and every public refresh ciphertext
-  under mode-separated domains. Crypto now also exposes exact-lift and
+  under mode-separated domains. Raw bootstrap-key zero-refresh statement
+  regressions also pin exact and bounded domain constants to the same typed
+  bootstrap-key material. Crypto now also exposes exact-lift and
   bounded-noise ciphertext proof statement digests that bind parameters,
   public key material, public-key digest, ciphertext bytes, a non-inert
   ciphertext digest, and the declared residual/noise bound under
-  mode-separated domains, rejecting all-zero ciphertext sentinels before a
-  verifier-facing statement hash can be emitted. Exact ciphertext statement
+  mode-separated domains, with regressions pinning both exact and bounded
+  domains to the same typed Norito statement material, rejecting all-zero
+  ciphertext sentinels before a verifier-facing statement hash can be emitted.
+  Exact ciphertext statement
   hashing now also runs the exact seeded-encryption residual headroom preflight,
   matching exact public-key statement admission so structurally valid but
   non-admissible exact profiles cannot emit verifier-facing ciphertext
@@ -1189,13 +1237,36 @@ redistributable schemas, and official trust/revocation bundles.
   id, registered parameter profile digests, maximum bootstrap depth,
   statement-hash layout, and governed schema digest while rejecting opaque
   schema/key bytes, profile/depth drift, empty or all-zero key material, and
-  duplicate prover/verifier key material. Crypto now also
+  duplicate prover/verifier key material; schema artifact regressions pin the
+  canonical proof public-input schema payload digest to exact typed Norito
+  schema bytes and the artifact digest to the governed registered-profile
+  envelope carrying those bytes. Arithmetic trace profile, AIR contract, and
+  native proof-circuit fingerprint regressions pin the encoded self-describing
+  Norito material under their dedicated digest domains. Crypto now also
   hashes full-bootstrap artifact bundles through a typed digest material with
   version, artifact-digest count, and per-role artifact hashes, and pins valid
   alternate-artifact regressions for every mutable artifact role that can vary
-  under the first-release profile. Crypto now also pins exact and bounded
+  under the first-release profile; circuit-material, evaluator-artifact-set,
+  and artifact-bundle digest regressions also pin the encoded self-describing
+  Norito material under the dedicated governance digest domains. Proof-key pair
+  and individual material-commitment regressions also pin the dedicated
+  domain-separated transcripts over proof-profile metadata, role labels,
+  verifier-obligation flags, and backend-native key bytes. The material/execution
+  Soracloud public schemas now also advertise their statement digest domains
+  plus the circuit-material, evaluator-artifact-set, and artifact-bundle digest
+  domains used by the governed artifact transcripts, with regressions binding
+  those fields to the authoritative crypto constants. The execution schema now
+  also advertises the release-prover proof-input, prover-input, AIR-evaluation,
+  trace-material, and AIR-constraint-system digest domains, again bound to the
+  authoritative crypto constants. Crypto now also
+  pins exact and bounded
   full-bootstrap execution statement digest goldens for that typed artifact
-  bundle layout. Crypto now also
+  bundle layout, currently
+  `1873c39ab7a25d5194a05ac36636726501fe5f0f86e11ca06ff899f91dd961bb`
+  for exact residual mode and
+  `0ec1100aec78f541235d0fa74c8934497074dedf72491002803931b203d6b88b`
+  for bounded-noise mode, with both modes checked against self-describing
+  Norito statement material. Crypto now also
   declares and validates the v1 statement-material and per-slot claim layout,
   requiring parameter, public-key, bootstrap-key, material, artifact-bundle,
   slot-index, ciphertext, proof-mode, and residual/noise-bound commitments
@@ -1205,7 +1276,10 @@ redistributable schemas, and official trust/revocation bundles.
   and prover-key material commitment digest
   `80afd2b32d2e19d57f10b6af6806b7eedd4a4e96e041f7faaa63694f926ad40d`,
   with native Merkle/FRI replay and AIR-root FRI query binding flags included
-  in the schema and proof-circuit fingerprint material.
+  in the schema and proof-circuit fingerprint material. The material/execution
+  Soracloud public schemas now advertise the proof-key material and proof-key
+  pair commitment domains used by those transcripts, plus the artifact digest
+  domains bound by release-audit evidence.
   Data-model tests pin the Soracloud FHE public-input schema hashes that Core
   verifier records use for input admission, bootstrap-key proof,
   full-bootstrap material proof, and full-bootstrap execution proof gates.
@@ -1222,12 +1296,15 @@ redistributable schemas, and official trust/revocation bundles.
 	  suffixed-label alias rejection, and Core rejects wrong-circuit STARK verifier
 	  keys in both canonical and native metadata payload layouts; release-audit
 	  evidence now exposes those
-	  replay-policy guarantees in its proof-profile record with field count 44,
-	  native proof-circuit fingerprint material binds the same guarantees with
-	  field count 45, generated circuit bodies carry them with field count 46,
+	  replay-policy guarantees in its proof-profile record with field count 53,
+	  including release-prover digest domains and proof-key material/pair
+	  commitment domains; native proof-circuit fingerprint material binds the
+	  same guarantees with field count 45, generated circuit bodies carry them
+	  with field count 46,
 		  deterministic release-audit report/archive inventories label the proof-profile
-		  field count and canonical/suffixed transcript-label obligations,
-		  release-audit packages validate those proof-profile markers plus
+		  field count, canonical/suffixed transcript-label obligations, and
+		  release-prover/proof-key domain contract, release-audit packages validate
+		  those proof-profile markers plus
 		  generated-body byte length/hex, native
 		  prover/verifier payload hex, governed prover/verifier artifact hex, and
 	  same-field signed commitment containment with standalone label tokens,
@@ -1268,8 +1345,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  plus machine-generated and separator-obfuscated machine-generated
 		  audit-body rejection,
 		  and the current material/execution schema hashes are
-			  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f`
-			  and `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`.
+			  `8d5cac1304e7b20ad05ebe4c9825af1d1d14231a3422e9d911d5698cf2a07df5`
+			  and `bcc5709f96a74c5f8606cb3c6b7093abac7f1645422fb1fea2c1a341acb93009`.
 		  The registered bounded-noise compatibility wrappers for
 		  multiplication, Galois switching, outer-slot rotation, packed rotation,
 		  and bootstrap refresh now delegate to the registered target-limb
@@ -1480,7 +1557,8 @@ redistributable schemas, and official trust/revocation bundles.
   signed generated-circuit-body digest, native circuit fingerprint,
 	  proof-key pair commitment, individual prover/verifier key digests, and the
 	  release-audit proof-profile field count plus canonical base transcript-label
-	  enforcement and suffixed-label alias rejection before a package validates.
+	  enforcement, suffixed-label alias rejection, release-prover digest domains,
+	  and proof-key material/pair commitment domains before a package validates.
   Native proof-key payload shape validation now rejects blank payload bytes and
   known direct/delayed placeholder or inert native payload sentinels before
   Norito decoding, so raw prover/verifier payload validators and material
@@ -1710,7 +1788,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  including governed full-bootstrap material, public-key, evaluation-key,
 	  concrete artifact-bundle, statement-hash, and material proof input package
 	  digest-domain bindings. Crypto now exposes a domain-separated Norito digest
-	  helper for that typed material proof input package. Public proof input
+	  helper for that typed material proof input package, with regressions pinning
+	  the digest to the encoded self-describing Norito proof-input material.
+	  Public proof input
 	  material validation also rejects zero statement hashes, malformed public-key shapes, and material
 	  prover artifact bundles that do not match governed material before release
 	  prover tooling can hand typed material to the future arithmetic backend, and
@@ -1724,15 +1804,23 @@ redistributable schemas, and official trust/revocation bundles.
 		  release prover input package, the execution proof input package digest
 		  domain, release-prover AIR constraint-system digest/artifact binding,
 		  release audit package caller-pinned digest enforcement with zero and
-		  placeholder pinned-digest rejection, and release prover
-		  verifier-key binding. The typed crypto schema validates those AIR
+		  placeholder pinned-digest rejection, and execution proof-input package
+		  digesting now pins the encoded self-describing Norito proof-input
+		  material under its dedicated domain before release prover
+		  verifier-key binding. The arithmetic trace material, AIR evaluation
+		  material, and proof-key-bound execution prover-input package digests
+		  are likewise pinned to encoded self-describing Norito material under
+		  their dedicated domains before verifier-key binding. The typed crypto
+		  schema validates those AIR
 		  contract, release-prover, execution proof input package digest-domain,
 		  artifact-bound prover-input validation, stale Galois-key-set replay
 		  rejection, and stale proof-key artifact replay rejection terms directly;
 				  release-audit proof-profile evidence now also advertises those replay
 					  policy and AIR evaluation material layout/digest/zero-composition
 					  terms, native proof-circuit fingerprint material binds the replay-policy
-					  terms with field count 45, and the
+					  terms with field count 45, and native payload regressions pin the
+					  generated circuit body raw SHA-256 digest to canonical body bytes plus
+					  embedded canonical AIR material bytes, and the
 			  AIR constraint-system digest is now bound through the typed public schema,
 		  native prover/verifier payloads, proof-key material envelope, native
 		  proof-key material, and native proof-circuit fingerprint. The AIR
@@ -1904,7 +1992,11 @@ redistributable schemas, and official trust/revocation bundles.
 			  digest, prover/verifier pair commitment, native payload digests, native
 			  circuit fingerprint, and proof-profile field counts before the bundle
 			  can be published, with a public validator for release tooling to reject
-			  forged evidence records before digesting them. Release tooling can also
+			  forged evidence records before digesting them. Evidence, record,
+			  manifest, and package digest regressions now pin encoded
+			  self-describing Norito payloads under their dedicated release-audit
+			  digest domains instead of relying only on canonical roundtrip
+			  stability. Release tooling can also
 			  sign that evidence together with the external audit report and archive
 			  digests, so stale reviewer identities, reused audit hashes, wrong
 			  reviewer keys, tampered payloads, evidence drift, and artifact drift
@@ -1916,7 +2008,8 @@ redistributable schemas, and official trust/revocation bundles.
 			  object and reject stale record headers or mismatched evidence/signoff
 			  pairs. The release audit package now carries the external report and
 			  evidence archive bytes themselves, hashes them against the signed
-			  record, enforces bounded report/archive sizes, and rejects empty,
+			  record with digests pinned to canonical headered artifact bytes rather
+			  than body-only hashes, enforces bounded report/archive sizes, and rejects empty,
 			  all-zero, unheadered, header-only, whitespace-prefixed nested-header,
 			  blank-body, sub-64-byte, zero-body, delayed placeholder-body,
 			  tampered, or missing audit artifacts before publication. It also carries a
@@ -2138,9 +2231,9 @@ redistributable schemas, and official trust/revocation bundles.
 						  prose, duplicate or conflicting reviewer-id labels, case-drifted
 						  or separator-alias reviewer labels, and padded-colon marker
 						  aliases under the pinned material
-							  `05890816bd1fb865e3836018316b01d07e3cff757446d1f8d30f68d156de5e0f`
+							  `8d5cac1304e7b20ad05ebe4c9825af1d1d14231a3422e9d911d5698cf2a07df5`
 							  and execution
-							  `25506f98acc6cc99a363a8adf53ea83eaaf6ad15c081b98b6e2b16985db77421`
+							  `bcc5709f96a74c5f8606cb3c6b7093abac7f1645422fb1fea2c1a341acb93009`
 							  schema hashes. Crypto now also exposes release-audit-gated
 						  exact and bounded artifact-aware execution and bound helpers,
 						  requiring the caller-trusted reviewer id/key and caller-pinned
@@ -2196,6 +2289,9 @@ redistributable schemas, and official trust/revocation bundles.
 							  prefix execution, so inert all-zero trace material, invalid propagated
 							  bounds, stale witness packages, or placeholder ciphertext inputs cannot
 							  bypass the executable crypto boundary.
+							  Release-prover input regressions now also pin all-zero
+							  arithmetic trace material and arithmetic AIR contract digest
+							  sentinel rejection before stale digest comparisons.
 		  Remaining production work is the audited full-bootstrap arithmetic
 		  proof-producing backend plus release-grade
 		  prover/verifier artifacts and independent audit report/archive production
@@ -2207,7 +2303,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  AIR contract material/digest/artifact binding,
 		  proof-key evaluator artifact-set binding,
 		  native circuit-fingerprint and generated circuit-body proof
-		  public-input schema-payload digest binding,
+		  public-input schema-payload digest binding, generated-body
+		  SHA-256 placeholder digest preflight, release-audit placeholder-scan first-byte prefilter,
+		  native payload archive hex syntax preflight,
 		  native AIR envelope construction/replay validation,
 		  raw native proof-key payload placeholder preflight,
 		  proof attachment finalization, and statement-recomputation validation,
@@ -2685,7 +2783,10 @@ redistributable schemas, and official trust/revocation bundles.
   payloads, and release-audit manifests so stale source-role metadata is
   rejected before artifact or audit acceptance, and caller-pinned package
   digest alias checks reject attempts to reuse the signed source-chain digest as
-  the package digest. Soracloud material/execution public-input schemas now
+  the package digest. The target-limb multiply helper now also rejects
+  structurally valid centered scale-round source chains that are not evaluator
+  prefixes before malformed relinearization-key or ciphertext payloads.
+  Soracloud material/execution public-input schemas now
   advertise the matching release-audit field counts, source-chain binding flags,
   external-audit signed-commitment distinctness, and caller-pinned
   signed-commitment package-digest alias rejection, plus package audit-body

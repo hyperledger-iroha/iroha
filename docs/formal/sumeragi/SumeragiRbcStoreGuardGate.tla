@@ -560,6 +560,12 @@ SafetyAnchors ==
   /\ TempPathAnchors
   /\ FileClassAnchors
 
+RbcStoreGuardExactness == SafetyAnchors
+
+RbcStoreGuardCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStoreGuardExactness
+
 BugManifestAcceptVersionMismatch ==
   ActualManifestMatches("version_mismatch") = SpecManifestMatches("version_mismatch")
 

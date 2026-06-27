@@ -148,7 +148,15 @@ TypeInvariant ==
 ImplicitRecoveryMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == ImplicitRecoveryMatchesSpec
+BlockSyncImplicitRecoveryExactness ==
+  ImplicitRecoveryMatchesSpec
+
+BlockSyncImplicitRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncImplicitRecoveryExactness
+
+SafetyFast ==
+  BlockSyncImplicitRecoveryExactness
 
 AlreadyRequestedPreserved ==
   Matches("already_requested")

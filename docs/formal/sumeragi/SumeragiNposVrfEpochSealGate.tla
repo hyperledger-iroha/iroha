@@ -391,6 +391,10 @@ NposVrfEpochSealExactness ==
   /\ NposVrfEpochSealActivationExactness
   /\ NposVrfEpochSealEffectValidationExactness
 
+NposVrfEpochSealCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NposVrfEpochSealExactness
+
 Safety ==
   NposVrfEpochSealExactness
 

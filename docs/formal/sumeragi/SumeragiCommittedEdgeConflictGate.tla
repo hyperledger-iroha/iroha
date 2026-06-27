@@ -293,8 +293,16 @@ CommittedEdgeConflictCoreSafety ==
   /\ CanonicalStateProtected
   /\ RecoveryWindowRespected
 
+CommittedEdgeConflictExactness ==
+  CommittedEdgeConflictCoreSafety
+
+CommittedEdgeConflictCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommittedEdgeConflictExactness
+
 NoBugInvariant == CommittedEdgeConflictCoreSafety
 
-SafetyFast == CommittedEdgeConflictCoreSafety
+SafetyFast ==
+  CommittedEdgeConflictExactness
 
 ====

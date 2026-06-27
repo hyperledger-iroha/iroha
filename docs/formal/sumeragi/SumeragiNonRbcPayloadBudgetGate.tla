@@ -121,8 +121,15 @@ NonRbcPayloadBudgetMatchesSpec ==
   /\ \A c \in Cases:
        SpecBudget(c) <= SpecFrameCap(c)
 
-SafetyFast ==
+NonRbcPayloadBudgetExactness ==
   NonRbcPayloadBudgetMatchesSpec
+
+NonRbcPayloadBudgetCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NonRbcPayloadBudgetExactness
+
+SafetyFast ==
+  NonRbcPayloadBudgetExactness
 
 BugUnderflowBelowHeadroom ==
   ActualBudget("unset_below_headroom") = SpecBudget("unset_below_headroom")

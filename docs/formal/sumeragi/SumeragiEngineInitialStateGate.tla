@@ -231,7 +231,7 @@ ValuesStayInDomain ==
     /\ ImplementationPrepareVoteCache(candidate) \in StoreValues
     /\ ImplementationOutput(candidate) \in OutputValues
 
-Safety ==
+EngineInitialStateExactness ==
   /\ ConstructorPreservesRound
   /\ ConstructorPreservesQuorumPolicy
   /\ ConstructorStartsInProposalPhase
@@ -247,6 +247,12 @@ Safety ==
   /\ ConstructorEmitsNoOutput
   /\ AllInitialStateMatchesSpec
   /\ ValuesStayInDomain
+
+EngineInitialStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineInitialStateExactness
+
+Safety == EngineInitialStateExactness
 
 =============================================================================
 ====

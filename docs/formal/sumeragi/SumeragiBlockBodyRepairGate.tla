@@ -163,7 +163,14 @@ TypeInvariant ==
 RepairAdmissionMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == RepairAdmissionMatchesSpec
+BlockBodyRepairExactness ==
+  RepairAdmissionMatchesSpec
+
+BlockBodyRepairCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockBodyRepairExactness
+
+SafetyFast == BlockBodyRepairExactness
 
 BlockCreatedAllowed ==
   Matches("happy_block_created")

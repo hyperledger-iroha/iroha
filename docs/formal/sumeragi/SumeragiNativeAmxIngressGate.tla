@@ -270,6 +270,10 @@ NativeAmxIngressExactness ==
   /\ NativeAmxIngressVoteAdmissionExactness
   /\ NativeAmxIngressVoteCacheExactness
 
+NativeAmxIngressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NativeAmxIngressExactness
+
 Safety ==
   NativeAmxIngressExactness
 

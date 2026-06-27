@@ -112,6 +112,13 @@ Safety ==
   /\ ImplementationActions(ResetAfterRecordClears) =
        SpecActions(ResetAfterRecordClears)
 
+DeterministicCommitteeStatusExactness ==
+  Safety
+
+DeterministicCommitteeStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DeterministicCommitteeStatusExactness
+
 BugResetEmptyKeepsSize ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

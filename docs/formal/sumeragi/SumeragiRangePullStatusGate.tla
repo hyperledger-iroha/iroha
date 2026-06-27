@@ -163,6 +163,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+RangePullStatusExactness ==
+  Safety
+
+RangePullStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RangePullStatusExactness
+
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

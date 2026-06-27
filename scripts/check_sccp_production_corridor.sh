@@ -12,6 +12,7 @@ SCCP_GRADLE_JVMARGS="${SCCP_GRADLE_JVMARGS:--Xmx6g}"
 SCCP_KOTLIN_DAEMON_JVMARGS="${SCCP_KOTLIN_DAEMON_JVMARGS:-$SCCP_GRADLE_JVMARGS}"
 SCCP_GRADLE_OPTS_DEFAULT="-Dorg.gradle.jvmargs=$SCCP_GRADLE_JVMARGS -Dkotlin.daemon.jvmargs=$SCCP_KOTLIN_DAEMON_JVMARGS -Dkotlin.daemon.jvm.options=$SCCP_KOTLIN_DAEMON_JVMARGS"
 SCCP_GRADLE_OPTS="${GRADLE_OPTS:-$SCCP_GRADLE_OPTS_DEFAULT}"
+SCCP_DOTNET_TRX_MAX_BYTES=16777216
 DRY_RUN=0
 LOG_DIR=""
 
@@ -224,20 +225,351 @@ dotnet_info_field_value() {
   '
 }
 
+dotnet_info_section_field_count() {
+  local section="$1"
+  local label="$2"
+  awk -v section="$section" -v label="$label" '
+    {
+      raw = $0
+      line = raw
+      sub(/^[[:space:]]+/, "", line)
+      if (line == section ":") {
+        in_section = 1
+        next
+      }
+      if (in_section && raw !~ /^[[:space:]]/ && line ~ /:$/) {
+        in_section = 0
+      }
+      if (in_section && index(line, label ":") == 1) {
+        count++
+      }
+    }
+    END {
+      print count + 0
+    }
+  '
+}
+
+dotnet_info_section_field_value() {
+  local section="$1"
+  local label="$2"
+  awk -v section="$section" -v label="$label" '
+    {
+      raw = $0
+      line = raw
+      sub(/^[[:space:]]+/, "", line)
+      if (line == section ":") {
+        in_section = 1
+        next
+      }
+      if (in_section && raw !~ /^[[:space:]]/ && line ~ /:$/) {
+        in_section = 0
+      }
+      if (in_section && index(line, label ":") == 1) {
+        value = substr(line, length(label) + 2)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        print value
+        exit
+      }
+    }
+  '
+}
+
+dotnet_test_passed_count() {
+  local dotnet_output="$1"
+  printf '%s\n' "$dotnet_output" | "$SCCP_CORRIDOR_PYTHON_BIN" -c '
+import re
+import sys
+
+ASSEMBLY = "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+DURATION = (
+    r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[ ]+(?:ms|s|m|h)"
+    r"(?:[ ]+(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[ ]+(?:ms|s|m|h))*"
+)
+SUMMARY_RE = re.compile(
+    r"^[ ]*Passed![ ]+-[ ]+Failed:[ ]+0,[ ]+Passed:[ ]+(?P<passed>[1-9][0-9]*),"
+    r"[ ]+Skipped:[ ]+(?P<skipped>0),"
+    rf"[ ]+Total:[ ]+(?P<total>[1-9][0-9]*),[ ]+Duration:[ ]+"
+    rf"(?P<duration>{DURATION})[ ]+-[ ]+"
+    rf"{re.escape(ASSEMBLY)}$"
+)
+
+matches = []
+for line in sys.stdin.read().splitlines():
+    normalized = line.rstrip("\r")
+    match = SUMMARY_RE.fullmatch(normalized)
+    if match is not None:
+        matches.append(match)
+
+if len(matches) != 1:
+    print(
+        "SCCP .NET SDK validation requires exactly one canonical VSTest summary "
+        f"for {ASSEMBLY}; found: {len(matches)}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+match = matches[0]
+passed = int(match.group("passed"))
+skipped = int(match.group("skipped"))
+total = int(match.group("total"))
+if skipped != 0 or total != passed:
+    print(
+        "SCCP .NET SDK validation requires VSTest summary to report Failed: 0, Skipped: 0, and Total == Passed",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(passed)
+'
+}
+
 validate_dotnet_trx_content() {
   local trx_path="$1"
-  if ! grep -aFq "Hyperledger.Iroha.Sdk.Tests.dll" "$trx_path"; then
-    echo "SCCP .NET SDK validation requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll: $trx_path" >&2
+  local expected_passed_count="$2"
+  local trx_bytes
+  if ! [[ "$expected_passed_count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SCCP .NET SDK validation requires a positive VSTest passed-test count before TRX XML parsing: $trx_path" >&2
     return 1
   fi
-  if grep -aEq '<UnitTestResult[[:space:]][^>]*outcome="(Failed|NotExecuted|Error|Timeout|Aborted)"' "$trx_path"; then
-    echo "SCCP .NET SDK validation requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results: $trx_path" >&2
+  trx_bytes="$(wc -c < "$trx_path" | tr -d '[:space:]')"
+  if ! [[ "$trx_bytes" =~ ^[1-9][0-9]*$ ]]; then
+    echo "SCCP .NET SDK validation requires TRX result to have a positive byte size: $trx_path" >&2
     return 1
   fi
-  if ! grep -aEq '<UnitTestResult[[:space:]][^>]*outcome="Passed"' "$trx_path"; then
-    echo "SCCP .NET SDK validation requires TRX result to contain at least one passed SCCP test result: $trx_path" >&2
+  if (( trx_bytes > SCCP_DOTNET_TRX_MAX_BYTES )); then
+    echo "SCCP .NET SDK validation requires TRX result to be at most $SCCP_DOTNET_TRX_MAX_BYTES bytes before XML parsing: $trx_path" >&2
     return 1
   fi
+  "$SCCP_CORRIDOR_PYTHON_BIN" - "$trx_path" "$expected_passed_count" <<'PY'
+import sys
+import re
+import xml.etree.ElementTree as ET
+
+ASSEMBLY = "Hyperledger.Iroha.Sdk.Tests.dll"
+SCCP_TEST_NAME_RE = re.compile(r"(^|[.])Sccp[A-Za-z0-9_]*(?:$|[.])")
+ASCII_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+trx_path = sys.argv[1]
+expected_passed_count = int(sys.argv[2])
+
+
+def fail(message):
+    print(f"SCCP .NET SDK validation {message}: {trx_path}", file=sys.stderr)
+    sys.exit(1)
+
+
+try:
+    trx_bytes = open(trx_path, "rb").read()
+except OSError:
+    fail("requires TRX result to be readable XML")
+
+lowered_trx = trx_bytes.lower()
+if b"<!doctype" in lowered_trx or b"<!entity" in lowered_trx:
+    fail("requires TRX result to contain no DTD or entity declarations")
+
+try:
+    root = ET.fromstring(trx_bytes)
+except ET.ParseError:
+    fail("requires TRX result to be well-formed XML")
+
+
+def local_name(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+if local_name(root.tag) != "TestRun":
+    fail("requires TRX root to be a VSTest TestRun")
+
+
+def path_basename(value):
+    return value.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def is_canonical_trx_test_name(value):
+    return bool(
+        value
+        and value == value.strip()
+        and ASCII_CONTROL_RE.search(value) is None
+    )
+
+
+def has_sccp_test_name_token(value):
+    return bool(is_canonical_trx_test_name(value) and SCCP_TEST_NAME_RE.search(value))
+
+
+assembly_sccp_test_ids = set()
+assembly_sccp_execution_ids = set()
+execution_id_to_test_id = {}
+sccp_test_id_to_names = {}
+sccp_execution_id_to_names = {}
+seen_unit_test_ids = set()
+seen_execution_ids = set()
+has_expected_assembly = False
+
+results_sections = [child for child in root if local_name(child.tag) == "Results"]
+test_definition_sections = [
+    child for child in root if local_name(child.tag) == "TestDefinitions"
+]
+all_unit_results = [
+    element for element in root.iter() if local_name(element.tag) == "UnitTestResult"
+]
+unit_results = (
+    [child for child in results_sections[0] if local_name(child.tag) == "UnitTestResult"]
+    if len(results_sections) == 1
+    else []
+)
+if all_unit_results and (
+    len(results_sections) != 1 or len(unit_results) != len(all_unit_results)
+):
+    fail(
+        "requires every TRX UnitTestResult to appear directly under the VSTest Results section"
+    )
+all_unit_tests = [
+    element for element in root.iter() if local_name(element.tag) == "UnitTest"
+]
+unit_tests = (
+    [
+        child
+        for child in test_definition_sections[0]
+        if local_name(child.tag) == "UnitTest"
+    ]
+    if len(test_definition_sections) == 1
+    else []
+)
+if all_unit_tests and (
+    len(test_definition_sections) != 1 or len(unit_tests) != len(all_unit_tests)
+):
+    fail(
+        "requires every TRX UnitTest definition to appear directly under the VSTest TestDefinitions section"
+    )
+
+for element in unit_tests:
+    element_has_expected_assembly = False
+    for attribute_name in ("codeBase", "storage"):
+        attribute_value = element.attrib.get(attribute_name)
+        if attribute_value and path_basename(attribute_value) == ASSEMBLY:
+            element_has_expected_assembly = True
+            has_expected_assembly = True
+    test_id = element.attrib.get("id")
+    if test_id:
+        if test_id in seen_unit_test_ids:
+            fail("requires unique TRX UnitTest id values")
+        seen_unit_test_ids.add(test_id)
+    definition_values = [
+        element.attrib.get("name"),
+        element.attrib.get("className"),
+    ]
+    definition_result_names = set(
+        value for value in (element.attrib.get("name"),) if value
+    )
+    definition_has_expected_assembly = element_has_expected_assembly
+    for child in element:
+        child_name = local_name(child.tag)
+        if child_name == "Execution":
+            execution_id = child.attrib.get("id")
+            if execution_id:
+                if execution_id in seen_execution_ids:
+                    fail("requires unique TRX Execution id values")
+                seen_execution_ids.add(execution_id)
+                if test_id:
+                    execution_id_to_test_id[execution_id] = test_id
+        if child_name == "TestMethod":
+            for attribute_name in ("codeBase", "storage"):
+                attribute_value = child.attrib.get(attribute_name)
+                if attribute_value and path_basename(attribute_value) == ASSEMBLY:
+                    definition_has_expected_assembly = True
+                    has_expected_assembly = True
+            definition_values.extend(
+                (
+                    child.attrib.get("name"),
+                    child.attrib.get("className"),
+                )
+            )
+            child_name_value = child.attrib.get("name")
+            child_class_name = child.attrib.get("className")
+            if child_name_value and child_class_name:
+                definition_result_names.add(f"{child_class_name}.{child_name_value}")
+    if definition_has_expected_assembly and any(
+        has_sccp_test_name_token(value) for value in definition_values
+    ):
+        if test_id:
+            assembly_sccp_test_ids.add(test_id)
+            sccp_test_id_to_names[test_id] = set(definition_result_names)
+        for child in element:
+            if local_name(child.tag) == "Execution":
+                execution_id = child.attrib.get("id")
+                if execution_id:
+                    assembly_sccp_execution_ids.add(execution_id)
+                    sccp_execution_id_to_names[execution_id] = set(
+                        definition_result_names
+                    )
+
+if not has_expected_assembly:
+    fail("requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll")
+
+for result in unit_results:
+    if result.attrib.get("outcome") != "Passed":
+        fail(
+            "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results"
+        )
+    result_test_id = result.attrib.get("testId")
+    result_execution_id = result.attrib.get("executionId")
+    test_id_matches = result_test_id in assembly_sccp_test_ids
+    execution_id_matches = result_execution_id in assembly_sccp_execution_ids
+    if not (test_id_matches or execution_id_matches):
+        fail(
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition"
+        )
+    if result_test_id and not test_id_matches:
+        fail(
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition"
+        )
+    if result_execution_id and not execution_id_matches:
+        fail(
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition"
+        )
+    if (
+        result_test_id
+        and result_execution_id
+        and execution_id_to_test_id.get(result_execution_id) != result_test_id
+    ):
+        fail(
+            "requires TRX UnitTestResult testId and executionId to bind the same SCCP test definition"
+        )
+    result_test_name = result.attrib.get("testName")
+    if result_test_name is not None:
+        allowed_result_names = set()
+        if result_test_id:
+            allowed_result_names.update(sccp_test_id_to_names.get(result_test_id, set()))
+        if result_execution_id:
+            allowed_result_names.update(
+                sccp_execution_id_to_names.get(result_execution_id, set())
+            )
+        if (
+            result_test_name not in allowed_result_names
+            or not has_sccp_test_name_token(result_test_name)
+        ):
+            fail(
+                "requires TRX UnitTestResult testName to match its SCCP test definition"
+            )
+
+has_passed_sccp_result = False
+for result in unit_results:
+    if result.attrib.get("outcome") != "Passed":
+        continue
+    if (
+        result.attrib.get("testId") in assembly_sccp_test_ids
+        or result.attrib.get("executionId") in assembly_sccp_execution_ids
+    ):
+        has_passed_sccp_result = True
+        break
+
+if not has_passed_sccp_result:
+    fail("requires TRX result to contain at least one passed SCCP test result")
+
+if len(unit_results) != expected_passed_count:
+    fail("requires TRX UnitTestResult count to match VSTest passed-test count")
+PY
 }
 
 ensure_swift_bridge_artifact() {
@@ -495,6 +827,8 @@ phase_dotnet_sdk() {
   local dotnet_trx_paths
   local dotnet_version
   local dotnet_info
+  local dotnet_test_output
+  local dotnet_passed_count
   local dotnet_os_name
   local dotnet_os_name_count
   local dotnet_os_platform
@@ -566,11 +900,20 @@ phase_dotnet_sdk() {
       return 1
     fi
     dotnet_arch_count="$(dotnet_info_field_count "OS Architecture" <<<"$dotnet_info")"
-    if [[ "$dotnet_arch_count" != 1 ]]; then
-      echo "SCCP .NET SDK validation requires exactly one OS Architecture from dotnet --info; found: $dotnet_arch_count" >&2
-      return 1
+    if [[ "$dotnet_arch_count" == 1 ]]; then
+      dotnet_arch="$(dotnet_info_field_value "OS Architecture" <<<"$dotnet_info")"
+    else
+      if [[ "$dotnet_arch_count" != 0 ]]; then
+        echo "SCCP .NET SDK validation requires exactly one OS Architecture from dotnet --info; found: $dotnet_arch_count" >&2
+        return 1
+      fi
+      dotnet_arch_count="$(dotnet_info_section_field_count "Host" "Architecture" <<<"$dotnet_info")"
+      if [[ "$dotnet_arch_count" != 1 ]]; then
+        echo "SCCP .NET SDK validation requires exactly one Host Architecture from dotnet --info when OS Architecture is absent; found: $dotnet_arch_count" >&2
+        return 1
+      fi
+      dotnet_arch="$(dotnet_info_section_field_value "Host" "Architecture" <<<"$dotnet_info")"
     fi
-    dotnet_arch="$(dotnet_info_field_value "OS Architecture" <<<"$dotnet_info")"
     if [[ ! "$dotnet_arch" =~ ^(x64|x86|arm64|arm)$ ]]; then
       echo "SCCP .NET SDK validation requires a canonical architecture; found: $dotnet_arch" >&2
       return 1
@@ -621,7 +964,7 @@ phase_dotnet_sdk() {
         -print0 2>/dev/null
     )
   fi
-  run_in_dir "$ROOT/csharp" \
+  run_capture_in_dir dotnet_test_output "$ROOT/csharp" \
     "${dotnet_env[@]}" \
     "PATH=$bridge_library_dir:$PATH" \
     "$dotnet_cli" test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
@@ -629,6 +972,9 @@ phase_dotnet_sdk() {
     --nologo \
     --logger "trx;LogFileName=sccp-dotnet-sdk.trx"
   if [[ "$DRY_RUN" -eq 0 ]]; then
+    if ! dotnet_passed_count="$(dotnet_test_passed_count "$dotnet_test_output")"; then
+      return 1
+    fi
     dotnet_trx_paths=()
     while IFS= read -r -d '' dotnet_trx_path; do
       dotnet_trx_paths+=("$dotnet_trx_path")
@@ -656,7 +1002,7 @@ phase_dotnet_sdk() {
       echo "SCCP .NET SDK validation produced an empty TRX result: $dotnet_trx_path" >&2
       return 1
     fi
-    validate_dotnet_trx_content "$dotnet_trx_path"
+    validate_dotnet_trx_content "$dotnet_trx_path" "$dotnet_passed_count"
     dotnet_trx_bytes="$(wc -c < "$dotnet_trx_path" | tr -d '[:space:]')"
     if ! [[ "$dotnet_trx_bytes" =~ ^[1-9][0-9]*$ ]]; then
       echo "SCCP .NET SDK validation could not compute a non-zero TRX byte size: $dotnet_trx_path" >&2

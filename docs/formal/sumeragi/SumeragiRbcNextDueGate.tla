@@ -271,7 +271,13 @@ RbcNextDueCoreSafety ==
   /\ CooldownStable
   /\ StatusStable
 
+RbcNextDueExactness == RbcNextDueCoreSafety
+
+RbcNextDueCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcNextDueExactness
+
 SafetyFast ==
-  RbcNextDueCoreSafety
+  RbcNextDueExactness
 
 ====

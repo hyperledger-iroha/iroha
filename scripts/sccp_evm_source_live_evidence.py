@@ -1751,7 +1751,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -1777,11 +1777,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(render_offline_toml(summary))
             return 0
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

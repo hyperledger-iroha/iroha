@@ -446,4 +446,11 @@ RbcBacklogStatusMatchesSpec ==
 SafetyFast ==
   RbcBacklogStatusMatchesSpec
 
+RbcBacklogStatusExactness ==
+  RbcBacklogStatusMatchesSpec
+
+RbcBacklogStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcBacklogStatusExactness
+
 ====

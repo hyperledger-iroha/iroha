@@ -264,9 +264,19 @@ ModeFlipCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == ModeFlipCoreSafety
+ModeFlipExactness ==
+  ModeFlipCoreSafety
 
-SafetyFast == ModeFlipCoreSafety
+ModeFlipCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ModeFlipExactness
+
+NoBugInvariant == ModeFlipExactness
+
+SafetyFast == ModeFlipExactness
+
+Safety ==
+  ModeFlipCorrectnessEnvelope
 
 BugTrackerSameKeepsPending == NoBugInvariant
 BugTrackerNewDropsSignal == NoBugInvariant

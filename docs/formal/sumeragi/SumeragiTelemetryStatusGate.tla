@@ -270,6 +270,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+TelemetryStatusExactness ==
+  Safety
+
+TelemetryStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TelemetryStatusExactness
+
 BugResetAvailabilityKeepsTotal ==
   ImplementationActions(AvailabilityResetClears) =
     SpecActions(AvailabilityResetClears)

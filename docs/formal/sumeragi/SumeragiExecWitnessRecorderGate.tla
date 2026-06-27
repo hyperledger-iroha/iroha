@@ -304,7 +304,14 @@ ActionsMatchSpec ==
   \A candidate \in Cases:
     ImplementationActions(candidate) = SpecActions(candidate)
 
-Safety ==
+ExecWitnessRecorderExactness ==
   ActionsMatchSpec
+
+ExecWitnessRecorderCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ExecWitnessRecorderExactness
+
+Safety ==
+  ExecWitnessRecorderExactness
 
 ====

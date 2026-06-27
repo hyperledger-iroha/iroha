@@ -322,6 +322,13 @@ ProposalMismatchCoreSafety ==
   /\ MissingTxRootDefaultZeroAccepted
   /\ NoMismatchOnlyWhenCompatible
 
-Safety == ProposalMismatchCoreSafety
+ProposalMismatchExactness ==
+  ProposalMismatchCoreSafety
+
+ProposalMismatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalMismatchExactness
+
+Safety == ProposalMismatchExactness
 
 ====

@@ -240,10 +240,18 @@ ActionsMatchSpec ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant ==
+DropPrecommitVoteForLockExactness ==
   ActionsMatchSpec
 
-SafetyFast == NoBugInvariant
+DropPrecommitVoteForLockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DropPrecommitVoteForLockExactness
+
+NoBugInvariant ==
+  DropPrecommitVoteForLockExactness
+
+SafetyFast ==
+  DropPrecommitVoteForLockExactness
 
 BugDropNonCommit == NoBugInvariant
 BugDropNoLock == NoBugInvariant

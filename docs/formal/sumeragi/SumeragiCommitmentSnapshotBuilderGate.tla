@@ -154,6 +154,10 @@ CommitmentSnapshotBuilderExactness ==
   /\ BugDataspaceHashPreserved
   /\ BugDataspaceOrderPreserved
 
+CommitmentSnapshotBuilderCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitmentSnapshotBuilderExactness
+
 SafetyFast == CommitmentSnapshotBuilderExactness
 
 ====

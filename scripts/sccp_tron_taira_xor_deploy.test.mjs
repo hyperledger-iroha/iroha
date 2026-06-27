@@ -1642,6 +1642,82 @@ test("TRON route-config refuses production-ready manifests with disabled reasons
   });
 });
 
+test("TRON route-config refuses production-ready manifests with handoff placeholders", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+
+    const cases = [
+      [
+        { operatorNote: "TODO replace verifier material before launch" },
+        /placeholder handoff material.*route manifest\.operatorNote/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            operatorNote: "example TRON verifier evidence must not ship",
+          },
+        },
+        /placeholder handoff material.*route manifest\.postDeployLiveEvidence\.operatorNote/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            replaceMeVerifierKeyHash: routeHash("replace-me-key"),
+          },
+        },
+        /placeholder handoff material.*route manifest\.destinationRollout\.replaceMeVerifierKeyHash/u,
+      ],
+    ];
+
+    for (const [overrides, pattern] of cases) {
+      const patchedManifest = {
+        ...manifest,
+        ...overrides,
+      };
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "destinationRollout") &&
+        overrides.destinationRollout &&
+        typeof overrides.destinationRollout === "object"
+      ) {
+        patchedManifest.destinationRollout = {
+          ...manifest.destinationRollout,
+          ...overrides.destinationRollout,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "postDeployLiveEvidence") &&
+        overrides.postDeployLiveEvidence &&
+        typeof overrides.postDeployLiveEvidence === "object"
+      ) {
+        patchedManifest.postDeployLiveEvidence = {
+          ...manifest.postDeployLiveEvidence,
+          ...overrides.postDeployLiveEvidence,
+        };
+      }
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(patchedManifest),
+        pattern,
+      );
+    }
+  });
+});
+
 test("TRON route-config requires post-deploy evidence for production manifests", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
@@ -1695,6 +1771,389 @@ test("TRON route-config requires post-deploy evidence for production manifests",
   });
 });
 
+test("TRON route-config rejects duplicate route manifest aliases", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const cases = [
+      [
+        { route_id: "taira_tron_xor" },
+        /route manifest routeId must not use multiple aliases: routeId, route_id/u,
+      ],
+      [
+        { production_ready: true },
+        /route manifest productionReady must not use multiple aliases: productionReady, production_ready/u,
+      ],
+      [
+        { post_deploy_readback_checked: true },
+        /route manifest postDeployReadbackChecked must not use multiple aliases: postDeployReadbackChecked, post_deploy_readback_checked/u,
+      ],
+      [
+        { post_deploy_live_evidence: manifest.postDeployLiveEvidence },
+        /route manifest postDeployLiveEvidence must not use multiple aliases: postDeployLiveEvidence, post_deploy_live_evidence/u,
+      ],
+      [
+        { network_id_hex: manifest.networkIdHex },
+        /route manifest networkIdHex must not use multiple aliases: networkIdHex, network_id_hex/u,
+      ],
+      [
+        { taira_xor_token_address: manifest.tairaXorTokenAddress },
+        /route manifest tairaXorTokenAddress must not use multiple aliases: tairaXorTokenAddress, taira_xor_token_address/u,
+      ],
+      [
+        { taira_xor_bridge_address: manifest.tairaXorBridgeAddress },
+        /route manifest tairaXorBridgeAddress must not use multiple aliases: tairaXorBridgeAddress, taira_xor_bridge_address/u,
+      ],
+      [
+        { sccp_tron_source_bridge_address: manifest.sccpTronSourceBridgeAddress },
+        /route manifest sccpTronSourceBridgeAddress must not use multiple aliases: sccpTronSourceBridgeAddress, sccp_tron_source_bridge_address/u,
+      ],
+      [
+        { tron_verifier_address: manifest.tronVerifierAddress },
+        /route manifest tronVerifierAddress must not use multiple aliases: tronVerifierAddress, tron_verifier_address/u,
+      ],
+      [
+        { destination_rollout: manifest.destinationRollout },
+        /route manifest destinationRollout in route manifest must not use multiple aliases: destinationRollout, destination_rollout/u,
+      ],
+      [
+        { destination_binding: manifest.destinationBinding },
+        /route manifest destinationBinding in route manifest must not use multiple aliases: destinationBinding, destination_binding/u,
+      ],
+      [
+        { taira_xor_burn_record: manifest.tairaXorBurnRecord },
+        /route manifest tairaXorBurnRecord in route manifest must not use multiple aliases: tairaXorBurnRecord, taira_xor_burn_record/u,
+      ],
+      [
+        { sccp_tron_destination_verifier_address: manifest.tronVerifierAddress },
+        /route manifest sccpTronDestinationVerifierAddress must not use multiple aliases: sccpTronDestinationVerifierAddress, sccp_tron_destination_verifier_address/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            source_domain: 0,
+          },
+        },
+        /route manifest destinationRollout\.sourceDomain must not use multiple aliases: sourceDomain, source_domain/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            target_domain: 5,
+          },
+        },
+        /route manifest destinationRollout\.targetDomain must not use multiple aliases: targetDomain, target_domain/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            verifier_backend: "tron-groth16-bn254-v1",
+          },
+        },
+        /route manifest destinationRollout\.verifierBackend must not use multiple aliases: verifierBackend, verifier_backend/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            proof_family: "stark-fri-v1",
+          },
+        },
+        /route manifest destinationRollout\.proofFamily must not use multiple aliases: proofFamily, proof_family/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            verifier_code_hash: manifest.destinationRollout.verifierCodeHash,
+          },
+        },
+        /route manifest destinationRollout\.verifierCodeHash must not use multiple aliases: verifierCodeHash, verifier_code_hash/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            verifier_key_hash: manifest.destinationRollout.verifierKeyHash,
+          },
+        },
+        /route manifest destinationRollout\.verifierKeyHash must not use multiple aliases: verifierKeyHash, verifier_key_hash/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            destination_network_id: manifest.networkIdHex,
+          },
+        },
+        /route manifest destinationRollout\.destinationNetworkId must not use multiple aliases: destinationNetworkId, destination_network_id/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            verifier_identity: manifest.tronVerifierAddress,
+          },
+        },
+        /route manifest destinationRollout\.verifierIdentity must not use multiple aliases: verifierIdentity, verifier_identity/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            destination_binding_key: manifest.destinationRollout.destinationBindingKey,
+          },
+        },
+        /route manifest destinationRollout\.destinationBindingKey must not use multiple aliases: destinationBindingKey, destination_binding_key/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            destination_binding_hash: manifest.destinationRollout.destinationBindingHash,
+          },
+        },
+        /route manifest destinationRollout\.destinationBindingHash must not use multiple aliases: destinationBindingHash, destination_binding_hash/u,
+      ],
+      [
+        {
+          destinationBinding: {
+            source_domain: 0,
+          },
+        },
+        /route manifest destinationBinding\.sourceDomain must not use multiple aliases: sourceDomain, source_domain/u,
+      ],
+      [
+        {
+          destinationBinding: {
+            target_domain: 5,
+          },
+        },
+        /route manifest destinationBinding\.targetDomain must not use multiple aliases: targetDomain, target_domain/u,
+      ],
+      [
+        {
+          destinationBinding: {
+            network_id_hex: manifest.networkIdHex,
+          },
+        },
+        /route manifest destinationBinding\.networkIdHex must not use multiple aliases: networkIdHex, network_id_hex/u,
+      ],
+      [
+        {
+          destinationBinding: {
+            destination_binding_key: manifest.destinationBinding.key,
+          },
+        },
+        /route manifest destinationBinding\.key must not use multiple aliases: key, destination_binding_key/u,
+      ],
+      [
+        {
+          destinationBinding: {
+            binding_hash: manifest.destinationBinding.bindingHash,
+          },
+        },
+        /route manifest destinationBinding\.bindingHash must not use multiple aliases: bindingHash, binding_hash/u,
+      ],
+      [
+        {
+          tairaXorBurnRecord: {
+            vk_ref: manifest.tairaXorBurnRecord.vkRef,
+          },
+        },
+        /route manifest tairaXorBurnRecord\.vkRef in route manifest tairaXorBurnRecord must not use multiple aliases: vkRef, vk_ref/u,
+      ],
+      [
+        {
+          tairaXorBurnRecord: {
+            artifact_b64: manifest.tairaXorBurnRecord.contractArtifactB64,
+          },
+        },
+        /route manifest tairaXorBurnRecord\.contractArtifactB64 must not use multiple aliases: contractArtifactB64, artifact_b64/u,
+      ],
+      [
+        {
+          tairaXorBurnRecord: {
+            artifact_sha256: manifest.tairaXorBurnRecord.artifactSha256,
+          },
+        },
+        /route manifest tairaXorBurnRecord\.artifactSha256 must not use multiple aliases: artifactSha256, artifact_sha256/u,
+      ],
+      [
+        {
+          tairaXorBurnRecord: {
+            settlement_asset_definition_id:
+              manifest.tairaXorBurnRecord.settlementAssetDefinitionId,
+          },
+        },
+        /route manifest tairaXorBurnRecord\.settlementAssetDefinitionId must not use multiple aliases: settlementAssetDefinitionId, settlement_asset_definition_id/u,
+      ],
+      [
+        {
+          tairaXorBurnRecord: {
+            gas_limit: manifest.tairaXorBurnRecord.gasLimit,
+          },
+        },
+        /route manifest burn-record gasLimit must not use multiple aliases: gasLimit, gas_limit/u,
+      ],
+      [
+        {
+          tairaXorBurnRecord: {
+            code_hash: manifest.tairaXorBurnRecord.codeHash,
+          },
+        },
+        /route manifest tairaXorBurnRecord\.codeHash must not use multiple aliases: codeHash, code_hash/u,
+      ],
+      [
+        {
+          settlement: {
+            route_id: "taira_tron_xor",
+          },
+        },
+        /route manifest settlement\.routeId must not use multiple aliases: routeId, route_id/u,
+      ],
+      [
+        {
+          settlement: {
+            asset_key: "xor",
+          },
+        },
+        /route manifest settlement\.assetKey must not use multiple aliases: assetKey, asset_key/u,
+      ],
+      [
+        {
+          settlement: {
+            submit_path: "/v1/bridge/messages",
+          },
+        },
+        /route manifest settlement\.submitPath must not use multiple aliases: submitPath, submit_path/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            full_toml_ready: true,
+          },
+        },
+        /route manifest postDeployLiveEvidence\.fullTomlReady must not use multiple aliases: fullTomlReady, full_toml_ready/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            source_bridge_config_hash:
+              manifest.postDeployLiveEvidence.sourceBridgeConfigHash,
+          },
+        },
+        /route manifest postDeployLiveEvidence\.sourceBridgeConfigHash must not use multiple aliases: sourceBridgeConfigHash, source_bridge_config_hash/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            source_event_transaction_id:
+              manifest.postDeployLiveEvidence.sourceEventTransactionId,
+          },
+        },
+        /route manifest postDeployLiveEvidence\.sourceEventTransactionId must not use multiple aliases: sourceEventTransactionId, source_event_transaction_id/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            route_canary_evidence_hash:
+              manifest.postDeployLiveEvidence.routeCanaryEvidenceHash,
+          },
+        },
+        /route manifest postDeployLiveEvidence\.routeCanaryEvidenceHash must not use multiple aliases: routeCanaryEvidenceHash, route_canary_evidence_hash/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            route_canary_transaction_id:
+              manifest.postDeployLiveEvidence.routeCanaryTransactionId,
+          },
+        },
+        /route manifest postDeployLiveEvidence\.routeCanaryTransactionId must not use multiple aliases: routeCanaryTransactionId, route_canary_transaction_id/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            offline_full_toml_sha256:
+              manifest.postDeployLiveEvidence.offlineFullTomlSha256,
+          },
+        },
+        /route manifest postDeployLiveEvidence\.offlineFullTomlSha256 must not use multiple aliases: offlineFullTomlSha256, offline_full_toml_sha256/u,
+      ],
+    ];
+
+    for (const [overrides, pattern] of cases) {
+      const patchedManifest = {
+        ...manifest,
+        ...overrides,
+      };
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "destinationRollout") &&
+        overrides.destinationRollout &&
+        typeof overrides.destinationRollout === "object"
+      ) {
+        patchedManifest.destinationRollout = {
+          ...manifest.destinationRollout,
+          ...overrides.destinationRollout,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "tairaXorBurnRecord") &&
+        overrides.tairaXorBurnRecord &&
+        typeof overrides.tairaXorBurnRecord === "object"
+      ) {
+        patchedManifest.tairaXorBurnRecord = {
+          ...manifest.tairaXorBurnRecord,
+          ...overrides.tairaXorBurnRecord,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "destinationBinding") &&
+        overrides.destinationBinding &&
+        typeof overrides.destinationBinding === "object"
+      ) {
+        patchedManifest.destinationBinding = {
+          ...manifest.destinationBinding,
+          ...overrides.destinationBinding,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "settlement") &&
+        overrides.settlement &&
+        typeof overrides.settlement === "object"
+      ) {
+        patchedManifest.settlement = {
+          ...manifest.settlement,
+          ...overrides.settlement,
+        };
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(overrides, "postDeployLiveEvidence") &&
+        overrides.postDeployLiveEvidence &&
+        typeof overrides.postDeployLiveEvidence === "object"
+      ) {
+        patchedManifest.postDeployLiveEvidence = {
+          ...manifest.postDeployLiveEvidence,
+          ...overrides.postDeployLiveEvidence,
+        };
+      }
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(patchedManifest),
+        pattern,
+      );
+    }
+  });
+});
+
 test("TRON route-config rejects malformed or foreign route manifests", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
@@ -1736,7 +2195,7 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [{ postDeployReadbackChecked: 1 }, /postDeployReadbackChecked must be true or false/u],
       [
         { post_deploy_readback_checked: false },
-        /postDeployReadbackChecked and post_deploy_readback_checked must match/u,
+        /postDeployReadbackChecked must not use multiple aliases/u,
       ],
       [
         { sccpTronDestinationVerifierAddress: manifest.tairaXorBridgeAddress },

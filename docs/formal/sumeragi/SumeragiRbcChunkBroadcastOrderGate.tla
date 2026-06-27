@@ -307,6 +307,12 @@ RbcChunkBroadcastOrderCoreSafety ==
   /\ ShuffleDoesNotChangeCardinalityWithoutDrop
   /\ DropCountUsesOneBasedPositions
 
-Safety == RbcChunkBroadcastOrderCoreSafety
+RbcChunkBroadcastOrderExactness == RbcChunkBroadcastOrderCoreSafety
+
+RbcChunkBroadcastOrderCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcChunkBroadcastOrderExactness
+
+Safety == RbcChunkBroadcastOrderExactness
 
 ====

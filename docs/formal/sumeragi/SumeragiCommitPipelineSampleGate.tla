@@ -147,7 +147,14 @@ ActualOutput ==
 CommitPipelineSampleMatchesSpec ==
   ActualOutput = SpecOutput
 
-SafetyFast == CommitPipelineSampleMatchesSpec
+CommitPipelineSampleExactness ==
+  CommitPipelineSampleMatchesSpec
+
+CommitPipelineSampleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitPipelineSampleExactness
+
+SafetyFast == CommitPipelineSampleExactness
 
 BugFinishSetsTotal ==
   ActualFinishIgnoresPrevious = SpecFinishIgnoresPrevious

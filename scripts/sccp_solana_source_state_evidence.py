@@ -1101,7 +1101,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -1123,7 +1123,14 @@ def main(argv: list[str] | None = None) -> int:
             print(render_toml(args), end="")
         else:
             print(json.dumps(_json_summary(args), sort_keys=True, indent=2))
-    except (OSError, SystemExit, RuntimeError, TypeError, ValueError) as exc:
+    except (
+        argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP Solana source-state evidence rendering failed",

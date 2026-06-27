@@ -948,7 +948,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -989,7 +989,14 @@ def main(argv: list[str] | None = None) -> int:
                     indent=2,
                 )
             )
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+    except (
+        argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP Solana live evidence collection failed",

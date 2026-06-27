@@ -150,7 +150,17 @@ DaGateHelperMatchesSpec ==
   /\ \A kind \in ManifestKinds:
        ActualManifestLabel(kind) = SpecManifestLabel(kind)
 
-SafetyFast == DaGateHelperMatchesSpec
+DaGateHelperExactness ==
+  DaGateHelperMatchesSpec
+
+DaGateHelperCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DaGateHelperExactness
+
+SafetyFast == DaGateHelperExactness
+
+Safety ==
+  DaGateHelperCorrectnessEnvelope
 
 BugEvalDisabledAvailableBlocks ==
   ActualEvaluate("disabled_available") = SpecEvaluate("disabled_available")

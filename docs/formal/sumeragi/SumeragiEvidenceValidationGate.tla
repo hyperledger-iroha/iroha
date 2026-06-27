@@ -345,7 +345,15 @@ EvidenceValidationMatchesSpec ==
   /\ Matches("censorship_outsider_precedes_signature")
   /\ Matches("censorship_signature_precedes_quorum")
 
-SafetyFast == EvidenceValidationMatchesSpec
+EvidenceValidationExactness ==
+  EvidenceValidationMatchesSpec
+
+EvidenceValidationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EvidenceValidationExactness
+
+SafetyFast ==
+  EvidenceValidationExactness
 
 BugKindMismatchAccepted ==
   ActualValidate("kind_mismatch_double_kind_invalid_qc_payload") =

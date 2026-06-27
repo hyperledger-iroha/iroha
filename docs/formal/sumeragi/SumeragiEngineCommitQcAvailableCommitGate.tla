@@ -469,4 +469,13 @@ Safety ==
   /\ NoCommitWithoutPayloadAvailable
   /\ ValuesStayInDomain
 
+EngineCommitQcAvailableCommitExactness ==
+  Safety
+
+EngineCommitQcAvailableCommitCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcAvailableCommitExactness
+
+SafetyFast == EngineCommitQcAvailableCommitExactness
+
 ====

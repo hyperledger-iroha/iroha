@@ -180,8 +180,16 @@ EvidenceHorizonCoreSafety ==
   /\ StaleEvidenceRejected
   /\ RecentAndFutureEvidenceAllowed
 
-SafetyFast == EvidenceHorizonCoreSafety
+EvidenceHorizonExactness ==
+  EvidenceHorizonCoreSafety
 
-Safety == EvidenceHorizonCoreSafety
+EvidenceHorizonCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EvidenceHorizonExactness
+
+SafetyFast ==
+  EvidenceHorizonExactness
+
+Safety == EvidenceHorizonExactness
 
 ====

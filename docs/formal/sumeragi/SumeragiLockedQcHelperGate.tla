@@ -254,9 +254,16 @@ LockedQcHelperCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == LockedQcHelperCoreSafety
+LockedQcHelperExactness ==
+  LockedQcHelperCoreSafety
 
-SafetyFast == LockedQcHelperCoreSafety
+LockedQcHelperCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LockedQcHelperExactness
+
+NoBugInvariant == LockedQcHelperExactness
+
+SafetyFast == LockedQcHelperExactness
 
 BugEnsureAllowsNoLockRejected == NoBugInvariant
 BugEnsureMissesHeightRegression == NoBugInvariant

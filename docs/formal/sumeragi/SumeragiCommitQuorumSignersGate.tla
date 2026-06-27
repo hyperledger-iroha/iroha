@@ -146,7 +146,18 @@ SpecFailedCommitBranchAnchors ==
 CommitQuorumSignersMatchesSpec ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
 
-SafetyFast == CommitQuorumSignersMatchesSpec
+CommitQuorumSignersExactness ==
+  /\ SpecQuorumDecisionAnchors
+  /\ SpecFailedCommitBranchShape
+  /\ SpecFailedCommitBranchAnchors
+  /\ CommitQuorumSignersMatchesSpec
+
+CommitQuorumSignersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitQuorumSignersExactness
+
+SafetyFast ==
+  CommitQuorumSignersExactness
 
 BugMissingSignersAccepted ==
   ActualCase("missing_min_one_failure") = SpecCase("missing_min_one_failure")

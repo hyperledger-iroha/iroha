@@ -382,11 +382,18 @@ Continuation ==
   /\ ActualProcessPrecommitAttempted("no_lock_continues")
        = SpecProcessPrecommitAttempted("no_lock_continues")
 
-SafetyFast ==
+BlockSyncSelectedQcPrefilterExactness ==
   /\ TopologyAndShape
   /\ LockedConflict
   /\ NonextendingLock
   /\ Continuation
+
+BlockSyncSelectedQcPrefilterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedQcPrefilterExactness
+
+SafetyFast ==
+  BlockSyncSelectedQcPrefilterExactness
 
 =============================================================================
 ====

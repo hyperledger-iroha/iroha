@@ -232,6 +232,13 @@ Safety ==
   /\ ImplementationActions(ResetAfterRecordsClears) =
        SpecActions(ResetAfterRecordsClears)
 
+RosterRecoveryStatusExactness ==
+  Safety
+
+RosterRecoveryStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RosterRecoveryStatusExactness
+
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

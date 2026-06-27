@@ -2875,7 +2875,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -3174,7 +3174,14 @@ def main(argv: list[str] | None = None) -> int:
                             and not _missing_full_toml_runtime_preimages(args)
                         )
             print(json.dumps(summary, indent=2, sort_keys=True))
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+    except (
+        argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP TRON source bridge evidence rendering failed",

@@ -87,7 +87,14 @@ def solana_light_client_cli_args():
 def test_solana_source_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, OSError, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_validate(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")

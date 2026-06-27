@@ -876,7 +876,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -908,7 +908,14 @@ def main(argv: list[str] | None = None) -> int:
             allow_receipt_only_evidence=args.allow_receipt_only_evidence,
             timeout=args.timeout,
         )
-    except (OSError, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError) as exc:
+    except (
+        argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         detail = _cli_error_detail(
             exc,
             fallback="SCCP EVM receipt proof evidence collection failed",

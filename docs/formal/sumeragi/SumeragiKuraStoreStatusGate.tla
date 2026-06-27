@@ -252,6 +252,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+KuraStoreStatusExactness ==
+  Safety
+
+KuraStoreStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ KuraStoreStatusExactness
+
 BugResetEmptyKeepsTotals ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

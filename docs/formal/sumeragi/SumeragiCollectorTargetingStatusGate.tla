@@ -162,6 +162,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+CollectorTargetingStatusExactness ==
+  Safety
+
+CollectorTargetingStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CollectorTargetingStatusExactness
+
 BugResetEmptyKeepsCurrent ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

@@ -84,7 +84,14 @@ class OversizedErrorBody:
 def test_evm_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_live_module()
 
-    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_collect(_args, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -1055,25 +1062,36 @@ def test_live_evm_full_toml_redacts_generated_parser_exception_cause(monkeypatch
         opener=fake.opener,
     )
 
-    class SecretFailingParser:
-        def parse_args(self, _argv):
-            raise SystemExit(
-                "secret-token generated EVM destination TOML parser detail"
-            )
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
-    monkeypatch.setattr(module.evidence, "build_parser", SecretFailingParser)
+        class SecretFailingParser:
+            def parse_args(self, _argv):
+                raise exception_type(
+                    "secret-token generated EVM destination TOML "
+                    f"{exception_type.__name__} parser detail"
+                )
 
-    try:
-        module.render_offline_toml(summary)
-    except RuntimeError as exc:
-        message = str(exc)
-        assert message == "generated EVM destination TOML arguments are invalid"
-        assert "secret-token" not in message
-        assert "parser detail" not in message
-        assert exc.__cause__ is None
-        assert exc.__suppress_context__ is True
-    else:
-        raise AssertionError("EVM full TOML leaked generated parser failure details")
+        with monkeypatch.context() as patch:
+            patch.setattr(module.evidence, "build_parser", SecretFailingParser)
+            try:
+                module.render_offline_toml(summary)
+            except RuntimeError as exc:
+                message = str(exc)
+                assert message == "generated EVM destination TOML arguments are invalid"
+                assert "secret-token" not in message
+                assert "parser detail" not in message
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "EVM full TOML leaked generated parser failure details"
+                )
 
 
 def test_live_evm_eth_toml_requires_finalized_block_tag():
@@ -2114,6 +2132,45 @@ def test_evm_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
                 raise AssertionError(
                     "EVM live exact hex parser helper failure was accepted"
                 )
+
+
+def test_evm_live_route_canary_prefilter_redacts_parser_helper_failures(monkeypatch):
+    module = load_live_module()
+    log = {
+        "address": "0x" + "22" * 20,
+        "topics": ["0x" + "11" * 32],
+    }
+    kwargs = {
+        "expected_log_index": 0,
+        "transaction_hash": bytes.fromhex("44" * 32),
+        "expected_block_hash": bytes.fromhex("aa" * 32),
+        "expected_block_number": 1,
+        "route_allowlist_hash": bytes.fromhex("06" * 32),
+        "bridge_address": bytes.fromhex("22" * 20),
+        "expected_source_domain": module.evidence.SCCP_DOMAIN_SORA,
+        "expected_target_domain": module.evidence.SCCP_DOMAIN_ETH,
+        "expected_destination_binding_hash": bytes.fromhex("33" * 32),
+        "expected_verifier_backend_hash": bytes.fromhex("34" * 32),
+        "expected_proof_family_hash": bytes.fromhex("35" * 32),
+        "expected_network_id": bytes.fromhex(ETH_MAINNET_NETWORK_ID),
+    }
+
+    for helper_name in ("_parse_exact_address", "_parse_exact_hex32_blob"):
+        for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+
+            def fail_parser(*_args, exception_type=exception_type, **_kwargs):
+                raise exception_type(
+                    f"secret-token EVM route canary {exception_type.__name__} detail"
+                )
+
+            with monkeypatch.context() as patch:
+                patch.setattr(module, helper_name, fail_parser)
+                result = module._route_canary_message_proof_event_summary(
+                    log,
+                    **kwargs,
+                )
+
+            assert result is None
 
 
 def test_live_evm_default_domain_lookups_redact_lookup_causes(monkeypatch):
