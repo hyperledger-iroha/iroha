@@ -287,7 +287,7 @@ EmptyRosterFailsClosed ==
 PopLengthMismatchFailsClosed ==
   candidate = "pop_len_mismatch" => ~accepted
 
-Safety ==
+VNextSignatureExactness ==
   /\ AcceptMatchesSpec
   /\ AcceptedReturnsBitmapSigners
   /\ ReturnedSignersWithinRoster
@@ -299,5 +299,15 @@ Safety ==
   /\ RechainBodyMismatchesFailClosed
   /\ EmptyRosterFailsClosed
   /\ PopLengthMismatchFailsClosed
+
+Safety ==
+  VNextSignatureExactness
+
+VNextSignatureCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextSignatureExactness
+
+SafetyFast ==
+  VNextSignatureExactness
 
 ====

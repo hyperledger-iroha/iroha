@@ -231,7 +231,30 @@ WorkerLoopStageCoreSafety ==
   /\ StageLabelImageExact
   /\ IdleAndUnknownFallbackAnchors
 
+WorkerLoopStageExactness ==
+  /\ StageIdsExact
+  /\ StageFromIdsExact
+  /\ StageLabelsExact
+  /\ KnownIdsRoundTrip
+  /\ UnknownIdsFallbackIdle
+  /\ StageLabelsDistinct
+  /\ RepresentativeStatusLabelsStable
+  /\ StageIdImageExact
+  /\ StageIdsDistinct
+  /\ KnownIdsReverseRoundTrip
+  /\ StageLabelImageExact
+  /\ IdleAndUnknownFallbackAnchors
+
+WorkerLoopStageCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerLoopStageExactness
+
+NoBugInvariant == WorkerLoopStageExactness
+
+Safety ==
+  WorkerLoopStageExactness
+
 SafetyFast ==
-  WorkerLoopStageCoreSafety
+  WorkerLoopStageExactness
 
 ====

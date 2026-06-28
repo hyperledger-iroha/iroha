@@ -270,8 +270,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+TelemetryStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 TelemetryStatusExactness ==
-  Safety
+  /\ TelemetryStatusActionsMatchSpec
 
 TelemetryStatusCorrectnessEnvelope ==
   /\ TypeInvariant

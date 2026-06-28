@@ -180,7 +180,7 @@ EffectiveModeCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 EffectiveModeExactness ==
-  EffectiveModeCoreSafety
+  /\ EffectiveModeCoreSafety
 
 EffectiveModeCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -283,7 +283,7 @@ ValuesStayInDomain ==
     /\ ImplementationBaseOutput(input) \in OutputTraces
     /\ ImplementationOutput(input) \in OutputTraces
 
-Safety ==
+EngineHandleOutputRelayExactness ==
   /\ HandleRelaysHandlerOutputExactly
   /\ EmptyHandlerOutputsRemainEmpty
   /\ NonEmptyHandlerOutputsAreNotDropped
@@ -295,6 +295,15 @@ Safety ==
   /\ ValidationOutputsRelayed
   /\ CommittedOutputsRelayed
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineHandleOutputRelayExactness
+
+EngineHandleOutputRelayCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineHandleOutputRelayExactness
+
+SafetyFast == EngineHandleOutputRelayExactness
 
 =============================================================================
 ====

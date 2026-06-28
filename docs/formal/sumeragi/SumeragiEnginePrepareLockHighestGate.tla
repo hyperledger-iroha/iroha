@@ -333,7 +333,7 @@ ValuesStayInDomain ==
     /\ ImplementationFinalLocked(candidate) \in QcValues
     /\ ImplementationFinalHighest(candidate) \in QcValues
 
-Safety ==
+EnginePrepareLockHighestExactness ==
   /\ FinalLockedMatchesSpec
   /\ FinalHighestMatchesSpec
   /\ AcceptedPrepareLocksExactDerivedQc
@@ -344,5 +344,14 @@ Safety ==
   /\ ReplayConflictPendingPreservesStoredLockAndHighest
   /\ IgnoredPrepareQcsNeverRecord
   /\ ValuesStayInDomain
+
+Safety ==
+  EnginePrepareLockHighestExactness
+
+EnginePrepareLockHighestCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePrepareLockHighestExactness
+
+SafetyFast == EnginePrepareLockHighestExactness
 
 ====

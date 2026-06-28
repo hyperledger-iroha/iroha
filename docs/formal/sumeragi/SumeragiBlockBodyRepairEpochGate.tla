@@ -178,7 +178,7 @@ RepairEpochMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockBodyRepairEpochExactness ==
-  RepairEpochMatchesSpec
+  /\ RepairEpochMatchesSpec
 
 BlockBodyRepairEpochCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -253,17 +253,16 @@ ReassemblyActivityHasExactPositiveEvidence ==
   /\ DeferredBlockSyncExact
 
 FrontierReassemblyActivityExactness ==
-  /\ ReassemblyActivityRejectsNonExactInputs
-  /\ ReassemblyActivityHasExactPositiveEvidence
-
-SafetyFast ==
   /\ DependencyProgressSafety
   /\ IngressSafety
   /\ SenderActivitySafety
   /\ ValidationSafety
   /\ DeferredBlockSyncSafety
   /\ NoSpuriousReassemblySafety
-  /\ FrontierReassemblyActivityExactness
+  /\ ReassemblyActivityRejectsNonExactInputs
+  /\ ReassemblyActivityHasExactPositiveEvidence
+
+SafetyFast == FrontierReassemblyActivityExactness
 
 DependencyProgressAnchors ==
   /\ DependencyProgressSafety
@@ -325,8 +324,7 @@ FrontierReassemblyActivitySafetyAnchors ==
 
 FrontierReassemblyActivityCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ FrontierReassemblyActivitySafetyAnchors
+  /\ FrontierReassemblyActivityExactness
 
 Safety == FrontierReassemblyActivitySafetyAnchors
 

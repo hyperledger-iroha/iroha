@@ -174,5 +174,12 @@ TrackedViewRequired ==
   /\ Matches("missing_current_view")
   /\ Matches("view_beyond_successor")
 
+FrontierNewViewCatchUpExactness ==
+  /\ AllCasesMatchSpec
+
+FrontierNewViewCatchUpCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierNewViewCatchUpExactness
+
 =============================================================================
 ====

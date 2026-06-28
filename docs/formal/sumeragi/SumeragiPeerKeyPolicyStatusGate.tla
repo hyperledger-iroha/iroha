@@ -390,10 +390,14 @@ SafetyAnchors ==
   /\ SnapshotProjectionAnchors
   /\ ResetAfterRecordsClearsAllAnchors
 
+PeerKeyPolicyStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 PeerKeyPolicyStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ PeerKeyPolicyStatusExactness
 
 =============================================================================
 ====

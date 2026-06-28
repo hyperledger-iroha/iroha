@@ -324,7 +324,12 @@ EngineReadAccessorsCoreSafety ==
   /\ AccessorsEmitNoOutputs
   /\ AllTriedCasesRemainModeled
 
-EngineReadAccessorsExactness == EngineReadAccessorsCoreSafety
+EngineReadAccessorsExactness ==
+  /\ StateSnapshotMatchesFields
+  /\ CommittedAtMatchesQueriedHeight
+  /\ AccessorsDoNotMutateState
+  /\ AccessorsEmitNoOutputs
+  /\ AllTriedCasesRemainModeled
 
 EngineReadAccessorsCorrectnessEnvelope ==
   /\ TypeInvariant

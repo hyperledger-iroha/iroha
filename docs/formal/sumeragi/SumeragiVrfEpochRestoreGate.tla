@@ -253,7 +253,16 @@ TypeInvariant ==
 FieldsMatchSpec ==
   candidate = "none" \/ fields = SpecFields(candidate)
 
+VrfEpochRestoreExactness ==
+  /\ FieldsMatchSpec
+
+VrfEpochRestoreCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfEpochRestoreExactness
+
+NoBugInvariant == VrfEpochRestoreExactness
+
 Safety ==
-  FieldsMatchSpec
+  VrfEpochRestoreExactness
 
 ====

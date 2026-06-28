@@ -194,7 +194,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..18
 
-Safety ==
+MissingQcLivenessStatusActionsMatchSpec ==
   /\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
   /\ ImplementationActions(MissingBlockEscalationRecord) =
        SpecActions(MissingBlockEscalationRecord)
@@ -232,7 +232,10 @@ Safety ==
        SpecActions(ResetAfterRecordsClears)
 
 MissingQcLivenessStatusExactness ==
-  Safety
+  /\ MissingQcLivenessStatusActionsMatchSpec
+
+Safety ==
+  MissingQcLivenessStatusExactness
 
 MissingQcLivenessStatusCorrectnessEnvelope ==
   /\ TypeInvariant

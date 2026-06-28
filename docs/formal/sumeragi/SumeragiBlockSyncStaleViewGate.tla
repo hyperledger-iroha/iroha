@@ -183,7 +183,7 @@ StaleViewMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncStaleViewExactness ==
-  StaleViewMatchesSpec
+  /\ StaleViewMatchesSpec
 
 BlockSyncStaleViewCorrectnessEnvelope ==
   /\ TypeInvariant

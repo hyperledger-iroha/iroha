@@ -372,38 +372,23 @@ MissingBlockFetchGroupedCases ==
 MissingBlockFetchCaseGroupsComplete ==
   MissingBlockFetchGroupedCases = Candidates
 
-MissingBlockFetchDecisionExact ==
-  FetchDecisionMatchesSpec
-
 MissingBlockRequestStateExact ==
   /\ RequestIdentityStable
   /\ RequestProgressMonotonic
-
-MissingBlockPriorityRetryExact ==
-  PriorityAndRetryWindowsSafe
-
-MissingBlockAttemptsExact ==
-  AttemptsAccountedOnlyForEmittedFetches
-
-MissingBlockTargetsExact ==
-  TargetSelectionMatchesMode
 
 MissingBlockSendDeferralExact ==
   /\ FinalSendPathFiltersLocal
   /\ KnownBlocksDoNotDefer
 
-MissingBlockRequestFieldsExact ==
-  FetchRequestsCarryCorrectFields
-
 MissingBlockFetchExactness ==
   /\ MissingBlockFetchCaseGroupsComplete
-  /\ MissingBlockFetchDecisionExact
+  /\ FetchDecisionMatchesSpec
   /\ MissingBlockRequestStateExact
-  /\ MissingBlockPriorityRetryExact
-  /\ MissingBlockAttemptsExact
-  /\ MissingBlockTargetsExact
+  /\ PriorityAndRetryWindowsSafe
+  /\ AttemptsAccountedOnlyForEmittedFetches
+  /\ TargetSelectionMatchesMode
   /\ MissingBlockSendDeferralExact
-  /\ MissingBlockRequestFieldsExact
+  /\ FetchRequestsCarryCorrectFields
 
 MissingBlockFetchCorrectnessEnvelope ==
   /\ TypeInvariant

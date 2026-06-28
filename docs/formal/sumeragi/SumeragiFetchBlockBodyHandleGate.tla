@@ -220,7 +220,7 @@ FetchBlockBodyHandleMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 FetchBlockBodyHandleExactness ==
-  FetchBlockBodyHandleMatchesSpec
+  /\ FetchBlockBodyHandleMatchesSpec
 
 FetchBlockBodyHandleCorrectnessEnvelope ==
   /\ TypeInvariant

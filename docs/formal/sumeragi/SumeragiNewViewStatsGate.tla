@@ -209,7 +209,7 @@ NewViewStatsCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 NewViewStatsExactness ==
-  NewViewStatsCoreSafety
+  /\ NewViewStatsCoreSafety
 
 NewViewStatsCorrectnessEnvelope ==
   /\ TypeInvariant

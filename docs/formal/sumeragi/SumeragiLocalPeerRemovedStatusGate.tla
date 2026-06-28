@@ -193,10 +193,14 @@ LocalPeerRemovedStatusSafetyAnchors ==
   /\ IdempotenceAnchors
   /\ GetterSideEffectFreeAnchors
 
+LocalPeerRemovedStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ LocalPeerRemovedStatusSafetyAnchors
+
 LocalPeerRemovedStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ LocalPeerRemovedStatusSafetyAnchors
+  /\ LocalPeerRemovedStatusExactness
 
 BugInitialRemovedTrue ==
   ImplementationActions(InitialPresent) = SpecActions(InitialPresent)

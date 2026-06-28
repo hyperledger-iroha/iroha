@@ -15,6 +15,58 @@ This directory contains bounded formal models for Sumeragi safety and liveness.
 - RBC causality (`Init -> Chunk -> Ready -> Deliver`) with header/digest evidence,
 - GST and weak fairness assumptions over honest progress actions.
 
+## Proof-Shape Policy
+
+Non-bug fast `*CorrectnessEnvelope` checks must compose `TypeInvariant` with a
+model-specific `*Exactness` operator. Exactness operators should carry concrete
+model predicate bundles directly, not direct helper aliases, generic aliases
+such as `NoBugInvariant`, `Safety`, or `SafetyFast`, or literal `TRUE`/`FALSE`
+placeholders. Exactness bundles must not repeat the same zero-arity conjunct;
+each named obligation should be counted once. Keep `TypeInvariant` at the
+`*CorrectnessEnvelope` layer rather than inside `*Exactness` bundles.
+Aggregate `*Exactness` bodies must inline concrete predicate obligations rather
+than composing other `*Exactness` operators.
+Named zero-arity conjuncts inside exactness bundles must not hide literal
+`TRUE`/`FALSE` placeholders or one-hop aliases; point at the concrete obligation
+name directly. Direct zero-arity exactness conjuncts must resolve to named
+static predicates; bare variables and undefined labels must be wrapped in
+concrete predicate obligations before composition.
+Whole-body raw scalar equality exactness definitions such as
+`ActualOutput = SpecOutput` must also be named as concrete predicates and
+composed as direct exactness conjuncts. Whole-body negation or disjunction
+exactness definitions must follow the same rule: name the positive model
+predicate, then compose that predicate directly. Whole-body
+`ImplementationActions(...) = SpecActions(...)` quantifiers must also be named
+as concrete predicates before exactness composition. Whole-body
+`\A ...: Matches(...)` exactness quantifiers must compose the existing concrete
+matches predicate directly. More generally, checked exactness bodies must not be
+whole-body quantifiers; name the quantified model predicate first.
+Top-level `ImplementationActions(Case) = SpecActions(Case)` exactness
+conjuncts must also be lifted into named concrete predicates before the
+exactness bundle composes them. Top-level `Matches(Case)` exactness conjuncts
+must follow the same rule: name the concrete matches predicate first, then
+compose that predicate from the exactness bundle. Checked exactness bodies must
+contain direct named zero-arity conjuncts; formula-only `/\` bundles must be
+lifted behind named concrete predicates before exactness composition.
+Correctness envelopes must expose `TypeInvariant`, model `*Exactness`
+operators, and allowlisted temporal side conjuncts as direct top-level `/\`
+conjuncts; nested mentions do not count, and zero-arity envelope conjuncts must
+not repeat.
+
+There are no documented `*Exactness` direct-alias exceptions. The top-level
+Sumeragi core proof keeps TLC level-analysis tractable by factoring the large
+non-type state obligations into `SumeragiConsensusCoreStateMatchesEnvelope` and
+composing that named predicate as a direct exactness conjunct; `TypeInvariant`
+stays at the correctness-envelope layer.
+
+The only documented correctness-envelope side-conjunct exception is the
+TLC-routed top-level
+`SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope`: it keeps
+`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope` and
+`EventuallyCommit` as direct temporal property conjuncts for TLC level-analysis
+compatibility. That exception is allowlisted by the formal coverage guard and
+is checked for staleness.
+
 `SumeragiForkSafety.tla` captures same-height fork safety with two conflicting
 branches:
 - honest and Byzantine commit signer sets,
@@ -23,8 +75,11 @@ branches:
 - honest single-vote discipline across branches,
 - commit-certificate formation for each branch, plus a mutation that disables
   the single-vote/locked-QC guards and must produce a counterexample.
-Its TLC cross-check exhausts the permissioned fast config and the
+Its TLC cross-check exhausts the permissioned and NPoS fast configs plus the
 expected-failure double-sign/lock-gate mutation.
+`ForkSafetyCorrectnessEnvelope` composes the type invariant with honest
+single-vote discipline, count/stake quorum evidence, honest-support lower
+bound, and the direct no-conflicting-commit-certificate finality property.
 
 `SumeragiQuorumPolicy.tla` captures fail-closed quorum-policy arithmetic:
 - permissioned count quorum requires a strict two-thirds supermajority plus
@@ -35,6 +90,10 @@ expected-failure double-sign/lock-gate mutation.
   two-thirds stake, and overflow all fail closed.
 Its TLC cross-check exhausts the fast config and six expected-failure quorum
 arithmetic mutation configs.
+`QuorumPolicyCorrectnessEnvelope` composes the type invariant with exact
+permissioned strict-supermajority matching, over-validator-count rejection,
+NPoS strict-supermajority matching, exact two-thirds rejection, invalid-input
+rejection, and over-total-stake rejection.
 
 `SumeragiRbcDeliverQuorum.tla` captures the RBC deliver-quorum gate:
 - the default deliver threshold equals the commit quorum over the deduplicated
@@ -50,6 +109,11 @@ arithmetic mutation configs.
   threshold.
 Its TLC cross-check exhausts the fast config and five expected-failure deliver
 quorum mutation configs.
+`RbcDeliverQuorumCorrectnessEnvelope` composes the type invariant with exact
+required-threshold derivation, deduplicated-topology quorum matching,
+force-one local-emission isolation, inbound protocol-threshold preservation,
+distinct READY counting, pre-quorum delivery rejection, duplicate READY
+non-inflation, and final delivery-decision matching.
 
 `SumeragiRbcCausalityGate.tla` captures implementation-side RBC message
 causality:
@@ -916,8 +980,9 @@ preimage construction:
 - mutable vote, VRF, aggregate-signature, and signer-bitmap bytes stay outside
   the signing preimages.
 
-The fast configuration checks `ClassicSigningPreimageCorrectnessEnvelope`, which
-groups the type invariant and `ClassicSigningPreimageExactness`; that aggregate
+The fast configuration checks `ClassicSigningPreimageExactness` and
+`ClassicSigningPreimageCorrectnessEnvelope`, whose envelope composes the type
+invariant with that exactness aggregate. The aggregate
 ties the live-state preimage projection to the concrete domain, type, vote
 subject, highest-QC, VRF body, and mutable-material exclusion anchors.
 
@@ -929,6 +994,10 @@ subject, highest-QC, VRF body, and mutable-material exclusion anchors.
 - the reveal hashes the signature payload, the commitment hashes the reveal,
   and the returned pair remains `(reveal, commitment)`,
 - raw signature payloads and message bytes stay out of the returned material.
+`VrfMaterialDerivationCorrectnessEnvelope` composes the type invariant with the
+full local VRF material-derivation exactness aggregate covering required message
+inputs, big-endian context, field ordering, signature binding, reveal and
+commitment hashing, return shape, and intermediate-output suppression.
 
 `SumeragiClassicSignatureGate.tla` captures classic Vote/QC signature
 verification:
@@ -1138,8 +1207,7 @@ The fast configuration checks `BlockMessageRbcCompactExactness`, which groups
 compact boundary, payload field preservation, normalization/widening, and
 priority anchors.
 - `BlockMessageRbcCompactCorrectnessEnvelope` composes the type invariant with
-  fast exactness plus the compact boundary, field preservation,
-  normalization/widening, and priority anchors.
+  `BlockMessageRbcCompactExactness`.
 
 `SumeragiBlockMessagePriorityGate.tla` captures `BlockMessage::priority()`:
 - every consensus block-message variant is high network priority,
@@ -1153,8 +1221,7 @@ The fast configuration checks `BlockMessagePriorityExactness`, which groups
 block-sync/body-fetch, VRF/execution-witness, RBC, and proposal/QC priority
 anchors.
 - `BlockMessagePriorityCorrectnessEnvelope` composes the type invariant with
-  fast exactness plus block-sync/body-fetch, VRF/execution-witness, RBC, and
-  proposal/QC priority anchors.
+  `BlockMessagePriorityExactness`.
 
 `SumeragiBlockMessageHeightViewGate.tla` captures
 `Actor::block_message_height_view(...)`:
@@ -1170,8 +1237,7 @@ The fast configuration checks `BlockMessageHeightViewExactness`, which groups
 no-slot exclusion, slot-bearing future-window eligibility, source selection,
 height/view order preservation, and compact chunk widening anchors.
 - `BlockMessageHeightViewCorrectnessEnvelope` composes the type invariant with
-  full height/view exactness plus the no-slot, slot-bearing, source-selection,
-  and compact-widening anchors.
+  `BlockMessageHeightViewExactness`.
 
 `SumeragiBlockMessageKindGate.tla` captures `Actor::block_message_kind(...)`
 and `Actor::block_message_status_kind(...)`:
@@ -1318,12 +1384,11 @@ with canonical proposal payload byte exactness.
   require fresh exact-slot actionable dependencies and reject old views,
   wrong phases, stale work, and body-present payload recovery.
 - `FrontierSameSlotActivityExactness` composes those family checks into one
-  aggregate invariant: every accepted same-slot activity source keeps exact
-  positive evidence, and every stale, cross-slot, terminal, passive,
-  body-present, no-actionable, or bookkeeping-only source is rejected.
+  aggregate invariant: every accepted same-slot activity source keeps family
+  safety plus exact positive evidence, and every stale, cross-slot, terminal,
+  passive, body-present, no-actionable, or bookkeeping-only source is rejected.
 - `FrontierSameSlotActivityCorrectnessEnvelope` composes the type invariant
-  with fast family safety and concrete payload, ingress, vote-backed,
-  missing-block, missing-commit-QC, and missing-payload activity anchors.
+  with `FrontierSameSlotActivityExactness`.
 
 `SumeragiFrontierReassemblyActivityGate.tla` captures
 `frontier_recovery_same_slot_reassembly_active(...)` and
@@ -1339,11 +1404,11 @@ with canonical proposal payload byte exactness.
   non-aborted pending validation work, and do not allow no-source reassembly.
 - `FrontierReassemblyActivityExactness` composes those source families into one
   aggregate invariant: reassembly keeps exact dependency, ingress, sender,
-  validation, and deferred-update evidence while rejecting stale, wrong-height,
-  wrong-view, aborted, non-pending, no-backlog, and no-source activity.
+  validation, and deferred-update family safety plus exact evidence while
+  rejecting stale, wrong-height, wrong-view, aborted, non-pending, no-backlog,
+  and no-source activity.
 - `FrontierReassemblyActivityCorrectnessEnvelope` composes the type invariant
-  with fast reassembly safety and concrete dependency-progress, ingress, sender
-  activity, validation, deferred-update, and no-spurious-reassembly anchors.
+  with `FrontierReassemblyActivityExactness`.
 
 `SumeragiFrontierQuorumOwnerActionableGate.tla` captures
 `frontier_quorum_timeout_owner_still_actionable(...)` and
@@ -1382,14 +1447,12 @@ retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
   local-evidence-without-commit-QC cases.
 - `FrontierSidecarRetargetExactness` composes those retargeting families into
   one aggregate invariant: accepted override, stall-gate, confirmation,
-  tracked/untracked routing, and reacquire paths keep exact positive evidence
-  while generic, quarantined, unstalled, unconfirmed, non-frontier, no-gate,
-  same-hash, authoritative-payload, and local-evidence-without-commit-QC cases
-  are rejected together.
+  tracked/untracked routing, and reacquire paths keep family safety plus exact
+  positive evidence while generic, quarantined, unstalled, unconfirmed,
+  non-frontier, no-gate, same-hash, authoritative-payload, and
+  local-evidence-without-commit-QC cases are rejected together.
 - `FrontierSidecarRetargetCorrectnessEnvelope` composes the type invariant
-  with fast retarget safety, exact positive/negative evidence, and the
-  concrete override, gate, confirmation, tracked/untracked, and reacquire
-  anchors.
+  with `FrontierSidecarRetargetExactness`.
 
 `SumeragiFrontierSidecarExpectedHashGate.tla` captures
 `contiguous_frontier_sidecar_expected_hash_hint(...)` and
@@ -1401,15 +1464,13 @@ retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
 - sidecar commit-QC views require Commit phase, the sidecar height, and the
   sidecar block hash.
 - `FrontierSidecarExpectedHashExactness` composes those source families into
-  one aggregate invariant: expected-hash selection keeps exact tracked,
-  deferred, observed, cached Prepare/Commit, and sidecar commit-QC evidence,
-  preserves deterministic phase/view/hash and source-precedence ordering, and
-  rejects wrong-height, authoritative, NewView, Prepare-QC, wrong-hash, and
-  absent-QC inputs together.
+  one aggregate invariant: expected-hash selection keeps family safety plus
+  exact tracked, deferred, observed, cached Prepare/Commit, and sidecar
+  commit-QC evidence, preserves deterministic phase/view/hash and
+  source-precedence ordering, and rejects wrong-height, authoritative, NewView,
+  Prepare-QC, wrong-hash, and absent-QC inputs together.
 - `FrontierSidecarExpectedHashCorrectnessEnvelope` composes the type invariant
-  with fast expected-hash safety, exact positive/negative evidence,
-  deterministic ordering, and the concrete tracked, deferred, observed, cache,
-  and sidecar commit-QC anchors.
+  with `FrontierSidecarExpectedHashExactness`.
 
 `SumeragiContiguousFrontierPayloadHintGate.tla` captures
 `deferred_qc_phase_payload_hint_rank(...)` and
@@ -1422,13 +1483,12 @@ retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
   wrong-height and non-actionable markers ignored before deterministic view/hash
   tie-breaking.
 - `ContiguousFrontierPayloadHintExactness` composes those cases into one
-  aggregate invariant: payload-hint selection keeps exact deferred and marker
-  evidence, preserves Commit/Prepare/NewView rank plus view/hash tie-breaks,
-  and rejects wrong-height, non-actionable, and no-eligible inputs together.
+  aggregate invariant: payload-hint selection matches the phase-rank and
+  selection specifications, keeps exact deferred and marker evidence, preserves
+  Commit/Prepare/NewView rank plus view/hash tie-breaks, and rejects
+  wrong-height, non-actionable, and no-eligible inputs together.
 - `ContiguousFrontierPayloadHintCorrectnessEnvelope` composes the type
-  invariant with fast payload-hint safety, exact positive/negative evidence,
-  deterministic ordering, and the concrete phase-rank, selection, deferred,
-  marker, and empty-fallback anchors.
+  invariant with `ContiguousFrontierPayloadHintExactness`.
 
 `SumeragiFrontierParentQcHintRetargetGate.tla` captures
 `should_retarget_contiguous_frontier_parent_from_qc_hint(...)` and the
@@ -1440,14 +1500,13 @@ deferred-QC payload-hint branch in `request_missing_parent(...)`:
   present, different QC hint, preserving the original expected parent for
   absent hints, same-hash hints, and non-frontier parents.
 - `FrontierParentQcHintRetargetExactness` composes those branches into one
-  aggregate invariant: parent retargeting keeps exact stall/reanchor progress
-  evidence, rejects wrong-frontier, advanced/created/no-emit/absent-gate,
-  absent-hint, same-hash, and non-frontier inputs, and rewrites only eligible
-  targets to the QC hint while preserving every ineligible expected parent.
+  aggregate invariant: parent retargeting matches the gate, retarget, and
+  rewrite specifications, keeps exact stall/reanchor progress evidence,
+  rejects wrong-frontier, advanced/created/no-emit/absent-gate, absent-hint,
+  same-hash, and non-frontier inputs, and rewrites only eligible targets to the
+  QC hint while preserving every ineligible expected parent.
 - `FrontierParentQcHintRetargetCorrectnessEnvelope` composes the type
-  invariant with fast parent QC-hint retarget safety, exact positive/negative
-  evidence, rewrite preservation, and the concrete gate, retarget, rewrite,
-  stall, progress, request-branch, and rewrite-stable anchors.
+  invariant with `FrontierParentQcHintRetargetExactness`.
 
 `SumeragiLiveFrontierIdleMissingQcGate.tla` captures
 `should_suppress_live_frontier_idle_missing_qc_reacquire(...)` and the
@@ -1460,6 +1519,9 @@ suppressed `reacquire_missing_qc_dependencies(...)` branch:
 - the suppressed branch still records the reacquire attempt and allows
   sidecar-hint reacquire while blocking broad highest-QC fetch and idle anchor
   range-pull emissions.
+`LiveFrontierIdleMissingQcCorrectnessEnvelope` composes the type invariant
+with live-frontier idle missing-QC suppression safety, branch-effect safety,
+and the component/anchor exactness aggregate.
 
 `SumeragiMissingQcReacquireAdmissionGate.tla` captures
 `should_attempt_missing_qc_reacquire(...)`:
@@ -1471,6 +1533,8 @@ suppressed `reacquire_missing_qc_dependencies(...)` branch:
   entries while retaining fresh ones, and
 - dependency signals, repeated timeout streaks, and the empty committed+1
   no-proposal/no-pending fallback are admitted only under their exact guards.
+The fast config checks the aggregate reacquire-admission exactness predicate and
+correctness envelope, combining the core admission and anchor obligations.
 
 `SumeragiMissingQcReacquireActionGate.tla` captures
 `reacquire_missing_qc_dependencies(...)` orchestration after admission:
@@ -1487,6 +1551,8 @@ suppressed `reacquire_missing_qc_dependencies(...)` branch:
   clears stale cooldowns for both lock-lag and requested heights when needed,
   increments success only for requested/triggered work, and returns true only
   for requested, triggered, or intentionally suppressed recovery.
+The fast config checks the aggregate reacquire-action exactness predicate and
+correctness envelope, combining the core orchestration and anchor obligations.
 
 `SumeragiMissingCommitQcActionableGate.tla` captures
 `missing_commit_qc_request_has_actionable_dependency(...)`,
@@ -1500,6 +1566,9 @@ and `missing_dependency_subject_height_for_phase(...)`:
   Prepare/Commit use the round height and height zero saturates, and
 - stale-prune preservation requires Commit phase, no cached commit QC, exact
   local payload height/view, and an authoritative or frontier owner match.
+The fast config checks the aggregate missing commit-QC actionable exactness
+predicate and correctness envelope, combining the core safety and anchor
+obligations.
 
 `SumeragiMissingQcHeightStallGate.tla` captures
 `missing_qc_height_stall_snapshot(...)`,
@@ -1516,6 +1585,9 @@ and `missing_dependency_subject_height_for_phase(...)`:
 - rotation and range-pull markers are updated only for the matching active
   stalled height, with at most one rotation/range-pull emission per active
   window.
+`MissingQcHeightStallCorrectnessEnvelope` composes the type invariant with the
+full snapshot/reservation/marker exactness aggregate and the component/anchor
+obligations.
 
 `SumeragiMissingQcStallRangePullGate.tla` captures the same-height missing-QC
 stall branch in `request_range_pull_from_anchor_with_tier(...)`:
@@ -1527,6 +1599,9 @@ stall branch in `request_range_pull_from_anchor_with_tier(...)`:
 - successful sends use sorted/deduplicated deterministic cohorts, fan out to
   all peers on every third emitted window or with two-or-fewer peers, apply the
   stall-window cooldown, and mark the missing-QC range-pull window.
+The fast config checks the aggregate missing-QC stall range-pull exactness
+predicate and correctness envelope, combining core branch and anchor
+obligations.
 
 `SumeragiMissingPayloadFetchWindowGate.tla` captures same-height
 missing-payload fetch-window pacing and hash-miss escalation caps:
@@ -1543,6 +1618,8 @@ missing-payload fetch-window pacing and hash-miss escalation caps:
 - lock-lag hash-miss escalation caps widen near and far from the catch-up
   frontier with `div_ceil` thresholds and remain clamped by the base/attempt
   cap.
+The fast config checks the aggregate missing-payload fetch-window exactness
+predicate and correctness envelope.
 
 `SumeragiCanonicalFrontierReanchorGate.tla` captures canonical contiguous
 frontier reanchor gating:
@@ -1572,6 +1649,8 @@ suppression while contiguous-frontier repair remains active:
 - active exact-body repair, same-slot missing-payload recovery, and same-slot
   reassembly suppress the view change, seed quorum-timeout frontier recovery
   when possible, and emit an urgent frontier body fetch.
+`FrontierRepairViewChangeCorrectnessEnvelope` composes the type invariant with
+the full repair view-change component/anchor exactness aggregate.
 
 `SumeragiFrontierRecoveryAdvanceGate.tla` captures
 `advance_frontier_recovery(...)`:
@@ -1586,6 +1665,9 @@ suppression while contiguous-frontier repair remains active:
 - catch-up windows emit scoped/all-peer range pulls, apply cleanup before
   rotate-arming, and rotate only after allowance, view, and grace checks while
   resetting the FSM back to catch-up.
+`FrontierRecoveryAdvanceCorrectnessEnvelope` composes the type invariant with
+the full contiguous-frontier recovery advance component/anchor exactness
+aggregate.
 
 `SumeragiSameHeightNoProposalStormGate.tla` captures the same-height
 no-proposal storm helpers that feed frontier recovery:
@@ -1600,6 +1682,8 @@ no-proposal storm helpers that feed frontier recovery:
   pending work or explicit backlog, resets the owner into catch-up, clears
   action/cleanup markers, and calls `advance_frontier_recovery(...)` with the
   deterministic missing-QC active-pending path preserving that source.
+`SameHeightNoProposalStormCorrectnessEnvelope` composes the type invariant with
+the full core-safety and component-anchor exactness aggregate.
 
 `SumeragiVrfMessageAdmissionGate.tla` captures VRF commit/reveal admission:
 - VRF commit and reveal handlers require a supported consensus mode, an active
@@ -1613,6 +1697,10 @@ no-proposal storm helpers that feed frontier recovery:
   penalty-clearing observations without refreshing the current PRF context,
 - only externally originated accepted observations are rebroadcast, and local
   VRF state is updated only for the local validator's accepted observation.
+`VrfMessageAdmissionCorrectnessEnvelope` composes the type invariant with the
+full VRF commit/reveal admission exactness aggregate covering mode/manager,
+topology, signature, epoch/window, rewrite, staging, broadcast, local-state, and
+PRF-refresh behavior.
 
 `SumeragiVrfEpochWindowGate.tla` captures VRF epoch-window arithmetic:
 - `set_params(...)` clamps zero epoch lengths to one block and clamps commit
@@ -1624,6 +1712,10 @@ no-proposal storm helpers that feed frontier recovery:
   and reveal windows include only positions after the commit window up to the
   clamped reveal offset,
 - positions outside both windows remain rejected.
+`VrfEpochWindowCorrectnessEnvelope` composes the type invariant with the full
+VRF epoch-window exactness aggregate covering parameter clamps,
+height/position/epoch mapping, commit and reveal window boundaries, empty
+reveal windows, and outside-window rejection.
 
 `SumeragiVrfEpochBoundaryGate.tla` captures VRF epoch-boundary state
 transitions:
@@ -1640,6 +1732,10 @@ transitions:
   and clear per-epoch inputs/roster, and
 - reset/take helpers clear transient reports/snapshots and consume stored
   reports exactly once.
+`VrfEpochBoundaryCorrectnessEnvelope` composes the type invariant with the
+epoch-boundary exactness aggregate covering no-op boundaries, penalty
+calculation, snapshots, seed evolution, clear/advance/reset/take behavior,
+roster canonicalization, and entropy ordering.
 
 `SumeragiVrfEpochRestoreGate.tla` captures `EpochManager` restore, snapshot,
 and observation-merge helpers:
@@ -1653,6 +1749,24 @@ and observation-merge helpers:
 - observation merge ignores wrong epochs, fills only absent commits/reveals and
   late reveals, preserves existing observations, and does not mutate manager
   identity state.
+`VrfEpochRestoreCorrectnessEnvelope` composes the type invariant with the full
+VRF epoch restore/snapshot/merge exactness aggregate covering unfinalized and
+finalized record hydration, parameter clamps, snapshot roster and input
+preservation, report clearing, merge conflict handling, late-reveal hydration,
+and identity preservation.
+
+`SumeragiVrfLocalStateGate.tla` captures `VrfLocalState` and `VrfActor` local
+emission state:
+- new/reset epoch state starts with zero reveal/commitment material and unsent
+  commit/reveal flags,
+- same-epoch refreshes preserve existing material and sent flags,
+- unsupported modes neither create new local state nor mutate existing state,
+- supported modes return mutable state, and
+- commit/reveal notes update only their respective material and sent flag while
+  preserving same-epoch counterpart material.
+`VrfLocalStateCorrectnessEnvelope` composes the type invariant with the exact
+local VRF state action aggregate covering mode gates, epoch resets, same-epoch
+preservation, commit/reveal note behavior, and actor reset.
 
 `SumeragiVrfPenaltiesReportGate.tla` captures VRF penalties report storage:
 - the report store and latest-epoch index start empty/zero,
@@ -1662,6 +1776,11 @@ and observation-merge helpers:
 - missing lookups synthesize no report,
 - `clear(...)` removes every report and resets the latest epoch, and
 - reads do not mutate the stored reports.
+`VrfPenaltiesReportCorrectnessEnvelope` composes the type invariant with the
+full VRF penalties report exactness aggregate covering initialization, update
+keying, latest-epoch tracking, report field preservation, replacement,
+multi-epoch retention, missing lookups, clear/reset behavior, and read
+side-effect freedom.
 
 `SumeragiVoteAdmissionGate.tla` captures classic inbound vote admission:
 - early height/view, lock, and missing-roster gates fail closed before vote
@@ -1678,6 +1797,11 @@ and observation-merge helpers:
   progress, while NEW_VIEW votes do not cache rosters; stale NEW_VIEW votes can
   aggregate a QC but must not update the proposal tracker or request the commit
   pipeline.
+`VoteAdmissionCorrectnessEnvelope` composes the type invariant with the full
+vote-admission exactness/safety aggregate covering admission decisions,
+record/defer/drop/evidence effects, QC attempts, progress touches,
+roster-cache and NEW_VIEW tracker side effects, pipeline requests, and conflict
+invariants.
 
 `SumeragiDropPrecommitVoteForLockGate.tla` captures
 `drop_precommit_vote_for_lock(...)`:
@@ -1949,6 +2073,9 @@ the block-sync roster source/drop status exactness aggregate.
   counter, and refresh the last-emitted timestamp,
 - zero cooldown bypasses suppression, GC uses `cooldown * 8` with a one-second
   floor for zero cooldown, and `clear()` drops all tracked keys.
+`QcInsufficientWarningThrottleCorrectnessEnvelope` composes the type invariant
+with the exact cooldown, keying, zero-cooldown, GC, and clear behavior
+aggregate.
 
 `SumeragiFetchResponseDeferralGate.tla` captures
 `should_defer_canonical_committed_fetch_response(...)`:
@@ -2043,6 +2170,8 @@ in `schedule_background(...)` and `schedule_background_via_queue(...)`:
 - precommit signer proof is keyed by block hash, height, view, and epoch, and
 - highest-QC proof requires the Commit phase plus exact block hash, height,
   and view.
+`RequesterRosterProofCorrectnessEnvelope` composes the type invariant with the
+all-cases requester proof exactness aggregate.
 
 `SumeragiBlockSyncFutureWindowGate.tla` captures
 `should_drop_future_block_sync_update(...)`:
@@ -2084,6 +2213,8 @@ in `schedule_background(...)` and `schedule_background_via_queue(...)`:
   admission sources,
 - pending requests and deferred QCs must match commit phase, block hash,
   height, view, and actionable-dependency checks.
+`SameHeightBlockBodyRepairCorrectnessEnvelope` composes the type invariant
+with the all-cases admission exactness aggregate.
 
 `SumeragiBlockBodyRepairEpochGate.tla` captures
 `observed_commit_qc_epoch_for_body_repair(...)`:
@@ -2201,6 +2332,10 @@ admission:
 - highest-QC state changes only for newer references or same-slot Commit phase
   promotion; lock-lag catchup defers that update while preserving accepted hint
   side effects.
+`ProposalHintAdmissionCorrectnessEnvelope` composes the type invariant with the
+full proposal-hint admission exactness aggregate covering admission, deferral,
+drop, cache/observe, highest-QC, dependency, PRF, replay, prune, and
+conflict-suppression behavior.
 
 `SumeragiStaleProposalHintRepairGate.tla` captures the stale-view proposal hint
 repair exception:
@@ -2210,6 +2345,8 @@ repair exception:
   view, subject hash, and epoch,
 - every denied stale hint remains a stale-view drop and does not cache hint
   metadata, mark the slot observed, or mutate highest-QC state.
+`StaleProposalHintRepairCorrectnessEnvelope` composes the type invariant with
+the exact stale-hint repair admission and no-side-effect aggregate.
 
 `SumeragiStaleRbcHintRepairGate.tla` captures stale RBC repair through cached
 proposal hints:
@@ -2221,6 +2358,8 @@ proposal hints:
 - matching hinted chunks are stashed and arm exact frontier body repair, while
   every rejected stale RBC message still drops and has no chunk-stash or repair
   side effects.
+`StaleRbcHintRepairCorrectnessEnvelope` composes the type invariant with the
+exact stale RBC hint repair admission, drop, and no-side-effect aggregate.
 
 `SumeragiProposalAdmissionGate.tla` captures inbound proposal metadata
 admission:
@@ -2234,6 +2373,9 @@ admission:
   slots,
 - proposal metadata alone must not wake the commit pipeline or record
   payload-phase progress.
+`ProposalAdmissionCorrectnessEnvelope` composes the type invariant with the
+exact admission, deferral, cache/observe, PRF/leader-context, replay/prune,
+conflict-suppression, and no-commit-wakeup aggregate.
 
 `SumeragiBlockCreatedAdmissionGate.tla` captures direct `BlockCreated` payload
 admission:
@@ -2327,6 +2469,9 @@ classification helpers:
 - `proposal_backpressure_allows_queue_work(...)` admits queued proposal work
   when there is no deferral signal, or when the only deferral source is pacing
   backpressure.
+`ProposalBackpressureCorrectnessEnvelope` composes the type invariant with the
+exact should-defer, pacing-only, queue-work bridge, hard-stop, and healthy
+behavior aggregate.
 
 `SumeragiProposalDeferWarningThrottleGate.tla` captures proposal-defer warning
 throttle helpers:
@@ -2340,6 +2485,9 @@ throttle helpers:
   while all other proposal-defer warning kinds remain view-specific,
 - zero cooldown never suppresses, and GC retains entries through the inclusive
   expiry boundary while pruning older entries.
+`ProposalDeferWarningThrottleCorrectnessEnvelope` composes the type invariant
+with the exact first-emission, cooldown, keying, empty-topology normalization,
+zero-cooldown, and GC behavior aggregate.
 
 `SumeragiNonRbcPayloadBudgetGate.tla` captures non-RBC payload frame budgeting:
 - the consensus payload frame cap is reduced by the fixed 8 KiB non-RBC
@@ -3091,6 +3239,9 @@ before recovery/finalization candidates are processed:
 - the last valid index is included, the first out-of-range index is excluded,
   all bitmap bytes are scanned, and bits rather than bytes are counted,
 - accumulation uses saturating addition before returning the vote count.
+`PrecommitVoteCountCorrectnessEnvelope` composes the type invariant with exact
+implementation/spec action equality plus return-classification, phase-gate,
+and bitmap-boundary anchors.
 
 `SumeragiVotingSignerCountGate.tla` captures set-based signer support counting:
 - empty signer sets and zero-length voting rosters return zero,
@@ -3130,6 +3281,9 @@ vote selection:
   instead of creating duplicate candidates,
 - candidate selection ranks by height, then view, then phase rank, then block
   hash, matching `new_view_highest_qc_rank(...)`.
+`NewViewHighestQcVotesCorrectnessEnvelope` composes the type invariant with
+the exact signer filter, slot filter, candidate validation, grouping, and rank
+aggregate.
 
 `SumeragiFrontierNewViewCatchUpGate.tla` captures active-frontier NEW_VIEW
 catch-up voting:
@@ -3140,6 +3294,8 @@ catch-up voting:
   committed payload is not locally available,
 - local phase tracking must know the frontier view, and the candidate view may
   be at most the immediate successor of that tracked view.
+`FrontierNewViewCatchUpCorrectnessEnvelope` composes the type invariant with
+the full active-frontier NEW_VIEW catch-up exactness aggregate.
 
 `SumeragiLateNewViewEmissionGate.tla` captures late NEW_VIEW emission for
 same-highest near-quorum completion:
@@ -3154,6 +3310,8 @@ same-highest near-quorum completion:
 - completing candidates outrank catch-up candidates, higher-ranked highest-QCs
   win among same-class candidates, and the helper return still follows the
   inner emission result.
+`LateNewViewEmissionCorrectnessEnvelope` composes the type invariant with
+selection exactness and final emission-result exactness.
 
 `SumeragiNearQuorumNewViewRebroadcastGate.tla` captures near-quorum NEW_VIEW
 vote rebroadcast:
@@ -3166,6 +3324,8 @@ vote rebroadcast:
 - pacemaker deadlines are nudged only after a positive rebroadcast result and
   only when the computed nudge deadline is representable and earlier than the
   current deadline.
+`NearQuorumNewViewRebroadcastCorrectnessEnvelope` composes the type invariant
+with the exact near-quorum NEW_VIEW rebroadcast branch aggregate.
 
 `SumeragiOnlineValidatorRelayCountersGate.tla` captures online-validator and
 relay counter helper contracts:
@@ -3178,6 +3338,8 @@ relay counter helper contracts:
   cap-violation lanes with saturating addition,
 - relay counter collection forwards direct counters and sums all seven p2p
   cap-violation families with saturating addition.
+`OnlineValidatorRelayCountersCorrectnessEnvelope` composes the type invariant
+with the exact online-validator count and relay-counter action aggregate.
 
 `SumeragiCommitResultDrainGate.tla` captures asynchronous commit-result
 draining:
@@ -3282,6 +3444,8 @@ recovery:
   normal key algorithm, cannot supply a recovered index,
 - remapped duplicate signatures, remapped duplicate signer indexes, and empty
   replacement sets fail closed before a recovered block can be retried.
+`SignatureIndexRecoveryCorrectnessEnvelope` composes the type invariant with
+the all-cases commit signature-index recovery exactness aggregate.
 
 Its TLC cross-check independently exhausts the same thirteen expected-failure
 configs as Apalache.
@@ -3416,6 +3580,9 @@ configs as Apalache.
 
 Its TLC cross-check independently exhausts the same twenty-eight
 expected-failure configs as Apalache.
+`TickDeadlineHelpersCorrectnessEnvelope` composes the type invariant with the
+all-helper deadline, budget, heartbeat, nudge, and next-tick exactness
+aggregate.
 
 `SumeragiBlockRosterCachesGate.tla` captures block roster cache helpers:
 - roster-selection cache keys require at least one roster artifact and reject
@@ -3685,10 +3852,9 @@ artifact trust:
 - the post-validation witness must be present and reproduce the artifact's
   parent and post-state roots before the prevalidated path can be accepted.
 - `PrevalidatedCommitArtifactExactness` composes trusted-artifact,
-  witness-root, and final commit-acceptance exactness.
+  witness-root, final commit-acceptance, and case-tuple exactness.
 - `PrevalidatedCommitArtifactCorrectnessEnvelope` composes the type invariant
-  with the fast-safety aggregate, tying trusted-artifact, witness-root, final
-  commit-acceptance, and case-tuple exactness into one checkable envelope.
+  with `PrevalidatedCommitArtifactExactness`.
 
 Its TLC cross-check independently exhausts the same fourteen expected-failure
 configs as Apalache.
@@ -3835,6 +4001,9 @@ configs as Apalache.
 - active pending blocks, RBC backlog, and relay pressure suppress proposal
   attempts even when the deadline is due,
 - recovered pressure clears the backpressure tracker without deferral logging.
+`PacemakerEvaluationCorrectnessEnvelope` composes the type invariant with the
+exact deferral logging, proposal-attempt, tracker-state, deadline-advance, and
+hard-backpressure aggregate.
 
 Its TLC cross-check independently exhausts the same forty expected-failure
 configs as Apalache.
@@ -3849,6 +4018,9 @@ configs as Apalache.
 - min factors are floored at 10_000 bps, max factors are raised to at least
   min, and both step-up and step-down outputs are clamped to those bounds,
 - ambiguous windows and no-op bound hits return no decision.
+`PacingGovernorCorrectnessEnvelope` composes the type invariant with exact
+sample-delta, ratio, factor-bound, decision, action, clamp, and no-op
+suppression matching.
 
 Its TLC cross-check independently exhausts the same nineteen expected-failure
 configs as Apalache.
@@ -4121,6 +4293,9 @@ semantics:
   from the last marker, marks the phase, and advances the marker,
 - `view_age` and `current_view` reject mismatched heights and return the
   round-start duration or current view for the matching height.
+`PhaseTrackerCorrectnessEnvelope` composes the type invariant with exact
+construction, round-start, view-change, record, lookup, timer-pairing, duration
+recording, duplicate-preservation, and anchor obligations.
 
 `SumeragiFailureRecoveryHelpersGate.tla` captures failed-commit and block-sync
 helper semantics:
@@ -4134,6 +4309,32 @@ helper semantics:
 - block-sync QC readiness requires both successful block creation and known
   block, while QC application after successful creation applies present QC even
   for unknown blocks and never applies on creation error.
+`FailureRecoveryHelpersCorrectnessEnvelope` composes the type invariant with
+QC realignment, pending-drop, view-cause, block-sync readiness, QC-application,
+realignment preservation, real-failure drop, missing-vote priority, readiness
+guard, creation-error no-apply, present-QC callback, and anchor-case
+obligations.
+
+Failure recovery helper invariants:
+- `TypeInvariant`
+- `RealignMatchesSpec`
+- `DropPendingMatchesSpec`
+- `ViewCauseMatchesSpec`
+- `BlockSyncReadyMatchesSpec`
+- `ApplyAfterBlockMatchesSpec`
+- `RealignPreservesUnrelatedAndAbsent`
+- `DropPendingRequiresRealRequeueFailure`
+- `ViewCauseMissingVotesPriority`
+- `ReadyRequiresKnownBlockAndSuccessfulCreation`
+- `ApplyNeverRunsAfterCreationError`
+- `ApplyPresentQcInvokesCallback`
+- `RealignAnchors`
+- `DropPendingAnchors`
+- `ViewCauseAnchors`
+- `ReadyAnchors`
+- `ApplyAnchors`
+- `FailureRecoveryHelpersExactness`
+- `FailureRecoveryHelpersCorrectnessEnvelope`
 
 `SumeragiRequeueTransactionsGate.tla` captures transaction requeue branch
 semantics after failed commit recovery:
@@ -4147,6 +4348,8 @@ semantics after failed commit recovery:
   chain duplicate without gossip, and other failure, and
 - pending-block drop removes only present entries, preserves the block
   transaction count, and returns delegated requeue counters.
+`RequeueTransactionsCorrectnessEnvelope` composes the type invariant with the
+all-cases transaction requeue action exactness aggregate.
 
 Its TLC cross-check independently exhausts the same twenty expected-failure
 configs as Apalache.
@@ -4177,6 +4380,9 @@ expected-failure configs as Apalache.
   zero-gap ticks run immediately, and
 - `idle_wait_duration(...)` returns `None` exactly when the run gate is open and
   otherwise returns the remaining gap duration.
+`WorkerTickGapCorrectnessEnvelope` composes the type invariant with the full
+worker tick-gap exactness aggregate covering saturating elapsed time, inclusive
+run boundaries, readiness/wait partitions, and boundary/future anchors.
 
 `SumeragiProposalParentResolutionGate.tla` captures proposal parent resolution
 and inline frontier backup transport:
@@ -4306,6 +4512,9 @@ exact-frontier missing-body recovery:
   one-shot `force_retry_now` flag,
 - existing requests never receive the force flag and are not held by this
   ingress gate.
+`MissingBlockIngressFetchCorrectnessEnvelope` composes the type invariant with
+the exact ingress action aggregate covering bypass, initial grace hold/force,
+existing-request no-force/no-hold, and hold/force exclusivity.
 Its TLC cross-check independently exhausts the same twelve expected-failure
 configs as Apalache.
 
@@ -4384,8 +4593,9 @@ recovery:
   `round_liveness_catchup_isolated` range-pull reanchor,
 - same-hash, non-higher, non-frontier, and fresh conflicts cannot take the
   stale-obsolete path.
-Its TLC cross-check independently exhausts the same thirty-one
-expected-failure configs as Apalache.
+The fast config checks the aggregate missing locked-QC recovery exactness
+predicate and correctness envelope. Its TLC cross-check independently exhausts
+the same thirty-one expected-failure configs as Apalache.
 
 `SumeragiLocalSignedBlockLookupGate.tla` captures local signed-block
 materialization for `local_signed_block_for_hash(...)` and body repair:
@@ -4470,6 +4680,9 @@ configs as Apalache.
 - pending blocks without evidence require waiting vote work and use inserted-at
   age rather than progress age,
 - scanning is existential: a later urgent pending block is enough.
+`QuorumRecoveryVoteDrainUrgentCorrectnessEnvelope` composes the type invariant
+with exact quorum-timeout, pending live/tip, evidence, queue, age-source,
+timeout-boundary, and existential-scan obligations.
 
 `SumeragiFrontierBodyGapPayloadDrainUrgentGate.tla` captures
 `frontier_body_gap_payload_drain_urgent()`:
@@ -4479,6 +4692,10 @@ configs as Apalache.
   satisfy the quorum-evidence gate,
 - only RBC chunk, block-payload, or block queues count as relevant backlog;
   vote backlog alone is ignored.
+`FrontierBodyGapPayloadDrainUrgentCorrectnessEnvelope` composes the type
+invariant with result/action exactness, slot-shape rejection,
+evidence-source acceptance, evidence-before-backlog ordering,
+relevant-backlog filtering, and any-payload-backlog acceptance.
 Their TLC cross-checks independently exhaust the same seventeen and sixteen
 expected-failure configs as Apalache.
 
@@ -4493,6 +4710,9 @@ payload knowledge for progress:
 - incomplete chunks, root mismatches, missing observed roots, and zero-chunk
   sessions must fall back to local authoritative payload bytes and require exact
   height, view, and payload hash.
+`RbcAuthoritativePayloadProgressCorrectnessEnvelope` composes the type
+invariant with exact metadata-gate, complete-chunk acceptance, chunk-rejection,
+local-fallback, local slot/hash, and lookup-shape obligations.
 
 `SumeragiSlotAuthoritativePayloadGate.tla` captures slot-level authoritative
 payload knowledge:
@@ -4503,6 +4723,9 @@ payload knowledge:
 - Kura requires the requested view and committed block hash for the height, and
   RBC requires a matching non-retained session with authoritative progress
   payload material.
+`SlotAuthoritativePayloadCorrectnessEnvelope` composes the type invariant with
+the exact result/action, pending, inflight, Kura, RBC, and lookup-shape
+aggregate.
 Their TLC cross-checks independently exhaust the same nineteen and twenty-one
 expected-failure configs as Apalache.
 
@@ -4556,6 +4779,9 @@ stability:
 - `stable_sort_recovery_events(...)` orders recovery transition events by
   `(height, reason.rank(), peer_id)` so height, reason priority, and peer
   tie-breaks stay explicit.
+`RecoveryFsmReasonCorrectnessEnvelope` composes the type invariant with exact
+reason-label classification, unknown fallback, rank order, rank distinctness,
+and sort-key stability obligations.
 Its TLC cross-check independently exhausts the same sixteen expected-failure
 configs as Apalache.
 
@@ -4579,6 +4805,8 @@ configs as Apalache.
 - after signer peers are known, NPoS requires a non-empty stake roster, an
   available stake snapshot, and a positive stake-quorum result; missing
   snapshots, false quorum, and quorum errors fail closed.
+`QcRebuildQuorumCorrectnessEnvelope` composes the type invariant with the
+aggregate quorum-reachability exactness check.
 Its TLC cross-check independently exhausts the same fourteen expected-failure
 configs as Apalache.
 
@@ -4710,6 +4938,9 @@ decisions:
   idle missing-QC behavior,
 - reason classifiers keep lock-lag, canonical-chain, missing-QC, and
   previous-anchor routing distinct.
+`RangePullRecoveryCorrectnessEnvelope` composes the type invariant with the
+range-pull recovery stage, tier, target, cooldown, reason, and anchor
+exactness aggregate.
 Its TLC cross-check independently exhausts the same forty-seven
 expected-failure configs as Apalache.
 
@@ -4744,6 +4975,8 @@ round-recovery bundle window gating:
   floored before computing elapsed window indexes.
 Its TLC cross-check independently exhausts the same nineteen expected-failure
 configs as Apalache.
+`RoundRecoveryBundleWindowCorrectnessEnvelope` composes the type invariant
+with the source/class label and same-height window exactness aggregate.
 
 `SumeragiCommittedEdgeConflictGate.tla` captures committed-edge conflicting
 highest-QC suppression:
@@ -4784,6 +5017,9 @@ lifecycle:
 - height clears preserve other heights, while purge cleanup removes matching
   vote/QC/deferred/known-work, proposal/owner/frontier, fetch/recovery,
   validation, and RBC artifacts for the rejected branch.
+`LockRejectedSinkCorrectnessEnvelope` composes the type invariant with exact
+sink lifecycle actions, fail-closed activity gates, dependency-free
+suppression, and full purge-surface coverage.
 Its TLC cross-check independently exhausts the same twenty-five
 expected-failure configs as Apalache.
 
@@ -4909,6 +5145,10 @@ replay across restart:
 - compaction preserves exactly the live records,
 - torn payload or length tails are repaired while preserving the last complete
   native AMX record.
+`NativeAmxJournalReplayCorrectnessEnvelope` composes the type invariant with
+the full journal replay exactness aggregate covering replay parity, plan
+shape, participants, digest/payload/entrypoint preservation, scoped tombstones,
+last-put-wins replacement, compaction, and torn-tail repair.
 Its TLC cross-check independently exhausts the same seventeen expected-failure
 configs as Apalache.
 
@@ -4948,6 +5188,8 @@ inside block execution-context validation:
 `NativeAmxReceiptValidationExactness` groups those obligations into acceptance,
 context/presence, header, participant-leg, QC-body, validator-set, signer
 bitmap, and quorum/signature checks for the fast mode.
+`NativeAmxReceiptValidationCorrectnessEnvelope` composes that aggregate with
+the type invariant.
 
 `SumeragiNativeAmxIngressGate.tla` captures native AMX control-plane ingress:
 - prepare/commit attestation requests reply only when the body phase matches the
@@ -4982,6 +5224,8 @@ construction:
   missing-weight, or zero-total-stake inputs,
 - `build_signer_bitmap(...)` uses the canonical byte length, rejects duplicate
   signer indices, and rejects out-of-range signer indices.
+`VNextChainOrderCorrectnessEnvelope` composes the type invariant with the
+exact chain-order construction, successor, prefix, and signer-bitmap aggregate.
 Its TLC cross-check independently exhausts the same nineteen expected-failure
 configs as Apalache.
 
@@ -4992,6 +5236,8 @@ semantics:
 - duplicate stake entries keep first-match lookup semantics, and
 - `stake_quorum_satisfied(...)` fails closed for zero total stake, missing
   weights, checked arithmetic failures, and exact two-thirds stake boundaries.
+`VNextStakeWeightCorrectnessEnvelope` composes the type invariant with the
+exact stake-weight lookup and strict stake-quorum fail-closed aggregate.
 Its TLC cross-check independently exhausts the same twelve expected-failure
 configs as Apalache.
 
@@ -5007,6 +5253,10 @@ configs as Apalache.
   hash,
 - count and stake quorum policies are rechecked after quarantine, with exact
   two-thirds stake still rejected by the strict NPoS comparison.
+
+`VNextRechainCorrectnessEnvelope` keeps the full accept/reject, taint,
+critical-path, certificate-body, and quorum exactness aggregate paired with the
+model type invariant.
 Its TLC cross-check independently exhausts the same seventeen expected-failure
 configs as Apalache.
 
@@ -5017,6 +5267,9 @@ configs as Apalache.
   embedded expected successor or untainted-validator counts,
 - expected-failure mutations cover label drift for every variant and dynamic
   payload leakage into labels.
+
+`VNextRechainErrorLabelCorrectnessEnvelope` keeps those exact label
+requirements paired with the model type invariant.
 Its TLC cross-check independently exhausts the same thirteen expected-failure
 configs as Apalache.
 
@@ -5035,6 +5288,11 @@ verification:
   aggregate signature over the canonical certificate preimage,
 - accepted certificates return exactly the bitmap-selected signer set, and
   rejected certificates return no signers.
+
+`VNextSignatureCorrectnessEnvelope` keeps the full aggregate certificate
+accept/reject, returned-signer, signer-bitmap, quorum, signature, re-chain body,
+empty-roster, and proof-of-possession exactness aggregate paired with the model
+type invariant.
 Its TLC cross-check independently exhausts the same sixteen expected-failure
 configs as Apalache.
 
@@ -5051,6 +5309,11 @@ construction:
   signature state,
 - suspicion signing-body hashes include the canonical suspicion evidence fields
   while excluding the signature.
+
+`VNextSigningPreimageCorrectnessEnvelope` keeps the full domain separation,
+message-type, body-field, mutable-signature exclusion, vote/certificate
+agreement, unsigned-vote projection, and suspicion-hash exactness aggregate
+paired with the model type invariant.
 Its TLC cross-check independently exhausts the same twenty-seven
 expected-failure configs as Apalache.
 
@@ -5071,6 +5334,8 @@ certificate ingress:
 - view-change certificates always install through the non-canonical diagnostic
   path, abort only an installed highest slot, and trigger only nonzero new
   views.
+`VNextControlIngressCorrectnessEnvelope` composes the type invariant with the
+exact control-certificate ingress side-effect aggregate.
 Its TLC cross-check independently exhausts the same twenty-eight
 expected-failure configs as Apalache.
 
@@ -5089,6 +5354,11 @@ expected-failure configs as Apalache.
 - recovery starts only for due, unprotected running or backpressured timeouts,
   and recovery does not emit validation result side effects,
 - commit-persisted events make the slot sticky-committed and record progress.
+
+`VNextSlotLifecycleCorrectnessEnvelope` keeps the full actor-owned slot,
+validation, dispatch, worker, queue, result, deferral, timeout, recovery,
+commit, and side-effect exactness aggregate paired with the model type
+invariant.
 Its TLC cross-check independently exhausts the same thirty-two expected-failure
 configs as Apalache.
 
@@ -5104,6 +5374,11 @@ configs as Apalache.
   `(id, generation)` worker results may apply,
 - wrong-id, wrong-generation, and non-running worker results are ignored
   without mutating validation state.
+
+`VNextValidationCorrectnessEnvelope` keeps the full decision, timeout,
+saturating elapsed, terminal-state, worker-owner, matching-result, stale-result,
+ignored-result preservation, and terminal-result exactness aggregate paired
+with the model type invariant.
 Its TLC cross-check independently exhausts the same fifteen expected-failure
 configs as Apalache.
 
@@ -5119,6 +5394,8 @@ and protection helpers:
   protection includes only backpressured slots whose pending block is retained,
 - `vnext_round_next_due(...)` ignores terminal/non-running states and returns
   the earliest fresh-worker, running-suspicion, or backpressure deadline.
+`VNextDeadlineProtectionCorrectnessEnvelope` composes the type invariant with
+the exact deadline, protection-set, and round wakeup aggregate.
 Its TLC cross-check independently exhausts the same twenty-four
 expected-failure configs as Apalache.
 
@@ -5130,6 +5407,9 @@ configuration conversion:
   threshold, and max-tainted fields unchanged, and
 - suspicion-timeout and re-chain-cooldown durations are converted
   independently, including their overflow saturation cases.
+`VNextPerformanceConfigCorrectnessEnvelope` composes the type invariant with
+the exact duration conversion, field preservation, independence, and overflow
+saturation aggregate.
 
 `SumeragiValidationWorkerConfigGate.tla` captures pending-block validation
 worker configuration:
@@ -5141,6 +5421,9 @@ worker configuration:
   a floor of four, while explicit work caps are preserved,
 - zero result queue caps derive from the effective thread count times eight
   with a floor of eight, while explicit result caps are preserved.
+`ValidationWorkerConfigCorrectnessEnvelope` composes the type invariant with
+the exact auto-thread clamp, explicit-thread preservation, queue-cap
+derivation, explicit-cap preservation, and positivity aggregate.
 
 `SumeragiValidationStallRedriveGate.tla` captures validation stall and vNext
 redrive helper decisions:
@@ -5154,6 +5437,9 @@ redrive helper decisions:
 - vNext redrive ignores missing/terminal slots, redrives queued/backpressured
   slots exactly at retry timeout boundaries, treats missing running ownership as
   orphaned, and maps stalled running validation to `StalledRunning`.
+`ValidationStallRedriveCorrectnessEnvelope` composes the type invariant with
+the exact stall-timeout, freshness, inline fallback, and vNext redrive
+aggregate.
 Its TLC cross-check independently exhausts the same twenty-four
 expected-failure configs as Apalache.
 
@@ -5165,6 +5451,8 @@ expected-failure configs as Apalache.
 - the emitted label set stays equal to the expected Rust label set, and
 - expected-failure mutations cover per-reason label drift and accidental label
   collisions.
+`ValidationRedriveLabelCorrectnessEnvelope` composes the type invariant with
+the exact label mapping, nonzero, distinctness, and stable label-set aggregate.
 
 `SumeragiValidationOwnershipCleanupGate.tla` captures
 `clear_validation_ownership_for_block(...)`:
@@ -5174,6 +5462,10 @@ expected-failure configs as Apalache.
 - empty vNext rounds are pruned after slot cleanup, including rounds that were
   already empty before cleanup, and
 - unrelated hashes and still-nonempty rounds are preserved exactly.
+`ValidationOwnershipCleanupCorrectnessEnvelope` composes the type invariant
+with exact legacy/vNext ownership cleanup, superseded-marker cleanup, slot
+removal, round projection, target-removal, unrelated-preservation, and
+empty-round pruning obligations.
 
 `SumeragiVerifyCacheKeyGate.tla` captures vote and QC verification cache-key
 identity:
@@ -5187,6 +5479,9 @@ identity:
 - `VoteVerifyKey::from_vote_with_signer_public_key(...)` and the vote cache-key
   constructor intentionally ignore the optional signer public key so retry and
   local-public-key hints cannot split the verification identity.
+`VerifyCacheKeyCorrectnessEnvelope` composes the type invariant with the
+all-candidates QC/vote verification cache-key exactness aggregate covering
+inner key fields, cache-tuple fields, and signer-public-key non-binding.
 Its TLC cross-check independently exhausts the same twenty-seven
 expected-failure configs as Apalache.
 
@@ -5203,6 +5498,11 @@ expected-failure configs as Apalache.
   and invalid-signature results cannot mutate consensus state,
 - a disconnected result channel clears worker senders plus in-flight and
   pending work and does not retain the dead receiver.
+`VoteVerifyAsyncCorrectnessEnvelope` composes the type invariant with the full
+async vote-verification exactness aggregate covering inline fallback,
+duplicate suppression, in-flight/pending ownership, backpressure retry,
+worker-result ownership, rejected-result handling, valid-result application,
+and channel-disconnect fail-closed cleanup.
 Its TLC cross-check independently exhausts the same thirty expected-failure
 configs as Apalache.
 
@@ -5218,9 +5518,7 @@ worker configuration:
   equality with thread resolution, zero-cap derivation, explicit-cap
   preservation, and positive channel-capacity floors.
 - `VoteVerifyWorkerConfigCorrectnessEnvelope` composes the type invariant with
-  fast vote-verification worker config safety, exact output tuples, thread
-  derivation, queue-cap derivation, explicit-cap preservation, and positive
-  queue-capacity floors.
+  `VoteVerifyWorkerConfigExactness`.
 
 `SumeragiQcVerifyAsyncGate.tla` captures actor-side async QC aggregate
 verification:
@@ -5238,6 +5536,9 @@ verification:
   QCs re-enter `apply_known_block_qc_work(...)`,
 - disconnected worker senders or result receivers clear worker-owned state and
   fall back to inline verification rather than keeping stale ownership.
+`QcVerifyAsyncCorrectnessEnvelope` composes the type invariant with exact
+cache, inline fallback, worker dispatch, duplicate suppression, known-block
+stale-lock, worker-result ownership, and disconnect-cleanup behavior.
 Its TLC cross-check independently exhausts the same thirty-nine
 expected-failure configs as Apalache.
 
@@ -5253,9 +5554,7 @@ worker configuration:
   equality with thread resolution, zero-cap derivation, explicit-cap
   preservation, and positive channel-capacity floors.
 - `QcVerifyWorkerConfigCorrectnessEnvelope` composes the type invariant with
-  fast QC aggregate-verification worker config safety, exact output tuples,
-  thread derivation, queue-cap derivation, explicit-cap preservation, and
-  positive queue-capacity floors.
+  `QcVerifyWorkerConfigExactness`.
 
 `SumeragiActorGatePriorityGate.tla` captures actor-gate priority and fairness:
 - `ActorGate::can_enter(...)` serializes access while any priority is already
@@ -5288,6 +5587,11 @@ configs as Apalache.
 - result polling and external-hint sync run before tick decisions, busy ticks
   use the busy gap, explicit wakeups bypass the tick gap, and budget-exhausted
   pre-tick drains suppress post-tick work.
+`WorkerDrainSchedulerCorrectnessEnvelope` composes the type invariant with the
+full worker-loop drain-scheduler exactness aggregate covering tier selection,
+frontier repair, quorum-recovery drain, overtime payload escape, block backlog
+escape, accounting, polling, tick gaps, and budget-exhausted post-tick
+suppression.
 Its TLC cross-check independently exhausts the same thirty-four
 expected-failure configs as Apalache.
 
@@ -5303,6 +5607,9 @@ adaptive-cap helpers:
 - vote backlog throttles block-payload work without reducing RBC ingress, and
   block backlog throttles blocks plus payload/RBC repair caps with a minimum
   payload/RBC floor.
+`WorkerBudgetAdaptiveCorrectnessEnvelope` composes the type invariant with the
+full worker budget/adaptive-cap exactness aggregate covering time budgets, vote
+and generic drain caps, tick gaps, block-backlog tiers, and adaptive queue caps.
 Its TLC cross-check independently exhausts the same thirty-two expected-failure
 configs as Apalache.
 
@@ -5320,6 +5627,10 @@ parallel worker execution envelopes:
   handling, poll worker results after each handled message, record the drain,
   stop on empty queues, and restore idle only when the last active worker
   leaves.
+`WorkerIngressRoutingCorrectnessEnvelope` composes the type invariant with the
+full worker-ingress exactness aggregate covering message routing, metadata,
+enqueue/drop/wake accounting, worker tier/stage/priority/handler mapping, batch
+limits, drain sequencing, empty stops, and idle restoration.
 Its TLC cross-check independently exhausts the same thirty-four
 expected-failure configs as Apalache.
 
@@ -5329,6 +5640,9 @@ expected-failure configs as Apalache.
   ids back to idle,
 - `WorkerLoopStage::as_str(...)` preserves the status/diagnostic label for
   every stage and keeps labels distinct.
+`WorkerLoopStageCorrectnessEnvelope` composes the type invariant with the full
+worker-loop stage exactness aggregate covering id mapping, reverse lookup,
+unknown fallback, label stability, distinct ids/labels, and image exactness.
 
 `SumeragiWorkerQueueStatusGate.tla` captures worker-queue status accounting:
 - `WorkerQueueKind` routes each queue family to its own depth, blocked, blocked
@@ -5494,6 +5808,9 @@ realignment and committed-anchor range-pull pacing:
 - the permit TTL boundary is inclusive while expired and zero-pending permits
   are rejected and removed; pruning drops expired permits without dropping
   fresh ones.
+`FrontierBlockSyncHintCorrectnessEnvelope` composes the type invariant with
+latest-gossip pause gates, external-hint storage, direct-response permit
+admission, permit accounting, and pruning exactness.
 
 `SumeragiPrecommitVoteGate.tla` captures local precommit vote emission:
 - pending blocks must be validated before the local node signs a precommit,
@@ -5505,6 +5822,9 @@ realignment and committed-anchor range-pull pacing:
 - older conflicting branches cannot use quorum-completion as an escape hatch,
 - locked-QC conflicts, missing locked payloads at the same or older view, and
   non-extending locked-chain candidates fail closed.
+`PrecommitVoteCorrectnessEnvelope` composes the type invariant with exact
+emitted/rejected guard matching, safe-candidate acceptance, unsafe-candidate
+rejection, conflict, locked-QC, and permitted exception obligations.
 Its TLC cross-check independently exhausts the same nine expected-failure
 configs as Apalache.
 
@@ -5521,6 +5841,9 @@ conflict helpers shared by proposal assembly and precommit voting:
   at or before the current view remains unresolved.
 Its TLC cross-check independently exhausts the same thirty-six
 expected-failure configs as Apalache.
+`SameHeightVoteConflictCorrectnessEnvelope` composes the type invariant with
+the all-cases vote-selection, conflict, supersession, and pending-validation
+exactness aggregate.
 
 `SumeragiSameHeightVoteLockGate.tla` captures aggregate same-height vote-lock
 construction and frontier competing-quorum lock composition:
@@ -5539,6 +5862,8 @@ construction and frontier competing-quorum lock composition:
   block the slot.
 Its TLC cross-check independently exhausts the same twenty-four
 expected-failure configs as Apalache.
+`SameHeightVoteLockCorrectnessEnvelope` composes the type invariant with the
+all-candidates vote-lock and frontier-lock exactness aggregate.
 
 `SumeragiProposalStaleVoteGate.tla` captures proposal-side stale same-height
 vote gates:
@@ -5552,6 +5877,8 @@ vote gates:
 - missing-QC repair can bypass a stale local Commit vote only for a newer
   frontier proposal with canonical committed-tip highest-QC evidence and no
   recoverable same-height lock/QC/inflight work.
+`ProposalStaleVoteCorrectnessEnvelope` composes the type invariant with exact
+base-blocker, missing-QC repair escape, and assembly-composition matching.
 Its TLC cross-check independently exhausts the same thirty-eight
 expected-failure configs as Apalache.
 
@@ -5566,6 +5893,8 @@ recovery view-gap thresholds:
   validator count.
 Its TLC cross-check independently exhausts the same nineteen expected-failure
 configs as Apalache.
+`SameHeightVoteRecoveryGapCorrectnessEnvelope` composes the type invariant
+with the standard/escalation threshold and relation exactness aggregate.
 
 `SumeragiTipExtensionHelpersGate.tla` captures pure tip-extension helpers:
 - pending blocks are stale for the committed tip only when the committed hash is
@@ -5576,6 +5905,8 @@ configs as Apalache.
 - chain extension checks return `Some(false)` below the tip or for divergent
   branches, `Some(true)` for matching same-height heads or complete ancestry to
   the tip, and `None` when a required parent lookup is missing.
+`TipExtensionHelpersCorrectnessEnvelope` composes the type invariant with the
+exact pending-block stale-tip and chain-extension helper aggregate.
 Its TLC cross-check independently exhausts the same nineteen expected-failure
 configs as Apalache.
 
@@ -5611,8 +5942,10 @@ expected-failure configs as Apalache.
   record and accept blocks without DA commitments,
 - DA bundle caps reject too many commitments/openings, missing proof digests,
   and zero-like proof digests while accepting valid nonzero digests.
-Its TLC cross-check independently exhausts the same twenty-eight
-expected-failure configs as Apalache.
+The fast config checks the manifest guard exactness aggregate and correctness
+envelope, including the strict/audit/hash-mismatch policy anchors. Its TLC
+cross-check independently exhausts the same twenty-eight expected-failure
+configs as Apalache.
 
 `SumeragiConsensusCapsStatusGate.tla` captures consensus capability status
 projection:
@@ -5649,6 +5982,8 @@ expected-failure configs as Apalache.
   version, then consensus fingerprint.
 Its TLC cross-check independently exhausts the same thirteen expected-failure
 configs as Apalache.
+`HandshakeCorrectnessEnvelope` composes the type invariant with exact local
+projection, exact-match admission, and mismatch-priority ordering.
 
 `SumeragiModeFlipGate.tla` captures runtime consensus-mode flip helpers:
 - `update_pending_mode_flip(...)` clears pending state when the effective mode
@@ -5736,6 +6071,9 @@ aggregation semantics:
   minimum-height filters,
 - pruning, exact removal, and per-height view pruning keep the same inclusive
   and exclusive boundaries as the Rust tracker.
+`NewViewTrackerCorrectnessEnvelope` composes the type invariant with tracker
+exactness for spec matching, roster/quorum selection, local-vote counting, and
+height-prune boundaries.
 Its TLC cross-check independently exhausts the same thirty expected-failure
 configs as Apalache.
 
@@ -5750,6 +6088,8 @@ configs as Apalache.
 - proposal-attempt logging fires immediately on the first attempt, suppresses
   attempts before the cooldown boundary, resumes at the boundary, and does not
   extend cooldowns for suppressed attempts or backward time samples.
+`TimingMonitorCorrectnessEnvelope` composes the type invariant with the exact
+timing/log cooldown monitor aggregate.
 Its TLC cross-check independently exhausts the same seventeen expected-failure
 configs as Apalache.
 
@@ -5767,6 +6107,8 @@ accumulator:
   due empty summary refreshes without logging.
 Its TLC cross-check independently exhausts the same twenty-one
 expected-failure configs as Apalache.
+`HotspotLogSummaryCorrectnessEnvelope` composes the type invariant with the
+full hotspot-summary accumulator exactness aggregate.
 
 `SumeragiAdaptiveObservabilityGate.tla` captures adaptive observability
 timing/fanout control:
@@ -5796,6 +6138,9 @@ expected-failure configs as Apalache.
 - `PacemakerBackpressure::update(...)` reports `First` only when entering
   deferral, `Subsequent` while deferral is already active, and `None` while
   clearing or remaining idle, with the internal deferring flag updated exactly.
+`PacingBackpressureCorrectnessEnvelope` composes the type invariant with exact
+receiver snapshot, refresh, cached-state, defer-refresh, saturation, and
+pacemaker deferral-state action matching.
 Its TLC cross-check independently exhausts the same fifteen expected-failure
 configs as Apalache.
 
@@ -5828,6 +6173,9 @@ backpressure telemetry tracking:
 - clearing an active reason observes the elapsed duration, marks the gauge
   inactive, resets age to zero, and drops the start timestamp,
 - idle reasons and impossible active-without-start clears emit no telemetry.
+`PacemakerBackpressureTrackerCorrectnessEnvelope` composes the type invariant
+with the exact label, telemetry-gate, activation, sustained-age, clear, and
+idle/missing-start aggregate.
 Its TLC cross-check independently exhausts the same twenty-four
 expected-failure configs as Apalache.
 
@@ -5859,6 +6207,8 @@ expected-failure configs as Apalache.
   allow aggregation,
 - same-view missing parent, divergent parent, height regression, and
   same-height hash conflict reject aggregation and emit the skip warning.
+`PrecommitQcExtendsLockedCorrectnessEnvelope` composes `TypeInvariant` with
+the aggregate wrapper exactness check.
 Its TLC cross-check independently exhausts the same fifteen expected-failure
 configs as Apalache.
 
@@ -5875,6 +6225,8 @@ configs as Apalache.
   zero total stake fail closed,
 - duplicate snapshot entries use the maximum stake for the peer, and selected
   stake coverage uses integer basis points clamped to 10,000.
+`StakeSnapshotCorrectnessEnvelope` composes the type invariant with the
+all-cases stake snapshot exactness aggregate.
 
 `SumeragiValidatorElectionGate.tla` captures NPoS validator election helpers:
 - staking-record, self-bond, nomination-bond, and nominator-concentration
@@ -5891,6 +6243,8 @@ configs as Apalache.
   seats, and
 - the outcome binds epoch, snapshot height, seed, params, candidate count, and
   validator-set hash to the selected set.
+`ValidatorElectionCorrectnessEnvelope` composes the type invariant with the
+all-cases NPoS validator election exactness aggregate.
 
 `SumeragiLiveVoteRosterGate.tla` captures live local-vote roster selection:
 - `roster_for_live_vote_with_mode(...)` returns an empty roster for heights
@@ -5905,8 +6259,9 @@ configs as Apalache.
   uses its world-derived active validator roster before legacy fallback,
 - all non-empty live rosters are deduplicated and sorted before local
   NEW_VIEW/precommit vote signing.
-Its TLC cross-check independently exhausts the same sixteen expected-failure
-configs as Apalache.
+The fast config checks the aggregate live-vote roster exactness predicate and
+correctness envelope. Its TLC cross-check independently exhausts the same
+sixteen expected-failure configs as Apalache.
 
 `SumeragiCanonicalRoundRosterGate.tla` captures canonical round-roster
 selection:
@@ -5956,6 +6311,10 @@ selection:
 - `roster_for_new_view_with_mode(...)` delegates past heights to the vote
   selector, uses the live roster at the next height, and uses future
   roll-forward before canonical round fallback.
+`VoteRosterSelectionCorrectnessEnvelope` composes the type invariant with the
+full block-specific vote-roster selection exactness aggregate covering cache
+priority, exact evidence, live-roster fallback, historical remap, committed
+fallback, future roll-forward, validation-cache, and NEW_VIEW routing.
 
 `SumeragiVoteRosterCacheGate.tla` captures vote roster cache/support helpers:
 - `cache_vote_roster(...)` ignores empty roster observations, canonicalizes
@@ -5971,6 +6330,11 @@ selection:
 - `local_commit_vote_roster(...)` and `vote_emission_topology_for_height(...)`
   use the nonempty live roster at `committed_height + 1` and otherwise preserve
   their supplied fallback topology.
+`VoteRosterCacheCorrectnessEnvelope` composes the type invariant with the full
+vote-roster cache/support exactness aggregate covering cache insertion,
+canonicalization, keep-existing behavior, deferred replay, POP-cache
+hit/miss/source/cap/hash handling, empty roster POP maps, and local/emission
+fallback topology selection.
 
 `SumeragiCommitTopologyStateGate.tla` captures commit-topology state refresh
 and roster-change reset handling:
@@ -6009,6 +6373,9 @@ fallback for block-sync roster and QC recovery:
   aligned stake snapshot when NPoS selected it,
 - cached QC reconstruction from precommit signer history requires a non-empty
   aggregate signature before it can synthesize a Commit QC.
+`PrecommitSignerHistoryCorrectnessEnvelope` composes the type invariant with
+the exact signer-history ordering, exact lookup, roster-shape, quorum,
+stake-snapshot, fallback artifact, and cached-QC aggregate action matching.
 Its TLC cross-check independently exhausts the same twenty-three
 expected-failure configs as Apalache.
 
@@ -6024,6 +6391,9 @@ prepare voting:
 - stale retired prior-view vote history, accepted new-view supersession,
   locked-QC fallback, and locked-chain extension remain permitted liveness
   cases.
+`ProposalAssemblyCorrectnessEnvelope` composes the type invariant with the
+full proposal assembly exactness aggregate covering guard matching,
+unsafe-case deferral, and permitted liveness exceptions.
 
 `SumeragiEngineInitialStateGate.tla` captures pure-engine constructor state:
 - `ConsensusEngine::new(round, quorum_policy)` stores the exact caller
@@ -6057,6 +6427,11 @@ accessors:
 - pending finality is preserved across view changes so exact payload recovery
   can still complete.
 
+`EngineTickCorrectnessEnvelope` composes the type invariant with the complete
+tick exactness obligation for view advancement, vote/output emission, phase
+reset, validation cleanup, pending-finality preservation, highest-QC subject
+selection, highest-QC binding, and output consistency.
+
 `SumeragiEngineTickStatePreservationGate.tla` captures unrelated state
 preservation during tick handling:
 - ticks preserve locked-QC and highest-QC state exactly,
@@ -6065,6 +6440,11 @@ preservation during tick handling:
   reconfiguration exactly,
 - those preservation guarantees hold for idle, validation-in-flight,
   pending-finality, and fully populated pure-engine state shapes.
+
+`EngineTickStatePreservationCorrectnessEnvelope` composes the type invariant
+with tick unrelated-state exactness for lock/highest-QC state, Prepare-QC replay
+cache, committed records, available payloads, pending-finality certificate map,
+staged reconfiguration, all-modeled-state preservation, and value domains.
 
 `SumeragiEngineNewViewSubjectGate.tla` captures pure-engine NewView vote
 subject projection:
@@ -6076,6 +6456,11 @@ subject projection:
   parent and block and bind no highest-QC reference,
 - every emitted NewView subject uses the zero payload hash.
 
+`EngineNewViewSubjectCorrectnessEnvelope` composes the type invariant with
+NewView subject projection exactness for highest-QC subjects, tick fallback,
+invalid-validation fallback, highest-QC binding presence, and zero payload
+hashes.
+
 `SumeragiEngineHandleDispatchGate.tla` captures top-level pure-engine input
 dispatch:
 - each `ConsensusInput` variant dispatches to exactly one matching handler,
@@ -6083,6 +6468,9 @@ dispatch:
 - all certificate phase variants dispatch only to `on_certificate(...)`,
 - payload availability, validation-result, and committed-block inputs dispatch
   only to their matching handlers.
+`EngineHandleDispatchCorrectnessEnvelope` composes the type invariant with
+exact handler matching, single dispatch, no-drop, no-cross-dispatch, per-input
+handler, and value-domain obligations.
 
 `SumeragiEngineHandleForwardingGate.tla` captures exact top-level input
 argument forwarding:
@@ -6092,6 +6480,9 @@ argument forwarding:
   subject, and highest-QC option from the input,
 - payload availability, validation-result, and committed-block inputs preserve
   their subject, round/block/validity, and reconfiguration fields exactly.
+`EngineHandleForwardingCorrectnessEnvelope` composes the type invariant with
+proposal, certificate, payload, validation, committed-block, all-payload, and
+value-domain forwarding obligations.
 
 `SumeragiEngineHandleOutputRelayGate.tla` captures exact top-level output
 relay:
@@ -6102,6 +6493,9 @@ relay:
 - two-output tick, invalid-validation, and accepted-proposal paths preserve
   output order,
 - top-level dispatch cannot substitute outputs from another handler family.
+`EngineHandleOutputRelayCorrectnessEnvelope` composes the type invariant with
+exact output relay, empty/non-empty preservation, two-output order, per-handler
+relay, and value-domain obligations.
 
 `SumeragiEngineCertificateDispatchGate.tla` captures pure-engine certificate
 prefilter dispatch:
@@ -6172,6 +6566,10 @@ view-advance boundary used by pacemaker ticks and invalid validation results:
   in-flight validation, and preserve pending finality,
 - accepted highest-QC evidence updates local highest-QC state only when it
   improves the existing reference.
+`EngineNewViewQcCorrectnessEnvelope` composes the type invariant with accepted
+and ignored certificate exactness, unsafe rejection, accepted output/phase and
+validation/pending-finality side effects, highest-QC improvement/preservation,
+and ignored-certificate no-mutation obligations.
 
 `SumeragiEngineNewViewHighestQcGate.tla` captures exact highest-QC state after
 NewView-QC handling:
@@ -6182,6 +6580,10 @@ NewView-QC handling:
 - accepted lower or equal carried highest-QC evidence preserves the stored QC,
 - stale/same-view, incompatible-highest, wrong-context, and wrong-quorum
   NewView certificates preserve the stored highest-QC reference exactly.
+`EngineNewViewHighestQcCorrectnessEnvelope` composes the type invariant with
+final highest-QC exactness, no-highest preservation, improving-QC recording,
+lower/equal preservation, rejected-certificate preservation, incompatible
+highest-QC rejection, wrong-context rejection, and value-domain obligations.
 
 `SumeragiEngineNewViewStatePreservationGate.tla` captures unrelated state
 preservation during NewView-QC handling:
@@ -6191,6 +6593,10 @@ preservation during NewView-QC handling:
   reconfiguration,
 - stale/same-view, incompatible-highest, wrong-context, wrong-quorum, and
   committed-height rejected NewView QCs preserve those same fields exactly.
+`EngineNewViewStatePreservationCorrectnessEnvelope` composes the type
+invariant with accepted and rejected preservation of lock, Prepare-QC replay
+cache, committed records, available-payload store, pending-finality certificate
+map, staged reconfiguration, all-modeled state, and value-domain obligations.
 
 `SumeragiEngineNewViewAdvanceGate.tla` captures the exact round/output fields
 for accepted NewView QCs:
@@ -6199,6 +6605,9 @@ for accepted NewView QCs:
 - accepted NewView QCs clear validation, preserve pending finality, and enter
   proposal phase,
 - rejected NewView QCs do not update the stored round or emit `AdvanceView`.
+`EngineNewViewAdvanceCorrectnessEnvelope` composes the type invariant with the
+round/output, validation cleanup, pending-finality preservation, phase, rejected
+certificate, and value-domain exactness obligations.
 
 `SumeragiEngineProposalGate.tla` captures the pure engine proposal-ingress
 gate:
@@ -6210,6 +6619,10 @@ gate:
   unlocked proposals and proposals for the locked subject remain safe,
 - accepted proposals must request validation, sign a prepare vote, and enter
   prepare phase.
+`EngineProposalCorrectnessEnvelope` composes the type invariant with
+proposal-ingress accepted/ignored exactness, safe proposal validation and
+prepare-vote emission, unsafe rejection, accepted output/phase side effects,
+ignored-output suppression, and output consistency.
 
 `SumeragiEngineProposalOutputGate.tla` captures exact proposal output fields:
 - accepted proposals emit `ValidateBlock` for the exact proposal subject,
@@ -6219,6 +6632,10 @@ gate:
   when the accepted proposal carried a highest QC to unlock a conflicting
   proposal,
 - rejected proposals emit no validation or prepare-vote outputs.
+`EngineProposalOutputCorrectnessEnvelope` composes the type invariant with
+accepted output ordering and pairing, exact validation subject, exact prepare
+vote phase/round/subject/highest-QC fields, rejected-output suppression, and
+value-domain obligations.
 
 `SumeragiEngineProposalStateGate.tla` captures exact proposal state mutation:
 - accepted proposals move the phase from Proposal to Prepare,
@@ -6228,6 +6645,10 @@ gate:
   wrong-phase inputs that started outside Proposal phase,
 - a proposal-carried highest QC may unlock a conflicting proposal but must not
   be recorded as the engine's highest QC by proposal ingress.
+`EngineProposalStateCorrectnessEnvelope` composes the type invariant with
+accepted phase transition exactness, accepted round/lock/highest-QC/pending
+preservation, rejected-state preservation, rejected-phase preservation, and
+value-domain obligations.
 
 `SumeragiEngineProposalStatePreservationGate.tla` captures unrelated-state
 preservation during proposal ingress:
@@ -6236,6 +6657,11 @@ preservation during proposal ingress:
   staged reconfiguration,
 - rejected proposals for wrong phase, wrong round, incompatible highest-QC, and
   lock failures preserve those same fields exactly.
+`EngineProposalStatePreservationCorrectnessEnvelope` composes the type
+invariant with accepted and rejected preservation of committed records,
+Prepare-QC replay cache, pending-finality certificate-map entries,
+available-payload records, staged reconfiguration, all-modeled-state
+preservation, and value-domain obligations.
 
 `SumeragiEngineProposalValidationOwnerGate.tla` captures the exact validation
 owner side effect for accepted proposals:
@@ -6244,6 +6670,10 @@ owner side effect for accepted proposals:
 - accepted proposals overwrite any stale validation owner from earlier work,
 - rejected proposals preserve the previous validation owner exactly, including
   preserving `None` for rejected candidates that started without an owner.
+`EngineProposalValidationOwnerCorrectnessEnvelope` composes the type invariant
+with final-owner exactness, accepted exact-subject recording, accepted stale
+owner overwrite, rejected-owner preservation, rejected existing/none owner
+preservation, and value-domain obligations.
 
 `SumeragiEngineProposalLockGate.tla` captures the pure-engine proposal lock
 predicate:
@@ -6252,6 +6682,10 @@ predicate:
 - conflicting proposals without a highest QC are rejected,
 - conflicting proposals with equal or lower QCs are rejected,
 - conflicting proposals with strictly greater QCs are accepted.
+`EngineProposalLockCorrectnessEnvelope` composes the type invariant with exact
+accept/reject classification, unlocked proposal acceptance, locked-subject
+acceptance, conflict-without-QC rejection, equal/lower-QC rejection, and
+strictly-higher-QC unlock obligations.
 
 `SumeragiQcRoundCompatibilityGate.tla` captures the pure-engine helper that
 checks whether carried highest-QC evidence is compatible with a candidate
@@ -6262,6 +6696,9 @@ round:
   candidate round view,
 - future-height QCs, same-height future-view QCs, and wrong-epoch QCs are
   rejected before proposal or NewView admission can use them.
+`QcRoundCompatibilityCorrectnessEnvelope` composes the type invariant with the
+exact epoch, lower-height, same-height view, future-height, and height/view
+ordering obligations.
 
 `SumeragiEngineQcRefProjectionGate.tla` captures the pure-engine helper that
 projects certificates into QC references:
@@ -6315,6 +6752,10 @@ applies finality side effects in `commit_subject(...)`:
 - successful commits clear pending finality and validation ownership,
 - successful commits return to proposal phase and emit exactly one
   `CommitBlock`.
+`EngineCommitSubjectCorrectnessEnvelope` composes the type invariant with
+commit-subject side-effect exactness, fresh/matching commit records, conflict
+preservation, conflict output suppression, cleanup, phase, and commit-output
+obligations.
 
 `SumeragiEnginePayloadLookupGate.tla` captures the pure-engine helper that
 checks local payload availability in `has_payload(...)`:
@@ -6323,6 +6764,10 @@ checks local payload availability in `has_payload(...)`:
 - a matching payload hash for another block is insufficient,
 - unrelated recorded payloads and empty availability stores cannot satisfy the
   commit-QC immediate-finality guard.
+`EnginePayloadLookupCorrectnessEnvelope` composes the type invariant with exact
+accept/reject classification, exact-pair acceptance, same-block/wrong-payload
+rejection, wrong-block/same-payload rejection, unrelated-pair rejection,
+empty-store rejection, and recorded-payload insufficiency obligations.
 
 `SumeragiEnginePrepareQcGate.tla` captures the pure engine prepare-QC to
 commit-vote transition:
@@ -6334,6 +6779,11 @@ commit-vote transition:
 - prepare QCs cannot emit commit votes while the engine is waiting for pending
   finality payload recovery,
 - accepted prepare QCs must record both the locked QC and highest QC.
+`EnginePrepareQcCorrectnessEnvelope` composes the type invariant with exact
+signed/ignored classification, safe Prepare-QC signing, unsafe-QC rejection by
+guard family, replay/conflict/pending-finality rejection, lock/highest-QC
+recording for signed Prepare QCs, ignored-QC lock/highest preservation, and
+signed-only lock/highest mutation obligations.
 
 `SumeragiEnginePrepareLockHighestGate.tla` captures exact lock/highest-QC state
 after Prepare-QC handling:
@@ -6346,6 +6796,11 @@ after Prepare-QC handling:
   still updating the lock,
 - shared-prefilter rejections, replayed/conflicting same-round Prepare QCs, and
   pending-finality returns preserve stored lock and highest-QC state exactly.
+`EnginePrepareLockHighestCorrectnessEnvelope` composes the type invariant with
+final lock/highest-QC exactness, exact accepted lock recording, no-current and
+improving highest-QC recording, lower/equal highest-QC preservation, rejected
+prefilter preservation, replay/conflict/pending preservation, ignored-QC
+no-recording, and value-domain obligations.
 
 `SumeragiEnginePreparePhaseGate.tla` captures exact phase state after
 Prepare-QC handling:
@@ -6356,6 +6811,11 @@ Prepare-QC handling:
 - replayed or conflicting same-round Prepare QCs preserve the current phase,
 - pending-finality Prepare QCs preserve `PendingFinality` rather than
   regressing or advancing phase state.
+`EnginePreparePhaseCorrectnessEnvelope` composes the type invariant with final
+phase exactness, accepted Prepare-QC commit-phase transitions, rejected
+prefilter preservation, replay/conflict preservation, pending-finality
+preservation, ignored-QC no-transition guarantees, and value-domain
+obligations.
 
 `SumeragiEnginePrepareStatePreservationGate.tla` captures unrelated state
 preservation during Prepare-QC handling:
@@ -6365,6 +6825,10 @@ preservation during Prepare-QC handling:
 - accepted fresh Prepare QCs do not insert or clear committed-height records,
 - shared-prefilter rejections, replayed/conflicting same-round Prepare QCs, and
   pending-finality returns preserve those same fields exactly.
+`EnginePrepareStatePreservationCorrectnessEnvelope` composes the type invariant
+with accepted/rejected round, pending-finality marker, validation-owner, and
+committed-record preservation, all-modeled-state preservation, and value-domain
+obligations.
 
 `SumeragiEnginePrepareVoteCacheGate.tla` captures the exact cache/output side
 effects in the accepted `on_prepare_qc(...)` branch:
@@ -6376,6 +6840,12 @@ effects in the accepted `on_prepare_qc(...)` branch:
   emit a commit vote,
 - replayed and conflicting same-round Prepare QCs must preserve the existing
   cached subject.
+`EnginePrepareVoteCacheCorrectnessEnvelope` composes the type invariant with
+exact cache-key, cache-subject, output phase/round/subject/highest-QC fields,
+safe Prepare-QC cache/output side effects, rejected-QC no-cache/no-output
+preservation, replay/conflict cache preservation and no-vote guarantees,
+safe-only output, wrong-round/subject rejection for safe prepares, and
+value-domain obligations.
 
 `SumeragiEngineCommitQcGate.tla` captures the pure engine commit-QC finality
 gate:
@@ -6387,6 +6857,9 @@ gate:
 - missing-payload commit QCs request exact payload recovery instead of
   finalizing,
 - accepted commit QCs must record highest-QC state.
+`EngineCommitQcCorrectnessEnvelope` composes the type invariant with accepted,
+fetched, ignored, rejection, payload-gating, pending-finality, and highest-QC
+recording obligations.
 
 `SumeragiEngineCommitQcHighestRecordGate.tla` captures exact highest-QC state
 after Commit-QC handling:
@@ -6398,6 +6871,9 @@ after Commit-QC handling:
 - accepted lower or equal derived Commit QCs preserve the stored highest QC,
 - shared-prefilter rejections and pending-finality replay/conflict returns
   preserve the stored highest-QC reference exactly.
+`EngineCommitQcHighestRecordCorrectnessEnvelope` composes the type invariant
+with the exact derived-QC record, preserving lower/equal candidates, rejected
+prefilter, pending replay/conflict, ignored-QC, and value-domain obligations.
 
 `SumeragiEngineCommitQcPhaseGate.tla` captures exact phase transitions after
 Commit-QC handling:
@@ -6407,6 +6883,10 @@ Commit-QC handling:
   payload is fetched,
 - shared-prefilter rejections and pending-finality replay/conflict returns
   preserve the phase that existed before the certificate was handled.
+`EngineCommitQcPhaseCorrectnessEnvelope` composes the type invariant with
+payload-available proposal transitions, missing-payload pending-finality
+transitions, rejected-QC preservation, pending replay/conflict preservation,
+ignored-QC preservation, and phase-domain obligations.
 
 `SumeragiEngineCommitQcStatePreservationGate.tla` captures unrelated state
 preservation during Commit-QC handling:
@@ -6418,6 +6898,10 @@ preservation during Commit-QC handling:
   it to choose finality vs. fetch,
 - shared-prefilter rejections and pending-finality replay/conflict returns
   preserve those same fields exactly.
+`EngineCommitQcStatePreservationCorrectnessEnvelope` composes the type
+invariant with accepted and rejected preservation of round, lock, Prepare-QC
+replay cache, available-payload store, all-modeled-state preservation, and
+value-domain obligations.
 
 `SumeragiEngineCommitQcAvailableCommitGate.tla` captures the exact
 payload-available Commit-QC finality side effects:
@@ -6443,6 +6927,10 @@ missing-payload Commit-QC pending/fetch boundary:
 - shared-prefilter rejections and pending-finality replay/conflict returns do
   not create new pending entries or fetch requests, and replay/conflict returns
   preserve the already pending subject and certificate-map entry.
+`EngineCommitQcPendingFetchCorrectnessEnvelope` composes the type invariant
+with pending subject/map exactness, fetch request exactness, payload-available
+and rejected-QC no-op behavior, replay/conflict preservation, and value-domain
+obligations.
 
 `SumeragiEngineCommitQcValidationCleanupGate.tla` captures the pure engine
 Commit-QC validation-owner cleanup boundary:
@@ -6453,6 +6941,10 @@ Commit-QC validation-owner cleanup boundary:
   ownership and do not synthesize cleanup side effects,
 - late invalid validation callbacks cannot advance the view after a handler
   reached Commit QC has superseded the validation owner.
+`EngineCommitQcValidationCleanupCorrectnessEnvelope` composes the type
+invariant with handler/accepted-QC cleanup, pending replay/conflict cleanup,
+rejected-prefilter preservation, no synthetic ownership, and late-invalid
+callback suppression obligations.
 
 `SumeragiEnginePayloadAvailabilityGate.tla` captures the pure engine
 payload-availability gate:
@@ -6462,6 +6954,11 @@ payload-availability gate:
   ignored without dropping pending finality,
 - the exact matching payload clears pending finality and returns the engine to
   proposal phase.
+`EnginePayloadAvailabilityCorrectnessEnvelope` composes the type invariant with
+availability recording, exact commit/ignore classification, payload-only and
+mismatched-payload rejection, exact matching-payload commit, pending-finality
+preservation/cleanup, proposal-phase transition, and ignored-payload no-cleanup
+obligations.
 
 `SumeragiEnginePayloadAvailabilityRecordGate.tla` captures the exact
 availability-store mutation in `on_payload_available(...)`:
@@ -6473,6 +6970,10 @@ availability-store mutation in `on_payload_available(...)`:
 - parent mismatches do not change the availability key because the store is
   keyed only by block hash and payload hash,
 - previously recorded unrelated availability pairs are preserved.
+`EnginePayloadAvailabilityRecordCorrectnessEnvelope` composes the type invariant
+with exact final availability, exact input-pair recording, wrong-pair exclusion,
+existing-availability preservation, no-pending and pending-mismatch recording,
+duplicate idempotence, and value-domain obligations.
 
 `SumeragiEnginePayloadStatePreservationGate.tla` captures unrelated-state
 preservation for payload-availability callbacks:
@@ -6485,6 +6986,9 @@ preservation for payload-availability callbacks:
   certificate map exactly,
 - mutation configs distinguish matching-commit side effects from ignored
   callback side effects.
+`EnginePayloadStatePreservationCorrectnessEnvelope` composes the type invariant
+with matching-commit preservation, ignored-callback preservation, always-preserved
+state, ignored-callback state preservation, and value-domain obligations.
 
 `SumeragiEngineValidationResultGate.tla` captures the pure engine
 validation-result gate:
@@ -6497,6 +7001,11 @@ validation-result gate:
 - wrong-round, wrong-block, replayed, no-in-flight, commit-superseded, and
   storage-committed callbacks are ignored without dropping pending finality or
   overwriting committed state.
+`EngineValidationResultCorrectnessEnvelope` composes the type invariant with
+accepted/ignored callback exactness, valid-result ownership cleanup and no-output
+behavior, invalid-result view advancement and NewView/AdvanceView emission,
+highest-QC subject/binding rules, superseded callback preservation, valid-result
+output suppression, and output consistency.
 
 `SumeragiEngineValidationStatePreservationGate.tla` captures unrelated-state
 preservation for the same validation-result handler:
@@ -6507,6 +7016,11 @@ preservation for the same validation-result handler:
   and storage-committed callbacks preserve the same fields exactly,
 - mutation configs distinguish accepted-callback side effects from ignored
   callback side effects for each protected field.
+`EngineValidationStatePreservationCorrectnessEnvelope` composes the type
+invariant with accepted/ignored preservation of lock, highest-QC,
+Prepare-QC replay cache, committed records, available payloads,
+pending-finality marker and map, staged reconfiguration, all-modeled-state
+preservation, and value-domain obligations.
 
 `SumeragiEngineValidationOwnershipGate.tla` captures exact validation-owner
 cleanup:
@@ -6517,6 +7031,10 @@ cleanup:
 - wrong-block callbacks preserve the existing validation owner after lookup,
 - no-in-flight, replayed, and superseded callbacks preserve `None` exactly and
   never synthesize a new owner.
+`EngineValidationOwnershipCorrectnessEnvelope` composes the type invariant with
+final-owner exactness, valid/invalid current-owner cleanup, wrong-round and
+wrong-block preservation, no-in-flight/replay/superseded `None` preservation,
+ignored-callback exact preservation, and value-domain obligations.
 
 `SumeragiEngineValidationInvalidAdvanceGate.tla` captures exact invalid
 validation-result round advancement:
@@ -6527,6 +7045,10 @@ validation-result round advancement:
 - max-view invalid results saturate instead of wrapping,
 - valid current results and ignored callbacks preserve the current round and
   emit no view-advance outputs.
+`EngineValidationInvalidAdvanceCorrectnessEnvelope` composes the type invariant
+with exact final-round, NewView-vote round, AdvanceView-output round,
+invalid-callback next-round, output/state agreement, valid/ignored callback
+preservation, saturating-view, and value-domain obligations.
 
 `SumeragiEngineCommittedBlockGate.tla` captures the pure engine committed-block
 notification gate:
@@ -6536,6 +7058,10 @@ notification gate:
 - duplicate same-height notifications are idempotent,
 - conflicting same-height notifications cannot overwrite the committed hash or
   activate a validator set.
+`EngineCommittedBlockCorrectnessEnvelope` composes the type invariant with
+recorded/activated/ignored exactness, fresh-record and boundary-activation
+obligations, duplicate/conflict idempotence, overwrite prevention, and
+activation-record coupling.
 
 `SumeragiEngineCommittedBlockRecordGate.tla` captures exact committed-map
 recording for pure engine committed-block notifications:
@@ -6545,6 +7071,10 @@ recording for pure engine committed-block notifications:
 - duplicate notifications preserve the existing committed map,
 - conflicting notifications preserve the existing same-height block hash and do
   not write any spurious committed height.
+`EngineCommittedBlockRecordCorrectnessEnvelope` composes the type invariant
+with committed-map exactness, fresh exact-height/block writes, duplicate and
+conflict preservation, wrong-height exclusion, replay preservation, unrelated
+height preservation, and value-domain obligations.
 
 `SumeragiEngineReconfigurationStagingGate.tla` captures pure-engine
 committed-block reconfiguration staging:
@@ -6555,6 +7085,11 @@ committed-block reconfiguration staging:
   activation heights,
 - plain commits, non-boundary reconfigurations, duplicate notifications, and
   conflicting notifications preserve existing staging and emit no activation.
+`EngineReconfigurationStagingCorrectnessEnvelope` composes the type invariant
+with exact staged-change/output results, boundary staging and activation,
+activation/staging suppression outside fresh boundary notifications, no-op
+preservation for plain/non-boundary/duplicate/conflict notifications, boundary
+replacement, and value-domain obligations.
 
 `SumeragiEngineReconfigurationDedupGate.tla` captures pure-engine
 committed-block reconfiguration deduplication:
@@ -6568,6 +7103,12 @@ committed-block reconfiguration deduplication:
   change payload differs,
 - boundary reconfiguration for a different activation height replaces stale
   pending material and emits the new change.
+`EngineReconfigurationDedupCorrectnessEnvelope` composes the type invariant
+with exact staged-change and activation-output matching, same-height
+activation-height deduplication, same-hash replay activation when unscheduled,
+different-height replacement, boundary-only activation/stage changes,
+activation/stage consistency, non-boundary/plain/conflict preservation, and
+synthetic-change exclusion.
 
 The TLC cross-checks for the pure-engine constructor, read-accessor, tick,
 tick-state-preservation, NewView subject, handle dispatch, handle forwarding,
@@ -6588,6 +7129,10 @@ side effects:
 - duplicate or conflicting already-committed-height notifications are no-ops,
 - storage finality notifications never emit a `CommitBlock` output back to the
   adapter.
+`EngineCommittedBlockCleanupCorrectnessEnvelope` composes the type invariant
+with exact committed-record behavior, current-height cleanup, other-height
+ownership preservation, duplicate/conflict no-op behavior, pending-state/map
+alignment, and no-spurious-CommitBlock output obligations.
 
 `SumeragiEngineCommittedBlockStatePreservationGate.tla` captures unrelated
 state preservation for committed-block notifications:
@@ -6599,6 +7144,9 @@ state preservation for committed-block notifications:
   fields exactly as no-ops,
 - expected-failure configs distinguish fresh-notification side effects from
   duplicate/conflict no-op side effects for each protected field.
+`EngineCommittedBlockStatePreservationCorrectnessEnvelope` composes the type
+invariant with fresh-notification preservation, duplicate/conflict no-op
+preservation, all-modeled-state preservation, and value-domain obligations.
 
 The TLC cross-checks for the remaining fast-passing pure-engine
 prefilter-preservation, Commit, committed-block, NewView, payload, Prepare,
@@ -6642,6 +7190,9 @@ gate for one scheduled reconfiguration:
 - old-set certificates stopping before the activation height,
 - rejection of mixed-set certificates and multiple validator-set certificates
   for one height.
+`ValidatorSetTransitionCorrectnessEnvelope` composes the type invariant with
+boundary-finality activation, new/old certificate epoch gates, mixed-set
+rejection, and single-certifier-per-height obligations.
 
 `SumeragiCertifiedRecovery.tla` captures certified block recovery when a commit
 QC arrives before the matching payload:
@@ -6663,6 +7214,10 @@ gate:
   strictly higher QC,
 - conflicting prepare evidence cannot overwrite an existing same-height lock at
   the same or lower QC rank.
+`ViewChangeSafetyCorrectnessEnvelope` composes the type invariant with the
+core view-change/lock-safety aggregate covering non-rewinding views,
+stale-certificate rejection, highest-QC dominance/regression prevention,
+unsafe proposal rejection, and conflicting lock-overwrite rejection.
 
 `SumeragiValidationGate.tla` captures asynchronous proposal-validation callback
 ownership:
@@ -6672,6 +7227,9 @@ ownership:
 - timeout-stale validation failures cannot advance the view after timeout
   already cleared the in-flight proposal,
 - one invalid validation result cannot advance the same proposal twice.
+`ValidationCorrectnessEnvelope` composes the type invariant with the aggregate
+callback ownership safety predicate covering unknown, replayed, late, timeout,
+duplicate-invalid, stale-in-flight, and completed-owner cleanup cases.
 
 `SumeragiValidationPriorityGate.tla` captures
 `pending_block_validation_priority_reason(...)`, the near-tip helper that lets
@@ -6682,6 +7240,9 @@ validation and commit-pipeline work bypass missing proposal evidence:
   then READY quorum,
 - pending blocks with no evidence or off-tip evidence receive no priority
   reason and cannot use the proposal-less bypass.
+`ValidationPriorityCorrectnessEnvelope` composes the type invariant with the
+exact reason-selection, bypass, tip-guard, evidence-required, and precedence
+aggregate.
 
 `SumeragiVoteBackedEvidenceGate.tla` captures the vote-backed consensus
 evidence helpers:
@@ -6692,6 +7253,10 @@ evidence helpers:
   locally,
 - `height_has_vote_backed_consensus_evidence(...)` accepts Prepare/Commit votes
   and QCs for the expected height/epoch while intentionally ignoring view.
+`VoteBackedEvidenceCorrectnessEnvelope` composes the type invariant with the
+slot-scoped, locally-known, and height-scoped vote-backed evidence exactness
+aggregate, including source admission, wrong-shape rejection, local block
+knowledge, and height-scoped view tolerance.
 
 `SumeragiVotePayloadActionableGate.tla` captures
 `vote_payload_actionable_for_proposal(...)`:
@@ -6702,6 +7267,9 @@ evidence helpers:
   block hash all match the queried tuple,
 - a mismatched deferred record must not suppress an earlier authoritative or
   validation source.
+`VotePayloadActionableCorrectnessEnvelope` composes the type invariant with
+the exact source admission, deferred-identity rejection, no-source rejection,
+and bad-deferred fall-through aggregate.
 
 `SumeragiActionableVoteBackedProposalGate.tla` captures proposal-side
 vote-backed actionability helpers:
@@ -6727,6 +7295,9 @@ semantics.
   rejected,
 - wrong-slot or incomplete earlier sources fall through to later valid
   proposal evidence instead of masking it.
+`SlotProposalEvidenceCorrectnessEnvelope` composes the type invariant with the
+exact result, action, acceptance, rejection, fallback, short-circuit, and return
+anchors for the helper.
 
 `SumeragiRoundLivenessGate.tla` captures `slot_has_round_liveness(...)`:
 - proposal evidence, live frontier-owner work, prior-view active pending
@@ -7060,6 +7631,9 @@ invalid-proposal evidence:
   then latest committed QC,
 - rejected highest-QC candidates do not block later valid locked or committed
   candidates.
+`ValidationEvidenceQcCorrectnessEnvelope` composes the type invariant with the
+exact parent, subject, height, precedence, skip, synthesis, and fallback
+selector aggregate.
 
 `SumeragiCertificateAdmission.tla` captures certificate admission before
 evidence mutates consensus state:
@@ -7120,16 +7694,20 @@ verification, and full networking details.
 
 - `Sumeragi.tla`: protocol model and properties, including latched
   commit-certificate and commit-view evidence across view-counter resets.
-- `Sumeragi_fast.cfg`: smaller CI-friendly parameter set.
+- `Sumeragi_fast.cfg`: smaller commit-path state-safety exactness sentinel
+  parameter set. The Apalache `fast` runner typechecks the monolithic
+  `Sumeragi.tla` module only; bounded Apalache model checking for PR CI lives in
+  the decomposed helper fast modes because expanding the full monolithic `Next`
+  relation exhausts heap on current local toolchains.
 - `Sumeragi_deep.cfg`: larger stress parameter set.
 - `Sumeragi_tlc_fast.cfg`: TLC check of the same commit-path parameters with
   the fairness-backed `Spec` temporal behavior.
 - `SumeragiForkSafety.tla`: same-height conflicting-branch commit-certificate safety model.
-- `SumeragiForkSafety_fast.cfg`: permissioned count-quorum fork-safety check.
-- `SumeragiForkSafety_npos.cfg`: NPoS-style stake-quorum fork-safety check.
+- `SumeragiForkSafety_fast.cfg`: permissioned count-quorum fork-safety correctness-envelope check.
+- `SumeragiForkSafety_npos.cfg`: NPoS-style stake-quorum fork-safety correctness-envelope check.
 - `SumeragiForkSafety_bug_double_sign.cfg`: expected-failure double-sign/lock-gate mutation.
 - `SumeragiQuorumPolicy.tla`: fail-closed quorum-policy arithmetic model.
-- `SumeragiQuorumPolicy_fast.cfg`: CI-friendly quorum-policy arithmetic check.
+- `SumeragiQuorumPolicy_fast.cfg`: CI-friendly quorum-policy arithmetic correctness-envelope check.
 - `SumeragiQuorumPolicy_bug_count_under_threshold.cfg`: expected-failure under-threshold count mutation.
 - `SumeragiQuorumPolicy_bug_count_over_validators.cfg`: expected-failure over-validator count mutation.
 - `SumeragiQuorumPolicy_bug_stake_exact_two_thirds.cfg`: expected-failure exact two-thirds stake mutation.
@@ -7137,7 +7715,7 @@ verification, and full networking details.
 - `SumeragiQuorumPolicy_bug_stake_invalid_input.cfg`: expected-failure invalid stake input mutation.
 - `SumeragiQuorumPolicy_bug_stake_overflow.cfg`: expected-failure stake overflow mutation.
 - `SumeragiRbcDeliverQuorum.tla`: RBC deliver-quorum gate model.
-- `SumeragiRbcDeliverQuorum_fast.cfg`: CI-friendly RBC deliver-quorum check.
+- `SumeragiRbcDeliverQuorum_fast.cfg`: CI-friendly RBC deliver-quorum correctness-envelope check.
 - `SumeragiRbcDeliverQuorum_bug_duplicate_ready_count.cfg`: expected-failure duplicate READY counting mutation.
 - `SumeragiRbcDeliverQuorum_bug_under_quorum_deliver.cfg`: expected-failure under-quorum delivery mutation.
 - `SumeragiRbcDeliverQuorum_bug_wrong_commit_formula.cfg`: expected-failure commit-quorum arithmetic mutation.
@@ -7336,7 +7914,7 @@ verification, and full networking details.
 - `SumeragiClassicSigningPreimageGate_fast.cfg`: CI-friendly classic signing-preimage correctness-envelope check.
 - `SumeragiClassicSigningPreimageGate_bug_*.cfg`: expected-failure domain, type, vote-subject, highest-QC, VRF body, and mutable-signature mutations.
 - `SumeragiVrfMaterialDerivationGate.tla`: local VRF material derivation model.
-- `SumeragiVrfMaterialDerivationGate_fast.cfg`: CI-friendly direct VRF material derivation helper check.
+- `SumeragiVrfMaterialDerivationGate_fast.cfg`: CI-friendly local VRF material-derivation correctness-envelope check.
 - `SumeragiVrfMaterialDerivationGate_bug_*.cfg`: expected-failure domain, input, encoding, order, signature, hash-chain, return-shape, and raw-output mutations.
 - `SumeragiClassicSignatureGate.tla`: classic Vote/QC signature-verification model.
 - `SumeragiClassicSignatureGate_fast.cfg`: CI-friendly classic Vote/QC signature-verification correctness-envelope check.
@@ -7429,61 +8007,61 @@ verification, and full networking details.
 - `SumeragiFrontierParentQcHintRetargetGate_fast.cfg`: CI-friendly direct frontier parent QC-hint retarget correctness-envelope check.
 - `SumeragiFrontierParentQcHintRetargetGate_bug_*.cfg`: expected-failure stall, dependency-progress, previous-emit, branch-condition, and target-rewrite mutations.
 - `SumeragiLiveFrontierIdleMissingQcGate.tla`: live-frontier idle missing-QC suppression helper model.
-- `SumeragiLiveFrontierIdleMissingQcGate_fast.cfg`: CI-friendly direct live-frontier idle missing-QC suppression component/anchor check.
+- `SumeragiLiveFrontierIdleMissingQcGate_fast.cfg`: CI-friendly direct live-frontier idle missing-QC suppression correctness-envelope check.
 - `SumeragiLiveFrontierIdleMissingQcGate_bug_*.cfg`: expected-failure liveness, dependency, observed-head, height, and suppressed-branch-effect mutations.
 - `SumeragiMissingQcReacquireAdmissionGate.tla`: missing-QC reacquire admission helper model.
-- `SumeragiMissingQcReacquireAdmissionGate_fast.cfg`: CI-friendly direct missing-QC reacquire admission component/anchor check.
+- `SumeragiMissingQcReacquireAdmissionGate_fast.cfg`: CI-friendly missing-QC reacquire admission correctness-envelope check.
 - `SumeragiMissingQcReacquireAdmissionGate_bug_*.cfg`: expected-failure duplicate, proposal/dependency, no-dependency throttle, timeout-streak, and empty-frontier fallback mutations.
 - `SumeragiMissingQcReacquireActionGate.tla`: missing-QC reacquire action orchestration helper model.
-- `SumeragiMissingQcReacquireActionGate_fast.cfg`: CI-friendly direct missing-QC reacquire action orchestration component/anchor check.
+- `SumeragiMissingQcReacquireActionGate_fast.cfg`: CI-friendly missing-QC reacquire action orchestration correctness-envelope check.
 - `SumeragiMissingQcReacquireActionGate_bug_*.cfg`: expected-failure prior-attempt, attempt-record, suppression, highest-QC, range-pull, cooldown, success-counter, and return-value mutations.
 - `SumeragiMissingCommitQcActionableGate.tla`: missing commit-QC actionable dependency and local-payload preservation helper model.
-- `SumeragiMissingCommitQcActionableGate_fast.cfg`: CI-friendly direct missing commit-QC actionable dependency component/anchor check.
+- `SumeragiMissingCommitQcActionableGate_fast.cfg`: CI-friendly missing commit-QC actionable dependency correctness-envelope check.
 - `SumeragiMissingCommitQcActionableGate_bug_*.cfg`: expected-failure payload, cached-QC, higher NEW_VIEW quorum, non-actionable dependency, subject-height, and local-payload preservation mutations.
 - `SumeragiMissingQcHeightStallGate.tla`: same-height missing-QC stall dampening helper model.
-- `SumeragiMissingQcHeightStallGate_fast.cfg`: CI-friendly direct same-height missing-QC stall component/anchor check.
+- `SumeragiMissingQcHeightStallGate_fast.cfg`: CI-friendly same-height missing-QC stall correctness-envelope check.
 - `SumeragiMissingQcHeightStallGate_bug_*.cfg`: expected-failure lifecycle, activation-window, dependency-continuity, reservation, availability, and marker-update mutations.
 - `SumeragiMissingQcStallRangePullGate.tla`: same-height missing-QC stall range-pull emission helper model.
-- `SumeragiMissingQcStallRangePullGate_fast.cfg`: CI-friendly direct same-height missing-QC stall range-pull component/anchor check.
+- `SumeragiMissingQcStallRangePullGate_fast.cfg`: CI-friendly same-height missing-QC stall range-pull correctness-envelope check.
 - `SumeragiMissingQcStallRangePullGate_bug_*.cfg`: expected-failure reason, exact-height, suppression, recovery-FSM, cohort, cooldown, and marking mutations.
 - `SumeragiMissingPayloadFetchWindowGate.tla`: same-height missing-payload fetch-window pacing and hash-miss cap helper model.
-- `SumeragiMissingPayloadFetchWindowGate_fast.cfg`: CI-friendly direct missing-payload fetch-window pacing and hash-miss cap check.
+- `SumeragiMissingPayloadFetchWindowGate_fast.cfg`: CI-friendly missing-payload fetch-window pacing and hash-miss cap correctness-envelope check.
 - `SumeragiMissingPayloadFetchWindowGate_bug_*.cfg`: expected-failure snapshot, emission-mark, clear-scope, and lock-lag cap mutations.
 - `SumeragiCanonicalFrontierReanchorGate.tla`: canonical contiguous-frontier reanchor helper model.
 - `SumeragiCanonicalFrontierReanchorGate_fast.cfg`: CI-friendly canonical contiguous-frontier reanchor correctness-envelope check.
 - `SumeragiCanonicalFrontierReanchorGate_bug_*.cfg`: expected-failure reason, shared-window key, snapshot, progress-watermark, stride, range-pull, and view-suppression mutations.
 - `SumeragiFrontierRepairViewChangeGate.tla`: contiguous-frontier repair view-change suppression helper model.
-- `SumeragiFrontierRepairViewChangeGate_fast.cfg`: CI-friendly direct contiguous-frontier repair view-change suppression component/anchor check.
+- `SumeragiFrontierRepairViewChangeGate_fast.cfg`: CI-friendly direct contiguous-frontier repair view-change suppression correctness-envelope check.
 - `SumeragiFrontierRepairViewChangeGate_bug_*.cfg`: expected-failure cause, height, precedence, repair-source, seed, fetch, and recovery-state mutations.
 - `SumeragiFrontierRecoveryAdvanceGate.tla`: contiguous-frontier recovery advance state-machine helper model.
-- `SumeragiFrontierRecoveryAdvanceGate_fast.cfg`: CI-friendly direct contiguous-frontier recovery advance state-machine component/anchor check.
+- `SumeragiFrontierRecoveryAdvanceGate_fast.cfg`: CI-friendly direct contiguous-frontier recovery advance state-machine correctness-envelope check.
 - `SumeragiFrontierRecoveryAdvanceGate_bug_*.cfg`: expected-failure cause, early-gate, exact-frontier, actionability, suppression, catch-up, and rotate mutations.
 - `SumeragiSameHeightNoProposalStormGate.tla`: same-height no-proposal storm recovery helper model.
-- `SumeragiSameHeightNoProposalStormGate_fast.cfg`: CI-friendly direct same-height no-proposal storm recovery component/anchor check.
+- `SumeragiSameHeightNoProposalStormGate_fast.cfg`: CI-friendly same-height no-proposal storm recovery correctness-envelope check.
 - `SumeragiSameHeightNoProposalStormGate_bug_*.cfg`: expected-failure progress, reset, record/count, force-break, and active-pending mutations.
 - `SumeragiVrfMessageAdmissionGate.tla`: VRF commit/reveal message-admission model.
-- `SumeragiVrfMessageAdmissionGate_fast.cfg`: CI-friendly direct VRF commit/reveal message-admission check.
+- `SumeragiVrfMessageAdmissionGate_fast.cfg`: CI-friendly VRF commit/reveal message-admission correctness-envelope check.
 - `SumeragiVrfMessageAdmissionGate_bug_*.cfg`: expected-failure mode, manager, topology, signature, epoch/window, rewrite, broadcast, local-state, and PRF-refresh mutations.
 - `SumeragiVrfEpochWindowGate.tla`: VRF epoch-window arithmetic helper model.
-- `SumeragiVrfEpochWindowGate_fast.cfg`: CI-friendly direct VRF epoch-window arithmetic helper check.
+- `SumeragiVrfEpochWindowGate_fast.cfg`: CI-friendly VRF epoch-window arithmetic correctness-envelope check.
 - `SumeragiVrfEpochWindowGate_bug_*.cfg`: expected-failure length, offset, position, epoch, commit-window, reveal-window, and outside-window mutations.
 - `SumeragiVrfEpochBoundaryGate.tla`: VRF epoch-boundary finalization helper model.
-- `SumeragiVrfEpochBoundaryGate_fast.cfg`: CI-friendly direct VRF epoch-boundary finalization helper check.
+- `SumeragiVrfEpochBoundaryGate_fast.cfg`: CI-friendly VRF epoch-boundary finalization correctness-envelope check.
 - `SumeragiVrfEpochBoundaryGate_bug_*.cfg`: expected-failure no-op, penalty, snapshot, seed, clear/advance, reset/take, roster, and entropy mutations.
 - `SumeragiVrfEpochRestoreGate.tla`: VRF epoch restore/snapshot/observation-merge helper model.
-- `SumeragiVrfEpochRestoreGate_fast.cfg`: CI-friendly direct VRF epoch restore/snapshot/merge helper check.
+- `SumeragiVrfEpochRestoreGate_fast.cfg`: CI-friendly VRF epoch restore/snapshot/merge correctness-envelope check.
 - `SumeragiVrfEpochRestoreGate_bug_*.cfg`: expected-failure restore, parameter-clamp, finalized-advance, snapshot, merge, and identity-preservation mutations.
 - `SumeragiVrfLocalStateGate.tla`: local VRF emission state helper model.
-- `SumeragiVrfLocalStateGate_fast.cfg`: CI-friendly direct local VRF emission state check.
+- `SumeragiVrfLocalStateGate_fast.cfg`: CI-friendly local VRF emission state correctness-envelope check.
 - `SumeragiVrfLocalStateGate_bug_*.cfg`: expected-failure mode-gate, epoch-reset, same-epoch preservation, commit/reveal note, and actor-reset mutations.
 - `SumeragiVrfPenaltiesReportGate.tla`: VRF penalties report storage helper model.
-- `SumeragiVrfPenaltiesReportGate_fast.cfg`: CI-friendly VRF penalties report storage direct exactness check.
+- `SumeragiVrfPenaltiesReportGate_fast.cfg`: CI-friendly VRF penalties report storage correctness-envelope check.
 - `SumeragiVrfPenaltiesReportGate_bug_*.cfg`: expected-failure initial, update, keying, field-preservation, replacement, latest-epoch, missing-get, clear, and read-side-effect mutations.
 - `SumeragiVoteAdmissionGate.tla`: classic inbound vote-admission model.
-- `SumeragiVoteAdmissionGate_fast.cfg`: CI-friendly direct classic inbound vote-admission check.
+- `SumeragiVoteAdmissionGate_fast.cfg`: CI-friendly classic inbound vote-admission correctness-envelope check.
 - `SumeragiVoteAdmissionGate_bug_*.cfg`: expected-failure early-drop, roster/defer, duplicate, chain-order, signature, NEW_VIEW highest-QC, conflict, evidence, QC, roster-cache, tracker, pipeline, and progress mutations.
 - `SumeragiVoteDuplicateKeyGate.tla`: vote duplicate raw-key and identity projection helper model.
-- `SumeragiVoteDuplicateKeyGate_fast.cfg`: CI-friendly vote duplicate raw-key and identity projection direct exactness check.
+- `SumeragiVoteDuplicateKeyGate_fast.cfg`: CI-friendly vote duplicate raw-key and identity projection correctness-envelope check.
 - `SumeragiVoteDuplicateKeyGate_bug_*.cfg`: expected-failure phase, round-context, signer, chain-order, rechain, block-hash, NEW_VIEW highest-QC, and public-key projection mutations.
 - `SumeragiEvidenceHorizonGate.tla`: evidence freshness horizon helper model.
 - `SumeragiEvidenceHorizonGate_fast.cfg`: CI-friendly evidence freshness horizon correctness-envelope check.
@@ -7531,7 +8109,7 @@ verification, and full networking details.
 - `SumeragiCommitQcOnlyFetchResponseGate_fast.cfg`: CI-friendly commit-QC-only fetch response dispatch correctness-envelope check.
 - `SumeragiCommitQcOnlyFetchResponseGate_bug_*.cfg`: expected-failure direct-QC companion, certified-proof, vote-rebroadcast, requester-target, signed-quorum fallback, bypass-flag, and return-value mutations.
 - `SumeragiRequesterRosterProofGate.tla`: requester local roster-proof detection helper model.
-- `SumeragiRequesterRosterProofGate_fast.cfg`: CI-friendly direct requester local roster-proof detection helper check.
+- `SumeragiRequesterRosterProofGate_fast.cfg`: CI-friendly direct requester local roster-proof detection helper correctness-envelope check.
 - `SumeragiRequesterRosterProofGate_bug_*.cfg`: expected-failure proof-source rejection, no-evidence admission, Commit-QC key, precommit-record key, and highest-QC exact-match mutations.
 - `SumeragiBlockSyncUpdateTargetsGate.tla`: BlockSyncUpdate gossip target-selection helper model.
 - `SumeragiBlockSyncUpdateTargetsGate_fast.cfg`: CI-friendly BlockSyncUpdate gossip target-selection correctness-envelope check.
@@ -7606,7 +8184,7 @@ verification, and full networking details.
 - `SumeragiBlockSyncWarningThrottleGate_fast.cfg`: CI-friendly block-sync warning throttle correctness-envelope check.
 - `SumeragiBlockSyncWarningThrottleGate_bug_*.cfg`: expected-failure cooldown, keying, burst-cap, zero-cap, zero-cooldown, GC, and clear mutations.
 - `SumeragiQcInsufficientWarningThrottleGate.tla`: QC-insufficient warning throttle model.
-- `SumeragiQcInsufficientWarningThrottleGate_fast.cfg`: CI-friendly QC-insufficient warning throttle direct exactness check.
+- `SumeragiQcInsufficientWarningThrottleGate_fast.cfg`: CI-friendly QC-insufficient warning throttle correctness-envelope check.
 - `SumeragiQcInsufficientWarningThrottleGate_bug_*.cfg`: expected-failure cooldown, keying, zero-cooldown, GC, and clear mutations.
 - `SumeragiFetchResponseDeferralGate.tla`: canonical committed fetch/body response deferral helper model.
 - `SumeragiFetchResponseDeferralGate_fast.cfg`: CI-friendly direct canonical committed fetch/body response deferral check.
@@ -7654,7 +8232,7 @@ verification, and full networking details.
 - `SumeragiBlockBodyRequestStashGate_fast.cfg`: CI-friendly direct body requester stash-window check.
 - `SumeragiBlockBodyRequestStashGate_bug_*.cfg`: expected-failure margin-floor, lower-bound, upper-bound, stale/same-height, zero-height, and saturating-boundary mutations.
 - `SumeragiSameHeightBlockBodyRepairGate.tla`: same-height block-body repair admission helper model.
-- `SumeragiSameHeightBlockBodyRepairGate_fast.cfg`: CI-friendly direct same-height block-body repair admission check.
+- `SumeragiSameHeightBlockBodyRepairGate_fast.cfg`: CI-friendly same-height block-body repair admission correctness-envelope check.
 - `SumeragiSameHeightBlockBodyRepairGate_bug_*.cfg`: expected-failure frontier, pending-request, deferred-QC, active-repair, round-match, phase, actionability, and no-source mutations.
 - `SumeragiBlockBodyRepairEpochGate.tla`: block-body repair observed commit-QC epoch source helper model.
 - `SumeragiBlockBodyRepairEpochGate_fast.cfg`: CI-friendly direct block-body repair observed epoch source check.
@@ -7687,19 +8265,19 @@ verification, and full networking details.
 - `SumeragiProposalCacheGate_fast.cfg`: CI-friendly proposal cache helper correctness-envelope check.
 - `SumeragiProposalCacheGate_bug_*.cfg`: expected-failure limit, zero-limit, eviction-order, observed-retention, pop, metric, duplicate-insert, and prune mutations.
 - `SumeragiProposalHintAdmissionGate.tla`: inbound proposal-hint admission model.
-- `SumeragiProposalHintAdmissionGate_fast.cfg`: CI-friendly direct proposal-hint admission check.
+- `SumeragiProposalHintAdmissionGate_fast.cfg`: CI-friendly proposal-hint admission correctness-envelope check.
 - `SumeragiProposalHintAdmissionGate_bug_*.cfg`: expected-failure stale/malformed hint, duplicate, committed-edge conflict, missing-highest repair, local metadata, lock, cache/observe, highest-QC update, dependency, PRF, replay, prune, and conflict-suppression mutations.
 - `SumeragiStaleProposalHintRepairGate.tla`: stale-view proposal hint repair exception model.
-- `SumeragiStaleProposalHintRepairGate_fast.cfg`: CI-friendly direct stale proposal-hint repair no-bug check.
+- `SumeragiStaleProposalHintRepairGate_fast.cfg`: CI-friendly stale proposal-hint repair correctness-envelope check.
 - `SumeragiStaleProposalHintRepairGate_bug_*.cfg`: expected-failure DA gate, active-height gate, one-view-late gate, committed-QC identity, stale-drop, and rejected-stale side-effect mutations.
 - `SumeragiStaleRbcHintRepairGate.tla`: stale RBC proposal-hint repair bridge model.
-- `SumeragiStaleRbcHintRepairGate_fast.cfg`: CI-friendly direct stale RBC hint repair no-bug check.
+- `SumeragiStaleRbcHintRepairGate_fast.cfg`: CI-friendly stale RBC hint repair correctness-envelope check.
 - `SumeragiStaleRbcHintRepairGate_bug_*.cfg`: expected-failure DA gate, repair-kind gate, frontier-height gate, cached-hint identity, stale-drop, chunk-stash, and repair-arm mutations.
 - `SumeragiProposalAdmissionGate.tla`: inbound proposal metadata admission model.
-- `SumeragiProposalAdmissionGate_fast.cfg`: CI-friendly direct proposal metadata admission check.
+- `SumeragiProposalAdmissionGate_fast.cfg`: CI-friendly proposal metadata admission correctness-envelope check.
 - `SumeragiProposalAdmissionGate_bug_*.cfg`: expected-failure stale/malformed proposal, committed-edge conflict, missing-highest repair, local metadata, lock, cache/observe, highest-QC update, dependency, PRF, leader-context, replay, prune, conflict-suppression, and no-commit-wakeup mutations.
 - `SumeragiPeerAdminDetectionGate.tla`: peer-admin transaction detection helper model.
-- `SumeragiPeerAdminDetectionGate_fast.cfg`: CI-friendly direct peer-admin transaction detection helper check.
+- `SumeragiPeerAdminDetectionGate_fast.cfg`: CI-friendly direct peer-admin transaction detection correctness-envelope check.
 - `SumeragiPeerAdminDetectionGate_bug_*.cfg`: expected-failure instruction-id classifier, signed-transaction, executable-kind, batch-any, and non-admin admission mutations.
 - `SumeragiBlockCreatedAdmissionGate.tla`: direct `BlockCreated` payload admission model.
 - `SumeragiBlockCreatedAdmissionGate_fast.cfg`: CI-friendly direct `BlockCreated` payload admission correctness-envelope check.
@@ -7717,10 +8295,10 @@ verification, and full networking details.
 - `SumeragiProposalBudgetGate_fast.cfg`: CI-friendly proposal budget/cap helper correctness-envelope check.
 - `SumeragiProposalBudgetGate_bug_*.cfg`: expected-failure queue-cap flooring, DA payload-budget, transaction-cap, fast-finality cap, gas-cap, and stale-window mutations.
 - `SumeragiProposalBackpressureGate.tla`: proposal backpressure classification helper model.
-- `SumeragiProposalBackpressureGate_fast.cfg`: CI-friendly direct proposal backpressure classification helper check.
+- `SumeragiProposalBackpressureGate_fast.cfg`: CI-friendly proposal backpressure correctness-envelope check.
 - `SumeragiProposalBackpressureGate_bug_*.cfg`: expected-failure should-defer, pacing-only, and queue-work admission mutations.
 - `SumeragiProposalDeferWarningThrottleGate.tla`: proposal-defer warning throttle model.
-- `SumeragiProposalDeferWarningThrottleGate_fast.cfg`: CI-friendly proposal-defer warning throttle direct exactness check.
+- `SumeragiProposalDeferWarningThrottleGate_fast.cfg`: CI-friendly proposal-defer warning throttle correctness-envelope check.
 - `SumeragiProposalDeferWarningThrottleGate_bug_*.cfg`: expected-failure first-emission, cooldown, keying, empty-topology normalization, zero-cooldown, and GC mutations.
 - `SumeragiNonRbcPayloadBudgetGate.tla`: non-RBC payload frame budget helper model.
 - `SumeragiNonRbcPayloadBudgetGate_fast.cfg`: CI-friendly non-RBC payload frame budget helper correctness-envelope check.
@@ -7860,7 +8438,7 @@ verification, and full networking details.
 - `SumeragiCommitPipelineSchedulingGate_fast.cfg`: CI-friendly direct commit-pipeline scheduling correctness-envelope check.
 - `SumeragiCommitPipelineSchedulingGate_bug_*.cfg`: expected-failure tick/event entry, deadline, recovery-candidate inclusion, budget exhaustion, backlog, last-run, wakeup, idle-budget, and candidate-processing mutations.
 - `SumeragiPrecommitVoteCountGate.tla`: precommit vote-count helper model.
-- `SumeragiPrecommitVoteCountGate_fast.cfg`: CI-friendly precommit vote-count aggregate/anchor check.
+- `SumeragiPrecommitVoteCountGate_fast.cfg`: CI-friendly precommit vote-count correctness-envelope check.
 - `SumeragiPrecommitVoteCountGate_bug_*.cfg`: expected-failure phase, empty-bitmap, roster-bound, boundary, multi-byte, bit-counting, and saturation mutations.
 - `SumeragiVotingSignerCountGate.tla`: set-based voting signer-count helper model.
 - `SumeragiVotingSignerCountGate_fast.cfg`: CI-friendly voting signer-count correctness-envelope check.
@@ -7875,19 +8453,19 @@ verification, and full networking details.
 - `SumeragiDistinctVoteEpochsGate_fast.cfg`: CI-friendly cached vote-log epoch replay correctness-envelope check.
 - `SumeragiDistinctVoteEpochsGate_bug_*.cfg`: expected-failure vote filter, value-vs-key epoch, topology gate, and duplicate-replay mutations.
 - `SumeragiNewViewHighestQcVotesGate.tla`: NEW_VIEW highest-QC vote-selection helper model.
-- `SumeragiNewViewHighestQcVotesGate_fast.cfg`: CI-friendly direct NEW_VIEW highest-QC vote-selection helper check.
+- `SumeragiNewViewHighestQcVotesGate_fast.cfg`: CI-friendly direct NEW_VIEW highest-QC vote-selection correctness-envelope check.
 - `SumeragiNewViewHighestQcVotesGate_bug_*.cfg`: expected-failure signer filter, slot filter, candidate presence/phase, rank, exact-grouping, and duplicate-group mutations.
 - `SumeragiFrontierNewViewCatchUpGate.tla`: active-frontier NEW_VIEW catch-up emission helper model.
-- `SumeragiFrontierNewViewCatchUpGate_fast.cfg`: CI-friendly direct active-frontier NEW_VIEW catch-up emission check.
+- `SumeragiFrontierNewViewCatchUpGate_fast.cfg`: CI-friendly direct active-frontier NEW_VIEW catch-up emission correctness-envelope check.
 - `SumeragiFrontierNewViewCatchUpGate_bug_*.cfg`: expected-failure resilience, view, support, local-signer, frontier, canonical-tip, tracked-view, and successor-window mutations.
 - `SumeragiNearQuorumNewViewRebroadcastGate.tla`: near-quorum NEW_VIEW vote rebroadcast helper model.
-- `SumeragiNearQuorumNewViewRebroadcastGate_fast.cfg`: CI-friendly direct near-quorum NEW_VIEW vote rebroadcast helper check.
+- `SumeragiNearQuorumNewViewRebroadcastGate_fast.cfg`: CI-friendly near-quorum NEW_VIEW vote rebroadcast correctness-envelope check.
 - `SumeragiNearQuorumNewViewRebroadcastGate_bug_*.cfg`: expected-failure admission, cooldown-floor, backpressure return, pacemaker nudge, phase, backpressure, and label mutations.
 - `SumeragiLateNewViewEmissionGate.tla`: late NEW_VIEW same-highest near-quorum emission helper model.
-- `SumeragiLateNewViewEmissionGate_fast.cfg`: CI-friendly direct late NEW_VIEW emission check.
+- `SumeragiLateNewViewEmissionGate_fast.cfg`: CI-friendly direct late NEW_VIEW emission correctness-envelope check.
 - `SumeragiLateNewViewEmissionGate_bug_*.cfg`: expected-failure frontier/view/local-index, permissioned/NPoS quorum, stake-roster, signer-map, same-slot supersession, candidate-ordering, and inner-emission mutations.
 - `SumeragiOnlineValidatorRelayCountersGate.tla`: online-validator and relay counter helper model.
-- `SumeragiOnlineValidatorRelayCountersGate_fast.cfg`: CI-friendly online-validator and relay counter direct exactness check.
+- `SumeragiOnlineValidatorRelayCountersGate_fast.cfg`: CI-friendly online-validator and relay counter correctness-envelope check.
 - `SumeragiOnlineValidatorRelayCountersGate_bug_*.cfg`: expected-failure online roster filtering, relay total, direct counter, cap-family, and saturation mutations.
 - `SumeragiCommitResultDrainGate.tla`: commit-result drain gate model.
 - `SumeragiCommitResultDrainGate_fast.cfg`: CI-friendly direct commit-result drain correctness-envelope check.
@@ -7908,7 +8486,7 @@ verification, and full networking details.
 - `SumeragiCommitQuorumSignersGate_fast.cfg`: CI-friendly commit-QC signer quorum correctness-envelope check.
 - `SumeragiCommitQuorumSignersGate_bug_*.cfg`: expected-failure missing metadata, zero-threshold, threshold-boundary, and failed-branch mutations.
 - `SumeragiSignatureIndexRecoveryGate.tla`: commit signature-index recovery helper model.
-- `SumeragiSignatureIndexRecoveryGate_fast.cfg`: CI-friendly direct commit signature-index recovery helper check.
+- `SumeragiSignatureIndexRecoveryGate_fast.cfg`: CI-friendly direct commit signature-index recovery helper correctness-envelope check.
 - `SumeragiSignatureIndexRecoveryGate_bug_*.cfg`: expected-failure raw-index, fallback, eligibility, ambiguity, duplicate, and replacement-error mutations.
 - `SumeragiCommitQcLookupGate.tla`: commit-QC cache/history lookup helper model.
 - `SumeragiCommitQcLookupGate_fast.cfg`: CI-friendly direct commit-QC cache/history lookup correctness-envelope check.
@@ -7986,10 +8564,10 @@ verification, and full networking details.
 - `SumeragiPacemakerCoreGate_fast.cfg`: CI-friendly Pacemaker state-machine correctness-envelope check.
 - `SumeragiPacemakerCoreGate_bug_*.cfg`: expected-failure construction, interval reset, deadline boundary, fire advancement, zero-interval, and accessor mutations.
 - `SumeragiPacemakerEvaluationGate.tla`: pacemaker evaluation gate model.
-- `SumeragiPacemakerEvaluationGate_fast.cfg`: CI-friendly direct pacemaker evaluation component check.
+- `SumeragiPacemakerEvaluationGate_fast.cfg`: CI-friendly pacemaker evaluation correctness-envelope check.
 - `SumeragiPacemakerEvaluationGate_bug_*.cfg`: expected-failure deferral logging, pacing-only, hard-backpressure, recovery, deadline, and proposal-attempt mutations.
 - `SumeragiPacingGovernorGate.tla`: pacing-governor factor evaluation model.
-- `SumeragiPacingGovernorGate_fast.cfg`: CI-friendly direct pacing-governor factor evaluation check.
+- `SumeragiPacingGovernorGate_fast.cfg`: CI-friendly pacing-governor correctness-envelope check.
 - `SumeragiPacingGovernorGate_bug_*.cfg`: expected-failure sample-count, target-time, pressure/clear threshold, factor-bound, step-clamp, saturating-delta, current-clamp, and ambiguous-window mutations.
 - `SumeragiCachedSlotTimeoutGate.tla`: cached proposal-slot timeout gate model.
 - `SumeragiCachedSlotTimeoutGate_fast.cfg`: CI-friendly cached proposal-slot timeout aggregate check.
@@ -8031,22 +8609,22 @@ verification, and full networking details.
 - `SumeragiRoundViewHelpersGate_fast.cfg`: CI-friendly round/view helper aggregate check.
 - `SumeragiRoundViewHelpersGate_bug_*.cfg`: expected-failure active-round, new-view target, timeout bump, and round-phase trace mutations.
 - `SumeragiPhaseTrackerGate.tla`: `PhaseTracker` mutable state helper model.
-- `SumeragiPhaseTrackerGate_fast.cfg`: CI-friendly `PhaseTracker` helper component/anchor check.
+- `SumeragiPhaseTrackerGate_fast.cfg`: CI-friendly `PhaseTracker` correctness-envelope check.
 - `SumeragiPhaseTrackerGate_bug_*.cfg`: expected-failure initialization, round-start, view-change, record, view-age, and current-view mutations.
 - `SumeragiRoundTraceStatusGate.tla`: round-trace status recorder model.
 - `SumeragiRoundTraceStatusGate_fast.cfg`: CI-friendly round-trace status recorder correctness-envelope check.
 - `SumeragiRoundTraceStatusGate_bug_*.cfg`: expected-failure transition, gap snapshot, trace pruning, wake, and event metadata mutations.
 - `SumeragiFailureRecoveryHelpersGate.tla`: failed-commit and block-sync helper model.
-- `SumeragiFailureRecoveryHelpersGate_fast.cfg`: CI-friendly direct failed-commit and block-sync helper check.
+- `SumeragiFailureRecoveryHelpersGate_fast.cfg`: CI-friendly failed-commit and block-sync helper correctness-envelope check.
 - `SumeragiFailureRecoveryHelpersGate_bug_*.cfg`: expected-failure QC realignment, requeue drop, view-cause, block-sync readiness, and QC application mutations.
 - `SumeragiRequeueTransactionsGate.tla`: transaction requeue branch helper model.
-- `SumeragiRequeueTransactionsGate_fast.cfg`: CI-friendly direct transaction requeue branch helper check.
+- `SumeragiRequeueTransactionsGate_fast.cfg`: CI-friendly direct transaction requeue branch helper correctness-envelope check.
 - `SumeragiRequeueTransactionsGate_bug_*.cfg`: expected-failure committed duplicate, route, push, gossip, hash-set, and pending-drop mutations.
 - `SumeragiTickDeadlineHelpersGate.tla`: tick/deadline scheduling helper model.
-- `SumeragiTickDeadlineHelpersGate_fast.cfg`: CI-friendly direct tick/deadline scheduling helper check.
+- `SumeragiTickDeadlineHelpersGate_fast.cfg`: CI-friendly tick/deadline scheduling helper correctness-envelope check.
 - `SumeragiTickDeadlineHelpersGate_bug_*.cfg`: expected-failure deadline merge, work-budget, budget-exhaustion, commit-bypass, heartbeat, pacemaker nudge, and next-tick scheduling mutations.
 - `SumeragiWorkerTickGapGate.tla`: worker tick-gap helper model.
-- `SumeragiWorkerTickGapGate_fast.cfg`: CI-friendly direct worker tick-gap helper check.
+- `SumeragiWorkerTickGapGate_fast.cfg`: CI-friendly worker tick-gap correctness-envelope check.
 - `SumeragiWorkerTickGapGate_bug_*.cfg`: expected-failure tick-run boundary, future-last-tick saturation, and idle-wait derivation mutations.
 - `SumeragiProposalParentResolutionGate.tla`: proposal parent resolution and inline backup transport gate model.
 - `SumeragiProposalParentResolutionGate_fast.cfg`: CI-friendly proposal parent resolution and inline backup transport aggregate check.
@@ -8092,7 +8670,7 @@ verification, and full networking details.
 - `SumeragiCertifiedBlockFetchGate_fast.cfg`: CI-friendly direct certified-block fetch aggregate check.
 - `SumeragiCertifiedBlockFetchGate_bug_*.cfg`: expected-failure request-targeting, service-side admission, response splitting, response/proof/body validation, proof pairing, invalid-owner, retry-revival, and materialization-cleanup mutations.
 - `SumeragiMissingBlockIngressFetchGate.tla`: missing-block ingress grace fetch gate model.
-- `SumeragiMissingBlockIngressFetchGate_fast.cfg`: CI-friendly direct missing-block ingress fetch gate check.
+- `SumeragiMissingBlockIngressFetchGate_fast.cfg`: CI-friendly missing-block ingress fetch correctness-envelope check.
 - `SumeragiMissingBlockIngressFetchGate_bug_*.cfg`: expected-failure payload/non-frontier bypass, initial grace hold, boundary force, request observation, and existing-request force mutations.
 - `SumeragiPayloadProgressAvailabilityGate.tla`: actor-local payload availability for progress model.
 - `SumeragiPayloadProgressAvailabilityGate_fast.cfg`: CI-friendly payload progress availability correctness-envelope check.
@@ -8110,7 +8688,7 @@ verification, and full networking details.
 - `SumeragiBlockKnownForLockGate_fast.cfg`: CI-friendly lock-safety block-known routing correctness-envelope check.
 - `SumeragiBlockKnownForLockGate_bug_*.cfg`: expected-failure pending validity, rejected-pending fallthrough, inflight, hash-only processing, deferred payload, Kura, and absent-block mutations.
 - `SumeragiMissingLockedQcRecoveryGate.tla`: missing locked-QC payload recovery model.
-- `SumeragiMissingLockedQcRecoveryGate_fast.cfg`: CI-friendly missing locked-QC payload recovery check.
+- `SumeragiMissingLockedQcRecoveryGate_fast.cfg`: CI-friendly missing locked-QC payload recovery correctness-envelope check.
 - `SumeragiMissingLockedQcRecoveryGate_bug_*.cfg`: expected-failure locked-payload request, roster fallback, ingress hold, stale conflict, lock/highest realignment, pruning, and reanchor mutations.
 - `SumeragiLocalSignedBlockLookupGate.tla`: local signed-block materialization model.
 - `SumeragiLocalSignedBlockLookupGate_fast.cfg`: CI-friendly direct local signed-block materialization check.
@@ -8131,16 +8709,16 @@ verification, and full networking details.
 - `SumeragiBlockingPendingBlocksGate_fast.cfg`: CI-friendly blocking pending-block counter correctness-envelope check.
 - `SumeragiBlockingPendingBlocksGate_bug_*.cfg`: expected-failure active/reschedule/fast-unblock, zero-quorum fallback, aborted/off-tip, vote/QC, reschedule, and age-window mutations.
 - `SumeragiQuorumRecoveryVoteDrainUrgentGate.tla`: quorum recovery vote-drain urgency model.
-- `SumeragiQuorumRecoveryVoteDrainUrgentGate_fast.cfg`: CI-friendly direct quorum recovery vote-drain urgency check.
+- `SumeragiQuorumRecoveryVoteDrainUrgentGate_fast.cfg`: CI-friendly quorum recovery vote-drain urgency correctness-envelope check.
 - `SumeragiQuorumRecoveryVoteDrainUrgentGate_bug_*.cfg`: expected-failure quorum-timeout, live/tip, evidence, queue, age-source, boundary, and existential-scan mutations.
 - `SumeragiFrontierBodyGapPayloadDrainUrgentGate.tla`: frontier body-gap payload-drain urgency model.
-- `SumeragiFrontierBodyGapPayloadDrainUrgentGate_fast.cfg`: CI-friendly direct frontier body-gap payload-drain urgency check.
+- `SumeragiFrontierBodyGapPayloadDrainUrgentGate_fast.cfg`: CI-friendly direct frontier body-gap payload-drain urgency correctness-envelope check.
 - `SumeragiFrontierBodyGapPayloadDrainUrgentGate_bug_*.cfg`: expected-failure slot-shape, evidence, backlog, vote-backlog-only, and over-strict conjunction mutations.
 - `SumeragiRbcAuthoritativePayloadProgressGate.tla`: RBC authoritative payload progress lookup model.
-- `SumeragiRbcAuthoritativePayloadProgressGate_fast.cfg`: CI-friendly direct RBC authoritative payload progress lookup check.
+- `SumeragiRbcAuthoritativePayloadProgressGate_fast.cfg`: CI-friendly RBC authoritative payload progress correctness-envelope check.
 - `SumeragiRbcAuthoritativePayloadProgressGate_bug_*.cfg`: expected-failure metadata gate, complete-chunk acceptance, chunk rejection, local-fallback skip, and local slot/hash mismatch mutations.
 - `SumeragiSlotAuthoritativePayloadGate.tla`: slot-level authoritative payload lookup model.
-- `SumeragiSlotAuthoritativePayloadGate_fast.cfg`: CI-friendly direct slot-level authoritative payload no-bug check.
+- `SumeragiSlotAuthoritativePayloadGate_fast.cfg`: CI-friendly slot-level authoritative payload correctness-envelope check.
 - `SumeragiSlotAuthoritativePayloadGate_bug_*.cfg`: expected-failure pending/inflight status, rejected-owner fallthrough, wrong-slot owner, Kura commit filtering, RBC retained/wrong-slot/non-authoritative, and absent-slot mutations.
 - `SumeragiMissingBlockFetchGate.tla`: QC-first missing-block fetch planner model.
 - `SumeragiMissingBlockFetchGate_fast.cfg`: CI-friendly missing-block fetch planner aggregate check.
@@ -8149,13 +8727,13 @@ verification, and full networking details.
 - `SumeragiRecoveryStatusCountersGate_fast.cfg`: CI-friendly recovery status counter/snapshot correctness-envelope check.
 - `SumeragiRecoveryStatusCountersGate_bug_*.cfg`: expected-failure fetch telemetry, zero-count, increment, snapshot, and reset mutations.
 - `SumeragiRecoveryFsmReasonGate.tla`: recovery-FSM reason classifier/rank/sort helper model.
-- `SumeragiRecoveryFsmReasonGate_fast.cfg`: CI-friendly direct recovery-FSM reason classifier/rank/sort check.
+- `SumeragiRecoveryFsmReasonGate_fast.cfg`: CI-friendly recovery-FSM reason classifier/rank/sort correctness-envelope check.
 - `SumeragiRecoveryFsmReasonGate_bug_*.cfg`: expected-failure reason-label, unknown-fallback, rank, and sort-key mutations.
 - `SumeragiQcRebuildStatusGate.tla`: QC rebuild status counter/snapshot helper model.
 - `SumeragiQcRebuildStatusGate_fast.cfg`: CI-friendly QC rebuild status counter/snapshot correctness-envelope check.
 - `SumeragiQcRebuildStatusGate_bug_*.cfg`: expected-failure reset, increment, independence, accumulation, and snapshot mutations.
 - `SumeragiQcRebuildQuorumGate.tla`: QC rebuild quorum reachability helper model.
-- `SumeragiQcRebuildQuorumGate_fast.cfg`: CI-friendly direct QC rebuild quorum reachability check.
+- `SumeragiQcRebuildQuorumGate_fast.cfg`: CI-friendly QC rebuild quorum reachability correctness-envelope check.
 - `SumeragiQcRebuildQuorumGate_bug_*.cfg`: expected-failure permissioned threshold, NPoS unknown-signer deferral, stake-roster, stake-snapshot, stake-quorum, and quorum-error mutations.
 - `SumeragiCollectorTargetingStatusGate.tla`: collector-targeting status counter/snapshot helper model.
 - `SumeragiCollectorTargetingStatusGate_fast.cfg`: CI-friendly collector-targeting status counter/snapshot correctness-envelope check.
@@ -8179,19 +8757,19 @@ verification, and full networking details.
 - `SumeragiRosterRecoveryStatusGate_fast.cfg`: CI-friendly roster-recovery status counter/state/dwell correctness-envelope check.
 - `SumeragiRosterRecoveryStatusGate_bug_*.cfg`: expected-failure roster/catch-up counter, wrong-bucket, repeated accumulation, state, dwell, snapshot, and reset mutations.
 - `SumeragiRangePullRecoveryGate.tla`: range-pull recovery helper model.
-- `SumeragiRangePullRecoveryGate_fast.cfg`: CI-friendly range-pull recovery helper check.
+- `SumeragiRangePullRecoveryGate_fast.cfg`: CI-friendly range-pull recovery helper correctness-envelope check.
 - `SumeragiRangePullRecoveryGate_bug_*.cfg`: expected-failure stage, tier, target fallback, cooldown, anchor, and reason-classifier mutations.
 - `SumeragiRangePullStatusGate.tla`: range-pull status counter/streak/snapshot helper model.
 - `SumeragiRangePullStatusGate_fast.cfg`: CI-friendly range-pull status counter/streak correctness-envelope check.
 - `SumeragiRangePullStatusGate_bug_*.cfg`: expected-failure counter increment, repeated accumulation, expiry-streak max/last, snapshot, and reset mutations.
 - `SumeragiRoundRecoveryBundleWindowGate.tla`: round-recovery bundle source/class and same-height window gate model.
-- `SumeragiRoundRecoveryBundleWindowGate_fast.cfg`: CI-friendly round-recovery bundle window gate check.
+- `SumeragiRoundRecoveryBundleWindowGate_fast.cfg`: CI-friendly round-recovery bundle window correctness-envelope check.
 - `SumeragiRoundRecoveryBundleWindowGate_bug_*.cfg`: expected-failure label, class, window-boundary, height-keying, and class-collision mutations.
 - `SumeragiCommittedEdgeConflictGate.tla`: committed-edge conflicting highest-QC suppression model.
 - `SumeragiCommittedEdgeConflictGate_fast.cfg`: CI-friendly direct committed-edge conflict suppression correctness-envelope check.
 - `SumeragiCommittedEdgeConflictGate_bug_*.cfg`: expected-failure suppression guard, artifact cleanup, canonical reanchor, frontier cleanup, owner gating, and recovery-window mutations.
 - `SumeragiLockRejectedSinkGate.tla`: lock-rejected branch sink lifecycle model.
-- `SumeragiLockRejectedSinkGate_fast.cfg`: CI-friendly direct lock-rejected sink lifecycle check.
+- `SumeragiLockRejectedSinkGate_fast.cfg`: CI-friendly direct lock-rejected sink lifecycle correctness-envelope check.
 - `SumeragiLockRejectedSinkGate_bug_*.cfg`: expected-failure note/update, activity gate, fetch/parent suppression, replay drop, height-clear, and purge-surface mutations.
 - `SumeragiActiveLockRejectRecoveryGate.tla`: active-height lock-reject recovery routing model.
 - `SumeragiActiveLockRejectRecoveryGate_fast.cfg`: CI-friendly active-height lock-reject recovery correctness-envelope check.
@@ -8225,7 +8803,7 @@ verification, and full networking details.
 - `SumeragiNativeAmxAttestationGate_bug_collapse_retry_bodies.cfg`: expected-failure retried-body cache collision mutation.
 - `SumeragiNativeAmxAttestationGate_bug_collapse_participant_legs.cfg`: expected-failure participant-leg cache collision mutation.
 - `SumeragiNativeAmxJournalReplay.tla`: native AMX queue-plan journal replay model.
-- `SumeragiNativeAmxJournalReplay_fast.cfg`: CI-friendly native AMX journal replay direct component check.
+- `SumeragiNativeAmxJournalReplay_fast.cfg`: CI-friendly native AMX journal replay correctness-envelope check.
 - `SumeragiNativeAmxJournalReplay_bug_drop_native_plan.cfg`: expected-failure native plan drop mutation.
 - `SumeragiNativeAmxJournalReplay_bug_collapse_native_to_single.cfg`: expected-failure native plan collapsed to single-route mutation.
 - `SumeragiNativeAmxJournalReplay_bug_single_plan_as_native.cfg`: expected-failure single-route plan replayed as native AMX mutation.
@@ -8244,7 +8822,7 @@ verification, and full networking details.
 - `SumeragiNativeAmxJournalReplay_bug_keep_torn_tail.cfg`: expected-failure torn-tail retention mutation.
 - `SumeragiNativeAmxJournalReplay_bug_drop_prior_on_tail_repair.cfg`: expected-failure complete-prefix loss during tail repair mutation.
 - `SumeragiNativeAmxReceiptValidation.tla`: native AMX receipt validation model.
-- `SumeragiNativeAmxReceiptValidation_fast.cfg`: CI-friendly native AMX receipt validation aggregate check.
+- `SumeragiNativeAmxReceiptValidation_fast.cfg`: CI-friendly native AMX receipt validation correctness-envelope check.
 - `SumeragiNativeAmxReceiptValidation_bug_accept_missing_receipt.cfg`: expected-failure missing native receipt acceptance mutation.
 - `SumeragiNativeAmxReceiptValidation_bug_reject_valid_single.cfg`: expected-failure single-route no-receipt rejection mutation.
 - `SumeragiNativeAmxReceiptValidation_bug_accept_single_receipt.cfg`: expected-failure single-route receipt acceptance mutation.
@@ -8298,7 +8876,7 @@ verification, and full networking details.
 - `SumeragiNativeAmxIngressGate_bug_drop_retried_body.cfg`: expected-failure retried-body cache drop mutation.
 - `SumeragiNativeAmxIngressGate_bug_drop_different_participant.cfg`: expected-failure distinct participant-leg cache drop mutation.
 - `SumeragiVNextChainOrderGate.tla`: vNext chain-order helper construction model.
-- `SumeragiVNextChainOrderGate_fast.cfg`: CI-friendly direct vNext chain-order component check.
+- `SumeragiVNextChainOrderGate_fast.cfg`: CI-friendly vNext chain-order correctness-envelope check.
 - `SumeragiVNextChainOrderGate_bug_accept_empty_order.cfg`: expected-failure empty-order acceptance mutation.
 - `SumeragiVNextChainOrderGate_bug_accept_zero_critical.cfg`: expected-failure zero critical-prefix acceptance mutation.
 - `SumeragiVNextChainOrderGate_bug_accept_critical_after_end.cfg`: expected-failure overlong critical-prefix mutation.
@@ -8319,7 +8897,7 @@ verification, and full networking details.
 - `SumeragiVNextChainOrderGate_bug_bitmap_allows_duplicate.cfg`: expected-failure duplicate signer bitmap mutation.
 - `SumeragiVNextChainOrderGate_bug_bitmap_allows_out_of_range.cfg`: expected-failure out-of-range signer bitmap mutation.
 - `SumeragiVNextRechainGate.tla`: quarantined vNext re-chain helper model.
-- `SumeragiVNextRechainGate_fast.cfg`: CI-friendly direct vNext re-chain helper check.
+- `SumeragiVNextRechainGate_fast.cfg`: CI-friendly vNext re-chain helper correctness-envelope check.
 - `SumeragiVNextRechainGate_bug_accept_empty_evidence.cfg`: expected-failure empty-evidence acceptance mutation.
 - `SumeragiVNextRechainGate_bug_ignore_slot_mismatch.cfg`: expected-failure slot-mismatch acceptance mutation.
 - `SumeragiVNextRechainGate_bug_ignore_order_hash_mismatch.cfg`: expected-failure chain-order hash mismatch acceptance mutation.
@@ -8338,10 +8916,10 @@ verification, and full networking details.
 - `SumeragiVNextRechainGate_bug_mutate_certificate_slot.cfg`: expected-failure certificate slot mutation.
 - `SumeragiVNextRechainGate_bug_reuse_previous_hash.cfg`: expected-failure unchanged chain-order hash mutation.
 - `SumeragiVNextRechainErrorLabelGate.tla`: vNext re-chain error label projection model.
-- `SumeragiVNextRechainErrorLabelGate_fast.cfg`: CI-friendly direct vNext re-chain error label check.
+- `SumeragiVNextRechainErrorLabelGate_fast.cfg`: CI-friendly vNext re-chain error label correctness-envelope check.
 - `SumeragiVNextRechainErrorLabelGate_bug_*.cfg`: expected-failure label-drift and payload-leakage mutations.
 - `SumeragiVNextSignatureGate.tla`: vNext aggregate certificate verification model.
-- `SumeragiVNextSignatureGate_fast.cfg`: CI-friendly direct vNext aggregate certificate verification check.
+- `SumeragiVNextSignatureGate_fast.cfg`: CI-friendly vNext aggregate certificate verification correctness-envelope check.
 - `SumeragiVNextSignatureGate_bug_accept_missing_signature.cfg`: expected-failure missing aggregate signature acceptance mutation.
 - `SumeragiVNextSignatureGate_bug_allow_empty_roster.cfg`: expected-failure empty signer roster acceptance mutation.
 - `SumeragiVNextSignatureGate_bug_ignore_bitmap_length.cfg`: expected-failure non-canonical bitmap length mutation.
@@ -8359,16 +8937,16 @@ verification, and full networking details.
 - `SumeragiVNextSignatureGate_bug_drop_returned_signer.cfg`: expected-failure returned-signer drop mutation.
 - `SumeragiVNextSignatureGate_bug_return_signers_on_reject.cfg`: expected-failure rejected-certificate signer leak mutation.
 - `SumeragiVNextSigningPreimageGate.tla`: vNext signing-preimage construction model.
-- `SumeragiVNextSigningPreimageGate_fast.cfg`: CI-friendly direct vNext signing-preimage construction check.
+- `SumeragiVNextSigningPreimageGate_fast.cfg`: CI-friendly vNext signing-preimage construction correctness-envelope check.
 - `SumeragiVNextSigningPreimageGate_bug_*.cfg`: expected-failure domain-separation, body-field, signature-material, vote-projection, and suspicion-hash mutations.
 - `SumeragiVNextControlIngressGate.tla`: vNext control-certificate ingress model.
-- `SumeragiVNextControlIngressGate_fast.cfg`: CI-friendly direct vNext control-certificate ingress component check.
+- `SumeragiVNextControlIngressGate_fast.cfg`: CI-friendly vNext control-certificate ingress correctness-envelope check.
 - `SumeragiVNextControlIngressGate_bug_*.cfg`: expected-failure missing-round, already-current, re-chain rejection, valid re-chain, taint-bound escalation, view-change requirement, and view-certificate side-effect mutations.
 - `SumeragiVNextSlotLifecycleGate.tla`: vNext actor-owned slot lifecycle model.
-- `SumeragiVNextSlotLifecycleGate_fast.cfg`: CI-friendly direct vNext slot-lifecycle component check.
+- `SumeragiVNextSlotLifecycleGate_fast.cfg`: CI-friendly vNext slot-lifecycle correctness-envelope check.
 - `SumeragiVNextSlotLifecycleGate_bug_*.cfg`: expected-failure no-base, committed-stickiness, validation-dispatch, worker-owner, queue-full, validation-result, deferral, timeout, commit, and recovery side-effect mutations.
 - `SumeragiVNextValidationGate.tla`: vNext validation ownership model.
-- `SumeragiVNextValidationGate_fast.cfg`: CI-friendly direct vNext validation ownership component check.
+- `SumeragiVNextValidationGate_fast.cfg`: CI-friendly vNext validation ownership correctness-envelope check.
 - `SumeragiVNextValidationGate_bug_dispatch_queued.cfg`: expected-failure queued-dispatch mutation.
 - `SumeragiVNextValidationGate_bug_raise_running_before_timeout.cfg`: expected-failure early running-suspicion mutation.
 - `SumeragiVNextValidationGate_bug_miss_running_at_timeout.cfg`: expected-failure missed running timeout-boundary mutation.
@@ -8385,37 +8963,37 @@ verification, and full networking details.
 - `SumeragiVNextValidationGate_bug_ignore_matching_invalid.cfg`: expected-failure matching invalid-result ignore mutation.
 - `SumeragiVNextValidationGate_bug_stale_mutates_state.cfg`: expected-failure stale-result state mutation.
 - `SumeragiVNextDeadlineProtectionGate.tla`: vNext validation deadline/protection helper model.
-- `SumeragiVNextDeadlineProtectionGate_fast.cfg`: CI-friendly vNext deadline/protection direct exactness check.
+- `SumeragiVNextDeadlineProtectionGate_fast.cfg`: CI-friendly vNext deadline/protection correctness-envelope check.
 - `SumeragiVNextDeadlineProtectionGate_bug_*.cfg`: expected-failure due-instant, fresh-deadline, timeout/backpressure protection, and round wakeup mutations.
 - `SumeragiVNextPerformanceConfigGate.tla`: vNext performance-fault config conversion model.
-- `SumeragiVNextPerformanceConfigGate_fast.cfg`: CI-friendly direct vNext performance-fault config conversion check.
+- `SumeragiVNextPerformanceConfigGate_fast.cfg`: CI-friendly vNext performance-fault config correctness-envelope check.
 - `SumeragiVNextPerformanceConfigGate_bug_*.cfg`: expected-failure duration saturation, field preservation, and timeout/cooldown independence mutations.
 - `SumeragiVNextStakeWeightGate.tla`: vNext stake-weight lookup and quorum helper model.
-- `SumeragiVNextStakeWeightGate_fast.cfg`: CI-friendly direct vNext stake-weight lookup and quorum helper check.
+- `SumeragiVNextStakeWeightGate_fast.cfg`: CI-friendly vNext stake-weight lookup and quorum correctness-envelope check.
 - `SumeragiVNextStakeWeightGate_bug_*.cfg`: expected-failure lookup, duplicate-weight, strict-boundary, and arithmetic fail-closed mutations.
 - `SumeragiValidationWorkerConfigGate.tla`: pending-block validation worker config helper model.
-- `SumeragiValidationWorkerConfigGate_fast.cfg`: CI-friendly direct pending-block validation worker config helper check.
+- `SumeragiValidationWorkerConfigGate_fast.cfg`: CI-friendly pending-block validation worker config correctness-envelope check.
 - `SumeragiValidationWorkerConfigGate_bug_*.cfg`: expected-failure auto-thread clamp, explicit-thread, work-cap, and result-cap mutations.
 - `SumeragiValidationStallRedriveGate.tla`: validation stall/freshness/vNext redrive helper model.
-- `SumeragiValidationStallRedriveGate_fast.cfg`: CI-friendly validation stall/redrive direct exactness check.
+- `SumeragiValidationStallRedriveGate_fast.cfg`: CI-friendly validation stall/redrive correctness-envelope check.
 - `SumeragiValidationStallRedriveGate_bug_*.cfg`: expected-failure stall-floor/cap, freshness, inline fallback, and vNext redrive mutations.
 - `SumeragiValidationRedriveLabelGate.tla`: validation redrive reason label model.
-- `SumeragiValidationRedriveLabelGate_fast.cfg`: CI-friendly direct validation redrive reason label, nonzero, and distinctness check.
+- `SumeragiValidationRedriveLabelGate_fast.cfg`: CI-friendly validation redrive reason label correctness-envelope check.
 - `SumeragiValidationRedriveLabelGate_bug_*.cfg`: expected-failure label-drift and label-collision mutations.
 - `SumeragiValidationOwnershipCleanupGate.tla`: validation ownership cleanup helper model.
-- `SumeragiValidationOwnershipCleanupGate_fast.cfg`: CI-friendly validation ownership cleanup direct exactness helper check.
+- `SumeragiValidationOwnershipCleanupGate_fast.cfg`: CI-friendly validation ownership cleanup correctness-envelope check.
 - `SumeragiValidationOwnershipCleanupGate_bug_*.cfg`: expected-failure target-removal, unrelated-hash preservation, slot cleanup, and empty-round pruning mutations.
 - `SumeragiVerifyCacheKeyGate.tla`: vote/QC verification cache-key identity model.
-- `SumeragiVerifyCacheKeyGate_fast.cfg`: CI-friendly vote/QC verification cache-key identity direct exactness check.
+- `SumeragiVerifyCacheKeyGate_fast.cfg`: CI-friendly vote/QC verification cache-key identity correctness-envelope check.
 - `SumeragiVerifyCacheKeyGate_bug_*.cfg`: expected-failure omitted-field, cache-tuple truncation, and signer-public-key binding mutations.
 - `SumeragiVoteVerifyAsyncGate.tla`: actor-side async vote-verification ownership model.
-- `SumeragiVoteVerifyAsyncGate_fast.cfg`: CI-friendly direct async vote-verification ownership check.
+- `SumeragiVoteVerifyAsyncGate_fast.cfg`: CI-friendly async vote-verification ownership correctness-envelope check.
 - `SumeragiVoteVerifyAsyncGate_bug_*.cfg`: expected-failure no-worker fallback, duplicate suppression, backpressure, pending retry, worker-result ownership, rejection, and channel-disconnect mutations.
 - `SumeragiVoteVerifyWorkerConfigGate.tla`: vote-signature verification worker config helper model.
 - `SumeragiVoteVerifyWorkerConfigGate_fast.cfg`: CI-friendly direct vote-signature verification worker config correctness-envelope check.
 - `SumeragiVoteVerifyWorkerConfigGate_bug_*.cfg`: expected-failure auto-thread, explicit-thread, work-cap, and result-cap mutations.
 - `SumeragiQcVerifyAsyncGate.tla`: actor-side async QC aggregate-verification ownership model.
-- `SumeragiQcVerifyAsyncGate_fast.cfg`: CI-friendly direct async QC aggregate-verification ownership check.
+- `SumeragiQcVerifyAsyncGate_fast.cfg`: CI-friendly async QC aggregate-verification ownership correctness-envelope check.
 - `SumeragiQcVerifyAsyncGate_bug_*.cfg`: expected-failure cache, inline fallback, worker dispatch, duplicate suppression, known-block stale-lock, worker-result ownership, and disconnect-cleanup mutations.
 - `SumeragiQcVerifyWorkerConfigGate.tla`: QC aggregate-verification worker config helper model.
 - `SumeragiQcVerifyWorkerConfigGate_fast.cfg`: CI-friendly direct QC aggregate-verification worker config correctness-envelope check.
@@ -8424,16 +9002,16 @@ verification, and full networking details.
 - `SumeragiActorGatePriorityGate_fast.cfg`: CI-friendly actor-gate priority and fairness correctness-envelope check.
 - `SumeragiActorGatePriorityGate_bug_*.cfg`: expected-failure entry/block, in-flight, waiter, wakeup, availability, body, urgent, and streak mutation configs.
 - `SumeragiWorkerDrainSchedulerGate.tla`: worker-loop drain scheduler model.
-- `SumeragiWorkerDrainSchedulerGate_fast.cfg`: CI-friendly direct worker-loop drain scheduler component check.
+- `SumeragiWorkerDrainSchedulerGate_fast.cfg`: CI-friendly worker-loop drain scheduler correctness-envelope check.
 - `SumeragiWorkerDrainSchedulerGate_bug_*.cfg`: expected-failure vote-priority, frontier repair, quorum-recovery drain, overtime payload, block backlog, low-priority service, accounting, polling, tick, and budget mutations.
 - `SumeragiWorkerBudgetAdaptiveGate.tla`: worker-loop budget/adaptive-cap model.
-- `SumeragiWorkerBudgetAdaptiveGate_fast.cfg`: CI-friendly direct worker-loop budget/adaptive-cap component check.
+- `SumeragiWorkerBudgetAdaptiveGate_fast.cfg`: CI-friendly worker-loop budget/adaptive-cap correctness-envelope check.
 - `SumeragiWorkerBudgetAdaptiveGate_bug_*.cfg`: expected-failure time-budget, vote-budget, drain-budget, tick-gap, block-backlog tier, and adaptive-cap mutations.
 - `SumeragiWorkerIngressRoutingGate.tla`: worker ingress routing and parallel worker execution-envelope model.
-- `SumeragiWorkerIngressRoutingGate_fast.cfg`: CI-friendly direct worker ingress routing component check.
+- `SumeragiWorkerIngressRoutingGate_fast.cfg`: CI-friendly worker ingress routing correctness-envelope check.
 - `SumeragiWorkerIngressRoutingGate_bug_*.cfg`: expected-failure message routing, enqueue accounting, gate/stage/handler mapping, batch-limit, and drain-sequencing mutations.
 - `SumeragiWorkerLoopStageGate.tla`: worker-loop stage id/from-id/label helper model.
-- `SumeragiWorkerLoopStageGate_fast.cfg`: CI-friendly direct worker-loop stage helper check.
+- `SumeragiWorkerLoopStageGate_fast.cfg`: CI-friendly worker-loop stage correctness-envelope check.
 - `SumeragiWorkerLoopStageGate_bug_*.cfg`: expected-failure stage id, from-id fallback, and label mutations.
 - `SumeragiWorkerQueueStatusGate.tla`: worker-queue status accounting model.
 - `SumeragiWorkerQueueStatusGate_fast.cfg`: CI-friendly worker-queue status accounting correctness-envelope check.
@@ -8457,22 +9035,22 @@ verification, and full networking details.
 - `SumeragiFrontierGapRealignGate_fast.cfg`: CI-friendly frontier-gap realignment correctness-envelope check.
 - `SumeragiFrontierGapRealignGate_bug_*.cfg`: expected-failure future-evidence, exact-body suppression, anchor selection, target fallback, cooldown, shared-window, stride, priority, and send-accounting mutations.
 - `SumeragiFrontierBlockSyncHintGate.tla`: frontier block-sync hint and direct-response permit model.
-- `SumeragiFrontierBlockSyncHintGate_fast.cfg`: CI-friendly direct frontier block-sync hint/direct-response permit check.
+- `SumeragiFrontierBlockSyncHintGate_fast.cfg`: CI-friendly direct frontier block-sync hint/direct-response permit correctness-envelope check.
 - `SumeragiFrontierBlockSyncHintGate_bug_*.cfg`: expected-failure latest-gossip pause, external-hint sync, direct-response permit admission/accounting, TTL, peer-scope, and pruning mutations.
 - `SumeragiSameHeightVoteConflictGate.tla`: same-height local vote conflict helper model.
-- `SumeragiSameHeightVoteConflictGate_fast.cfg`: CI-friendly direct same-height local vote conflict helper check.
+- `SumeragiSameHeightVoteConflictGate_fast.cfg`: CI-friendly same-height local vote conflict correctness-envelope check.
 - `SumeragiSameHeightVoteConflictGate_bug_*.cfg`: expected-failure vote-selection, conflict, frontier, certified-commit supersession, NewView supersession, and pending-validation mutations.
 - `SumeragiSameHeightVoteLockGate.tla`: aggregate same-height vote-lock helper model.
-- `SumeragiSameHeightVoteLockGate_fast.cfg`: CI-friendly aggregate same-height vote-lock direct exactness check.
+- `SumeragiSameHeightVoteLockGate_fast.cfg`: CI-friendly aggregate same-height vote-lock correctness-envelope check.
 - `SumeragiSameHeightVoteLockGate_bug_*.cfg`: expected-failure roster, vote-filtering, deduplication, remaining-vote, best-branch, metadata, and frontier-lock mutations.
 - `SumeragiProposalStaleVoteGate.tla`: proposal-side stale same-height vote gate model.
-- `SumeragiProposalStaleVoteGate_fast.cfg`: CI-friendly direct proposal-side stale same-height vote check.
+- `SumeragiProposalStaleVoteGate_fast.cfg`: CI-friendly proposal-side stale same-height vote correctness-envelope check.
 - `SumeragiProposalStaleVoteGate_bug_*.cfg`: expected-failure base-blocking, missing-QC repair escape, and assembly composition mutations.
 - `SumeragiSameHeightVoteRecoveryGapGate.tla`: same-height vote recovery view-gap threshold model.
-- `SumeragiSameHeightVoteRecoveryGapGate_fast.cfg`: CI-friendly direct same-height vote recovery view-gap check.
+- `SumeragiSameHeightVoteRecoveryGapGate_fast.cfg`: CI-friendly same-height vote recovery view-gap correctness-envelope check.
 - `SumeragiSameHeightVoteRecoveryGapGate_bug_*.cfg`: expected-failure saturating-subtraction, minimum-floor, multiplier, boundary, and escalation-vs-standard relation mutations.
 - `SumeragiTipExtensionHelpersGate.tla`: pending-block stale-tip and chain tip-extension helper model.
-- `SumeragiTipExtensionHelpersGate_fast.cfg`: CI-friendly direct pending-block stale-tip and chain extension helper check.
+- `SumeragiTipExtensionHelpersGate_fast.cfg`: CI-friendly pending-block stale-tip and chain extension helper correctness-envelope check.
 - `SumeragiTipExtensionHelpersGate_bug_*.cfg`: expected-failure stale-tip parent/height and chain-extension true/false/unknown mutations.
 - `SumeragiDaGateHelperGate.tla`: DA gate evaluation, satisfaction, and manifest-label helper model.
 - `SumeragiDaGateHelperGate_fast.cfg`: CI-friendly DA gate helper correctness-envelope check.
@@ -8481,13 +9059,13 @@ verification, and full networking details.
 - `SumeragiDaGateStatusGate_fast.cfg`: CI-friendly DA gate status correctness-envelope check.
 - `SumeragiDaGateStatusGate_bug_*.cfg`: expected-failure counter, latest reason, satisfaction, snapshot, getter, and reset mutations.
 - `SumeragiManifestGuardGate.tla`: DA manifest guard outcome, cache merge, block scan, and bundle cap helper model.
-- `SumeragiManifestGuardGate_fast.cfg`: CI-friendly direct DA manifest guard helper check.
+- `SumeragiManifestGuardGate_fast.cfg`: CI-friendly DA manifest guard correctness-envelope check.
 - `SumeragiManifestGuardGate_bug_*.cfg`: expected-failure manifest enforcement, audit/strict policy, cache merge, block scan, and bundle cap mutations.
 - `SumeragiConsensusHandshakeCapsGate.tla`: consensus handshake capability construction helper model.
 - `SumeragiConsensusHandshakeCapsGate_fast.cfg`: CI-friendly direct consensus handshake capability construction correctness-envelope check.
 - `SumeragiConsensusHandshakeCapsGate_bug_*.cfg`: expected-failure mode/domain, caps, fingerprint, canonical-param, NPoS payload, epoch, and timeout-base mutations.
 - `SumeragiHandshakeGate.tla`: consensus p2p handshake exact-match and local-projection helper model.
-- `SumeragiHandshakeGate_fast.cfg`: CI-friendly direct consensus p2p handshake helper check.
+- `SumeragiHandshakeGate_fast.cfg`: CI-friendly direct consensus p2p handshake helper correctness-envelope check.
 - `SumeragiHandshakeGate_bug_*.cfg`: expected-failure handshake accept/reject, mismatch-priority, and local-projection mutations.
 - `SumeragiModeFlipGate.tla`: runtime consensus-mode flip helper model.
 - `SumeragiModeFlipGate_fast.cfg`: CI-friendly runtime mode flip correctness-envelope check.
@@ -8502,61 +9080,61 @@ verification, and full networking details.
 - `SumeragiNewViewStatsGate_fast.cfg`: CI-friendly NEW_VIEW receipt statistics correctness-envelope check.
 - `SumeragiNewViewStatsGate_bug_*.cfg`: expected-failure sender deduplication, per-key counting, capacity-pruning, lexicographic-order, and snapshot mutations.
 - `SumeragiNewViewTrackerGate.tla`: NEW_VIEW tracker quorum/selection helper model.
-- `SumeragiNewViewTrackerGate_fast.cfg`: CI-friendly direct NEW_VIEW tracker quorum/selection helper check.
+- `SumeragiNewViewTrackerGate_fast.cfg`: CI-friendly NEW_VIEW tracker quorum/selection correctness-envelope check.
 - `SumeragiNewViewTrackerGate_bug_*.cfg`: expected-failure highest-QC promotion, sender counting, roster-local quorum, selection, pruning, and removal mutations.
 - `SumeragiTimingMonitorGate.tla`: timing/log cooldown monitor model.
-- `SumeragiTimingMonitorGate_fast.cfg`: CI-friendly direct timing/log cooldown monitor no-bug check.
+- `SumeragiTimingMonitorGate_fast.cfg`: CI-friendly timing/log cooldown monitor correctness-envelope check.
 - `SumeragiTimingMonitorGate_bug_*.cfg`: expected-failure threshold, cooldown-boundary, suppression-preservation, independent-cooldown, saturating-time, and proposal-attempt mutations.
 - `SumeragiHotspotLogSummaryGate.tla`: hotspot summary accumulator model.
-- `SumeragiHotspotLogSummaryGate_fast.cfg`: CI-friendly direct hotspot summary accumulator check.
+- `SumeragiHotspotLogSummaryGate_fast.cfg`: CI-friendly direct hotspot summary accumulator correctness-envelope check.
 - `SumeragiHotspotLogSummaryGate_bug_*.cfg`: expected-failure initialization, counter update, saturation, interval-boundary, suppressed-only logging, due reset, and reset mutations.
 - `SumeragiAdaptiveObservabilityGate.tla`: adaptive observability timing/fanout helper model.
 - `SumeragiAdaptiveObservabilityGate_fast.cfg`: CI-friendly direct adaptive observability timing/fanout check.
 - `SumeragiAdaptiveObservabilityGate_bug_*.cfg`: expected-failure disabled/reset, resilience, alert, cooldown, collector-limit, interval, trigger, and missing-data baseline mutations.
 - `SumeragiPacingBackpressureGate.tla`: pacing backpressure helper model.
-- `SumeragiPacingBackpressureGate_fast.cfg`: CI-friendly direct pacing backpressure helper check.
+- `SumeragiPacingBackpressureGate_fast.cfg`: CI-friendly pacing backpressure correctness-envelope check.
 - `SumeragiPacingBackpressureGate_bug_*.cfg`: expected-failure receiver snapshot, refresh, cached-state, defer-refresh, saturation, and pacemaker deferral-state mutations.
 - `SumeragiCounterBackpressureCooldownGate.tla`: counter-driven backpressure cooldown helper model.
 - `SumeragiCounterBackpressureCooldownGate_fast.cfg`: CI-friendly counter-driven backpressure cooldown correctness-envelope check.
 - `SumeragiCounterBackpressureCooldownGate_bug_*.cfg`: expected-failure counter-source, cooldown-boundary, reset, disable, and queue-projection mutations.
 - `SumeragiPacemakerBackpressureTrackerGate.tla`: per-reason pacemaker backpressure tracker telemetry model.
-- `SumeragiPacemakerBackpressureTrackerGate_fast.cfg`: CI-friendly direct per-reason pacemaker backpressure tracker check.
+- `SumeragiPacemakerBackpressureTrackerGate_fast.cfg`: CI-friendly per-reason pacemaker backpressure tracker correctness-envelope check.
 - `SumeragiPacemakerBackpressureTrackerGate_bug_*.cfg`: expected-failure label, deferring-gate, reason-signal, first-activation, sustained-age, clear-duration, idle, and missing-start mutations.
 - `SumeragiLockedQcHelperGate.tla`: locked-QC helper model.
 - `SumeragiLockedQcHelperGate_fast.cfg`: CI-friendly locked-QC helper correctness-envelope check.
 - `SumeragiLockedQcHelperGate_bug_*.cfg`: expected-failure lock admission, chain-extension, missing-payload, newer-view bypass, and committed-realignment mutations.
 - `SumeragiPrecommitQcExtendsLockedGate.tla`: precommit-QC locked-chain wrapper model.
-- `SumeragiPrecommitQcExtendsLockedGate_fast.cfg`: CI-friendly direct precommit-QC locked-chain wrapper check.
+- `SumeragiPrecommitQcExtendsLockedGate_fast.cfg`: CI-friendly precommit-QC locked-chain wrapper correctness-envelope check.
 - `SumeragiPrecommitQcExtendsLockedGate_bug_*.cfg`: expected-failure fail-open, extension, newer-view bypass, rejection, and warning mutations.
 - `SumeragiDropPrecommitVoteForLockGate.tla`: precommit-vote locked-chain filter model.
 - `SumeragiDropPrecommitVoteForLockGate_fast.cfg`: CI-friendly direct precommit-vote locked-chain filter correctness-envelope check.
 - `SumeragiDropPrecommitVoteForLockGate_bug_*.cfg`: expected-failure phase, lock, payload-presence, extension, newer-view bypass, and drop-accounting mutations.
 - `SumeragiStakeSnapshotGate.tla`: NPoS stake snapshot helper model.
-- `SumeragiStakeSnapshotGate_fast.cfg`: CI-friendly direct stake snapshot no-bug check.
+- `SumeragiStakeSnapshotGate_fast.cfg`: CI-friendly stake snapshot correctness-envelope check.
 - `SumeragiStakeSnapshotGate_bug_*.cfg`: expected-failure empty-roster, fallback, roster-order, hash, active-stake, strict-quorum, signer, snapshot, duplicate-stake, and coverage mutations.
 - `SumeragiValidatorElectionGate.tla`: NPoS validator election helper model.
-- `SumeragiValidatorElectionGate_fast.cfg`: CI-friendly direct validator election helper check.
+- `SumeragiValidatorElectionGate_fast.cfg`: CI-friendly NPoS validator election correctness-envelope check.
 - `SumeragiValidatorElectionGate_bug_*.cfg`: expected-failure constraint, score-ordering, seat-band, entity-correlation, deferred-fill, rejection, and outcome-binding mutations.
 - `SumeragiLiveVoteRosterGate.tla`: live local-vote roster selection and active topology fallback model.
-- `SumeragiLiveVoteRosterGate_fast.cfg`: CI-friendly direct live local-vote roster check.
+- `SumeragiLiveVoteRosterGate_fast.cfg`: CI-friendly live local-vote roster correctness-envelope check.
 - `SumeragiLiveVoteRosterGate_bug_*.cfg`: expected-failure future-height, pending-activation, canonicalization, fallback-source, mode-source, and live-key-filter mutations.
 - `SumeragiCanonicalRoundRosterGate.tla`: canonical round-roster selection and commit-QC roll-forward model.
 - `SumeragiCanonicalRoundRosterGate_fast.cfg`: CI-friendly canonical round-roster correctness-envelope check.
 - `SumeragiCanonicalRoundRosterGate_bug_*.cfg`: expected-failure future-height, history-priority, pending/previous-topology, canonicalization, parent-hash, exact-parent, strict-parent, candidate-filter, sorting, intermediate-hash, and live-key-filter mutations.
 - `SumeragiVoteRosterSelectionGate.tla`: block-specific vote roster selection, validation wrapper, and NEW_VIEW roster routing model.
-- `SumeragiVoteRosterSelectionGate_fast.cfg`: CI-friendly direct vote-roster selection check.
+- `SumeragiVoteRosterSelectionGate_fast.cfg`: CI-friendly block-specific vote-roster selection correctness-envelope check.
 - `SumeragiVoteRosterSelectionGate_bug_*.cfg`: expected-failure cache-priority, next-height live-roster, persisted/block-sync, sidecar, historical-remap, committed fallback, future roll-forward, canonicalization, validation-cache, and NEW_VIEW routing mutations.
 - `SumeragiVoteRosterCacheGate.tla`: vote roster cache, POP cache, and local emission topology helper model.
-- `SumeragiVoteRosterCacheGate_fast.cfg`: CI-friendly direct vote-roster cache/support check.
+- `SumeragiVoteRosterCacheGate_fast.cfg`: CI-friendly vote-roster cache/support correctness-envelope check.
 - `SumeragiVoteRosterCacheGate_bug_*.cfg`: expected-failure cache-insert, canonicalization, keep-existing, deferred-replay, POP-cache hit/miss, POP-source, cache-cap, roster-hash, empty-roster, and live-emission fallback mutations.
 - `SumeragiCommitTopologyStateGate.tla`: commit-topology refresh and roster-change reset model.
 - `SumeragiCommitTopologyStateGate_fast.cfg`: CI-friendly direct commit-topology state correctness-envelope check.
 - `SumeragiCommitTopologyStateGate_bug_*.cfg`: expected-failure same-order, order-only, membership-change, reset-surface, proposals-seen, runtime-cache, and on-commit branch mutations.
 - `SumeragiPrecommitSignerHistoryGate.tla`: precommit signer-history roster/QC fallback model.
-- `SumeragiPrecommitSignerHistoryGate_fast.cfg`: CI-friendly direct precommit signer-history fallback check.
+- `SumeragiPrecommitSignerHistoryGate_fast.cfg`: CI-friendly precommit signer-history correctness-envelope check.
 - `SumeragiPrecommitSignerHistoryGate_bug_*.cfg`: expected-failure history ordering, exact lookup, roster shape, quorum, stake snapshot, fallback artifact, and cached-QC aggregate mutations.
 - `SumeragiPrecommitVoteGate.tla`: local precommit vote-emission gate model.
-- `SumeragiPrecommitVoteGate_fast.cfg`: CI-friendly precommit vote-emission check.
+- `SumeragiPrecommitVoteGate_fast.cfg`: CI-friendly precommit vote-emission correctness-envelope check.
 - `SumeragiPrecommitVoteGate_bug_invalid_validation.cfg`: expected-failure invalid-validation emission mutation.
 - `SumeragiPrecommitVoteGate_bug_observer.cfg`: expected-failure observer/out-of-topology emission mutation.
 - `SumeragiPrecommitVoteGate_bug_duplicate.cfg`: expected-failure duplicate same-slot emission mutation.
@@ -8567,7 +9145,7 @@ verification, and full networking details.
 - `SumeragiPrecommitVoteGate_bug_non_extending_lock.cfg`: expected-failure non-extending locked-chain mutation.
 - `SumeragiPrecommitVoteGate_bug_reject_safe.cfg`: expected-failure safe-candidate rejection mutation.
 - `SumeragiProposalAssemblyGate.tla`: local proposal assembly gate model.
-- `SumeragiProposalAssemblyGate_fast.cfg`: CI-friendly proposal assembly gate check.
+- `SumeragiProposalAssemblyGate_fast.cfg`: CI-friendly proposal assembly correctness-envelope check.
 - `SumeragiProposalAssemblyGate_bug_observer.cfg`: expected-failure observer/non-leader assembly mutation.
 - `SumeragiProposalAssemblyGate_bug_active_vote_conflict.cfg`: expected-failure active same-height vote conflict mutation.
 - `SumeragiProposalAssemblyGate_bug_pending_vote_verification.cfg`: expected-failure pending vote-verification mutation.
@@ -8585,7 +9163,7 @@ verification, and full networking details.
 - `SumeragiEngineReadAccessorsGate_fast.cfg`: CI-friendly read-only accessor correctness-envelope check.
 - `SumeragiEngineReadAccessorsGate_bug_*.cfg`: expected-failure state snapshot, committed lookup, mutation, and output configs.
 - `SumeragiEngineTickGate.tla`: pure engine pacemaker tick gate model.
-- `SumeragiEngineTickGate_fast.cfg`: CI-friendly engine tick gate check.
+- `SumeragiEngineTickGate_fast.cfg`: CI-friendly engine tick correctness-envelope check.
 - `SumeragiEngineTickGate_bug_skip_round_advance.cfg`: expected-failure missing round-advance mutation.
 - `SumeragiEngineTickGate_bug_skip_new_view_vote.cfg`: expected-failure missing NewView vote mutation.
 - `SumeragiEngineTickGate_bug_skip_advance_output.cfg`: expected-failure missing AdvanceView output mutation.
@@ -8597,19 +9175,19 @@ verification, and full networking details.
 - `SumeragiEngineTickGate_bug_omit_highest_binding.cfg`: expected-failure missing highest-QC binding mutation.
 - `SumeragiEngineTickGate_bug_bind_highest_without_highest.cfg`: expected-failure spurious highest-QC binding mutation.
 - `SumeragiEngineTickStatePreservationGate.tla`: pure engine tick unrelated-state preservation model.
-- `SumeragiEngineTickStatePreservationGate_fast.cfg`: CI-friendly tick unrelated-state preservation check.
+- `SumeragiEngineTickStatePreservationGate_fast.cfg`: CI-friendly tick unrelated-state preservation correctness-envelope check.
 - `SumeragiEngineTickStatePreservationGate_bug_*.cfg`: expected-failure lock/highest, replay-cache, committed-record, availability-store, pending-map, and reconfiguration mutation configs.
 - `SumeragiEngineNewViewSubjectGate.tla`: pure engine NewView subject projection helper model.
-- `SumeragiEngineNewViewSubjectGate_fast.cfg`: CI-friendly direct NewView subject projection helper check.
+- `SumeragiEngineNewViewSubjectGate_fast.cfg`: CI-friendly NewView subject projection correctness-envelope check.
 - `SumeragiEngineNewViewSubjectGate_bug_*.cfg`: expected-failure highest-QC, fallback-subject, field-projection, payload, and highest-binding mutations.
 - `SumeragiEngineHandleDispatchGate.tla`: pure engine top-level input dispatch model.
-- `SumeragiEngineHandleDispatchGate_fast.cfg`: CI-friendly top-level input dispatch check.
+- `SumeragiEngineHandleDispatchGate_fast.cfg`: CI-friendly top-level input dispatch correctness-envelope check.
 - `SumeragiEngineHandleDispatchGate_bug_*.cfg`: expected-failure dropped input, cross-routed input, and double-dispatch mutations.
 - `SumeragiEngineHandleForwardingGate.tla`: pure engine top-level input argument-forwarding model.
-- `SumeragiEngineHandleForwardingGate_fast.cfg`: CI-friendly direct top-level input argument-forwarding component check.
+- `SumeragiEngineHandleForwardingGate_fast.cfg`: CI-friendly top-level input argument-forwarding correctness-envelope check.
 - `SumeragiEngineHandleForwardingGate_bug_*.cfg`: expected-failure proposal, certificate, payload, validation, and committed-block argument mutation configs.
 - `SumeragiEngineHandleOutputRelayGate.tla`: pure engine top-level output relay model.
-- `SumeragiEngineHandleOutputRelayGate_fast.cfg`: CI-friendly direct top-level output relay component check.
+- `SumeragiEngineHandleOutputRelayGate_fast.cfg`: CI-friendly top-level output relay correctness-envelope check.
 - `SumeragiEngineHandleOutputRelayGate_bug_*.cfg`: expected-failure dropped, invented, truncated, duplicated, reordered, substituted, and cross-handler output mutation configs.
 - `SumeragiEngineCertificateDispatchGate.tla`: pure engine certificate prefilter dispatch model.
 - `SumeragiEngineCertificateDispatchGate_fast.cfg`: CI-friendly certificate prefilter dispatch correctness-envelope check.
@@ -8624,7 +9202,7 @@ verification, and full networking details.
 - `SumeragiEngineViewAdvanceSaturationGate_fast.cfg`: CI-friendly view-advance saturation correctness-envelope check.
 - `SumeragiEngineViewAdvanceSaturationGate_bug_*.cfg`: expected-failure tick, invalid-validation, non-advancing validation, wraparound, and output-binding mutations.
 - `SumeragiEngineNewViewQcGate.tla`: pure engine NewView-QC gate model.
-- `SumeragiEngineNewViewQcGate_fast.cfg`: CI-friendly engine NewView-QC gate check.
+- `SumeragiEngineNewViewQcGate_fast.cfg`: CI-friendly engine NewView-QC correctness-envelope check.
 - `SumeragiEngineNewViewQcGate_bug_accept_wrong_context.cfg`: expected-failure wrong round-context NewView-QC mutation.
 - `SumeragiEngineNewViewQcGate_bug_accept_wrong_quorum.cfg`: expected-failure wrong quorum-policy NewView-QC mutation.
 - `SumeragiEngineNewViewQcGate_bug_accept_stale_view.cfg`: expected-failure stale or same-view NewView-QC mutation.
@@ -8639,16 +9217,16 @@ verification, and full networking details.
 - `SumeragiEngineNewViewQcGate_bug_overwrite_lower_highest.cfg`: expected-failure lower highest-QC overwrite mutation.
 - `SumeragiEngineNewViewQcGate_bug_skip_highest_record.cfg`: expected-failure missing improving highest-QC record mutation.
 - `SumeragiEngineNewViewHighestQcGate.tla`: pure engine exact NewView-QC highest-QC record model.
-- `SumeragiEngineNewViewHighestQcGate_fast.cfg`: CI-friendly direct exactness NewView highest-QC record check.
+- `SumeragiEngineNewViewHighestQcGate_fast.cfg`: CI-friendly NewView-QC highest-QC record correctness-envelope check.
 - `SumeragiEngineNewViewHighestQcGate_bug_*.cfg`: expected-failure no-current record, improving record, wrong-QC record, lower overwrite, no-highest mutation, and rejected-certificate record mutations.
 - `SumeragiEngineNewViewStatePreservationGate.tla`: pure engine NewView-QC unrelated-state preservation model.
-- `SumeragiEngineNewViewStatePreservationGate_fast.cfg`: CI-friendly NewView-QC unrelated-state preservation check.
+- `SumeragiEngineNewViewStatePreservationGate_fast.cfg`: CI-friendly NewView-QC unrelated-state preservation correctness-envelope check.
 - `SumeragiEngineNewViewStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineNewViewAdvanceGate.tla`: pure engine exact NewView-QC round/output model.
-- `SumeragiEngineNewViewAdvanceGate_fast.cfg`: CI-friendly direct exactness NewView-QC advance check.
+- `SumeragiEngineNewViewAdvanceGate_fast.cfg`: CI-friendly NewView-QC advance correctness-envelope check.
 - `SumeragiEngineNewViewAdvanceGate_bug_*.cfg`: expected-failure round-field, output-field, cleanup, phase, rejected-round-update, and rejected-output mutations.
 - `SumeragiEngineProposalGate.tla`: pure engine proposal-ingress gate model.
-- `SumeragiEngineProposalGate_fast.cfg`: CI-friendly engine proposal-ingress gate check.
+- `SumeragiEngineProposalGate_fast.cfg`: CI-friendly engine proposal-ingress correctness-envelope check.
 - `SumeragiEngineProposalGate_bug_wrong_phase.cfg`: expected-failure wrong phase proposal mutation.
 - `SumeragiEngineProposalGate_bug_wrong_round.cfg`: expected-failure wrong round-context proposal mutation.
 - `SumeragiEngineProposalGate_bug_incompatible_highest.cfg`: expected-failure incompatible highest-QC mutation.
@@ -8662,22 +9240,22 @@ verification, and full networking details.
 - `SumeragiEngineProposalGate_bug_skip_prepare_vote.cfg`: expected-failure missing prepare-vote output mutation.
 - `SumeragiEngineProposalGate_bug_skip_prepare_phase.cfg`: expected-failure missing prepare-phase transition mutation.
 - `SumeragiEngineProposalOutputGate.tla`: pure engine exact proposal output-field model.
-- `SumeragiEngineProposalOutputGate_fast.cfg`: CI-friendly exact proposal output-field component check.
+- `SumeragiEngineProposalOutputGate_fast.cfg`: CI-friendly exact proposal output-field correctness-envelope check.
 - `SumeragiEngineProposalOutputGate_bug_*.cfg`: expected-failure missing output, swapped output order, wrong validation subject, wrong prepare-vote field, and rejected-output mutation configs.
 - `SumeragiEngineProposalStateGate.tla`: pure engine exact proposal state-mutation model.
-- `SumeragiEngineProposalStateGate_fast.cfg`: CI-friendly direct exactness proposal state-mutation check.
+- `SumeragiEngineProposalStateGate_fast.cfg`: CI-friendly proposal state-mutation correctness-envelope check.
 - `SumeragiEngineProposalStateGate_bug_*.cfg`: expected-failure accepted-phase, accepted-state, rejected-phase, and rejected-state mutation configs.
 - `SumeragiEngineProposalStatePreservationGate.tla`: pure engine proposal unrelated-state preservation model.
-- `SumeragiEngineProposalStatePreservationGate_fast.cfg`: CI-friendly proposal unrelated-state preservation direct component check.
+- `SumeragiEngineProposalStatePreservationGate_fast.cfg`: CI-friendly proposal unrelated-state preservation correctness-envelope check.
 - `SumeragiEngineProposalStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineProposalValidationOwnerGate.tla`: pure engine exact proposal validation-owner model.
-- `SumeragiEngineProposalValidationOwnerGate_fast.cfg`: CI-friendly direct exactness proposal validation-owner check.
+- `SumeragiEngineProposalValidationOwnerGate_fast.cfg`: CI-friendly proposal validation-owner correctness-envelope check.
 - `SumeragiEngineProposalValidationOwnerGate_bug_*.cfg`: expected-failure missing owner record, stale owner retention, wrong-subject record, locked-subject record, and rejected-owner mutation configs.
 - `SumeragiEngineProposalLockGate.tla`: pure engine proposal lock predicate helper model.
-- `SumeragiEngineProposalLockGate_fast.cfg`: CI-friendly direct exactness proposal lock predicate helper check.
+- `SumeragiEngineProposalLockGate_fast.cfg`: CI-friendly proposal-lock helper correctness-envelope check.
 - `SumeragiEngineProposalLockGate_bug_*.cfg`: expected-failure unlocked, locked-subject, no-QC, equality, lower-QC, and higher-QC strictness mutations.
 - `SumeragiQcRoundCompatibilityGate.tla`: pure engine QC-round compatibility helper model.
-- `SumeragiQcRoundCompatibilityGate_fast.cfg`: CI-friendly direct QC-round compatibility helper check.
+- `SumeragiQcRoundCompatibilityGate_fast.cfg`: CI-friendly QC-round compatibility correctness-envelope check.
 - `SumeragiQcRoundCompatibilityGate_bug_*.cfg`: expected-failure epoch, lower-height, same-height view, future-height, and height/view ordering mutations.
 - `SumeragiEngineQcRefProjectionGate.tla`: pure engine certificate-to-QC reference projection helper model.
 - `SumeragiEngineQcRefProjectionGate_fast.cfg`: CI-friendly QC reference projection correctness-envelope check.
@@ -8689,13 +9267,13 @@ verification, and full networking details.
 - `SumeragiEngineHighestQcRecordGate_fast.cfg`: CI-friendly highest-QC record correctness-envelope check.
 - `SumeragiEngineHighestQcRecordGate_bug_*.cfg`: expected-failure empty-state, height, view, phase-rank, subject tie-break, and equal-overwrite mutations.
 - `SumeragiEngineCommitSubjectGate.tla`: pure engine commit-subject finality side-effect helper model.
-- `SumeragiEngineCommitSubjectGate_fast.cfg`: CI-friendly commit-subject direct component check.
+- `SumeragiEngineCommitSubjectGate_fast.cfg`: CI-friendly commit-subject correctness-envelope check.
 - `SumeragiEngineCommitSubjectGate_bug_*.cfg`: expected-failure fresh-record, matching-commit, cleanup, phase, output, conflict-overwrite, conflict-output, and conflict-mutation mutations.
 - `SumeragiEnginePayloadLookupGate.tla`: pure engine payload lookup helper model.
-- `SumeragiEnginePayloadLookupGate_fast.cfg`: CI-friendly direct exactness payload lookup helper check.
+- `SumeragiEnginePayloadLookupGate_fast.cfg`: CI-friendly payload lookup correctness-envelope check.
 - `SumeragiEnginePayloadLookupGate_bug_*.cfg`: expected-failure block-hash, payload-hash, any-recorded-payload, empty-store, exact-rejection, and inverted-lookup mutations.
 - `SumeragiEnginePrepareQcGate.tla`: pure engine prepare-QC commit-vote gate model.
-- `SumeragiEnginePrepareQcGate_fast.cfg`: CI-friendly engine prepare-QC gate check.
+- `SumeragiEnginePrepareQcGate_fast.cfg`: CI-friendly engine prepare-QC correctness-envelope check.
 - `SumeragiEnginePrepareQcGate_bug_wrong_context.cfg`: expected-failure wrong round-context mutation.
 - `SumeragiEnginePrepareQcGate_bug_wrong_quorum_policy.cfg`: expected-failure wrong quorum-policy mutation.
 - `SumeragiEnginePrepareQcGate_bug_stale_view.cfg`: expected-failure stale prepare-view mutation.
@@ -8706,19 +9284,19 @@ verification, and full networking details.
 - `SumeragiEnginePrepareQcGate_bug_reject_safe.cfg`: expected-failure safe prepare-QC rejection mutation.
 - `SumeragiEnginePrepareQcGate_bug_missing_lock_record.cfg`: expected-failure missing lock/highest-QC record mutation.
 - `SumeragiEnginePrepareLockHighestGate.tla`: pure engine exact Prepare-QC lock/highest-QC record model.
-- `SumeragiEnginePrepareLockHighestGate_fast.cfg`: CI-friendly direct exactness Prepare-QC lock/highest-QC record check.
+- `SumeragiEnginePrepareLockHighestGate_fast.cfg`: CI-friendly Prepare-QC lock/highest-QC record correctness-envelope check.
 - `SumeragiEnginePrepareLockHighestGate_bug_*.cfg`: expected-failure lock record, wrong-QC record, rejected-QC mutation, replay/conflict/pending mutation, no-current record, improving record, and lower-overwrite mutations.
 - `SumeragiEnginePreparePhaseGate.tla`: pure engine exact Prepare-QC phase-transition model.
-- `SumeragiEnginePreparePhaseGate_fast.cfg`: CI-friendly direct exactness Prepare-QC phase-transition check.
+- `SumeragiEnginePreparePhaseGate_fast.cfg`: CI-friendly Prepare-QC phase-transition correctness-envelope check.
 - `SumeragiEnginePreparePhaseGate_bug_*.cfg`: expected-failure accepted-phase, rejected-QC phase, replay/conflict phase, and pending-finality phase mutations.
 - `SumeragiEnginePrepareStatePreservationGate.tla`: pure engine Prepare-QC unrelated-state preservation model.
-- `SumeragiEnginePrepareStatePreservationGate_fast.cfg`: CI-friendly Prepare-QC unrelated-state preservation check.
+- `SumeragiEnginePrepareStatePreservationGate_fast.cfg`: CI-friendly Prepare-QC unrelated-state preservation correctness-envelope check.
 - `SumeragiEnginePrepareStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEnginePrepareVoteCacheGate.tla`: pure engine prepare-QC commit-vote cache/output side-effect model.
-- `SumeragiEnginePrepareVoteCacheGate_fast.cfg`: CI-friendly direct exactness prepare-QC commit-vote cache/output check.
+- `SumeragiEnginePrepareVoteCacheGate_fast.cfg`: CI-friendly prepare-QC commit-vote cache/output correctness-envelope check.
 - `SumeragiEnginePrepareVoteCacheGate_bug_*.cfg`: expected-failure cache insert, cache field, output field, rejection, replay/conflict output, conflict overwrite, and replay/conflict cleanup mutations.
 - `SumeragiEngineCommitQcGate.tla`: pure engine commit-QC finality gate model.
-- `SumeragiEngineCommitQcGate_fast.cfg`: CI-friendly engine commit-QC gate check.
+- `SumeragiEngineCommitQcGate_fast.cfg`: CI-friendly engine commit-QC correctness-envelope check.
 - `SumeragiEngineCommitQcGate_bug_wrong_context.cfg`: expected-failure wrong round-context mutation.
 - `SumeragiEngineCommitQcGate_bug_wrong_quorum_policy.cfg`: expected-failure wrong quorum-policy mutation.
 - `SumeragiEngineCommitQcGate_bug_stale_view.cfg`: expected-failure stale commit-view mutation.
@@ -8731,28 +9309,28 @@ verification, and full networking details.
 - `SumeragiEngineCommitQcGate_bug_reject_missing_payload.cfg`: expected-failure missing-payload commit-QC rejection mutation.
 - `SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg`: expected-failure missing highest-QC record mutation.
 - `SumeragiEngineCommitQcHighestRecordGate.tla`: pure engine exact Commit-QC highest-QC record model.
-- `SumeragiEngineCommitQcHighestRecordGate_fast.cfg`: CI-friendly direct exactness Commit-QC highest-QC record check.
+- `SumeragiEngineCommitQcHighestRecordGate_fast.cfg`: CI-friendly Commit-QC highest-QC record correctness-envelope check.
 - `SumeragiEngineCommitQcHighestRecordGate_bug_*.cfg`: expected-failure no-current record, improving record, wrong-QC record, lower overwrite, rejected-QC mutation, and pending replay/conflict mutation.
 - `SumeragiEngineCommitQcPhaseGate.tla`: pure engine exact Commit-QC phase-transition model.
-- `SumeragiEngineCommitQcPhaseGate_fast.cfg`: CI-friendly direct exactness Commit-QC phase-transition check.
+- `SumeragiEngineCommitQcPhaseGate_fast.cfg`: CI-friendly Commit-QC phase-transition correctness-envelope check.
 - `SumeragiEngineCommitQcPhaseGate_bug_*.cfg`: expected-failure available-payload, missing-payload, rejected-prefilter, and pending replay/conflict phase mutations.
 - `SumeragiEngineCommitQcStatePreservationGate.tla`: pure engine Commit-QC unrelated-state preservation model.
-- `SumeragiEngineCommitQcStatePreservationGate_fast.cfg`: CI-friendly Commit-QC unrelated-state preservation check.
+- `SumeragiEngineCommitQcStatePreservationGate_fast.cfg`: CI-friendly Commit-QC unrelated-state preservation correctness-envelope check.
 - `SumeragiEngineCommitQcStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineCommitQcAvailableCommitGate.tla`: pure engine payload-available Commit-QC exact finality side-effect model.
 - `SumeragiEngineCommitQcAvailableCommitGate_fast.cfg`: CI-friendly payload-available Commit-QC finality correctness-envelope check.
 - `SumeragiEngineCommitQcAvailableCommitGate_bug_*.cfg`: expected-failure commit-record, output-field, cleanup, fetch/pending, rejected-QC, replay/conflict, and committed-height overwrite mutations.
 - `SumeragiEngineCommitQcPendingFetchGate.tla`: pure engine missing-payload Commit-QC pending/fetch model.
-- `SumeragiEngineCommitQcPendingFetchGate_fast.cfg`: CI-friendly direct exactness missing-payload Commit-QC pending/fetch check.
+- `SumeragiEngineCommitQcPendingFetchGate_fast.cfg`: CI-friendly missing-payload Commit-QC pending/fetch correctness-envelope check.
 - `SumeragiEngineCommitQcPendingFetchGate_bug_*.cfg`: expected-failure pending-state, pending-map key/certificate, fetch-field, payload-available, rejected-QC, and replay/conflict mutations.
 - `SumeragiEngineCommitQcValidationCleanupGate.tla`: pure engine Commit-QC validation cleanup model.
-- `SumeragiEngineCommitQcValidationCleanupGate_fast.cfg`: CI-friendly Commit-QC validation cleanup check.
+- `SumeragiEngineCommitQcValidationCleanupGate_fast.cfg`: CI-friendly Commit-QC validation cleanup correctness-envelope check.
 - `SumeragiEngineCommitQcValidationCleanupGate_bug_*.cfg`: expected-failure accepted-QC cleanup, pending replay/conflict cleanup, rejected-prefilter cleanup, and late invalid callback mutations.
 - `SumeragiEnginePayloadAvailabilityRecordGate.tla`: pure engine exact payload-availability record model.
-- `SumeragiEnginePayloadAvailabilityRecordGate_fast.cfg`: CI-friendly direct exactness payload-availability record check.
+- `SumeragiEnginePayloadAvailabilityRecordGate_fast.cfg`: CI-friendly payload-availability record correctness-envelope check.
 - `SumeragiEnginePayloadAvailabilityRecordGate_bug_*.cfg`: expected-failure skipped record, conditional record, wrong-key record, pending-subject substitution, and existing-availability mutation.
 - `SumeragiEnginePayloadAvailabilityGate.tla`: pure engine payload-availability gate model.
-- `SumeragiEnginePayloadAvailabilityGate_fast.cfg`: CI-friendly engine payload-availability gate check.
+- `SumeragiEnginePayloadAvailabilityGate_fast.cfg`: CI-friendly engine payload-availability correctness-envelope check.
 - `SumeragiEnginePayloadAvailabilityGate_bug_skip_available_record.cfg`: expected-failure missing payload-availability record mutation.
 - `SumeragiEnginePayloadAvailabilityGate_bug_commit_without_pending.cfg`: expected-failure payload-only commit mutation.
 - `SumeragiEnginePayloadAvailabilityGate_bug_commit_mismatched_payload.cfg`: expected-failure mismatched-payload commit mutation.
@@ -8761,10 +9339,10 @@ verification, and full networking details.
 - `SumeragiEnginePayloadAvailabilityGate_bug_keep_pending_after_commit.cfg`: expected-failure stale pending-finality after commit mutation.
 - `SumeragiEnginePayloadAvailabilityGate_bug_wrong_phase_after_commit.cfg`: expected-failure wrong post-commit phase mutation.
 - `SumeragiEnginePayloadStatePreservationGate.tla`: pure engine payload-availability unrelated-state preservation model.
-- `SumeragiEnginePayloadStatePreservationGate_fast.cfg`: CI-friendly payload-availability state-preservation direct component check.
+- `SumeragiEnginePayloadStatePreservationGate_fast.cfg`: CI-friendly payload-availability state-preservation correctness-envelope check.
 - `SumeragiEnginePayloadStatePreservationGate_bug_*.cfg`: expected-failure matching-commit and ignored-callback mutations for round, lock, highest-QC, Prepare-QC replay-cache, staged reconfiguration, and ignored-callback ownership/finality state.
 - `SumeragiEngineValidationResultGate.tla`: pure engine validation-result gate model.
-- `SumeragiEngineValidationResultGate_fast.cfg`: CI-friendly engine validation-result gate check.
+- `SumeragiEngineValidationResultGate_fast.cfg`: CI-friendly engine validation-result correctness-envelope check.
 - `SumeragiEngineValidationResultGate_bug_accept_wrong_round.cfg`: expected-failure wrong-round validation callback mutation.
 - `SumeragiEngineValidationResultGate_bug_accept_wrong_block_hash.cfg`: expected-failure wrong-block validation callback mutation.
 - `SumeragiEngineValidationResultGate_bug_accept_no_inflight.cfg`: expected-failure no-in-flight/replayed validation callback mutation.
@@ -8784,7 +9362,7 @@ verification, and full networking details.
 - `SumeragiEngineValidationResultGate_bug_drop_pending_finality.cfg`: expected-failure superseded-callback pending-finality drop mutation.
 - `SumeragiEngineValidationResultGate_bug_overwrite_committed.cfg`: expected-failure superseded-callback committed-state overwrite mutation.
 - `SumeragiEngineValidationStatePreservationGate.tla`: pure engine validation-result unrelated-state preservation model.
-- `SumeragiEngineValidationStatePreservationGate_fast.cfg`: CI-friendly validation-result state-preservation direct component check.
+- `SumeragiEngineValidationStatePreservationGate_fast.cfg`: CI-friendly validation-result unrelated-state preservation correctness-envelope check.
 - `SumeragiEngineValidationStatePreservationGate_bug_accepted_mutates_lock.cfg`: expected-failure accepted-callback lock mutation.
 - `SumeragiEngineValidationStatePreservationGate_bug_accepted_mutates_highest.cfg`: expected-failure accepted-callback highest-QC mutation.
 - `SumeragiEngineValidationStatePreservationGate_bug_accepted_mutates_commit_vote.cfg`: expected-failure accepted-callback Prepare-QC replay-cache mutation.
@@ -8802,13 +9380,13 @@ verification, and full networking details.
 - `SumeragiEngineValidationStatePreservationGate_bug_ignored_mutates_pending_map.cfg`: expected-failure ignored-callback pending-finality map mutation.
 - `SumeragiEngineValidationStatePreservationGate_bug_ignored_mutates_reconfiguration.cfg`: expected-failure ignored-callback staged-reconfiguration mutation.
 - `SumeragiEngineValidationOwnershipGate.tla`: pure engine exact validation-owner cleanup model.
-- `SumeragiEngineValidationOwnershipGate_fast.cfg`: CI-friendly direct exactness validation-owner cleanup check.
+- `SumeragiEngineValidationOwnershipGate_fast.cfg`: CI-friendly validation-owner cleanup correctness-envelope check.
 - `SumeragiEngineValidationOwnershipGate_bug_*.cfg`: expected-failure current-owner retention, ignored-callback clear/replace, and no-owner synthesis mutations.
 - `SumeragiEngineValidationInvalidAdvanceGate.tla`: pure engine exact invalid-validation round/output advance model.
-- `SumeragiEngineValidationInvalidAdvanceGate_fast.cfg`: CI-friendly direct exactness invalid-validation round/output advance check.
+- `SumeragiEngineValidationInvalidAdvanceGate_fast.cfg`: CI-friendly invalid-validation round/output advance correctness-envelope check.
 - `SumeragiEngineValidationInvalidAdvanceGate_bug_*.cfg`: expected-failure state-round, output-round, saturating-view, valid-callback, and ignored-callback advance mutations.
 - `SumeragiEngineCommittedBlockGate.tla`: pure engine committed-block notification gate model.
-- `SumeragiEngineCommittedBlockGate_fast.cfg`: CI-friendly engine committed-block gate check.
+- `SumeragiEngineCommittedBlockGate_fast.cfg`: CI-friendly engine committed-block correctness-envelope check.
 - `SumeragiEngineCommittedBlockGate_bug_skip_fresh_record.cfg`: expected-failure missing committed-height record mutation.
 - `SumeragiEngineCommittedBlockGate_bug_reject_boundary_activation.cfg`: expected-failure boundary reconfiguration rejection mutation.
 - `SumeragiEngineCommittedBlockGate_bug_activate_without_boundary.cfg`: expected-failure plain commit activation mutation.
@@ -8819,22 +9397,22 @@ verification, and full networking details.
 - `SumeragiEngineCommittedBlockGate_bug_activate_conflict.cfg`: expected-failure conflicting reconfiguration activation mutation.
 - `SumeragiEngineCommittedBlockGate_bug_overwrite_conflict.cfg`: expected-failure conflicting committed-height overwrite mutation.
 - `SumeragiEngineCommittedBlockRecordGate.tla`: pure engine exact committed-map record model.
-- `SumeragiEngineCommittedBlockRecordGate_fast.cfg`: CI-friendly direct exactness committed-map record check.
+- `SumeragiEngineCommittedBlockRecordGate_fast.cfg`: CI-friendly committed-map record correctness-envelope check.
 - `SumeragiEngineCommittedBlockRecordGate_bug_*.cfg`: expected-failure fresh-record key/value, unrelated-entry preservation, duplicate no-op, conflict no-op, and spurious committed-height mutations.
 - `SumeragiEngineReconfigurationStagingGate.tla`: pure engine committed-block reconfiguration staging model.
-- `SumeragiEngineReconfigurationStagingGate_fast.cfg`: CI-friendly reconfiguration staging check.
+- `SumeragiEngineReconfigurationStagingGate_fast.cfg`: CI-friendly reconfiguration staging correctness-envelope check.
 - `SumeragiEngineReconfigurationStagingGate_bug_*.cfg`: expected-failure boundary staging/activation, non-boundary/plain staging or activation, duplicate/conflict mutation, wrong-change, stale-stage preservation, and no-op clearing mutations.
 - `SumeragiEngineReconfigurationDedupGate.tla`: pure engine committed-block reconfiguration deduplication model.
-- `SumeragiEngineReconfigurationDedupGate_fast.cfg`: CI-friendly direct reconfiguration deduplication component check.
+- `SumeragiEngineReconfigurationDedupGate_fast.cfg`: CI-friendly reconfiguration deduplication correctness-envelope check.
 - `SumeragiEngineReconfigurationDedupGate_bug_*.cfg`: expected-failure same-hash replay, activation-height dedup, same-height preservation, different-height replacement, non-boundary/plain, and conflict mutations.
 - `SumeragiEngineCommittedBlockCleanupGate.tla`: pure engine committed-block cleanup side-effect model.
-- `SumeragiEngineCommittedBlockCleanupGate_fast.cfg`: CI-friendly committed-block cleanup side-effect direct component check.
+- `SumeragiEngineCommittedBlockCleanupGate_fast.cfg`: CI-friendly committed-block cleanup side-effect correctness-envelope check.
 - `SumeragiEngineCommittedBlockCleanupGate_bug_*.cfg`: expected-failure fresh-record, current-cleanup, other-height preservation, duplicate/conflict no-op, and spurious CommitBlock-output mutations.
 - `SumeragiEngineCommittedBlockStatePreservationGate.tla`: pure engine committed-block unrelated-state preservation model.
-- `SumeragiEngineCommittedBlockStatePreservationGate_fast.cfg`: CI-friendly committed-block state-preservation direct component check.
+- `SumeragiEngineCommittedBlockStatePreservationGate_fast.cfg`: CI-friendly committed-block state-preservation correctness-envelope check.
 - `SumeragiEngineCommittedBlockStatePreservationGate_bug_*.cfg`: expected-failure fresh-notification and duplicate/conflict no-op mutations for round, lock, highest-QC, Prepare-QC replay-cache, and available-payload state.
 - `SumeragiValidatorSetTransition.tla`: validator-set activation safety model.
-- `SumeragiValidatorSetTransition_fast.cfg`: CI-friendly reconfiguration check.
+- `SumeragiValidatorSetTransition_fast.cfg`: CI-friendly validator-set transition correctness-envelope check.
 - `SumeragiValidatorSetTransition_bug_premature_activation.cfg`: expected-failure activation-without-boundary-finality mutation.
 - `SumeragiValidatorSetTransition_bug_premature_new_cert.cfg`: expected-failure new-set-before-activation mutation.
 - `SumeragiValidatorSetTransition_bug_mixed_cert.cfg`: expected-failure mixed-set certificate mutation.
@@ -8844,31 +9422,31 @@ verification, and full networking details.
 - `SumeragiCertifiedRecovery_bug_mismatched_payload.cfg`: expected-failure mismatched-payload mutation.
 - `SumeragiCertifiedRecovery_bug_conflicting_finality.cfg`: expected-failure conflicting-finality mutation.
 - `SumeragiViewChangeSafety.tla`: view-change/highest-QC/locked-proposal safety model.
-- `SumeragiViewChangeSafety_fast.cfg`: CI-friendly view-change safety check.
+- `SumeragiViewChangeSafety_fast.cfg`: CI-friendly view-change/highest-QC/locked-proposal correctness-envelope check.
 - `SumeragiViewChangeSafety_bug_stale_new_view.cfg`: expected-failure stale-new-view mutation.
 - `SumeragiViewChangeSafety_bug_unsafe_proposal.cfg`: expected-failure unsafe-proposal mutation.
 - `SumeragiViewChangeSafety_bug_lock_overwrite.cfg`: expected-failure lock-overwrite mutation.
 - `SumeragiViewChangeSafety_bug_highest_regression.cfg`: expected-failure highest-QC regression mutation.
 - `SumeragiValidationGate.tla`: asynchronous proposal-validation callback ownership model.
-- `SumeragiValidationGate_fast.cfg`: CI-friendly validation-callback safety check.
+- `SumeragiValidationGate_fast.cfg`: CI-friendly validation-callback ownership correctness-envelope check.
 - `SumeragiValidationGate_bug_unknown_result.cfg`: expected-failure unknown-validation-result mutation.
 - `SumeragiValidationGate_bug_completed_replay.cfg`: expected-failure completed-result-replay mutation.
 - `SumeragiValidationGate_bug_timeout_inflight.cfg`: expected-failure timeout-retains-in-flight mutation.
 - `SumeragiValidationGate_bug_invalid_replay.cfg`: expected-failure duplicate-invalid-result mutation.
 - `SumeragiValidationPriorityGate.tla`: near-tip validation priority reason helper model.
-- `SumeragiValidationPriorityGate_fast.cfg`: CI-friendly direct validation priority reason helper check.
+- `SumeragiValidationPriorityGate_fast.cfg`: CI-friendly validation priority reason correctness-envelope check.
 - `SumeragiValidationPriorityGate_bug_*.cfg`: expected-failure tip-gate, missing-evidence, evidence-priority, and proposal-bypass mutations.
 - `SumeragiVoteBackedEvidenceGate.tla`: vote-backed consensus evidence helper model.
-- `SumeragiVoteBackedEvidenceGate_fast.cfg`: CI-friendly direct vote-backed evidence no-bug check.
+- `SumeragiVoteBackedEvidenceGate_fast.cfg`: CI-friendly vote-backed consensus evidence correctness-envelope check.
 - `SumeragiVoteBackedEvidenceGate_bug_*.cfg`: expected-failure slot vote/QC source, height/view/epoch/phase, locally-known, and height-scoped view handling mutations.
 - `SumeragiVotePayloadActionableGate.tla`: vote payload actionable-for-proposal helper model.
-- `SumeragiVotePayloadActionableGate_fast.cfg`: CI-friendly direct vote payload actionable-for-proposal no-bug check.
+- `SumeragiVotePayloadActionableGate_fast.cfg`: CI-friendly vote payload actionable-for-proposal correctness-envelope check.
 - `SumeragiVotePayloadActionableGate_bug_*.cfg`: expected-failure authoritative, validation, pending-processing, deferred identity, no-source, and bad-deferred suppression mutations.
 - `SumeragiActionableVoteBackedProposalGate.tla`: proposal-side actionable vote-backed evidence helper model.
 - `SumeragiActionableVoteBackedProposalGate_fast.cfg`: CI-friendly direct actionable vote-backed proposal evidence correctness-envelope check.
 - `SumeragiActionableVoteBackedProposalGate_bug_*.cfg`: expected-failure precommit blocker, slot vote/QC source, wrong-slot, non-vote phase, and non-actionable payload mutations.
 - `SumeragiSlotProposalEvidenceGate.tla`: slot proposal evidence helper model.
-- `SumeragiSlotProposalEvidenceGate_fast.cfg`: CI-friendly direct slot proposal evidence no-bug check.
+- `SumeragiSlotProposalEvidenceGate_fast.cfg`: CI-friendly slot proposal evidence correctness-envelope check.
 - `SumeragiSlotProposalEvidenceGate_bug_*.cfg`: expected-failure source rejection, wrong-slot acceptance, incomplete owner, no-evidence, and fall-through-blocking mutations.
 - `SumeragiRoundLivenessGate.tla`: round liveness helper model.
 - `SumeragiRoundLivenessGate_fast.cfg`: CI-friendly direct round liveness correctness-envelope check.
@@ -8931,7 +9509,7 @@ verification, and full networking details.
 - `SumeragiQcStatusGate_fast.cfg`: CI-friendly leader/highest-QC/locked-QC status correctness-envelope check.
 - `SumeragiQcStatusGate_bug_*.cfg`: expected-failure leader, highest-QC tuple/subject, locked-QC monotonicity/reset, subject, getter, snapshot, and overwrite mutations.
 - `SumeragiValidationEvidenceQcGate.tla`: validation evidence QC selector model.
-- `SumeragiValidationEvidenceQcGate_fast.cfg`: CI-friendly direct validation evidence QC selector check.
+- `SumeragiValidationEvidenceQcGate_fast.cfg`: CI-friendly validation evidence QC selector correctness-envelope check.
 - `SumeragiValidationEvidenceQcGate_bug_*.cfg`: expected-failure parent, subject, height, precedence, skip, synthesis, and fallback mutations.
 - `SumeragiCertificateAdmission.tla`: fail-closed certificate-admission safety model.
 - `SumeragiCertificateAdmission_fast.cfg`: CI-friendly certificate-admission correctness-envelope check.
@@ -9078,6 +9656,8 @@ Fork-safety invariants:
   budget.
 - `NoConflictingCommitCertificates`, which is the direct same-height finality
   property for the two modeled branches.
+- `ForkSafetyExactness`
+- `ForkSafetyCorrectnessEnvelope`
 
 Quorum-policy invariants:
 - `TypeInvariant`
@@ -9087,6 +9667,21 @@ Quorum-policy invariants:
 - `ExactTwoThirdsStakeRejected`
 - `StakeRejectsInvalidInputs`
 - `StakeRejectsOverTotal`
+- `QuorumPolicyExactness`
+- `QuorumPolicyCorrectnessEnvelope`
+
+RBC deliver-quorum invariants:
+- `TypeInvariant`
+- `RequiredMatchesSpec`
+- `DefaultQuorumMatchesDedupedTopology`
+- `ForceOneLocalEmissionUsesSingleReadyThreshold`
+- `ForceOneInboundAcceptanceUsesProtocolThreshold`
+- `ReadyCountUsesDistinctSenders`
+- `NoDeliverBeforeDistinctReadyQuorum`
+- `DuplicateReadyDoesNotInflateDeliver`
+- `DeliveredMatchesSpec`
+- `RbcDeliverQuorumExactness`
+- `RbcDeliverQuorumCorrectnessEnvelope`
 
 RBC causality gate invariants:
 - `TypeInvariant`
@@ -9336,7 +9931,7 @@ RBC RS16 initial fanout helper invariants:
 - `RequiredNeverExceedsStripeWidth`
 - `SelectionHasNoOutOfRange`
 - `SelectionHasNoDuplicates`
-- `SelectionSortedAfterDedup`
+- `sorted`
 - `EveryStripeCoveredForReducedFanout`
 - `PerStripeSelectionMatchesRequired`
 - `SelectionLengthEqualsPerStripeTotal`
@@ -9358,7 +9953,7 @@ RBC chunk broadcast order helper invariants:
 - `DropLargeDropsNone`
 - `NoShufflePreservesOrder`
 - `NoShuffleFirstAndLastMatchSpec`
-- `FilteredOrderPreserved`
+- `preserves_filter_order`
 - `NoDuplicateIndices`
 - `NoOutOfRangeIndices`
 - `ShuffleDoesNotChangeCardinalityWithoutDrop`
@@ -10217,6 +10812,8 @@ vNext chain-order helper invariants:
 - `BitmapOkMatchesSpec`
 - `BitmapLengthMatchesSpec`
 - `BitmapFailuresFailClosed`
+- `VNextChainOrderExactness`
+- `VNextChainOrderCorrectnessEnvelope`
 
 vNext validation gate invariants:
 - `TypeInvariant`
@@ -10457,6 +11054,24 @@ Engine certificate prefilter unrelated-state preservation invariants:
 - `RejectedPreservesReconfiguration`
 - `AllModeledStatePreserved`
 - `ValuesStayInDomain`
+- `EngineProposalStatePreservationExactness`
+- `EngineProposalStatePreservationCorrectnessEnvelope`
+
+Engine handle dispatch invariants:
+- `TypeInvariant`
+- `DispatchMatchesSpec`
+- `EveryInputDispatchesOnce`
+- `NoInputDropped`
+- `NoCrossDispatch`
+- `TickDispatchesOnlyToTick`
+- `ProposalDispatchesOnlyToProposal`
+- `CertificatesDispatchOnlyToCertificate`
+- `PayloadDispatchesOnlyToPayload`
+- `ValidationResultsDispatchOnlyToValidation`
+- `CommittedBlocksDispatchOnlyToCommitted`
+- `ValuesStayInDomain`
+- `EngineHandleDispatchExactness`
+- `EngineHandleDispatchCorrectnessEnvelope`
 
 Engine handle argument-forwarding invariants:
 - `TypeInvariant`
@@ -10476,6 +11091,8 @@ Engine handle argument-forwarding invariants:
 - `CommittedReconfigurationForwarded`
 - `AllPayloadsForwarded`
 - `ValuesStayInDomain`
+- `EngineHandleForwardingExactness`
+- `EngineHandleForwardingCorrectnessEnvelope`
 
 Engine handle output-relay invariants:
 - `TypeInvariant`
@@ -10490,6 +11107,8 @@ Engine handle output-relay invariants:
 - `ValidationOutputsRelayed`
 - `CommittedOutputsRelayed`
 - `ValuesStayInDomain`
+- `EngineHandleOutputRelayExactness`
+- `EngineHandleOutputRelayCorrectnessEnvelope`
 
 Engine tick gate invariants:
 - `TypeInvariant`
@@ -10504,6 +11123,87 @@ Engine tick gate invariants:
 - `HighestTicksBindHighestQc`
 - `NoHighestTicksDoNotBindHighestQc`
 - `SignedTicksHaveConsistentOutputs`
+- `EngineTickExactness`
+- `EngineTickCorrectnessEnvelope`
+
+Engine tick unrelated-state preservation invariants:
+- `TypeInvariant`
+- `TicksPreserveLockedQc`
+- `TicksPreserveHighestQc`
+- `TicksPreserveCommitVoteCache`
+- `TicksPreserveCommittedRecords`
+- `TicksPreserveAvailablePayloads`
+- `TicksPreservePendingMap`
+- `TicksPreserveReconfiguration`
+- `AllModeledStatePreserved`
+- `ValuesStayInDomain`
+- `EngineTickStatePreservationExactness`
+- `EngineTickStatePreservationCorrectnessEnvelope`
+
+Engine NewView subject projection invariants:
+- `TypeInvariant`
+- `SubjectFieldsMatchSpec`
+- `HighestCasesUseQcSubject`
+- `TickFallbackUsesZeroSubject`
+- `InvalidFallbackUsesRejectedBlockSubject`
+- `HighestBindingMatchesPresence`
+- `PayloadHashAlwaysZero`
+- `EngineNewViewSubjectExactness`
+- `EngineNewViewSubjectCorrectnessEnvelope`
+
+Engine NewView-QC gate invariants:
+- `TypeInvariant`
+- `AcceptedMatchesSpec`
+- `IgnoredMatchesSpec`
+- `SafeNewViewQcsAdvance`
+- `UnsafeNewViewQcsAreIgnored`
+- `WrongContextNeverAccepted`
+- `WrongQuorumPolicyNeverAccepted`
+- `StaleOrSameViewNeverAccepted`
+- `IncompatibleHighestNeverAccepted`
+- `AcceptedNewViewQcsEmitAdvance`
+- `AcceptedNewViewQcsEnterProposal`
+- `AcceptedNewViewQcsClearValidation`
+- `AcceptedNewViewQcsPreservePendingFinality`
+- `ImprovingHighestQcIsRecorded`
+- `LowerHighestQcDoesNotOverwrite`
+- `AcceptedLowerHighestPreservesCurrentHighest`
+- `AcceptedNoHighestDoesNotChangeHighest`
+- `IgnoredNewViewQcsDoNotMutate`
+- `EngineNewViewQcExactness`
+- `EngineNewViewQcCorrectnessEnvelope`
+
+Engine NewView-QC highest-record invariants:
+- `TypeInvariant`
+- `FinalHighestMatchesSpec`
+- `AcceptedNoHighestPreservesStoredHighest`
+- `AcceptedImprovingHighestRecordsExactCarriedQc`
+- `AcceptedLowerOrEqualHighestPreservesStoredHighest`
+- `RejectedNewViewPreservesStoredHighest`
+- `IncompatibleHighestNeverRecords`
+- `WrongContextNeverRecords`
+- `ValuesStayInDomain`
+- `EngineNewViewHighestQcExactness`
+- `EngineNewViewHighestQcCorrectnessEnvelope`
+
+Engine NewView-QC unrelated-state preservation invariants:
+- `TypeInvariant`
+- `AcceptedPreservesLockedQc`
+- `AcceptedPreservesPrepareVoteCache`
+- `AcceptedPreservesCommittedRecords`
+- `AcceptedPreservesAvailablePayloads`
+- `AcceptedPreservesPendingMap`
+- `AcceptedPreservesReconfiguration`
+- `RejectedPreservesLockedQc`
+- `RejectedPreservesPrepareVoteCache`
+- `RejectedPreservesCommittedRecords`
+- `RejectedPreservesAvailablePayloads`
+- `RejectedPreservesPendingMap`
+- `RejectedPreservesReconfiguration`
+- `AllModeledStatePreserved`
+- `ValuesStayInDomain`
+- `EngineNewViewStatePreservationExactness`
+- `EngineNewViewStatePreservationCorrectnessEnvelope`
 
 Engine NewView-QC exact advance invariants:
 - `TypeInvariant`
@@ -10527,6 +11227,8 @@ Engine NewView-QC exact advance invariants:
 - `RejectedNewViewEmitsNoAdvanceView`
 - `RejectedNewViewPreservesOwnershipAndPhase`
 - `ValuesStayInDomain`
+- `EngineNewViewAdvanceExactness`
+- `EngineNewViewAdvanceCorrectnessEnvelope`
 
 Engine proposal-ingress gate invariants:
 - `TypeInvariant`
@@ -10545,6 +11247,8 @@ Engine proposal-ingress gate invariants:
 - `AcceptedProposalsEnterPrepare`
 - `IgnoredProposalsDoNotEmit`
 - `OutputsStayTogether`
+- `EngineProposalExactness`
+- `EngineProposalCorrectnessEnvelope`
 
 Engine proposal unrelated-state preservation invariants:
 - `TypeInvariant`
@@ -10560,6 +11264,33 @@ Engine proposal unrelated-state preservation invariants:
 - `RejectedPreservesReconfiguration`
 - `AllModeledStatePreserved`
 - `ValuesStayInDomain`
+
+Engine commit-subject invariants:
+- `TypeInvariant`
+- `CommitSubjectMatchesSpec`
+- `FreshCommitsRecordSubject`
+- `MatchingCommittedStillCommits`
+- `ConflictsNeverMutate`
+- `ConflictsNeverEmit`
+- `SuccessfulCommitsClearPendingFinality`
+- `SuccessfulCommitsClearValidation`
+- `SuccessfulCommitsReturnProposalPhase`
+- `SuccessfulCommitsEmitExactlyOnce`
+- `EngineCommitSubjectExactness`
+- `EngineCommitSubjectCorrectnessEnvelope`
+
+Engine payload lookup invariants:
+- `TypeInvariant`
+- `AcceptedMatchesSpec`
+- `RejectedMatchesSpec`
+- `ExactPairAccepted`
+- `SameBlockWrongPayloadRejected`
+- `WrongBlockSamePayloadRejected`
+- `WrongBlockWrongPayloadRejected`
+- `EmptyStoreRejected`
+- `RecordedPayloadAloneIsInsufficient`
+- `EnginePayloadLookupExactness`
+- `EnginePayloadLookupCorrectnessEnvelope`
 
 Engine prepare-QC gate invariants:
 - `TypeInvariant`
@@ -10578,6 +11309,50 @@ Engine prepare-QC gate invariants:
 - `SignedPrepareRecordsHighest`
 - `IgnoredPrepareDoesNotMutateLock`
 - `LockAndHighestFollowSigned`
+- `EnginePrepareQcExactness`
+- `EnginePrepareQcCorrectnessEnvelope`
+
+Engine Prepare-QC lock/highest-record invariants:
+- `TypeInvariant`
+- `FinalLockedMatchesSpec`
+- `FinalHighestMatchesSpec`
+- `AcceptedPrepareLocksExactDerivedQc`
+- `AcceptedNoCurrentHighestRecordsExactPrepareQc`
+- `AcceptedImprovingHighestRecordsExactPrepareQc`
+- `AcceptedLowerOrEqualHighestPreservesStoredHighest`
+- `RejectedPrefilterPreservesStoredLockAndHighest`
+- `ReplayConflictPendingPreservesStoredLockAndHighest`
+- `IgnoredPrepareQcsNeverRecord`
+- `ValuesStayInDomain`
+- `EnginePrepareLockHighestExactness`
+- `EnginePrepareLockHighestCorrectnessEnvelope`
+
+Engine Prepare-QC phase-transition invariants:
+- `TypeInvariant`
+- `FinalPhaseMatchesSpec`
+- `AcceptedPrepareMovesToCommitPhase`
+- `RejectedPrefilterPreservesPhase`
+- `ReplayConflictPreservesPhase`
+- `PendingFinalityPreservesPhase`
+- `IgnoredPrepareQcsNeverChangePhase`
+- `ValuesStayInDomain`
+- `EnginePreparePhaseExactness`
+- `EnginePreparePhaseCorrectnessEnvelope`
+
+Engine Prepare-QC state-preservation invariants:
+- `TypeInvariant`
+- `AcceptedPreservesRound`
+- `AcceptedPreservesPendingFinality`
+- `AcceptedPreservesValidationOwner`
+- `AcceptedPreservesCommittedRecord`
+- `RejectedPreservesRound`
+- `RejectedPreservesPendingFinality`
+- `RejectedPreservesValidationOwner`
+- `RejectedPreservesCommittedRecord`
+- `AllModeledStatePreserved`
+- `ValuesStayInDomain`
+- `EnginePrepareStatePreservationExactness`
+- `EnginePrepareStatePreservationCorrectnessEnvelope`
 
 Engine prepare-vote cache/output invariants:
 - `TypeInvariant`
@@ -10596,6 +11371,8 @@ Engine prepare-vote cache/output invariants:
 - `CacheNeverUsesWrongRoundForSafePrepare`
 - `CacheNeverUsesWrongSubjectForSafePrepare`
 - `ValuesStayInDomain`
+- `EnginePrepareVoteCacheExactness`
+- `EnginePrepareVoteCacheCorrectnessEnvelope`
 
 Engine commit-QC gate invariants:
 - `TypeInvariant`
@@ -10616,6 +11393,34 @@ Engine commit-QC gate invariants:
 - `AcceptedCommitQcsRecordHighest`
 - `IgnoredCommitQcsDoNotRecordHighest`
 - `HighestFollowsAcceptedCommitQcs`
+- `EngineCommitQcExactness`
+- `EngineCommitQcCorrectnessEnvelope`
+
+Engine Commit-QC highest-record invariants:
+- `TypeInvariant`
+- `FinalHighestMatchesSpec`
+- `AcceptedNoCurrentRecordsExactCommitQc`
+- `AcceptedImprovingRecordsExactCommitQc`
+- `AcceptedLowerOrEqualPreservesStoredHighest`
+- `RejectedPrefilterPreservesStoredHighest`
+- `PendingReplayConflictPreservesStoredHighest`
+- `IgnoredCommitQcsNeverRecord`
+- `ValuesStayInDomain`
+- `EngineCommitQcHighestRecordExactness`
+- `EngineCommitQcHighestRecordCorrectnessEnvelope`
+
+Engine Commit-QC phase-transition invariants:
+- `TypeInvariant`
+- `FinalPhaseMatchesSpec`
+- `AvailableCommitQcsReturnToProposalPhase`
+- `MissingPayloadCommitQcsEnterPendingFinalityPhase`
+- `RejectedPrefilterPreservesPhase`
+- `PendingReplayPreservesPhase`
+- `PendingConflictPreservesPhase`
+- `IgnoredCommitQcsNeverChangePhase`
+- `ValuesStayInDomain`
+- `EngineCommitQcPhaseExactness`
+- `EngineCommitQcPhaseCorrectnessEnvelope`
 
 Engine payload-available Commit-QC exact finality invariants:
 - `TypeInvariant`
@@ -10643,6 +11448,59 @@ Engine payload-available Commit-QC exact finality invariants:
 - `EngineCommitQcAvailableCommitExactness`
 - `EngineCommitQcAvailableCommitCorrectnessEnvelope`
 
+Engine missing-payload Commit-QC pending/fetch invariants:
+- `TypeInvariant`
+- `PendingSubjectMatchesSpec`
+- `PendingMapKeyMatchesSpec`
+- `PendingMapCertificateMatchesSpec`
+- `FetchRoundMatchesSpec`
+- `FetchBlockMatchesSpec`
+- `FetchPayloadMatchesSpec`
+- `MissingPayloadRecordsPendingStateAndMap`
+- `MissingPayloadFetchesExactRequest`
+- `PendingMapKeyIsCertifiedBlockHash`
+- `PendingMapStoresClonedCertificate`
+- `PayloadAvailableCommitQcDoesNotFetchOrStage`
+- `RejectedCommitQcsDoNotFetchOrStage`
+- `ReplayConflictPreservesExistingPending`
+- `ReplayConflictNeverFetches`
+- `NoFetchWithoutMissingPayload`
+- `FieldValuesStayInDomain`
+- `EngineCommitQcPendingFetchExactness`
+- `EngineCommitQcPendingFetchCorrectnessEnvelope`
+
+Engine Commit-QC validation cleanup invariants:
+- `TypeInvariant`
+- `ValidationAfterMatchesSpec`
+- `HandlerCommitQcsClearValidation`
+- `AcceptedCommitQcsClearValidation`
+- `PendingReplayClearsValidationBeforeReturn`
+- `PendingConflictClearsValidationBeforeReturn`
+- `RejectedPrefilterCommitQcsPreserveValidation`
+- `WrongContextCommitQcsPreserveValidation`
+- `WrongQuorumPolicyPreservesValidation`
+- `StaleViewPreservesValidation`
+- `CommittedHeightPreservesValidation`
+- `NoSyntheticValidationOwnership`
+- `LateInvalidResultSuppressedAfterHandlerCommitQc`
+- `EngineCommitQcValidationCleanupExactness`
+- `EngineCommitQcValidationCleanupCorrectnessEnvelope`
+
+Engine Commit-QC unrelated-state preservation invariants:
+- `TypeInvariant`
+- `AcceptedPreservesRound`
+- `AcceptedPreservesLockedQc`
+- `AcceptedPreservesPrepareVoteCache`
+- `AcceptedPreservesAvailablePayloads`
+- `RejectedPreservesRound`
+- `RejectedPreservesLockedQc`
+- `RejectedPreservesPrepareVoteCache`
+- `RejectedPreservesAvailablePayloads`
+- `AllModeledStatePreserved`
+- `ValuesStayInDomain`
+- `EngineCommitQcStatePreservationExactness`
+- `EngineCommitQcStatePreservationCorrectnessEnvelope`
+
 Engine payload-availability gate invariants:
 - `TypeInvariant`
 - `EveryPayloadIsRecordedAvailable`
@@ -10656,6 +11514,115 @@ Engine payload-availability gate invariants:
 - `CommitClearsPending`
 - `CommitEntersProposalPhase`
 - `IgnoredPayloadsDoNotClearPending`
+- `EnginePayloadAvailabilityExactness`
+- `EnginePayloadAvailabilityCorrectnessEnvelope`
+
+Engine payload-availability record invariants:
+- `TypeInvariant`
+- `FinalAvailabilityMatchesSpec`
+- `EveryPayloadRecordsExactInputPair`
+- `NoWrongAvailabilityPairRecorded`
+- `ExistingAvailabilityPreserved`
+- `NoPendingStillRecordsInputPair`
+- `PendingMismatchStillRecordsInputPair`
+- `DuplicateRecordIsIdempotent`
+- `ValuesStayInDomain`
+- `EnginePayloadAvailabilityRecordExactness`
+- `EnginePayloadAvailabilityRecordCorrectnessEnvelope`
+
+Engine payload-availability state-preservation invariants:
+- `TypeInvariant`
+- `CommitsPreserveRound`
+- `CommitsPreserveLockedQc`
+- `CommitsPreserveHighestQc`
+- `CommitsPreservePrepareVoteCache`
+- `CommitsPreserveReconfiguration`
+- `IgnoredPreserveRound`
+- `IgnoredPreserveLockedQc`
+- `IgnoredPreserveHighestQc`
+- `IgnoredPreservePrepareVoteCache`
+- `IgnoredPreserveReconfiguration`
+- `IgnoredPreserveCommitted`
+- `IgnoredPreserveValidation`
+- `IgnoredPreservePhase`
+- `IgnoredPreservePendingFinality`
+- `IgnoredPreservePendingMap`
+- `AllAlwaysPreservedStatePreserved`
+- `IgnoredStatePreserved`
+- `ValuesStayInDomain`
+- `EnginePayloadStatePreservationExactness`
+- `EnginePayloadStatePreservationCorrectnessEnvelope`
+
+Engine validation-result invariants:
+- `TypeInvariant`
+- `AcceptedMatchesSpec`
+- `IgnoredMatchesSpec`
+- `CurrentValidConsumesAndStops`
+- `CurrentInvalidAdvancesView`
+- `IgnoredCallbacksHaveNoOutputs`
+- `InvalidWithHighestUsesHighestSubject`
+- `InvalidWithoutHighestUsesInvalidSubject`
+- `InvalidWithHighestBindsHighestQc`
+- `InvalidWithoutHighestDoesNotBindHighestQc`
+- `SupersededCommitPreservesPendingFinality`
+- `SupersededCommittedBlockPreservesCommittedState`
+- `CurrentValidNeverEmitsNewView`
+- `OutputsStayTogether`
+- `EngineValidationResultExactness`
+- `EngineValidationResultCorrectnessEnvelope`
+
+Engine validation-result state-preservation invariants:
+- `TypeInvariant`
+- `AcceptedPreservesLockedQc`
+- `AcceptedPreservesHighestQc`
+- `AcceptedPreservesCommitVoteCache`
+- `AcceptedPreservesCommittedRecords`
+- `AcceptedPreservesAvailablePayloads`
+- `AcceptedPreservesPendingFinality`
+- `AcceptedPreservesPendingMap`
+- `AcceptedPreservesReconfiguration`
+- `IgnoredPreservesLockedQc`
+- `IgnoredPreservesHighestQc`
+- `IgnoredPreservesCommitVoteCache`
+- `IgnoredPreservesCommittedRecords`
+- `IgnoredPreservesAvailablePayloads`
+- `IgnoredPreservesPendingFinality`
+- `IgnoredPreservesPendingMap`
+- `IgnoredPreservesReconfiguration`
+- `AllModeledStatePreserved`
+- `ValuesStayInDomain`
+- `EngineValidationStatePreservationExactness`
+- `EngineValidationStatePreservationCorrectnessEnvelope`
+
+Engine validation-owner cleanup invariants:
+- `TypeInvariant`
+- `FinalOwnerMatchesSpec`
+- `CurrentValidClearsOwner`
+- `CurrentInvalidClearsOwner`
+- `WrongRoundPreservesOwner`
+- `WrongBlockPreservesOwner`
+- `NoInflightPreservesNone`
+- `ReplayPreservesNone`
+- `SupersededCallbacksPreserveNone`
+- `IgnoredCallbacksPreserveOwnerExactly`
+- `ValuesStayInDomain`
+- `EngineValidationOwnershipExactness`
+- `EngineValidationOwnershipCorrectnessEnvelope`
+
+Engine invalid-validation round/output advance invariants:
+- `TypeInvariant`
+- `FinalRoundMatchesSpec`
+- `SignVoteRoundMatchesSpec`
+- `AdvanceOutputRoundMatchesSpec`
+- `InvalidStateUsesExactNextRound`
+- `InvalidOutputsUseExactNextRound`
+- `InvalidOutputRoundsAgreeWithState`
+- `ValidCurrentPreservesRoundAndHasNoOutputs`
+- `IgnoredCallbacksPreserveRoundAndHaveNoOutputs`
+- `SaturatingMaxViewDoesNotWrap`
+- `ValuesStayInDomain`
+- `EngineValidationInvalidAdvanceExactness`
+- `EngineValidationInvalidAdvanceCorrectnessEnvelope`
 
 Engine committed-block gate invariants:
 - `TypeInvariant`
@@ -10671,6 +11638,68 @@ Engine committed-block gate invariants:
 - `ConflictsNeverOverwrite`
 - `ActivationRequiresFreshBoundaryRecord`
 - `NoDuplicateOrConflictRecord`
+- `EngineCommittedBlockExactness`
+- `EngineCommittedBlockCorrectnessEnvelope`
+
+Engine committed-block record invariants:
+- `TypeInvariant`
+- `CommitMapMatchesSpec`
+- `FreshNotificationsRecordExactHeightBlock`
+- `DuplicateNotificationsPreserveMap`
+- `ConflictingNotificationsPreserveMap`
+- `NoSpuriousWrongHeightRecords`
+- `ExistingInputHeightNeverClearedOnReplay`
+- `FreshDoesNotOverwriteUnrelatedHeight`
+- `ValuesStayInDomain`
+- `EngineCommittedBlockRecordExactness`
+- `EngineCommittedBlockRecordCorrectnessEnvelope`
+
+Engine committed-block cleanup invariants:
+- `TypeInvariant`
+- `RecordsMatchSpec`
+- `CleanupMatchesSpec`
+- `FreshCurrentNotificationsCleanup`
+- `OtherHeightNotificationsPreserveOwnership`
+- `DuplicateNotificationsAreNoops`
+- `ConflictingNotificationsAreNoops`
+- `PendingStateAndMapStayAligned`
+- `NoCommitBlockOutput`
+- `EngineCommittedBlockCleanupExactness`
+- `EngineCommittedBlockCleanupCorrectnessEnvelope`
+
+Engine committed-block state-preservation invariants:
+- `TypeInvariant`
+- `FreshPreservesRound`
+- `FreshPreservesLockedQc`
+- `FreshPreservesHighestQc`
+- `FreshPreservesPrepareVoteCache`
+- `FreshPreservesAvailablePayloads`
+- `NoopPreservesRound`
+- `NoopPreservesLockedQc`
+- `NoopPreservesHighestQc`
+- `NoopPreservesPrepareVoteCache`
+- `NoopPreservesAvailablePayloads`
+- `AllModeledStatePreserved`
+- `ValuesStayInDomain`
+- `EngineCommittedBlockStatePreservationExactness`
+- `EngineCommittedBlockStatePreservationCorrectnessEnvelope`
+
+Engine reconfiguration staging invariants:
+- `TypeInvariant`
+- `StageAfterMatchesSpec`
+- `EmitMatchesSpec`
+- `FreshBoundaryStagesAndActivates`
+- `BoundaryActivationMatchesStagedChange`
+- `NoStageWithoutFreshBoundary`
+- `NoActivationWithoutFreshBoundary`
+- `PlainCommitsPreserveStagingAndStaySilent`
+- `NonBoundaryReconfigurationsPreserveStagingAndStaySilent`
+- `DuplicatesPreserveStagingAndStaySilent`
+- `ConflictsPreserveStagingAndStaySilent`
+- `BoundaryReplacesExistingStaging`
+- `NoSyntheticChangeValues`
+- `EngineReconfigurationStagingExactness`
+- `EngineReconfigurationStagingCorrectnessEnvelope`
 
 Engine reconfiguration dedup invariants:
 - `TypeInvariant`
@@ -10687,6 +11716,8 @@ Engine reconfiguration dedup invariants:
 - `ConflictsPreservePendingAndStaySilent`
 - `PlainCommitsPreservePendingAndStaySilent`
 - `NoSyntheticChangeValues`
+- `EngineReconfigurationDedupExactness`
+- `EngineReconfigurationDedupCorrectnessEnvelope`
 
 Validator-set transition invariants:
 - `TypeInvariant`
@@ -12467,11 +13498,23 @@ Temporal properties:
   theorem composes the full fast/deep state-invariant surface under `[]` with
   the end-to-end temporal safety envelope, giving one checkable consensus-core
   safety theorem for both state facts and handoff/transition obligations.
+- `SumeragiConsensusCoreStateMatchesEnvelope` factors the non-type state-safety
+  obligations behind one named predicate.
+  `SumeragiConsensusCoreStateSafetyEnvelope` composes `TypeInvariant` with that
+  predicate for temporal state-safety checks.
+- The aggregate `SumeragiConsensusCoreAlwaysMatchesExactness` composes
+  `SumeragiConsensusCoreStateMatchesEnvelope` as a direct exactness conjunct,
+  giving the monolithic fast correctness envelope direct `*Exactness` coverage
+  without hiding `TypeInvariant` inside the exactness body.
 - The aggregate `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` theorem
   composes the state+temporal safety theorem with `EventuallyCommit`, giving one
   checkable consensus-core correctness theorem for the fairness-backed bounded
   model: every post-GST run eventually commits while retaining the certified
   safety, evidence, and RBC handoff envelopes.
+- `SumeragiConsensusCoreFastCorrectnessEnvelope` composes `TypeInvariant` with
+  `SumeragiConsensusCoreAlwaysMatchesExactness`; the Apalache `fast` runner
+  typechecks that direct envelope while decomposed helper fast modes carry the
+  bounded-check workload.
 
 Frontier recovery invariants:
 - `TypeInvariant`
@@ -12592,9 +13635,11 @@ surfaces it abstracts:
 | `lockedBranch`, `lockView`, `PrepareQc` | Locked-QC acceptance rules in `crates/iroha_core/src/sumeragi/main_loop/locked_qc.rs` and the pure engine's `proposal_satisfies_lock(...)`. |
 | `commitCerts` | Commit-certificate formation and finality conflict rejection in the collector/receiver path; the pure engine bridge coverage includes `conflicting_blocks_cannot_both_commit_at_same_height` and `committed_block_notifications_do_not_overwrite_conflicting_height`. |
 
-TLC now cross-checks `fork-fast`, `fork-npos`, and the `fork-bug-*`
-expected-failure mutation so the same finite fork-safety state space is
-covered by both Apalache and TLC.
+`ForkSafetyExactness` aliases the complete same-height finality obligation, and
+`ForkSafetyCorrectnessEnvelope` composes that aggregate with the type
+invariant. TLC now cross-checks `fork-fast`, `fork-npos`, and the `fork-bug-*`
+expected-failure mutation so the same finite fork-safety state space is covered
+by both Apalache and TLC.
 
 The quorum-policy model is intentionally finite. These are the implementation
 surfaces it abstracts:
@@ -12606,8 +13651,26 @@ surfaces it abstracts:
 | `StakeSpecSatisfied` | `QuorumPolicy::is_satisfied_by_stake(...)` accepts only signed stake strictly greater than two thirds of total stake. |
 | `StakeRejectsInvalidInputs`, `StakeRejectsOverTotal` | NPoS stake quorum rejects missing/negative stake, zero/negative total stake, signed stake above total stake, and checked-multiply overflow. The same bridge test exercises these fail-closed boundaries. |
 
-TLC now cross-checks `quorum-fast` and all six `quorum-bug-*`
-expected-failure mutations, giving the fail-closed quorum arithmetic model an
+`QuorumPolicyExactness` aliases the complete fail-closed quorum arithmetic
+obligation, and `QuorumPolicyCorrectnessEnvelope` composes that aggregate with
+the type invariant. TLC now cross-checks `quorum-fast` and all six
+`quorum-bug-*` expected-failure mutations, giving the fail-closed quorum
+arithmetic model an independent exhaustive checker in addition to Apalache.
+
+The RBC deliver-quorum model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `CommitQuorumSpec`, `RequiredSpec` | `Topology::min_votes_for_commit()` and RBC deliver-quorum helpers derive protocol thresholds from the deduplicated validator topology. |
+| `forceOne`, `localEmission` | Developer force-one behavior may lower only local DELIVER emission; receiver-side inbound DELIVER acceptance keeps the protocol quorum. |
+| `distinctReady`, `ReadyCountUsesDistinctSenders` | READY observations are counted by distinct sender, so duplicate READY frames do not inflate deliver eligibility. |
+| `delivered`, `DeliveredMatchesSpec` | RBC delivery occurs exactly when the distinct READY count reaches the required threshold for the local/inbound path. |
+
+`RbcDeliverQuorumExactness` aliases the complete RBC deliver-quorum
+obligation, and `RbcDeliverQuorumCorrectnessEnvelope` composes that aggregate
+with the type invariant. TLC now cross-checks `rbc-fast` and all five
+`rbc-bug-*` expected-failure mutations, giving the deliver-quorum gate an
 independent exhaustive checker in addition to Apalache.
 
 The RBC causality model is intentionally finite. These are the implementation
@@ -12714,7 +13777,7 @@ implementation surfaces it abstracts:
 | `DataPlusOneAddsOneWhenAvailable`, `RequiredNeverExceedsStripeWidth` | `DataPlusOne` maps to `data_shards + 1`, then clamps the required count to `layout.stripe_width()`. |
 | `EveryStripeCoveredForReducedFanout`, `ReducedFanoutIsReconstructable` | The helper visits every stripe and selects at least `data_shards` chunks in each reduced-fanout stripe. |
 | `SelectionHasNoOutOfRange`, `SelectionHasNoDuplicates` | Generated indices are filtered below `layout.total_chunks()` and then sorted/deduplicated. |
-| `SelectionSortedAfterDedup`, `SelectionLengthEqualsPerStripeTotal`, `TotalSelectionWithinChunkRange` | The returned vector is sorted after deduplication and has exactly `stripe_count * required` in-range entries for modeled valid layouts. |
+| `sorted`, `SelectionLengthEqualsPerStripeTotal`, `TotalSelectionWithinChunkRange` | The returned vector is sorted after deduplication and has exactly `stripe_count * required` in-range entries for modeled valid layouts. |
 
 The RBC chunk broadcast order model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -12725,7 +13788,7 @@ implementation surfaces it abstracts:
 | `DropNoneKeepsAll`, `DropZeroIgnored` | Drop filtering uses `drop_every.filter(|value| *value > 0)`, so absent and zero intervals skip filtering. |
 | `DropEveryOneDropsAll`, `DropCountUsesOneBasedPositions` | The filter drops positions where `(pos + 1) % interval == 0`, using one-based positions for the configured interval. |
 | `DropLargeDropsNone` | An interval larger than the order length never satisfies the one-based position predicate. |
-| `FilteredOrderPreserved` | The filtering loop pushes retained `idx` values in iteration order and only skips selected positions. |
+| `preserves_filter_order` | The filtering loop pushes retained `idx` values in iteration order and only skips selected positions. |
 | `NoDuplicateIndices`, `NoOutOfRangeIndices` | The base order is `0..chunk_count`, shuffle is a permutation, and filtering only removes entries. |
 | `OutputLengthPlusDroppedEqualsInput` | `dropped` increments exactly when an entry is skipped; retained entries are pushed once. |
 
@@ -13726,8 +14789,8 @@ implementation surfaces it abstracts:
 | Root binding | The COMMIT QC parent and post-state roots must match the artifact parent and post-state roots before the artifact is trusted. |
 | Witness roots | `prevalidated_roots_match_witness(...)` requires a present execution witness whose parent and post-state roots reproduce the trusted artifact. |
 | Commit acceptance | The optimized commit path accepts only when an untrusted artifact falls back to normal handling or a trusted artifact also has matching witness roots. |
-| `PrevalidatedCommitArtifactExactness` | The aggregate invariant ties trusted-artifact, witness-root, and final commit-acceptance exactness together for every bounded case. |
-| `PrevalidatedCommitArtifactCorrectnessEnvelope` | The correctness envelope composes the type invariant with prevalidated commit artifact fast safety so the fast mode checks bounded domain safety, helper exactness, and case-tuple exactness together. |
+| `PrevalidatedCommitArtifactExactness` | The aggregate invariant ties trusted-artifact, witness-root, final commit-acceptance, and case-tuple exactness together for every bounded case. |
+| `PrevalidatedCommitArtifactCorrectnessEnvelope` | The correctness envelope composes the type invariant with `PrevalidatedCommitArtifactExactness`. |
 
 The commit-result drain-gate model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14439,6 +15502,8 @@ implementation surfaces it abstracts:
 | `AllowAbsentPeer`, `RecordNewPermit`, `RecordExistingIncrements`, `RecordExistingSaturates`, `RecordPrunesExpired` | `record_direct_block_sync_response_permit(...)` prunes stale permits first, creates per-peer entries, updates `last_request`, and saturates pending response permits at `DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING`. |
 | `AllowFreshSingle`, `AllowFreshMulti`, `AllowExactTtl`, `AllowExpired`, `AllowZeroPending`, `AllowWrongPeer` | `allow_direct_block_sync_response(...)` admits only fresh peer-scoped permits, consumes one pending response, removes exhausted/stale entries, preserves multi-pending owners, and treats the TTL boundary as still valid. |
 | `PruneExpired`, `PruneFresh` | `prune_direct_block_sync_response_permits(...)` removes permits only when their age is greater than the configured TTL. |
+| `FrontierBlockSyncHintExactness` | The aggregate invariant ties latest-gossip pause gates, external-hint storage, direct-response permit admission, accounting, and pruning exactness together for every bounded case. |
+| `FrontierBlockSyncHintCorrectnessEnvelope` | The fast correctness envelope composes `TypeInvariant` with `FrontierBlockSyncHintExactness`. |
 
 The frontier-gap realignment model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14570,6 +15635,7 @@ surfaces it abstracts:
 | local gate projection | `HandshakeGate::local(...)` stores the local `chain_id`, caller-supplied `mode_tag`, constant `PROTO_VERSION`, and caller-supplied consensus fingerprint exactly. |
 | exact-match admission | `HandshakeGate::validate_peer(...)` returns `Ok(())` only when peer chain id, mode tag, protocol version, and fingerprint all match the local gate. |
 | mismatch priority | `validate_peer(...)` checks chain id first, mode tag second, protocol version third, and consensus fingerprint last, so earlier mismatches fail closed before lower-priority fields can be considered. |
+| `HandshakeCorrectnessEnvelope` | The correctness envelope composes `TypeInvariant` with exact local projection, exact-match admission, and mismatch-priority ordering. |
 
 The live-vote roster model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14686,6 +15752,14 @@ implementation surfaces it abstracts:
 | `validationNoHighest`, `validationWithHighest` | Ticks clear the pure engine's `validating` owner so late validation callbacks cannot force an extra view change. Bridge coverage includes `timeout_clears_inflight_validation_before_late_failure_arrives` and `tick_binds_highest_qc_and_clears_inflight_validation`. |
 | `pendingFinalityWithHighest` | Ticks leave `pending_finality` intact across view changes while still binding highest-QC evidence into the `NewView` vote. Bridge coverage includes `pending_finality_survives_timeout_and_view_change_noise`. |
 
+`EngineTickExactness` aliases the complete pacemaker tick obligation, and
+`EngineTickCorrectnessEnvelope` composes that aggregate with the type invariant.
+
+`EngineTickStatePreservationExactness` aliases the complete tick
+unrelated-state preservation obligation, and
+`EngineTickStatePreservationCorrectnessEnvelope` composes that aggregate with
+the type invariant.
+
 The engine NewView subject projection model is intentionally finite. These
 are the implementation surfaces it abstracts:
 
@@ -14695,6 +15769,10 @@ are the implementation surfaces it abstracts:
 | `tick_prepare_highest`, `tick_commit_highest`, `tick_new_view_highest` | `on_tick(...)` maps the current highest QC through `qc_subject(...)`, using the QC subject hash as both parent and block with zero payload, and binds the same highest-QC reference. Bridge coverage includes `tick_binds_highest_qc_and_clears_inflight_validation` and `pending_finality_survives_timeout_and_view_change_noise`. |
 | `invalid_no_highest` | The invalid branch of `on_validation_result(...)` falls back to the rejected proposal block hash as both parent and block, with zero payload and no highest-QC binding. Bridge coverage includes `invalid_validation_result_for_current_proposal_advances_view_once`. |
 | `invalid_prepare_highest`, `invalid_commit_highest`, `invalid_new_view_highest` | Invalid validation with a current highest QC signs the QC-derived subject instead of the rejected block hash and binds the same highest-QC reference. Bridge coverage includes `invalid_validation_new_view_vote_uses_highest_qc_subject`. |
+
+`EngineNewViewSubjectExactness` aliases the complete NewView subject projection
+obligation, and `EngineNewViewSubjectCorrectnessEnvelope` composes that
+aggregate with the type invariant.
 
 The engine certificate dispatch model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14764,6 +15842,10 @@ implementation surfaces it abstracts:
 | `sameView`, `lowerView` | `on_new_view_qc(...)` requires the certificate view to be strictly greater than the current view. Bridge coverage includes `stale_new_view_certificate_cannot_update_highest_qc_or_rewind_round`. |
 | `futureHeightHighest`, `futureViewHighest`, `wrongEpochHighest` | `qc_ref_is_compatible_with_round(...)` rejects carried highest-QC evidence from a future height/view or wrong epoch. Bridge coverage includes `new_view_certificate_rejects_incompatible_highest_qc`. |
 
+`EngineNewViewQcExactness` aliases the complete NewView-QC gate obligation, and
+`EngineNewViewQcCorrectnessEnvelope` composes that aggregate with the type
+invariant.
+
 The engine exact NewView-QC advance model is intentionally finite. These are
 the implementation surfaces it abstracts:
 
@@ -14787,6 +15869,18 @@ implementation surfaces it abstracts:
 | `futureHeightHighest`, `futureViewHighest`, `wrongEpochHighest` | `qc_ref_is_compatible_with_round(...)` rejects proposal highest-QC evidence from a future height/view or wrong epoch. Bridge coverage includes `proposal_with_incompatible_highest_qc_cannot_unlock_conflicting_lock`. |
 | `lockedConflictNoQc`, `lockedConflictEqualQc`, `lockedConflictLowerQc` | `proposal_satisfies_lock(...)` rejects conflicting locked proposals unless the proposal carries a strictly greater compatible QC. Bridge coverage includes `locked_qc_blocks_unsafe_prepare_votes` and `conflicting_proposal_requires_strictly_higher_qc_to_unlock`. |
 
+`EngineProposalExactness` aliases the complete proposal-ingress obligation, and
+`EngineProposalCorrectnessEnvelope` composes that aggregate with the type
+invariant.
+
+`EngineProposalOutputExactness` aliases the complete exact proposal
+output-field obligation, and `EngineProposalOutputCorrectnessEnvelope` composes
+that aggregate with the type invariant.
+
+`EngineProposalStateExactness` aliases the complete proposal state-mutation
+obligation, and `EngineProposalStateCorrectnessEnvelope` composes that
+aggregate with the type invariant.
+
 The engine proposal unrelated-state preservation model is intentionally finite.
 These are the implementation surfaces it abstracts:
 
@@ -14795,6 +15889,16 @@ These are the implementation surfaces it abstracts:
 | `safe_unlocked_clean`, `safe_unlocked_with_all_state`, `safe_locked_subject_with_all_state`, `safe_conflict_higher_qc_with_all_state` | Accepted `on_proposal(...)` inputs enter the validation/prepare path but do not touch committed records, the Prepare-QC replay cache, pending-finality certificate-map entries, available-payload records, or staged reconfiguration. Companion proposal models cover the intentional phase/output/validation-owner side effects. |
 | `wrong_phase_with_all_state`, `wrong_round_clean`, `wrong_round_with_all_state`, `incompatible_highest_with_all_state` | Phase, round, and incompatible-highest guards return before mutating those unrelated state fields. Bridge coverage is shared with the proposal-ingress and proposal state-mutation tests. |
 | `locked_conflict_no_qc_with_all_state`, `locked_conflict_equal_qc_with_all_state`, `locked_conflict_lower_qc_with_all_state` | Locked-conflict rejections by `proposal_satisfies_lock(...)` do not clean, overwrite, or synthesize unrelated storage/cache/reconfiguration state. |
+
+`EngineProposalStatePreservationExactness` aliases the complete proposal
+unrelated-state preservation obligation, and
+`EngineProposalStatePreservationCorrectnessEnvelope` composes that aggregate
+with the type invariant.
+
+`EngineProposalValidationOwnerExactness` aliases the complete proposal
+validation-owner obligation, and
+`EngineProposalValidationOwnerCorrectnessEnvelope` composes that aggregate with
+the type invariant.
 
 The engine proposal-lock helper model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14807,6 +15911,10 @@ implementation surfaces it abstracts:
 | `conflict_equal_qc` | Equal QC rank is rejected because the implementation requires `qc_ref_cmp(...).is_gt()`, not greater-than-or-equal. |
 | `conflict_lower_height_qc`, `conflict_lower_view_qc` | Lower QC evidence cannot unlock a conflicting proposal. |
 | `conflict_higher_height_qc`, `conflict_higher_view_qc`, `conflict_higher_phase_qc`, `conflict_higher_subject_qc` | Any strictly greater QC under `qc_ref_cmp(...)` can unlock the conflicting proposal after the proposal highest-QC compatibility gate has already accepted it. |
+
+`EngineProposalLockExactness` aliases the complete proposal-lock helper
+obligation, and `EngineProposalLockCorrectnessEnvelope` composes that aggregate
+with the type invariant.
 
 The QC-round compatibility helper model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14972,6 +16080,10 @@ the implementation surfaces it abstracts:
 | `fresh_plain_*`, `fresh_non_boundary_*` | Plain commits and non-boundary reconfigurations record the block but preserve existing reconfiguration staging and emit no activation. Bridge coverage includes `reconfiguration_with_non_boundary_activation_is_not_activated`. |
 | `duplicate_boundary_*`, `conflict_boundary_*`, `conflict_non_boundary_a_prior_b` | Already-scheduled duplicates and conflicting notifications preserve existing staged changes. Same-hash duplicate notifications without a scheduled activation height are covered by the dedup model. Bridge coverage includes `duplicate_committed_block_notification_does_not_reactivate_reconfiguration` and `conflicting_committed_block_notification_cannot_activate_reconfiguration`. |
 
+`EngineReconfigurationStagingExactness` aliases the complete reconfiguration
+staging obligation, and `EngineReconfigurationStagingCorrectnessEnvelope`
+composes that aggregate with the type invariant.
+
 The engine reconfiguration-dedup model is intentionally finite. These are the
 implementation surfaces it abstracts:
 
@@ -15106,6 +16218,10 @@ implementation surfaces it abstracts:
 | `invalidNoHighest`, `invalidWithHighest` | A failed current validation clears ownership, emits `NewView` plus `AdvanceView`, and advances to proposal phase. Bridge coverage includes `invalid_validation_new_view_vote_uses_highest_qc_subject`. |
 | `supersededByCommit`, `supersededByCommittedBlock` | Commit QCs and committed-block notifications clear stale validation ownership before late invalid callbacks can mutate pending finality or committed state. Bridge coverage includes `commit_qc_supersedes_late_invalid_validation_result`, `conflicting_commit_qc_supersedes_late_invalid_validation_result`, and `committed_block_notification_supersedes_late_invalid_validation_result`. |
 
+`EngineValidationResultExactness` aliases the complete validation-result
+obligation, and `EngineValidationResultCorrectnessEnvelope` composes that
+aggregate with the type invariant.
+
 The pure engine validation-result state-preservation model is intentionally
 finite. These are the implementation surfaces it abstracts:
 
@@ -15175,6 +16291,17 @@ surfaces it abstracts:
 ## Running
 
 From repository root:
+
+The Apalache `fast` mode is intentionally a monolithic-module typecheck smoke.
+Keep `Sumeragi_fast.cfg` as the documented state-safety sentinel for the same
+constants, but use the decomposed `*-fast` helper modes for bounded Apalache
+checking of production CI obligations. The TLC `fast` mode still checks the
+top-level commit-path temporal behavior through `Sumeragi_tlc_fast.cfg`, but it
+is not a short helper smoke; keep short PR gating on the decomposed helper
+modes unless the monolithic TLC runtime is measured and bounded. Do not add a
+separate TLC runner branch for `Sumeragi_fast.cfg` as a quick state-safety
+smoke without first publishing a passing bounded runtime; it traverses the
+top-level Sumeragi state graph rather than a decomposed helper model.
 
 ```bash
 bash scripts/formal/sumeragi_apalache.sh fast
@@ -16191,12 +17318,12 @@ The runner sets an explicit Apalache `--length` for each mode:
 
 | Mode | Length | Intended use |
 | --- | ---: | --- |
-| `fast` | 10 | CI commit-path check |
+| `fast` | 10 | Monolithic commit-path typecheck smoke; safety sentinel cfg is retained |
 | `deep` | 10 | Larger commit-path check |
-| `fork-fast` | 9 | CI permissioned fork-safety check |
-| `fork-npos` | 9 | CI NPoS stake-quorum fork-safety check |
-| `quorum-fast` | 2 | CI quorum-policy arithmetic check |
-| `rbc-fast` | 2 | CI RBC deliver-quorum gate check |
+| `fork-fast` | 9 | CI permissioned fork-safety correctness-envelope check |
+| `fork-npos` | 9 | CI NPoS stake-quorum fork-safety correctness-envelope check |
+| `quorum-fast` | 2 | CI quorum-policy arithmetic correctness-envelope check |
+| `rbc-fast` | 2 | CI RBC deliver-quorum correctness-envelope check |
 | `rbc-causality-fast` | 1 | CI RBC causality correctness-envelope check |
 | `rbc-deliver-acceptance-fast` | 1 | CI RBC DELIVER acceptance correctness-envelope check |
 | `rbc-ready-emission-fast` | 1 | CI RBC local READY emission correctness-envelope check |
@@ -16261,8 +17388,8 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `rbc-unverified-roster-fast` | 1 | CI direct RBC unverified-roster escape-hatch correctness-envelope check |
 | `rbc-preimage-fast` | 1 | CI RBC signing-preimage correctness-envelope check |
 | `classic-preimage-fast` | 1 | CI classic Vote/VRF signing-preimage correctness-envelope check |
-| `vrf-material-derivation-fast` | 1 | CI direct VRF material derivation helper check |
-| `vrf-penalties-report-fast` | 1 | CI VRF penalties report storage direct exactness check |
+| `vrf-material-derivation-fast` | 1 | CI local VRF material-derivation correctness-envelope check |
+| `vrf-penalties-report-fast` | 1 | CI VRF penalties report storage correctness-envelope check |
 | `classic-signature-fast` | 1 | CI classic Vote/QC signature-verification correctness-envelope check |
 | `invalid-signature-labels-fast` | 1 | CI direct invalid-signature kind/outcome label correctness-envelope check |
 | `invalid-signature-throttle-fast` | 1 | CI invalid-signature throttle and penalty correctness-envelope check |
@@ -16286,7 +17413,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `block-created-frontier-wire-fast` | 1 | CI direct BlockCreated frontier metadata wire/rebuild correctness-envelope check |
 | `block-payload-canonicalization-fast` | 1 | CI canonical proposal payload byte correctness-envelope check |
 | `cached-proposal-rebroadcast-fast` | 1 | CI direct cached proposal rebroadcast admission/fanout correctness-envelope check |
-| `frontier-block-sync-hint-fast` | 1 | CI direct frontier block-sync hint/direct-response permit check |
+| `frontier-block-sync-hint-fast` | 1 | CI direct frontier block-sync hint/direct-response permit correctness-envelope check |
 | `frontier-same-slot-activity-fast` | 1 | CI direct exact-slot frontier recovery activity correctness-envelope check |
 | `frontier-reassembly-activity-fast` | 1 | CI direct frontier reassembly activity correctness-envelope check |
 | `frontier-quorum-owner-actionable-fast` | 1 | CI direct frontier quorum-timeout actionable-owner cleanup correctness-envelope check |
@@ -16294,24 +17421,24 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `frontier-sidecar-expected-hash-fast` | 1 | CI direct contiguous-frontier sidecar expected-hash correctness-envelope check |
 | `contiguous-frontier-payload-hint-fast` | 1 | CI direct contiguous-frontier payload-hint selector correctness-envelope check |
 | `frontier-parent-qc-hint-retarget-fast` | 1 | CI direct contiguous-frontier parent QC-hint retarget correctness-envelope check |
-| `live-frontier-idle-missing-qc-fast` | 1 | CI direct live-frontier idle missing-QC suppression component/anchor check |
-| `missing-qc-reacquire-admission-fast` | 1 | CI direct missing-QC reacquire admission component/anchor check |
-| `missing-qc-reacquire-action-fast` | 1 | CI direct missing-QC reacquire action orchestration component/anchor check |
-| `missing-commit-qc-actionable-fast` | 1 | CI direct missing commit-QC actionable dependency component/anchor check |
-| `missing-qc-height-stall-fast` | 1 | CI direct same-height missing-QC stall dampening component/anchor check |
-| `missing-qc-stall-range-pull-fast` | 1 | CI direct same-height missing-QC stall range-pull component/anchor check |
-| `missing-payload-fetch-window-fast` | 1 | CI direct same-height missing-payload fetch-window and hash-miss cap check |
+| `live-frontier-idle-missing-qc-fast` | 1 | CI direct live-frontier idle missing-QC suppression correctness-envelope check |
+| `missing-qc-reacquire-admission-fast` | 1 | CI missing-QC reacquire admission correctness-envelope check |
+| `missing-qc-reacquire-action-fast` | 1 | CI missing-QC reacquire action orchestration correctness-envelope check |
+| `missing-commit-qc-actionable-fast` | 1 | CI missing commit-QC actionable dependency correctness-envelope check |
+| `missing-qc-height-stall-fast` | 1 | CI same-height missing-QC stall dampening correctness-envelope check |
+| `missing-qc-stall-range-pull-fast` | 1 | CI same-height missing-QC stall range-pull correctness-envelope check |
+| `missing-payload-fetch-window-fast` | 1 | CI same-height missing-payload fetch-window and hash-miss cap correctness-envelope check |
 | `canonical-frontier-reanchor-fast` | 1 | CI canonical contiguous-frontier reanchor correctness-envelope check |
-| `frontier-repair-view-change-fast` | 1 | CI direct contiguous-frontier repair view-change suppression component/anchor check |
-| `frontier-recovery-advance-fast` | 1 | CI direct contiguous-frontier recovery advance state-machine component/anchor check |
-| `same-height-no-proposal-storm-fast` | 1 | CI direct same-height no-proposal storm recovery component/anchor check |
-| `vrf-admission-fast` | 1 | CI VRF commit/reveal admission check |
-| `vrf-epoch-window-fast` | 1 | CI direct VRF epoch-window arithmetic helper check |
-| `vrf-epoch-boundary-fast` | 1 | CI direct VRF epoch-boundary finalization helper check |
-| `vrf-epoch-restore-fast` | 1 | CI direct VRF epoch restore/snapshot/merge helper check |
-| `vrf-local-state-fast` | 1 | CI local VRF emission state helper check |
-| `vote-admission-fast` | 1 | CI direct classic inbound vote-admission check |
-| `vote-duplicate-key-fast` | 1 | CI vote duplicate raw-key and identity projection direct exactness check |
+| `frontier-repair-view-change-fast` | 1 | CI direct contiguous-frontier repair view-change suppression correctness-envelope check |
+| `frontier-recovery-advance-fast` | 1 | CI direct contiguous-frontier recovery advance state-machine correctness-envelope check |
+| `same-height-no-proposal-storm-fast` | 1 | CI same-height no-proposal storm recovery correctness-envelope check |
+| `vrf-admission-fast` | 1 | CI VRF commit/reveal admission correctness-envelope check |
+| `vrf-epoch-window-fast` | 1 | CI VRF epoch-window arithmetic correctness-envelope check |
+| `vrf-epoch-boundary-fast` | 1 | CI VRF epoch-boundary finalization correctness-envelope check |
+| `vrf-epoch-restore-fast` | 1 | CI VRF epoch restore/snapshot/merge correctness-envelope check |
+| `vrf-local-state-fast` | 1 | CI local VRF emission state correctness-envelope check |
+| `vote-admission-fast` | 1 | CI classic inbound vote-admission correctness-envelope check |
+| `vote-duplicate-key-fast` | 1 | CI vote duplicate raw-key and identity projection correctness-envelope check |
 | `evidence-horizon-fast` | 1 | CI evidence freshness horizon correctness-envelope check |
 | `evidence-canonicalization-fast` | 1 | CI evidence canonicalization/deduplication correctness-envelope check |
 | `evidence-validation-fast` | 1 | CI evidence validation correctness-envelope check |
@@ -16352,7 +17479,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `block-sync-stale-view-fast` | 1 | CI BlockSyncUpdate stale-view admission correctness-envelope check |
 | `block-sync-commit-conflict-fast` | 1 | CI committed-height BlockSyncUpdate conflict correctness-envelope check |
 | `block-sync-warning-throttle-fast` | 1 | CI block-sync warning throttle correctness-envelope check |
-| `qc-insufficient-warning-fast` | 1 | CI QC-insufficient warning throttle direct exactness check |
+| `qc-insufficient-warning-fast` | 1 | CI QC-insufficient warning throttle correctness-envelope check |
 | `fetch-response-deferral-fast` | 1 | CI canonical committed fetch/body response deferral correctness-envelope check |
 | `fetch-block-body-handle-fast` | 1 | CI exact block-body fetch handler correctness-envelope check |
 | `background-frame-cap-fast` | 1 | CI background consensus frame-cap preparation correctness-envelope check |
@@ -16368,7 +17495,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `block-sync-future-window-fast` | 1 | CI future BlockSyncUpdate drop/window correctness-envelope check |
 | `block-body-repair-fast` | 1 | CI RBC block-body repair admission correctness-envelope check |
 | `block-body-request-stash-fast` | 1 | CI body requester stash-window correctness-envelope check |
-| `same-height-block-body-repair-fast` | 1 | CI direct same-height block-body repair admission check |
+| `same-height-block-body-repair-fast` | 1 | CI same-height block-body repair admission correctness-envelope check |
 | `block-body-repair-epoch-fast` | 1 | CI block-body repair observed epoch source correctness-envelope check |
 | `direct-commit-qc-for-block-fast` | 1 | CI direct commit-QC source selection correctness-envelope check |
 | `materialize-qc-fast` | 1 | CI QC materialization and Kura recovery correctness-envelope check |
@@ -16378,18 +17505,18 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `invalid-proposal-evidence-fast` | 1 | CI invalid-proposal evidence builder correctness-envelope check |
 | `proposal-mismatch-fast` | 1 | CI proposal mismatch helper correctness-envelope check |
 | `proposal-cache-fast` | 1 | CI proposal cache helper correctness-envelope check |
-| `proposal-hint-fast` | 1 | CI direct proposal-hint admission check |
-| `stale-proposal-hint-repair-fast` | 1 | CI direct stale proposal-hint repair no-bug check |
-| `stale-rbc-hint-repair-fast` | 1 | CI direct stale RBC hint repair no-bug check |
-| `proposal-admission-fast` | 1 | CI direct proposal metadata admission check |
-| `peer-admin-detection-fast` | 1 | CI direct peer-admin transaction detection helper check |
+| `proposal-hint-fast` | 1 | CI proposal-hint admission correctness-envelope check |
+| `stale-proposal-hint-repair-fast` | 1 | CI stale proposal-hint repair correctness-envelope check |
+| `stale-rbc-hint-repair-fast` | 1 | CI stale RBC hint repair correctness-envelope check |
+| `proposal-admission-fast` | 1 | CI proposal metadata admission correctness-envelope check |
+| `peer-admin-detection-fast` | 1 | CI direct peer-admin transaction detection correctness-envelope check |
 | `block-created-admission-fast` | 1 | CI direct `BlockCreated` payload admission correctness-envelope check |
 | `empty-block-qc-drop-fast` | 1 | CI direct empty-block QC drop correctness-envelope check |
 | `missing-request-clear-fast` | 1 | CI missing-block request clear helper correctness-envelope check |
 | `missing-block-clear-fast` | 1 | CI missing-block clear reason helper correctness-envelope check |
 | `proposal-budget-fast` | 1 | CI proposal budget/cap helper correctness-envelope check |
-| `proposal-backpressure-fast` | 1 | CI direct proposal backpressure classification helper check |
-| `proposal-defer-warning-fast` | 1 | CI proposal-defer warning throttle direct exactness check |
+| `proposal-backpressure-fast` | 1 | CI proposal backpressure correctness-envelope check |
+| `proposal-defer-warning-fast` | 1 | CI proposal-defer warning throttle correctness-envelope check |
 | `non-rbc-payload-budget-fast` | 1 | CI non-RBC payload frame budget helper correctness-envelope check |
 | `proposal-batch-fast` | 1 | CI direct proposal batch trim/canonicalization correctness-envelope check |
 | `lane-interleave-fast` | 1 | CI direct lane interleave routing-decision correctness-envelope check |
@@ -16430,22 +17557,22 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `pending-block-marker-fast` | 1 | CI direct pending-block marker/cooldown correctness-envelope check |
 | `kura-retry-fast` | 1 | CI direct pending-block Kura retry correctness-envelope check |
 | `commit-pipeline-scheduling-fast` | 1 | CI direct commit-pipeline scheduling correctness-envelope check |
-| `precommit-vote-count-fast` | 1 | CI precommit vote-count aggregate/anchor check |
+| `precommit-vote-count-fast` | 1 | CI precommit vote-count correctness-envelope check |
 | `voting-signer-count-fast` | 1 | CI voting signer-count correctness-envelope check |
 | `distinct-vote-epochs-fast` | 1 | CI cached vote-log epoch replay correctness-envelope check |
-| `new-view-highest-qc-votes-fast` | 1 | CI direct NEW_VIEW highest-QC vote-selection helper check |
-| `frontier-new-view-catch-up-fast` | 1 | CI active-frontier NEW_VIEW catch-up emission helper check |
-| `late-new-view-emission-fast` | 1 | CI late NEW_VIEW same-highest near-quorum emission helper check |
-| `near-quorum-new-view-rebroadcast-fast` | 1 | CI near-quorum NEW_VIEW vote rebroadcast helper check |
-| `requester-roster-proof-fast` | 1 | CI requester local roster-proof detection helper check |
-| `online-validator-relay-counters-fast` | 1 | CI online-validator and relay counter direct exactness check |
+| `new-view-highest-qc-votes-fast` | 1 | CI direct NEW_VIEW highest-QC vote-selection correctness-envelope check |
+| `frontier-new-view-catch-up-fast` | 1 | CI active-frontier NEW_VIEW catch-up emission correctness-envelope check |
+| `late-new-view-emission-fast` | 1 | CI late NEW_VIEW same-highest near-quorum emission correctness-envelope check |
+| `near-quorum-new-view-rebroadcast-fast` | 1 | CI near-quorum NEW_VIEW vote rebroadcast correctness-envelope check |
+| `requester-roster-proof-fast` | 1 | CI requester local roster-proof detection helper correctness-envelope check |
+| `online-validator-relay-counters-fast` | 1 | CI online-validator and relay counter correctness-envelope check |
 | `commit-result-drain-fast` | 1 | CI direct commit-result drain correctness-envelope check |
 | `commit-drain-summary-fast` | 1 | CI commit-drain summary aggregation correctness-envelope check |
 | `commit-pipeline-sample-fast` | 1 | CI direct commit-pipeline timing sample helper check |
 | `commit-pipeline-status-fast` | 1 | CI commit-pipeline status recorder correctness-envelope check |
 | `autoscale-transition-fast` | 1 | CI autoscale transition commit gate correctness-envelope check |
 | `commit-quorum-signers-fast` | 1 | CI commit-QC signer quorum correctness-envelope check |
-| `signature-index-recovery-fast` | 1 | CI direct commit signature-index recovery helper check |
+| `signature-index-recovery-fast` | 1 | CI direct commit signature-index recovery helper correctness-envelope check |
 | `commit-qc-lookup-fast` | 1 | CI direct commit-QC cache/history lookup correctness-envelope check |
 | `precommit-signer-record-fast` | 1 | CI direct cached-QC precommit signer record correctness-envelope check |
 | `roster-validation-memo-fast` | 1 | CI roster-validation memo cache correctness-envelope check |
@@ -16471,8 +17598,8 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `post-commit-pacemaker-kick-fast` | 1 | CI post-commit pacemaker kick correctness-envelope check |
 | `idle-view-proposal-budget-fast` | 1 | CI proposal idle-view budget preservation correctness-envelope check |
 | `pacemaker-core-fast` | 1 | CI Pacemaker state-machine correctness-envelope check |
-| `pacemaker-evaluation-fast` | 1 | CI direct pacemaker evaluation component check |
-| `pacing-governor-fast` | 1 | CI direct pacing-governor factor evaluation check |
+| `pacemaker-evaluation-fast` | 1 | CI pacemaker evaluation correctness-envelope check |
+| `pacing-governor-fast` | 1 | CI pacing-governor correctness-envelope check |
 | `cached-slot-timeout-fast` | 1 | CI cached proposal-slot timeout correctness-envelope check |
 | `pending-fast-path-timeout-fast` | 1 | CI pending fast-path timeout correctness-envelope check |
 | `stalled-pending-timeout-fast` | 1 | CI stalled pending-block timeout decision correctness-envelope check |
@@ -16486,40 +17613,40 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `slot-tracker-state-fast` | 1 | CI slot tracker state correctness-envelope check |
 | `timeout-derivation-fast` | 1 | CI timeout and cooldown derivation correctness-envelope check |
 | `round-view-helpers-fast` | 1 | CI round/view helper correctness-envelope check |
-| `phase-tracker-fast` | 1 | CI PhaseTracker mutable state component/anchor check |
+| `phase-tracker-fast` | 1 | CI PhaseTracker mutable state correctness-envelope check |
 | `round-trace-status-fast` | 1 | CI round-trace status recorder correctness-envelope check |
-| `failure-recovery-helpers-fast` | 1 | CI direct failed-commit and block-sync helper check |
-| `requeue-transactions-fast` | 1 | CI direct transaction requeue branch helper check |
-| `tick-deadline-helpers-fast` | 1 | CI direct tick/deadline scheduling helper check |
-| `worker-tick-gap-fast` | 1 | CI direct worker tick-gap helper check |
+| `failure-recovery-helpers-fast` | 1 | CI failed-commit and block-sync helper correctness-envelope check |
+| `requeue-transactions-fast` | 1 | CI direct transaction requeue branch helper correctness-envelope check |
+| `tick-deadline-helpers-fast` | 1 | CI tick/deadline scheduling helper correctness-envelope check |
+| `worker-tick-gap-fast` | 1 | CI worker tick-gap correctness-envelope check |
 | `proposal-parent-resolution-fast` | 1 | CI proposal parent resolution and inline backup transport correctness-envelope check |
 | `highest-qc-dependency-deferral-fast` | 1 | CI highest-QC dependency deferral correctness-envelope check |
 | `precommit-qc-view-change-fast` | 1 | CI precommit-QC view-change selector correctness-envelope check |
 | `commit-evidence-replay-fast` | 2 | CI known-block commit-evidence replay correctness-envelope check |
 | `block-sync-recovery-fast` | 2 | CI block-sync recovery admission correctness-envelope check |
 | `certified-fetch-fast` | 1 | CI direct certified-block fetch correctness-envelope check |
-| `missing-block-ingress-fetch-fast` | 1 | CI direct missing-block ingress grace fetch gate check |
+| `missing-block-ingress-fetch-fast` | 1 | CI missing-block ingress grace fetch correctness-envelope check |
 | `payload-progress-availability-fast` | 1 | CI actor-local payload progress availability correctness-envelope check |
 | `highest-qc-fetch-body-known-fast` | 1 | CI highest-QC body-known fetch suppression correctness-envelope check |
 | `local-payload-availability-fast` | 1 | CI broad actor-local payload availability correctness-envelope check |
 | `block-known-locally-fast` | 1 | CI actor-local block-known routing correctness-envelope check |
 | `block-known-for-lock-fast` | 1 | CI lock-safety block-known routing correctness-envelope check |
-| `missing-locked-qc-recovery-fast` | 1 | CI missing locked-QC payload recovery check |
+| `missing-locked-qc-recovery-fast` | 1 | CI missing locked-QC payload recovery correctness-envelope check |
 | `local-signed-block-lookup-fast` | 1 | CI local signed-block materialization correctness-envelope check |
 | `authoritative-payload-progress-fast` | 1 | CI authoritative payload progress lookup correctness-envelope check |
 | `authoritative-block-payload-fast` | 1 | CI hash-level authoritative payload availability correctness-envelope check |
 | `pending-block-active-for-tip-fast` | 1 | CI pending-block active-for-tip correctness-envelope check |
 | `pending-fast-unblock-fast` | 1 | CI pending fast-unblock decision correctness-envelope check |
 | `blocking-pending-blocks-fast` | 1 | CI blocking pending-block counter correctness-envelope check |
-| `quorum-recovery-vote-drain-fast` | 1 | CI direct quorum recovery vote-drain urgency check |
-| `frontier-body-gap-payload-drain-fast` | 1 | CI direct frontier body-gap payload-drain urgency check |
-| `rbc-authoritative-payload-progress-fast` | 1 | CI direct RBC authoritative payload progress lookup check |
-| `slot-authoritative-payload-fast` | 1 | CI direct slot-level authoritative payload no-bug check |
+| `quorum-recovery-vote-drain-fast` | 1 | CI quorum recovery vote-drain urgency correctness-envelope check |
+| `frontier-body-gap-payload-drain-fast` | 1 | CI direct frontier body-gap payload-drain urgency correctness-envelope check |
+| `rbc-authoritative-payload-progress-fast` | 1 | CI RBC authoritative payload progress correctness-envelope check |
+| `slot-authoritative-payload-fast` | 1 | CI slot-level authoritative payload correctness-envelope check |
 | `missing-block-fetch-fast` | 1 | CI missing-block fetch planner correctness-envelope check |
 | `recovery-status-counters-fast` | 1 | CI recovery status counter/snapshot correctness-envelope check |
-| `recovery-fsm-reason-fast` | 1 | CI direct recovery-FSM reason classifier/rank/sort check |
+| `recovery-fsm-reason-fast` | 1 | CI recovery-FSM reason classifier/rank/sort correctness-envelope check |
 | `qc-rebuild-status-fast` | 1 | CI QC rebuild status counter/snapshot correctness-envelope check |
-| `qc-rebuild-quorum-fast` | 1 | CI QC rebuild quorum reachability check |
+| `qc-rebuild-quorum-fast` | 1 | CI QC rebuild quorum reachability correctness-envelope check |
 | `collector-targeting-status-fast` | 1 | CI collector-targeting status counter/snapshot correctness-envelope check |
 | `deferred-recovery-status-fast` | 1 | CI deferred recovery status counter/snapshot correctness-envelope check |
 | `missing-qc-liveness-status-fast` | 1 | CI missing-QC liveness status counter/snapshot correctness-envelope check |
@@ -16527,45 +17654,45 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `deterministic-committee-status-fast` | 1 | CI deterministic-committee status store/snapshot correctness-envelope check |
 | `timing-status-counters-fast` | 1 | CI timing/liveness status counter/snapshot correctness-envelope check |
 | `roster-recovery-status-fast` | 1 | CI roster-recovery status counter/state/dwell correctness-envelope check |
-| `range-pull-recovery-fast` | 1 | CI range-pull recovery helper check |
+| `range-pull-recovery-fast` | 1 | CI range-pull recovery helper correctness-envelope check |
 | `range-pull-status-fast` | 1 | CI range-pull status counter/streak correctness-envelope check |
-| `round-recovery-bundle-window-fast` | 1 | CI round-recovery bundle window gate check |
+| `round-recovery-bundle-window-fast` | 1 | CI round-recovery bundle window correctness-envelope check |
 | `committed-edge-conflict-fast` | 1 | CI direct committed-edge highest-QC conflict suppression correctness-envelope check |
-| `lock-rejected-sink-fast` | 1 | CI direct lock-rejected branch sink lifecycle check |
+| `lock-rejected-sink-fast` | 1 | CI direct lock-rejected branch sink lifecycle correctness-envelope check |
 | `active-lock-reject-recovery-fast` | 1 | CI active-height lock-reject recovery routing correctness-envelope check |
 | `missing-block-hard-cap-fast` | 1 | CI missing-block hard-cap recovery correctness-envelope check |
 | `missing-block-hard-cap-cleanup-fast` | 1 | CI missing-block hard-cap cleanup correctness-envelope check |
 | `missing-block-view-change-fast` | 1 | CI missing-block view-change escalation correctness-envelope check |
 | `native-amx-attestation-fast` | 2 | CI native AMX attestation correctness-envelope check |
-| `native-amx-journal-fast` | 1 | CI native AMX queue-journal replay direct component check |
+| `native-amx-journal-fast` | 1 | CI native AMX queue-journal replay correctness-envelope check |
 | `native-amx-routing-plan-fast` | 1 | CI native AMX routing-plan correctness-envelope check |
-| `native-amx-receipt-fast` | 1 | CI native AMX receipt validation aggregate check |
+| `native-amx-receipt-fast` | 1 | CI native AMX receipt validation correctness-envelope check |
 | `native-amx-ingress-fast` | 1 | CI native AMX control-plane ingress correctness-envelope check |
-| `vnext-chain-order-fast` | 1 | CI direct vNext chain-order component check |
-| `vnext-stake-weight-fast` | 1 | CI direct vNext stake-weight lookup and quorum helper check |
-| `vnext-rechain-fast` | 1 | CI direct quarantined vNext re-chain helper check |
-| `vnext-rechain-error-label-fast` | 1 | CI direct vNext re-chain error label check |
-| `vnext-signature-fast` | 1 | CI direct vNext aggregate certificate verification check |
-| `vnext-signing-preimage-fast` | 1 | CI direct vNext signing-preimage construction check |
-| `vnext-control-ingress-fast` | 1 | CI direct vNext control-certificate ingress component check |
-| `vnext-slot-lifecycle-fast` | 1 | CI direct vNext slot-lifecycle component check |
-| `vnext-validation-fast` | 1 | CI direct vNext validation ownership component check |
-| `vnext-deadline-protection-fast` | 1 | CI vNext deadline/protection direct exactness check |
-| `vnext-performance-config-fast` | 1 | CI direct vNext performance-fault config conversion check |
-| `validation-worker-config-fast` | 1 | CI direct pending-block validation worker config helper check |
-| `validation-stall-redrive-fast` | 1 | CI validation stall/freshness/redrive direct exactness check |
-| `validation-redrive-label-fast` | 1 | CI direct validation redrive reason label check |
-| `validation-ownership-cleanup-fast` | 1 | CI validation ownership cleanup direct exactness helper check |
-| `verify-cache-key-fast` | 1 | CI vote/QC verification cache-key identity direct exactness check |
-| `vote-verify-async-fast` | 1 | CI direct async vote-verification ownership check |
+| `vnext-chain-order-fast` | 1 | CI vNext chain-order correctness-envelope check |
+| `vnext-stake-weight-fast` | 1 | CI vNext stake-weight lookup and quorum correctness-envelope check |
+| `vnext-rechain-fast` | 1 | CI vNext re-chain helper correctness-envelope check |
+| `vnext-rechain-error-label-fast` | 1 | CI vNext re-chain error label correctness-envelope check |
+| `vnext-signature-fast` | 1 | CI vNext aggregate certificate verification correctness-envelope check |
+| `vnext-signing-preimage-fast` | 1 | CI vNext signing-preimage construction correctness-envelope check |
+| `vnext-control-ingress-fast` | 1 | CI vNext control-certificate ingress correctness-envelope check |
+| `vnext-slot-lifecycle-fast` | 1 | CI vNext slot-lifecycle correctness-envelope check |
+| `vnext-validation-fast` | 1 | CI vNext validation ownership correctness-envelope check |
+| `vnext-deadline-protection-fast` | 1 | CI vNext deadline/protection correctness-envelope check |
+| `vnext-performance-config-fast` | 1 | CI vNext performance-fault config correctness-envelope check |
+| `validation-worker-config-fast` | 1 | CI pending-block validation worker config correctness-envelope check |
+| `validation-stall-redrive-fast` | 1 | CI validation stall/freshness/redrive correctness-envelope check |
+| `validation-redrive-label-fast` | 1 | CI validation redrive reason label correctness-envelope check |
+| `validation-ownership-cleanup-fast` | 1 | CI validation ownership cleanup correctness-envelope check |
+| `verify-cache-key-fast` | 1 | CI vote/QC verification cache-key identity correctness-envelope check |
+| `vote-verify-async-fast` | 1 | CI async vote-verification ownership correctness-envelope check |
 | `vote-verify-worker-config-fast` | 1 | CI direct vote-signature verification worker config correctness-envelope check |
-| `qc-verify-async-fast` | 1 | CI direct async QC aggregate-verification ownership check |
+| `qc-verify-async-fast` | 1 | CI async QC aggregate-verification ownership correctness-envelope check |
 | `qc-verify-worker-config-fast` | 1 | CI direct QC aggregate-verification worker config correctness-envelope check |
-| `worker-drain-fast` | 1 | CI direct worker-loop drain scheduler component check |
+| `worker-drain-fast` | 1 | CI worker-loop drain scheduler correctness-envelope check |
 | `actor-gate-fast` | 1 | CI actor-gate priority/fairness correctness-envelope check |
-| `worker-budget-fast` | 1 | CI direct worker-loop budget/adaptive-cap component check |
-| `worker-ingress-fast` | 1 | CI direct worker ingress routing component check |
-| `worker-loop-stage-fast` | 1 | CI direct worker-loop stage helper check |
+| `worker-budget-fast` | 1 | CI worker-loop budget/adaptive-cap correctness-envelope check |
+| `worker-ingress-fast` | 1 | CI worker ingress routing correctness-envelope check |
+| `worker-loop-stage-fast` | 1 | CI worker-loop stage correctness-envelope check |
 | `worker-queue-status-fast` | 1 | CI worker-queue status accounting correctness-envelope check |
 | `npos-vrf-fast` | 1 | CI NPoS VRF epoch-seal correctness-envelope check |
 | `kura-commit-fast` | 1 | CI Kura durability commit retry correctness-envelope check |
@@ -16573,102 +17700,102 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `restart-replay-fast` | 1 | CI restarted-peer replay correctness-envelope check |
 | `post-commit-cleanup-fast` | 1 | CI post-commit cleanup correctness-envelope check |
 | `frontier-gap-realign-fast` | 1 | CI frontier-gap realignment correctness-envelope check |
-| `same-height-vote-conflict-fast` | 1 | CI direct same-height local vote conflict helper check |
-| `same-height-vote-lock-fast` | 1 | CI aggregate same-height vote-lock direct exactness check |
-| `proposal-stale-vote-fast` | 1 | CI direct proposal stale same-height vote helper check |
-| `same-height-vote-recovery-gap-fast` | 1 | CI direct same-height vote recovery view-gap helper check |
-| `tip-extension-helpers-fast` | 1 | CI direct pending-block stale-tip and chain extension helper check |
+| `same-height-vote-conflict-fast` | 1 | CI same-height local vote conflict correctness-envelope check |
+| `same-height-vote-lock-fast` | 1 | CI aggregate same-height vote-lock correctness-envelope check |
+| `proposal-stale-vote-fast` | 1 | CI proposal stale same-height vote helper correctness-envelope check |
+| `same-height-vote-recovery-gap-fast` | 1 | CI same-height vote recovery view-gap correctness-envelope check |
+| `tip-extension-helpers-fast` | 1 | CI pending-block stale-tip and chain extension helper correctness-envelope check |
 | `da-gate-fast` | 1 | CI DA gate helper correctness-envelope check |
 | `da-gate-status-fast` | 1 | CI DA gate status counter/snapshot correctness-envelope check |
-| `manifest-guard-fast` | 1 | CI direct DA manifest guard helper check |
+| `manifest-guard-fast` | 1 | CI DA manifest guard correctness-envelope check |
 | `consensus-handshake-caps-fast` | 1 | CI direct consensus handshake capability construction correctness-envelope check |
-| `handshake-fast` | 1 | CI direct consensus p2p handshake helper check |
+| `handshake-fast` | 1 | CI direct consensus p2p handshake helper correctness-envelope check |
 | `mode-flip-fast` | 1 | CI runtime consensus-mode flip correctness-envelope check |
 | `effective-mode-fast` | 1 | CI effective consensus-mode correctness-envelope check |
 | `effective-timing-fast` | 1 | CI effective consensus timing correctness-envelope check |
 | `new-view-stats-fast` | 1 | CI NEW_VIEW receipt statistics correctness-envelope check |
-| `new-view-tracker-fast` | 1 | CI direct NEW_VIEW tracker quorum/selection helper check |
-| `timing-monitor-fast` | 1 | CI direct timing/log cooldown monitor no-bug check |
-| `hotspot-log-summary-fast` | 1 | CI direct hotspot summary accumulator check |
+| `new-view-tracker-fast` | 1 | CI NEW_VIEW tracker quorum/selection correctness-envelope check |
+| `timing-monitor-fast` | 1 | CI timing/log cooldown monitor correctness-envelope check |
+| `hotspot-log-summary-fast` | 1 | CI direct hotspot summary accumulator correctness-envelope check |
 | `adaptive-observability-fast` | 1 | CI adaptive observability timing/fanout correctness-envelope check |
-| `pacing-backpressure-fast` | 1 | CI direct pacing backpressure helper check |
+| `pacing-backpressure-fast` | 1 | CI pacing backpressure correctness-envelope check |
 | `counter-backpressure-cooldown-fast` | 1 | CI counter-driven backpressure cooldown correctness-envelope check |
-| `pacemaker-backpressure-tracker-fast` | 1 | CI direct per-reason pacemaker backpressure tracker check |
+| `pacemaker-backpressure-tracker-fast` | 1 | CI per-reason pacemaker backpressure tracker correctness-envelope check |
 | `locked-qc-helper-fast` | 1 | CI locked-QC helper correctness-envelope check |
-| `precommit-qc-extends-locked-fast` | 1 | CI direct precommit-QC locked-chain wrapper check |
+| `precommit-qc-extends-locked-fast` | 1 | CI precommit-QC locked-chain wrapper correctness-envelope check |
 | `drop-precommit-vote-for-lock-fast` | 1 | CI direct precommit-vote locked-chain filter correctness-envelope check |
-| `stake-snapshot-fast` | 1 | CI direct stake snapshot no-bug check |
-| `validator-election-fast` | 1 | CI direct NPoS validator election helper check |
-| `live-vote-roster-fast` | 1 | CI direct live local-vote roster selection check |
+| `stake-snapshot-fast` | 1 | CI stake snapshot correctness-envelope check |
+| `validator-election-fast` | 1 | CI NPoS validator election correctness-envelope check |
+| `live-vote-roster-fast` | 1 | CI live local-vote roster correctness-envelope check |
 | `canonical-round-roster-fast` | 1 | CI canonical round-roster correctness-envelope check |
-| `vote-roster-selection-fast` | 1 | CI direct block-specific vote-roster selection check |
-| `vote-roster-cache-fast` | 1 | CI direct vote-roster cache/support helper check |
+| `vote-roster-selection-fast` | 1 | CI block-specific vote-roster selection correctness-envelope check |
+| `vote-roster-cache-fast` | 1 | CI vote-roster cache/support correctness-envelope check |
 | `commit-topology-state-fast` | 1 | CI direct commit-topology state/reset correctness-envelope check |
-| `precommit-signer-history-fast` | 1 | CI direct precommit signer-history fallback check |
-| `precommit-fast` | 2 | CI precommit vote-emission gate check |
-| `proposal-fast` | 2 | CI proposal assembly gate check |
+| `precommit-signer-history-fast` | 1 | CI precommit signer-history correctness-envelope check |
+| `precommit-fast` | 2 | CI precommit vote-emission correctness-envelope check |
+| `proposal-fast` | 2 | CI proposal assembly correctness-envelope check |
 | `engine-initial-state-fast` | 1 | CI pure engine constructor initial-state correctness-envelope check |
 | `engine-read-accessors-fast` | 1 | CI pure engine read-only accessor correctness-envelope check |
-| `engine-tick-fast` | 2 | CI pure engine tick gate check |
-| `engine-tick-state-preservation-fast` | 1 | CI pure engine tick unrelated-state preservation check |
-| `engine-new-view-subject-fast` | 1 | CI pure engine direct NewView subject projection helper check |
-| `engine-handle-dispatch-fast` | 1 | CI pure engine top-level input dispatch check |
-| `engine-handle-forwarding-fast` | 1 | CI pure engine direct top-level input argument-forwarding component check |
-| `engine-handle-output-relay-fast` | 1 | CI pure engine direct top-level output relay component check |
+| `engine-tick-fast` | 2 | CI pure engine tick correctness-envelope check |
+| `engine-tick-state-preservation-fast` | 1 | CI pure engine tick unrelated-state preservation correctness-envelope check |
+| `engine-new-view-subject-fast` | 1 | CI pure engine NewView subject projection correctness-envelope check |
+| `engine-handle-dispatch-fast` | 1 | CI pure engine top-level input dispatch correctness-envelope check |
+| `engine-handle-forwarding-fast` | 1 | CI pure engine top-level input argument-forwarding correctness-envelope check |
+| `engine-handle-output-relay-fast` | 1 | CI pure engine top-level output relay correctness-envelope check |
 | `engine-certificate-dispatch-fast` | 1 | CI pure engine certificate prefilter dispatch correctness-envelope check |
 | `engine-certificate-prefilter-state-fast` | 1 | CI pure engine certificate prefilter state-handoff correctness-envelope check |
 | `engine-certificate-prefilter-state-preservation-fast` | 1 | CI pure engine certificate prefilter unrelated-state preservation correctness-envelope check |
 | `engine-view-advance-saturation-fast` | 1 | CI pure engine view-advance saturation correctness-envelope check |
-| `engine-new-view-fast` | 2 | CI pure engine NewView-QC gate check |
-| `engine-new-view-highest-qc-fast` | 1 | CI pure engine direct exactness NewView highest-QC record check |
-| `engine-new-view-state-preservation-fast` | 1 | CI pure engine NewView-QC unrelated-state preservation check |
-| `engine-new-view-advance-fast` | 1 | CI pure engine direct exactness NewView-QC advance/output check |
-| `engine-proposal-fast` | 2 | CI pure engine proposal-ingress gate check |
-| `engine-proposal-output-fast` | 1 | CI pure engine exact proposal output-field component check |
-| `engine-proposal-state-fast` | 1 | CI pure engine direct exactness proposal state-mutation check |
-| `engine-proposal-state-preservation-fast` | 1 | CI pure engine proposal unrelated-state preservation direct component check |
-| `engine-proposal-validation-owner-fast` | 1 | CI pure engine direct exactness proposal validation-owner check |
-| `engine-proposal-lock-fast` | 1 | CI pure engine direct exactness proposal-lock helper check |
-| `qc-round-compatibility-fast` | 1 | CI pure engine direct QC-round compatibility helper check |
+| `engine-new-view-fast` | 2 | CI pure engine NewView-QC correctness-envelope check |
+| `engine-new-view-highest-qc-fast` | 1 | CI pure engine NewView-QC highest-QC record correctness-envelope check |
+| `engine-new-view-state-preservation-fast` | 1 | CI pure engine NewView-QC unrelated-state preservation correctness-envelope check |
+| `engine-new-view-advance-fast` | 1 | CI pure engine NewView-QC advance/output correctness-envelope check |
+| `engine-proposal-fast` | 2 | CI pure engine proposal-ingress correctness-envelope check |
+| `engine-proposal-output-fast` | 1 | CI pure engine exact proposal output-field correctness-envelope check |
+| `engine-proposal-state-fast` | 1 | CI pure engine proposal state-mutation correctness-envelope check |
+| `engine-proposal-state-preservation-fast` | 1 | CI pure engine proposal unrelated-state preservation correctness-envelope check |
+| `engine-proposal-validation-owner-fast` | 1 | CI pure engine proposal validation-owner correctness-envelope check |
+| `engine-proposal-lock-fast` | 1 | CI pure engine proposal-lock helper correctness-envelope check |
+| `qc-round-compatibility-fast` | 1 | CI pure engine QC-round compatibility correctness-envelope check |
 | `engine-qc-ref-projection-fast` | 1 | CI pure engine QC reference projection correctness-envelope check |
 | `engine-qc-ref-comparator-fast` | 1 | CI pure engine QC reference comparator correctness-envelope check |
 | `engine-highest-qc-record-fast` | 1 | CI pure engine highest-QC record correctness-envelope check |
-| `engine-commit-subject-fast` | 1 | CI pure engine commit-subject direct component check |
-| `engine-payload-lookup-fast` | 1 | CI pure engine direct exactness payload lookup helper check |
-| `engine-prepare-fast` | 2 | CI pure engine prepare-QC gate check |
-| `engine-prepare-lock-highest-fast` | 1 | CI pure engine direct exactness Prepare-QC lock/highest-QC record check |
-| `engine-prepare-phase-fast` | 1 | CI pure engine direct exactness Prepare-QC phase-transition check |
-| `engine-prepare-state-preservation-fast` | 1 | CI pure engine Prepare-QC unrelated-state preservation check |
-| `engine-prepare-vote-cache-fast` | 1 | CI pure engine direct exactness prepare-QC commit-vote cache/output check |
-| `engine-commit-fast` | 2 | CI pure engine commit-QC gate check |
-| `engine-commit-highest-qc-fast` | 1 | CI pure engine direct exactness Commit-QC highest-QC record check |
-| `engine-commit-phase-fast` | 1 | CI pure engine direct exactness Commit-QC phase-transition check |
-| `engine-commit-state-preservation-fast` | 1 | CI pure engine Commit-QC unrelated-state preservation check |
+| `engine-commit-subject-fast` | 1 | CI pure engine commit-subject correctness-envelope check |
+| `engine-payload-lookup-fast` | 1 | CI pure engine payload lookup correctness-envelope check |
+| `engine-prepare-fast` | 2 | CI pure engine prepare-QC correctness-envelope check |
+| `engine-prepare-lock-highest-fast` | 1 | CI pure engine Prepare-QC lock/highest-QC record correctness-envelope check |
+| `engine-prepare-phase-fast` | 1 | CI pure engine Prepare-QC phase-transition correctness-envelope check |
+| `engine-prepare-state-preservation-fast` | 1 | CI pure engine Prepare-QC unrelated-state preservation correctness-envelope check |
+| `engine-prepare-vote-cache-fast` | 1 | CI pure engine prepare-QC commit-vote cache/output correctness-envelope check |
+| `engine-commit-fast` | 2 | CI pure engine commit-QC correctness-envelope check |
+| `engine-commit-highest-qc-fast` | 1 | CI pure engine Commit-QC highest-QC record correctness-envelope check |
+| `engine-commit-phase-fast` | 1 | CI pure engine Commit-QC phase-transition correctness-envelope check |
+| `engine-commit-state-preservation-fast` | 1 | CI pure engine Commit-QC unrelated-state preservation correctness-envelope check |
 | `engine-commit-available-commit-fast` | 1 | CI pure engine payload-available Commit-QC finality correctness-envelope check |
-| `engine-commit-pending-fetch-fast` | 1 | CI pure engine direct exactness missing-payload Commit-QC pending/fetch check |
-| `engine-commit-validation-cleanup-fast` | 1 | CI pure engine Commit-QC validation cleanup check |
-| `engine-committed-block-fast` | 2 | CI pure engine committed-block gate check |
-| `engine-committed-block-record-fast` | 1 | CI pure engine direct exactness committed-map record check |
-| `engine-reconfiguration-staging-fast` | 1 | CI pure engine reconfiguration staging check |
-| `engine-reconfiguration-dedup-fast` | 1 | CI pure engine direct reconfiguration activation-height dedup component check |
-| `engine-committed-block-cleanup-fast` | 1 | CI pure engine committed-block cleanup side-effect direct component check |
-| `engine-committed-block-state-preservation-fast` | 1 | CI pure engine committed-block unrelated-state preservation direct component check |
-| `engine-payload-record-fast` | 1 | CI pure engine direct exactness payload-availability record check |
-| `engine-payload-fast` | 2 | CI pure engine payload-availability gate check |
-| `engine-payload-state-preservation-fast` | 1 | CI pure engine payload-availability unrelated-state preservation direct component check |
-| `engine-validation-result-fast` | 2 | CI pure engine validation-result gate check |
-| `engine-validation-state-preservation-fast` | 1 | CI pure engine validation-result unrelated-state preservation direct component check |
-| `engine-validation-ownership-fast` | 1 | CI pure engine direct exactness validation-owner cleanup check |
-| `engine-validation-invalid-advance-fast` | 1 | CI pure engine direct exactness invalid-validation round/output advance check |
-| `reconfig-fast` | 7 | CI validator-set transition safety check |
+| `engine-commit-pending-fetch-fast` | 1 | CI pure engine missing-payload Commit-QC pending/fetch correctness-envelope check |
+| `engine-commit-validation-cleanup-fast` | 1 | CI pure engine Commit-QC validation cleanup correctness-envelope check |
+| `engine-committed-block-fast` | 2 | CI pure engine committed-block correctness-envelope check |
+| `engine-committed-block-record-fast` | 1 | CI pure engine committed-map record correctness-envelope check |
+| `engine-reconfiguration-staging-fast` | 1 | CI pure engine reconfiguration staging correctness-envelope check |
+| `engine-reconfiguration-dedup-fast` | 1 | CI pure engine reconfiguration activation-height dedup correctness-envelope check |
+| `engine-committed-block-cleanup-fast` | 1 | CI pure engine committed-block cleanup side-effect correctness-envelope check |
+| `engine-committed-block-state-preservation-fast` | 1 | CI pure engine committed-block unrelated-state preservation correctness-envelope check |
+| `engine-payload-record-fast` | 1 | CI pure engine payload-availability record correctness-envelope check |
+| `engine-payload-fast` | 2 | CI pure engine payload-availability correctness-envelope check |
+| `engine-payload-state-preservation-fast` | 1 | CI pure engine payload-availability unrelated-state preservation correctness-envelope check |
+| `engine-validation-result-fast` | 2 | CI pure engine validation-result correctness-envelope check |
+| `engine-validation-state-preservation-fast` | 1 | CI pure engine validation-result unrelated-state preservation correctness-envelope check |
+| `engine-validation-ownership-fast` | 1 | CI pure engine validation-owner cleanup correctness-envelope check |
+| `engine-validation-invalid-advance-fast` | 1 | CI pure engine invalid-validation round/output advance correctness-envelope check |
+| `reconfig-fast` | 7 | CI validator-set transition correctness-envelope check |
 | `recovery-fast` | 7 | CI certified payload recovery correctness-envelope check |
-| `view-change-fast` | 6 | CI view-change and lock-safety check |
-| `validation-fast` | 6 | CI validation-callback ownership check |
-| `validation-priority-fast` | 1 | CI direct validation priority reason helper check |
-| `vote-backed-evidence-fast` | 1 | CI direct vote-backed consensus evidence no-bug check |
-| `vote-payload-actionable-fast` | 1 | CI direct vote payload actionable-for-proposal no-bug check |
+| `view-change-fast` | 6 | CI view-change and lock-safety correctness-envelope check |
+| `validation-fast` | 6 | CI validation-callback ownership correctness-envelope check |
+| `validation-priority-fast` | 1 | CI validation priority reason correctness-envelope check |
+| `vote-backed-evidence-fast` | 1 | CI vote-backed consensus evidence correctness-envelope check |
+| `vote-payload-actionable-fast` | 1 | CI vote payload actionable-for-proposal correctness-envelope check |
 | `actionable-vote-backed-proposal-fast` | 1 | CI proposal-side actionable vote-backed evidence correctness-envelope check |
-| `slot-proposal-evidence-fast` | 1 | CI direct slot proposal evidence no-bug check |
+| `slot-proposal-evidence-fast` | 1 | CI slot proposal evidence correctness-envelope check |
 | `round-liveness-fast` | 1 | CI direct round liveness correctness-envelope check |
 | `roster-recovery-fsm-fast` | 1 | CI direct roster recovery FSM correctness-envelope check |
 | `consensus-recovery-prune-fast` | 1 | CI direct consensus recovery prune/clear correctness-envelope check |
@@ -16689,7 +17816,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `view-change-cause-status-fast` | 1 | CI view-change cause status correctness-envelope check |
 | `view-change-proof-status-fast` | 1 | CI view-change proof/index status correctness-envelope check |
 | `qc-status-fast` | 1 | CI leader/highest-QC/locked-QC status correctness-envelope check |
-| `validation-evidence-qc-fast` | 1 | CI direct validation evidence QC selector check |
+| `validation-evidence-qc-fast` | 1 | CI validation evidence QC selector correctness-envelope check |
 | `admission-fast` | 6 | CI certificate-admission correctness-envelope check |
 | `highest-fast` | 6 | CI deterministic highest-QC selection correctness-envelope check |
 | `highest-optional-fast` | 1 | CI optional highest-QC selection filter correctness-envelope check |
@@ -17341,7 +18468,7 @@ subject roots with round and chain-order context, optional highest-QC
 presence/absence/body fields, VRF commit/reveal body binding, and mutable
 signature/certificate exclusion.
 `ClassicSigningPreimageCorrectnessEnvelope` composes the type invariant with
-that exactness aggregate and the concrete classic preimage anchors.
+`ClassicSigningPreimageExactness`.
 `classic-signature-fast` and `classic-signature-bug-*` cross-check classic
 Vote/QC signature verification: mode and validator-set binding, signer bitmap
 shape and roster bounds, count/stake quorum, aggregate signature and PoP gates,
@@ -17429,22 +18556,19 @@ cross-check direct RBC chunk compact block-message correctness-envelope
 behavior: compact boundary admission, payload field preservation, full-message fallback,
 normalization, height/view/epoch widening, and high-priority routing.
 `BlockMessageRbcCompactCorrectnessEnvelope` composes the type invariant with
-fast exactness and the concrete compact boundary, field preservation,
-normalization/widening, and priority anchors.
+`BlockMessageRbcCompactExactness`.
 `block-message-priority-fast` and `block-message-priority-bug-*` cross-check
 direct consensus block-message priority correctness-envelope behavior: block sync, body fetch,
 VRF and execution-witness material, RBC messages, proposal hints, proposals,
 QC votes, and QCs all remain high network priority.
 `BlockMessagePriorityCorrectnessEnvelope` composes the type invariant with
-fast exactness and the concrete block-sync/body-fetch, VRF/execution-witness,
-RBC, and proposal/QC priority anchors.
+`BlockMessagePriorityExactness`.
 `block-message-height-view-fast` and `block-message-height-view-bug-*`
 cross-check direct consensus block-message height/view correctness-envelope behavior: no-slot
 exclusions, slot-bearing future-window eligibility, source selection, compact
 chunk widening, and height/view ordering.
 `BlockMessageHeightViewCorrectnessEnvelope` composes the type invariant with
-full height/view exactness and the concrete no-slot, slot-bearing,
-source-selection, and compact-widening anchors.
+`BlockMessageHeightViewExactness`.
 `block-message-kind-fast` and `block-message-kind-bug-*` cross-check
 direct block-message log/status kind correctness-envelope behavior: certified-fetch subtype
 labels, NewView vote/certificate labels, compact/full RBC chunk collapse,
@@ -17509,6 +18633,8 @@ defaults, pressure/lane gating, absent-peer rejection, request recording,
 pending-count pruning, fresh versus expired TTL boundaries, peer ownership, and
 direct-response consumption. Its TLC cross-check independently exhausts the
 same twenty-seven expected-failure configs as Apalache.
+`FrontierBlockSyncHintCorrectnessEnvelope` keeps the PR-fast mode aligned with
+the full direct block-sync hint exactness aggregate.
 `frontier-same-slot-activity-fast` and
 `frontier-same-slot-activity-bug-*` cross-check exact-slot frontier recovery
 activity helpers: payload progress evidence, ingress backlog/payload gates,
@@ -17529,11 +18655,12 @@ same-height RBC sender and deferral work, validation work, deferred block-sync
 updates, stale and wrong-height/view rejection, and no-source suppression. The
 fast check also includes the aggregate `FrontierReassemblyActivityExactness`
 invariant tying exact positive evidence and non-exact-source rejection across
-all reassembly sources. Its TLC cross-check independently exhausts the same
-thirty-two expected-failure configs as Apalache.
+all reassembly sources while carrying the dependency, ingress, sender,
+validation, deferred-update, and no-spurious-reassembly family safety
+predicates. Its TLC cross-check independently exhausts the same thirty-two
+expected-failure configs as Apalache.
 `FrontierReassemblyActivityCorrectnessEnvelope` composes the type invariant
-with fast reassembly safety and concrete dependency-progress, ingress, sender
-activity, validation, deferred-update, and no-spurious-reassembly anchors.
+with `FrontierReassemblyActivityExactness`.
 `frontier-quorum-owner-actionable-fast` and
 `frontier-quorum-owner-actionable-bug-*` cross-check live contiguous-frontier
 cleanup preservation: owner, vote, dependency backlog, RBC sender,
@@ -17553,11 +18680,11 @@ quarantine and stall/progress gates, confirmation by local payload, commit QC,
 or override, tracked and untracked sidecar routing, commit-certified reacquire
 with local evidence, and rejection of missing expected hashes, same-hash
 sidecars, and authoritative payloads. The fast check also includes the
-aggregate `FrontierSidecarRetargetExactness` invariant tying exact positive
-evidence and non-exact retarget rejection across all sidecar routes, and
-`FrontierSidecarRetargetCorrectnessEnvelope` composes that aggregate with type
-safety and the concrete retarget anchors. Its TLC cross-check independently
-exhausts the same twenty-seven expected-failure configs as Apalache.
+aggregate `FrontierSidecarRetargetExactness` invariant tying family safety,
+exact positive evidence, and non-exact retarget rejection across all sidecar
+routes, and `FrontierSidecarRetargetCorrectnessEnvelope` composes that
+aggregate with type safety. Its TLC cross-check independently exhausts the same
+twenty-seven expected-failure configs as Apalache.
 `frontier-sidecar-expected-hash-fast` and
 `frontier-sidecar-expected-hash-bug-*` cross-check sidecar expected-hash
 selection: tracked request precedence, deferred-hint and observed-head source
@@ -17565,12 +18692,11 @@ ordering, exact height and authoritative-payload filtering, deterministic
 phase/view/hash tie-breaks, cached Prepare/Commit QC selection, and sidecar
 Commit-QC view rejection for absent, Prepare, wrong-height, or wrong-hash QCs.
 The fast check also includes the aggregate
-`FrontierSidecarExpectedHashExactness` invariant tying exact positive
-evidence, deterministic ordering, and non-exact rejection across all
-expected-hash sources, and
-`FrontierSidecarExpectedHashCorrectnessEnvelope` composes that aggregate with
-type safety and the concrete expected-hash anchors. Its TLC cross-check
-independently exhausts the same twenty-five expected-failure configs as
+`FrontierSidecarExpectedHashExactness` invariant tying family safety, exact
+positive evidence, deterministic ordering, and non-exact rejection across all
+expected-hash sources, and `FrontierSidecarExpectedHashCorrectnessEnvelope`
+composes that aggregate with type safety. Its TLC cross-check independently
+exhausts the same twenty-five expected-failure configs as
 Apalache.
 `contiguous-frontier-payload-hint-fast` and
 `contiguous-frontier-payload-hint-bug-*` cross-check contiguous-frontier
@@ -17579,10 +18705,10 @@ priority over proposal markers, exact height and actionable filtering,
 deferred view/hash tie-breaks, marker fallback view/hash tie-breaks, and empty
 fallback behavior. The fast check also includes the aggregate
 `ContiguousFrontierPayloadHintExactness` invariant tying exact positive
-evidence, deterministic ordering, and ineligible-input rejection across
-deferred and marker sources, and
-`ContiguousFrontierPayloadHintCorrectnessEnvelope` composes that aggregate with
-type safety and the concrete payload-hint anchors. Its TLC cross-check
+evidence, deterministic ordering, specification matching, and ineligible-input
+rejection across deferred and marker sources, and
+`ContiguousFrontierPayloadHintCorrectnessEnvelope` composes the type invariant
+with `ContiguousFrontierPayloadHintExactness`. Its TLC cross-check
 independently exhausts the same thirteen expected-failure configs as Apalache.
 `frontier-parent-qc-hint-retarget-fast` and
 `frontier-parent-qc-hint-retarget-bug-*` cross-check contiguous-frontier
@@ -17590,10 +18716,11 @@ missing-parent retargeting: exact-frontier stall bypass, canonical reanchor
 dependency-progress gating, previous-emission requirements, parent height
 matching, absent/same-hash hint rejection, and QC-hint target rewrite. The fast
 check also includes the aggregate `FrontierParentQcHintRetargetExactness`
-invariant tying exact positive evidence, ineligible-input rejection, and
-expected-parent/QC-hint source-target preservation across all parent retarget
-branches, and `FrontierParentQcHintRetargetCorrectnessEnvelope` composes that
-aggregate with type safety and the concrete parent QC-hint retarget anchors.
+invariant tying exact positive evidence, ineligible-input rejection,
+specification matching, and expected-parent/QC-hint source-target preservation
+across all parent retarget branches, and
+`FrontierParentQcHintRetargetCorrectnessEnvelope` composes the type invariant
+with `FrontierParentQcHintRetargetExactness`.
 Its TLC cross-check independently exhausts the same twelve expected-failure
 configs as Apalache.
 `live-frontier-idle-missing-qc-fast` and
@@ -17604,6 +18731,8 @@ future-head rejection, explicit commit or missing-QC dependency escape hatches,
 no-liveness rejection, attempt recording, broad highest-QC fetch and anchor-pull
 suppression, and sidecar hint preservation. Its TLC cross-check independently
 exhausts the same seventeen expected-failure configs as Apalache.
+`LiveFrontierIdleMissingQcCorrectnessEnvelope` keeps the PR-fast mode aligned
+with the full component/anchor exactness aggregate.
 `missing-qc-reacquire-admission-fast` and
 `missing-qc-reacquire-admission-bug-*` cross-check missing-QC reacquire
 admission: duplicate-attempt rejection, proposal-observed commit/missing-QC/
@@ -17628,13 +18757,14 @@ NEW_VIEW quorum rejection, non-actionable dependency filtering, NEW_VIEW and
 Prepare subject-height mapping, and stale-prune preservation for local payloads
 owned by the authoritative or frontier slot. Its TLC cross-check independently
 exhausts the same twenty-five expected-failure configs as Apalache.
-`missing-qc-height-stall-fast` and `missing-qc-height-stall-bug-*` cross-check
-same-height missing-QC stall dampening: snapshot lifecycle, three-window
-activation, active window advancement, dependency-progress and commit-progress
-reset, dependency continuity across reclassification, rotation reservation and
-availability, and range-pull/rotation marker height and mode gating. Its TLC
-cross-check independently exhausts the same twenty-five expected-failure configs
-as Apalache.
+`missing-qc-height-stall-fast` checks the aggregate same-height missing-QC
+stall exactness predicate and correctness envelope. Its expected-failure modes
+cross-check snapshot lifecycle, three-window activation, active window
+advancement, dependency-progress and commit-progress reset, dependency
+continuity across reclassification, rotation reservation and availability, and
+range-pull/rotation marker height and mode gating. Its TLC cross-check
+independently exhausts the same twenty-five expected-failure configs as
+Apalache.
 `missing-qc-stall-range-pull-fast` and
 `missing-qc-stall-range-pull-bug-*` cross-check same-height missing-QC stall
 range-pull emission: reanchor reason admission, exact active/canonical height
@@ -17665,6 +18795,8 @@ authoritative-payload exits, exact repair/missing-payload/reassembly repair
 source admission, recovery seeding, urgent body fetch emission, and precedence
 ordering. Its TLC cross-check independently exhausts the same twenty-six
 expected-failure configs as Apalache.
+`FrontierRepairViewChangeCorrectnessEnvelope` keeps the PR-fast mode aligned
+with the full component/anchor exactness aggregate.
 `frontier-recovery-advance-fast` and `frontier-recovery-advance-bug-*`
 cross-check contiguous-frontier recovery advance: reason-to-cause mapping,
 committed+1 gating, committed-edge and passive catch-up preemption, same-height
@@ -17672,6 +18804,8 @@ evidence seeding, exact-frontier event routing, actionable dependency state
 updates, live-work/cooldown suppression, catch-up range-pull and cleanup
 transitions, and rotate-armed view-change behavior. Its TLC cross-check
 independently exhausts the same thirty-six expected-failure configs as Apalache.
+`FrontierRecoveryAdvanceCorrectnessEnvelope` keeps the PR-fast mode aligned
+with the full component/anchor exactness aggregate.
 `same-height-no-proposal-storm-fast` and
 `same-height-no-proposal-storm-bug-*` cross-check same-height no-proposal storm
 recovery: dependency-progress monotonicity, progress-triggered state resets,
@@ -17683,11 +18817,15 @@ admission: consensus-mode and epoch-manager gating, signer/signature checks,
 commit/reveal window and duplicate handling, external rebroadcast policy, local
 state updates, and late-reveal PRF refresh suppression. Its TLC cross-check
 independently exhausts the same twenty-one expected-failure configs as Apalache.
+The fast check uses `VrfMessageAdmissionCorrectnessEnvelope`, which composes the
+type invariant with the aggregate VRF message-admission exactness predicate.
 `vrf-epoch-window-fast` and `vrf-epoch-window-bug-*` cross-check VRF epoch-window
 arithmetic: zero-length and offset clamping, zero-height/one-based position and
 epoch mapping, commit/reveal window boundaries, empty reveal windows, and
 outside-window rejection. Its TLC cross-check independently exhausts the same
 seventeen expected-failure configs as Apalache.
+The fast check uses `VrfEpochWindowCorrectnessEnvelope`, which composes the
+type invariant with the aggregate VRF epoch-window exactness predicate.
 `vrf-epoch-boundary-fast` and `vrf-epoch-boundary-bug-*` cross-check VRF
 epoch-boundary finalization: no-op boundaries, penalty calculation, snapshot
 preservation, seed evolution, clear/advance/reset/take semantics, roster
@@ -17705,6 +18843,9 @@ signer encoding, field order, private-key signature binding, reveal/commitment
 hash chain, return ordering, and suppression of raw intermediate outputs. Its
 TLC cross-check independently exhausts the same seventeen expected-failure
 configs as Apalache.
+The fast check uses `VrfMaterialDerivationCorrectnessEnvelope`, which composes
+the type invariant with the aggregate local VRF material-derivation exactness
+predicate.
 `vrf-local-state-fast` and `vrf-local-state-bug-*` cross-check local VRF emission
 state: supported-mode state creation, unsupported-mode preservation, epoch-switch
 material reset, same-epoch material preservation, commit/reveal note mutation,
@@ -17727,6 +18868,10 @@ duplicate-key projection: raw key fields, public-key exclusion from raw keys,
 identity-key public-key binding, block-hash comparison, NEW_VIEW highest-QC
 matching, and non-NEW_VIEW highest-QC ignoring. Its TLC cross-check
 independently exhausts the same fifteen expected-failure configs as Apalache.
+The fast check uses `VoteDuplicateKeyCorrectnessEnvelope`, which composes the
+type invariant with the aggregate exactness predicate over duplicate lookup,
+raw-key projection, identity-key binding, block-hash checks, and highest-QC
+matching semantics.
 `evidence-horizon-fast` and `evidence-horizon-bug-*` cross-check evidence
 freshness filtering: zero-horizon disablement, missing-subject defaulting,
 saturating lower-bound arithmetic, inclusive boundary handling, stale rejection,
@@ -18051,8 +19196,11 @@ QC-insufficient warning throttling: first-warning insertion, strict
 within-cooldown suppression, cooldown-boundary emission, suppressed-count
 replay/reset, per-kind/phase/hash/height/view key separation, zero-cooldown
 bypass, GC boundary/expiry behavior, zero-cooldown GC floor, and `clear()`
-entry reset semantics. Its TLC cross-check independently exhausts the same
-fourteen expected-failure configs as Apalache.
+entry reset semantics. The fast check also includes
+`QcInsufficientWarningThrottleExactness`, which groups those component
+obligations, plus `QcInsufficientWarningThrottleCorrectnessEnvelope`, which
+composes the aggregate with the type invariant. Its TLC cross-check
+independently exhausts the same fourteen expected-failure configs as Apalache.
 `fetch-response-deferral-fast` and `fetch-response-deferral-bug-*`
 cross-check canonical committed fetch/body response deferral: next-height and
 historical responses do not defer, same-height hash mismatches and unknown
@@ -18410,8 +19558,11 @@ within-cooldown repeats are suppressed with a strict `< cooldown` check,
 cooldown-boundary emissions replay suppressed counts, warning keys separate
 kind/hash/height/view except for empty-topology view normalization,
 zero-cooldown bypasses suppression, and GC keeps boundary entries while pruning
-expired entries. Its TLC cross-check independently exhausts the same fifteen
-expected-failure configs as Apalache.
+expired entries. The fast check also includes
+`ProposalDeferWarningThrottleExactness`, which groups those component
+obligations, plus `ProposalDeferWarningThrottleCorrectnessEnvelope`, which
+composes the aggregate with the type invariant. Its TLC cross-check
+independently exhausts the same fifteen expected-failure configs as Apalache.
 `proposal-batch-fast` and `proposal-batch-bug-*` cross-check proposal batch
 trim/canonicalization correctness-envelope behavior: tail trimming removes only
 excess transactions while preserving singleton and zero-size floor behavior,
@@ -18701,14 +19852,14 @@ The fast check also includes the aggregate `VoteVerifyWorkerConfigExactness`
 invariant tying exact output tuples, thread derivation, queue-cap derivation,
 explicit-cap preservation, and positive channel floors together.
 `VoteVerifyWorkerConfigCorrectnessEnvelope` composes that aggregate with type
-safety and fast vote-verification worker config safety.
+safety.
 `qc-verify-worker-config-fast` and `qc-verify-worker-config-bug-*` cross-check
 QC aggregate-verification worker count and queue-cap derivation.
 The fast check also includes the aggregate `QcVerifyWorkerConfigExactness`
 invariant tying exact output tuples, thread derivation, queue-cap derivation,
 explicit-cap preservation, and positive channel floors together.
 `QcVerifyWorkerConfigCorrectnessEnvelope` composes that aggregate with type
-safety and fast QC aggregate-verification worker config safety.
+safety.
 `qc-signers-fast` and `qc-signers-bug-*` cross-check QC signer-bitmap
 admission: bitmap length must match the full topology width, bits outside the
 topology are rejected, quorum accounting counts only voting validators, observer
@@ -18902,7 +20053,11 @@ with the type invariant. Its TLC cross-check independently exhausts the same
 thirty-two expected-failure configs as Apalache.
 `precommit-vote-count-fast` and `precommit-vote-count-bug-*` check the
 precommit vote-progress phase gate and bitmap-counting obligations through
-TLC.
+TLC. The fast check also includes the aggregate
+`PrecommitVoteCountExactness` invariant tying action equality, return
+classification, phase gates, and bitmap boundaries together, plus
+`PrecommitVoteCountCorrectnessEnvelope`, which composes that aggregate with the
+type invariant.
 `commit-quorum-signers-fast` and `commit-quorum-signers-bug-*` check the
 commit-QC signer quorum threshold and failed-commit branch gate.
 `commit-qc-lookup-fast` and `commit-qc-lookup-bug-*` check cache priority and
@@ -19079,9 +20234,9 @@ subject/root-bound to the artifact; witnesses must be present and reproduce the
 artifact roots; and final optimized commit acceptance matches the trusted
 artifact plus witness-root result. The fast check also includes the aggregate
 `PrevalidatedCommitArtifactExactness` invariant tying trusted-artifact,
-witness-root, and final commit-acceptance exactness together, plus
-`PrevalidatedCommitArtifactCorrectnessEnvelope`, which composes the fast-safety
-aggregate with the type invariant.
+witness-root, final commit-acceptance, and case-tuple exactness together, plus
+`PrevalidatedCommitArtifactCorrectnessEnvelope`, which composes that aggregate
+with the type invariant.
 `commit-job-dispatch-fast` and `commit-job-dispatch-bug-*` cross-check
 commit-job dispatch ownership: duplicate inflight subjects are suppressed,
 different inflight subjects keep the candidate pending, ready workers receive
@@ -19122,6 +20277,8 @@ tip, missing canonical payload bytes do not block hash-only catch-up, and the
 candidate view must be the tracked current view or its immediate successor. Its
 TLC cross-check independently exhausts the same fourteen expected-failure
 configs as Apalache.
+`FrontierNewViewCatchUpCorrectnessEnvelope` keeps the PR-fast mode aligned with
+the complete catch-up emission exactness aggregate.
 `late-new-view-emission-fast` and `late-new-view-emission-bug-*` cross-check
 late NEW_VIEW emission for same-highest near-quorum support: top-level
 frontier/view/local-index gates fail closed, permissioned and NPoS completion
@@ -19130,6 +20287,8 @@ bad groups, catch-up remains lower priority than completion, superseded local
 votes may be replaced, and the final result respects inner emission failure.
 Its TLC cross-check independently exhausts the same twenty expected-failure
 configs as Apalache.
+`LateNewViewEmissionCorrectnessEnvelope` keeps the PR-fast mode aligned with
+selection and final-emission exactness.
 `near-quorum-new-view-rebroadcast-fast` and
 `near-quorum-new-view-rebroadcast-bug-*` cross-check near-quorum NEW_VIEW vote
 rebroadcast: only validators at the committed frontier with nonzero
@@ -29189,7 +30348,21 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
   continuation line and cannot be empty. Behavior directives, static
   `CONSTRAINT` directives, and invariant/property check entries must not be
-  duplicated. CFG
+  duplicated. Non-bug `_fast.cfg` configs must check a model-specific
+  `*CorrectnessEnvelope` invariant or property, so PR-fast corridors cannot
+  regress to generic `NoBugInvariant`, `Safety`, or `SafetyFast` aliases;
+  mutation configs remain exempt even when their bug name ends in `_fast`.
+  Those correctness-envelope definitions must compose `TypeInvariant` and a
+  model-specific `*Exactness` conjunct, and the envelope body itself must not
+  mention generic `NoBugInvariant`/`Safety`/`SafetyFast`. The exactness conjunct
+  must have a static definition, must not be literal `TRUE`/`FALSE`, and must
+  not directly alias or mention generic
+  `NoBugInvariant`/`Safety`/`SafetyFast`. The same shape rule also applies to
+  any direct `*Exactness` invariant/property checked by a non-bug `_fast.cfg`,
+  and each direct `*Exactness` check must be composed by a checked correctness
+  envelope in the same CFG. The historical legacy-exactness allowlist is empty
+  and should stay empty.
+  CFG
   constant bindings must also match constants declared by the selected `.tla`
   module, every declared TLA constant must be bound by the CFG, each CFG
   constant-binding line must bind exactly one non-reserved static constant name,

@@ -371,8 +371,21 @@ QuorumRecoveryVoteDrainUrgentCoreSafety ==
   /\ AgeSourceAndBoundaryMatchRust
   /\ PendingScanIsExistential
 
-NoBugInvariant == QuorumRecoveryVoteDrainUrgentCoreSafety
+QuorumRecoveryVoteDrainUrgentExactness ==
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ QuorumTimeoutRequired
+  /\ PendingMustBeLiveAndTipExtending
+  /\ AnyVoteEvidenceCanDriveUrgency
+  /\ NoEvidenceRequiresWaitingVotes
+  /\ AgeSourceAndBoundaryMatchRust
+  /\ PendingScanIsExistential
+QuorumRecoveryVoteDrainUrgentCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QuorumRecoveryVoteDrainUrgentExactness
 
-SafetyFast == QuorumRecoveryVoteDrainUrgentCoreSafety
+NoBugInvariant == QuorumRecoveryVoteDrainUrgentExactness
+
+SafetyFast == QuorumRecoveryVoteDrainUrgentExactness
 
 ====

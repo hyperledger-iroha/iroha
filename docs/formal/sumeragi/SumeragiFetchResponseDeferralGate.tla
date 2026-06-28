@@ -141,7 +141,7 @@ FetchResponseDeferralMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 FetchResponseDeferralExactness ==
-  FetchResponseDeferralMatchesSpec
+  /\ FetchResponseDeferralMatchesSpec
 
 FetchResponseDeferralCorrectnessEnvelope ==
   /\ TypeInvariant

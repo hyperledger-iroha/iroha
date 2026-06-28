@@ -185,7 +185,8 @@ RbcStatusLookupMatchesSpec ==
        /\ ActualStaleKeysNonEmpty(c) = SpecStaleKeysNonEmpty(c)
        /\ ActualNextDue(c) = SpecNextDue(c)
 
-RbcStatusLookupExactness == RbcStatusLookupMatchesSpec
+RbcStatusLookupExactness ==
+  /\ RbcStatusLookupMatchesSpec
 
 RbcStatusLookupCorrectnessEnvelope ==
   /\ TypeInvariant

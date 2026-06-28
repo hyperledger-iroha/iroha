@@ -106,9 +106,6 @@ TypeInvariant ==
 ValidationRedriveLabelsMatchSpec ==
   ActualLabels = SpecLabels
 
-SafetyFast ==
-  ValidationRedriveLabelsMatchSpec
-
 LabelsDistinct ==
   Cardinality(ActualLabelSet) = 4
 
@@ -120,6 +117,19 @@ LabelsNonzero ==
 
 LabelSetStable ==
   ActualLabelSet = SpecLabelSet
+
+ValidationRedriveLabelExactness ==
+  /\ ValidationRedriveLabelsMatchSpec
+  /\ LabelsDistinct
+  /\ LabelsNonzero
+  /\ LabelSetStable
+
+ValidationRedriveLabelCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationRedriveLabelExactness
+
+SafetyFast ==
+  ValidationRedriveLabelExactness
 
 BugOrphanedQueuedLabelWrong ==
   ActualOrphanedQueuedLabel = SpecOrphanedQueuedLabel

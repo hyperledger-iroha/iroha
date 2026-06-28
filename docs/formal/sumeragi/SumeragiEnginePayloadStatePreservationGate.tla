@@ -400,7 +400,7 @@ ValuesStayInDomain ==
     /\ InitialPendingMap(candidate) \in PendingMapValues
     /\ ImplementationPendingMap(candidate) \in PendingMapValues
 
-Safety ==
+EnginePayloadStatePreservationExactness ==
   /\ CommitsPreserveRound
   /\ CommitsPreserveLockedQc
   /\ CommitsPreserveHighestQc
@@ -419,6 +419,15 @@ Safety ==
   /\ AllAlwaysPreservedStatePreserved
   /\ IgnoredStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EnginePayloadStatePreservationExactness
+
+EnginePayloadStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePayloadStatePreservationExactness
+
+SafetyFast == EnginePayloadStatePreservationExactness
 
 =============================================================================
 ====

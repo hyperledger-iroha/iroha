@@ -214,7 +214,7 @@ QcValidationEvidenceMatchesSpec ==
   \A c \in AllCases: Matches(c)
 
 QcValidationEvidenceExactness ==
-  QcValidationEvidenceMatchesSpec
+  /\ QcValidationEvidenceMatchesSpec
 
 QcValidationEvidenceCorrectnessEnvelope ==
   /\ TypeInvariant

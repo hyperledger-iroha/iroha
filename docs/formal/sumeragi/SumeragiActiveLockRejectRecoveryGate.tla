@@ -298,7 +298,14 @@ NoBugInvariant ==
   /\ RejectedBranchNeverAdmitted
 
 ActiveLockRejectRecoveryExactness ==
-  NoBugInvariant
+  /\ ActionsMatchSpec
+  /\ NonActiveHeightReturnsEarly
+  /\ QcFetchFollowsEvidence
+  /\ ActiveRecoveryUsesMissingQcContext
+  /\ PristineNoneFallbackReentersViewChange
+  /\ NonPristineRecoveryIsPreserved
+  /\ ViewChangeReportedOnlyForRotate
+  /\ RejectedBranchNeverAdmitted
 
 ActiveLockRejectRecoveryCorrectnessEnvelope ==
   /\ TypeInvariant

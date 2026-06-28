@@ -308,8 +308,17 @@ TypeInvariant ==
 VoteRosterSelectionCoreSafety ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
 
+VoteRosterSelectionExactness ==
+  /\ VoteRosterSelectionCoreSafety
+
+VoteRosterSelectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteRosterSelectionExactness
+
+NoBugInvariant == VoteRosterSelectionExactness
+
 SafetyFast ==
-  VoteRosterSelectionCoreSafety
+  VoteRosterSelectionExactness
 
 BugSkipCacheForPast ==
   ActualActions(VoteCachedPastWins) = SpecActions(VoteCachedPastWins)

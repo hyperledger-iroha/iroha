@@ -272,8 +272,12 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+PendingRbcStatusActionsMatchSpec ==
+  \A c \in Candidates:
+    ImplementationActions(c) = SpecActions(c)
+
 PendingRbcStatusExactness ==
-  Safety
+  /\ PendingRbcStatusActionsMatchSpec
 
 PendingRbcStatusCorrectnessEnvelope ==
   /\ TypeInvariant

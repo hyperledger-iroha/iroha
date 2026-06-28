@@ -493,7 +493,7 @@ ProposalMetadataDoesNotWakeCommitPipeline ==
 ProposalMetadataDoesNotRecordPayloadPhase ==
   ~payload_phase_recorded
 
-Safety ==
+ProposalAdmissionExactness ==
   /\ AcceptMatchesSpec
   /\ DeferredMatchesSpec
   /\ DroppedMatchesSpec
@@ -524,5 +524,12 @@ Safety ==
   /\ CleanProposalsDoNotSuppressCommittedConflicts
   /\ ProposalMetadataDoesNotWakeCommitPipeline
   /\ ProposalMetadataDoesNotRecordPayloadPhase
+
+Safety ==
+  ProposalAdmissionExactness
+
+ProposalAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalAdmissionExactness
 
 ====

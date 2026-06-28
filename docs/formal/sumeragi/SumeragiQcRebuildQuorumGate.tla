@@ -166,6 +166,13 @@ AllCasesMatchSpec ==
 Safety ==
   AllCasesMatchSpec
 
+QcRebuildQuorumExactness ==
+  /\ AllCasesMatchSpec
+
+QcRebuildQuorumCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcRebuildQuorumExactness
+
 PermissionedThreshold ==
   /\ Matches("permissioned_under_quorum")
   /\ Matches("permissioned_exact_quorum")

@@ -36,6 +36,16 @@ DEFAULT_SOURCE_RUNTIME_BYTECODE = object()
 DEFAULT_TRANSACTION_INFO_FIELD = object()
 
 
+class HostilePublicKey:
+    """Mapping key that public sanitizers must classify without stringifying."""
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile __str__")
+
+    def __repr__(self):
+        return "secret-token-hostile-key"
+
+
 def transaction_info_field(default, override):
     return default if override is DEFAULT_TRANSACTION_INFO_FIELD else override
 
@@ -3008,6 +3018,11 @@ def test_live_evidence_redacts_unsupported_transaction_result_fields():
             None,
         ),
         (
+            {HostilePublicKey(): 1},
+            "ret[0] has unsupported fields: non-string field name",
+            "hostile",
+        ),
+        (
             {"operator_override": 1},
             "ret[0] has unsupported fields: operator_override",
             None,
@@ -3021,6 +3036,7 @@ def test_live_evidence_redacts_unsupported_transaction_result_fields():
             assert expected_error in message
             if forbidden is not None:
                 assert forbidden not in message
+            assert "__str__" not in message
         else:
             raise AssertionError(f"{result!r} was accepted")
 
@@ -3041,6 +3057,11 @@ def test_live_evidence_redacts_unsupported_transaction_result_fields():
             None,
         ),
         (
+            {HostilePublicKey(): 1},
+            "ret[0] orderDetails[0] has unsupported fields: non-string field name",
+            "hostile",
+        ),
+        (
             {"operator_override": 1},
             "ret[0] orderDetails[0] has unsupported fields: operator_override",
             None,
@@ -3057,6 +3078,7 @@ def test_live_evidence_redacts_unsupported_transaction_result_fields():
             assert expected_error in message
             if forbidden is not None:
                 assert forbidden not in message
+            assert "__str__" not in message
         else:
             raise AssertionError(f"{detail!r} was accepted")
 

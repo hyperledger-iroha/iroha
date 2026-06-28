@@ -305,9 +305,6 @@ PostCommitPacemakerKickHardStopExact ==
   /\ HardBackpressureSuppressesKickstart
   /\ TriggerRejectsHardBackpressure
 
-PostCommitPacemakerKickCallbackExact ==
-  CallbackResultDoesNotControlReturn
-
 PostCommitPacemakerKickTimestampExact ==
   /\ TimestampMatchesSpec
   /\ TriggerReturnAndTimeAreConsistent
@@ -317,7 +314,7 @@ PostCommitPacemakerKickExactness ==
   /\ PostCommitPacemakerKickAdmissionExact
   /\ PostCommitPacemakerKickPacingExact
   /\ PostCommitPacemakerKickHardStopExact
-  /\ PostCommitPacemakerKickCallbackExact
+  /\ CallbackResultDoesNotControlReturn
   /\ PostCommitPacemakerKickTimestampExact
 
 PostCommitPacemakerKickCorrectnessEnvelope ==

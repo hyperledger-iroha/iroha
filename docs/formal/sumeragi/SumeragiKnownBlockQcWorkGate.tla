@@ -259,7 +259,7 @@ KnownBlockQcWorkCoreSafety ==
 NoBugInvariant == KnownBlockQcWorkCoreSafety
 
 KnownBlockQcWorkExactness ==
-  KnownBlockQcWorkCoreSafety
+  /\ KnownBlockQcWorkCoreSafety
 
 KnownBlockQcWorkCorrectnessEnvelope ==
   /\ TypeInvariant

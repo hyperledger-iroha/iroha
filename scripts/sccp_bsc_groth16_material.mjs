@@ -57,6 +57,10 @@ import {
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(SCRIPT_PATH), "..");
 const textEncoder = new TextEncoder();
+const PUBLIC_BLOCKER_HTML_ENTITY_PATTERN =
+  /&(?:#([0-9]{1,7})|#x([0-9a-f]{1,6})|amp|lt|gt|quot|apos);/giu;
+const PUBLIC_BLOCKER_SENSITIVE_PATTERN =
+  /(?:private[\s_-]?key|mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|secret|password|api[\s_-]?(?:key|token)|access[\s_-]?token|auth[\s_-]?token|bearer(?:[\s_-]?token)?|session[\s_-]?token|refresh[\s_-]?token|token)/iu;
 
 export const BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA =
   "iroha-sccp-bsc-groth16-material-manifest/v1";
@@ -5018,9 +5022,13 @@ async function generateMaterialFromVerificationKey({
     attestationValidationBlockers,
   }).concat(
     artifactBlockers,
-    selfCheck.blockers,
+    selfCheck.blockers.map(publicGeneratedProductionBlockerText),
     transcriptValidationBlockers,
     referenceLabelBlockers,
+  );
+  const publicProductionBlockers = publicProductionBlockerStrings(
+    productionBlockers,
+    "BSC Groth16 material productionBlockers",
   );
   const manifest = {
     schema: BSC_GROTH16_MATERIAL_MANIFEST_SCHEMA,
@@ -5041,8 +5049,8 @@ async function generateMaterialFromVerificationKey({
     verifierKeyHash: verifierMaterial.verifierKeyHash,
     proofArtifactHash: artifacts.r1cs.sha256,
     provingKeyHash: artifacts.provingKey.sha256,
-    productionReady: productionBlockers.length === 0,
-    productionBlockers,
+    productionReady: publicProductionBlockers.length === 0,
+    productionBlockers: publicProductionBlockers,
     artifacts,
     trustedSetup: {
       localPowersOfTau: Boolean(localPtau),
@@ -5060,7 +5068,7 @@ async function generateMaterialFromVerificationKey({
     },
     attestations: publicAttestations,
     nextStep:
-      productionBlockers.length === 0
+      publicProductionBlockers.length === 0
         ? "Use the verifier key for deployment, then bind r1cs/zkey/verifier hashes through native-prover-bundle and route-manifest."
         : "Do not deploy this as production. Replace or attest the circuit/setup material, then rebuild the native-prover bundle and route manifest.",
   };
@@ -5655,8 +5663,141 @@ function proofSelfTestManifestProductionState(manifest) {
   }
   return {
     productionReady,
-    productionBlockers: productionBlockers.map((blocker) => String(blocker)),
+    productionBlockers: publicProductionBlockerStrings(
+      productionBlockers,
+      "material manifest productionBlockers",
+    ),
   };
+}
+
+function decodedPublicBlockerText(value) {
+  let decoded = value.replace(
+    PUBLIC_BLOCKER_HTML_ENTITY_PATTERN,
+    (match, decimalEntity, hexEntity) => {
+      if (decimalEntity !== undefined) {
+        const codePoint = Number.parseInt(decimalEntity, 10);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (hexEntity !== undefined) {
+        const codePoint = Number.parseInt(hexEntity, 16);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      const namedEntity = match.toLowerCase();
+      if (namedEntity === "&amp;") return "&";
+      if (namedEntity === "&lt;") return "<";
+      if (namedEntity === "&gt;") return ">";
+      if (namedEntity === "&quot;") return '"';
+      if (namedEntity === "&apos;") return "'";
+      return match;
+    },
+  );
+  for (let index = 0; index < 3; index += 1) {
+    let nextDecoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+  }
+  return decoded;
+}
+
+function publicProductionBlockerSensitiveProblem(entries, label) {
+  for (const [index, entry] of entries.entries()) {
+    if (PUBLIC_BLOCKER_SENSITIVE_PATTERN.test(
+      decodedPublicBlockerText(String(entry)),
+    )) {
+      return `${label}[${index}] contains sensitive name`;
+    }
+  }
+  return null;
+}
+
+function canonicalPublicBlockerKey(value) {
+  return decodedPublicBlockerText(String(value)).toLowerCase();
+}
+
+function publicProductionBlockerDuplicateProblem(entries, label) {
+  const seenBlockers = new Set();
+  for (const entry of entries) {
+    const blockerKey = canonicalPublicBlockerKey(entry);
+    if (seenBlockers.has(blockerKey)) {
+      return `${label} must not contain duplicate strings`;
+    }
+    seenBlockers.add(blockerKey);
+  }
+  return null;
+}
+
+function publicProductionBlockerDecodedUnsafeProblem(entries, label) {
+  for (const [index, entry] of entries.entries()) {
+    const decoded = decodedPublicBlockerText(String(entry));
+    if (/[\u0000-\u001f\u007f]/u.test(decoded)) {
+      return `${label}[${index}] contains decoded control character`;
+    }
+    if (/[^\u0020-\u007e]/u.test(decoded)) {
+      return `${label}[${index}] contains decoded non-ASCII character`;
+    }
+  }
+  return null;
+}
+
+function publicGeneratedProductionBlockerText(value) {
+  const normalized = String(value)
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .replace(/[^\u0020-\u007e]/gu, "?")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return normalized || "generated production blocker is empty";
+}
+
+function publicProductionBlockerStrings(entries, label) {
+  for (const [index, entry] of entries.entries()) {
+    if (
+      typeof entry !== "string" ||
+      entry.length === 0 ||
+      entry.trim() !== entry
+    ) {
+      throw new Error(`${label}[${index}] must be a non-empty canonical string`);
+    }
+    if (/[\u0000-\u001f\u007f]/u.test(entry)) {
+      throw new Error(`${label}[${index}] contains control character`);
+    }
+    if (/[^\u0020-\u007e]/u.test(entry)) {
+      throw new Error(`${label}[${index}] must be printable ASCII`);
+    }
+  }
+  const decodedUnsafeProblem = publicProductionBlockerDecodedUnsafeProblem(
+    entries,
+    label,
+  );
+  if (decodedUnsafeProblem) {
+    throw new Error(decodedUnsafeProblem);
+  }
+  const problem = publicProductionBlockerSensitiveProblem(entries, label);
+  if (problem) {
+    throw new Error(problem);
+  }
+  const duplicateProblem = publicProductionBlockerDuplicateProblem(entries, label);
+  if (duplicateProblem) {
+    throw new Error(duplicateProblem);
+  }
+  return entries.map((blocker) => String(blocker));
+}
+
+function materialManifestProductionBlockerStrings(manifest, label) {
+  const productionBlockers = ownValue(manifest, "productionBlockers");
+  return Array.isArray(productionBlockers)
+    ? publicProductionBlockerStrings(productionBlockers, label)
+    : [];
 }
 
 function requireProductionReadyMaterialManifestForProofSelfTest(manifest) {
@@ -6176,12 +6317,28 @@ async function validateProofSelfTestReport({
         "proof self-test manifest.productionBlockers must be an empty array",
       );
     } else if (productionBlockers.length > 0) {
-      blockers.push(
-        `proof self-test manifest.productionBlockers must be empty: ${productionBlockers
-          .map((entry) => String(entry))
-          .filter(Boolean)
-          .join("; ")}`,
+      const sensitiveProblem = publicProductionBlockerSensitiveProblem(
+        productionBlockers,
+        "proof self-test manifest.productionBlockers",
       );
+      if (sensitiveProblem) {
+        blockers.push(sensitiveProblem);
+      } else {
+        const duplicateProblem = publicProductionBlockerDuplicateProblem(
+          productionBlockers,
+          "proof self-test manifest.productionBlockers",
+        );
+        if (duplicateProblem) {
+          blockers.push(duplicateProblem);
+        } else {
+          blockers.push(
+            `proof self-test manifest.productionBlockers must be empty: ${productionBlockers
+              .map((entry) => String(entry))
+              .filter(Boolean)
+              .join("; ")}`,
+          );
+        }
+      }
     }
   }
   const artifactBlock = isRecord(ownValue(report, "artifacts"))
@@ -7771,9 +7928,10 @@ export async function writeBscGroth16EvidenceTemplates(options = {}) {
       path: repoRelativePath(manifestPath),
       sha256: manifestSha256,
       productionReady: ownValue(manifest, "productionReady") === true,
-      productionBlockers: Array.isArray(ownValue(manifest, "productionBlockers"))
-        ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
-        : [],
+      productionBlockers: materialManifestProductionBlockerStrings(
+        manifest,
+        "BSC Groth16 material manifest productionBlockers",
+      ),
     },
     routeId: ROUTE_ID,
     assetKey: ASSET_KEY,
@@ -7991,11 +8149,10 @@ export async function writeBscGroth16AttestationHandoff(options = {}) {
   const handoffDir = dirname(resolve(outPath));
 
   const manifestSha256 = await fileSha256(manifestPath);
-  const manifestProductionBlockers = Array.isArray(
-    ownValue(manifest, "productionBlockers"),
-  )
-    ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
-    : [];
+  const manifestProductionBlockers = materialManifestProductionBlockerStrings(
+    manifest,
+    "BSC Groth16 material manifest productionBlockers",
+  );
   const packages = {
     transcriptTemplates: transcriptPackage.path
       ? await handoffJsonReference(
@@ -8292,10 +8449,10 @@ function pushHandoffPackageFlagBlocker({
 }
 
 function materialManifestProductionBlockers(manifestStatus) {
-  return manifestStatus.valid &&
-    Array.isArray(ownValue(manifestStatus.record, "productionBlockers"))
-    ? ownValue(manifestStatus.record, "productionBlockers").map((blocker) =>
-        String(blocker),
+  return manifestStatus.valid
+    ? materialManifestProductionBlockerStrings(
+        manifestStatus.record,
+        "BSC Groth16 material manifest productionBlockers",
       )
     : [];
 }
@@ -9036,9 +9193,10 @@ export async function generateBscGroth16AttestationRequestPackage(options = {}) 
       "material manifest SnarkJS self-check exportedVerifierKeyHash",
     ),
   };
-  const productionBlockers = Array.isArray(ownValue(manifest, "productionBlockers"))
-    ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
-    : [];
+  const productionBlockers = materialManifestProductionBlockerStrings(
+    manifest,
+    "BSC Groth16 material manifest productionBlockers",
+  );
   const packageBody = {
     schema: BSC_GROTH16_ATTESTATION_REQUEST_PACKAGE_SCHEMA,
     manifest: {
@@ -9209,22 +9367,23 @@ function requestRolePayloadHash(role, label) {
   if (!isRecord(role)) {
     throw new Error(`attestation request package ${label} role is required.`);
   }
+  const blockers = ownValue(role, "blockers");
+  if (!Array.isArray(blockers)) {
+    throw new Error(`attestation request package ${label} blockers must be an array.`);
+  }
+  const publicBlockers = publicProductionBlockerStrings(
+    blockers,
+    `attestation request package ${label} blockers`,
+  );
   if (ownValue(role, "readyForSignature") !== true) {
-    const blockers = ownValue(role, "blockers");
-    const blockerText = Array.isArray(blockers)
-      ? blockers.map((blocker) => String(blocker)).filter(Boolean).join("; ")
-      : "";
+    const blockerText = publicBlockers.join("; ");
     throw new Error(
       `attestation request package ${label} role is not ready for signature${
         blockerText ? `: ${blockerText}` : ""
       }.`,
     );
   }
-  const blockers = ownValue(role, "blockers");
-  if (!Array.isArray(blockers)) {
-    throw new Error(`attestation request package ${label} blockers must be an array.`);
-  }
-  if (blockers.length > 0) {
+  if (publicBlockers.length > 0) {
     throw new Error(
       `attestation request package ${label} role must not carry blockers when ready.`,
     );
@@ -9364,9 +9523,10 @@ function validateAttestationRequestCommonFields({
     );
   }
   const requestBlockers = ownValue(manifestBlock, "productionBlockers");
-  const manifestBlockers = Array.isArray(ownValue(manifest, "productionBlockers"))
-    ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
-    : [];
+  const manifestBlockers = materialManifestProductionBlockerStrings(
+    manifest,
+    "BSC Groth16 material manifest productionBlockers",
+  );
   if (
     !Array.isArray(requestBlockers) ||
     JSON.stringify(requestBlockers.map((blocker) => String(blocker))) !==
@@ -9706,9 +9866,14 @@ function attestationRequestRoleStatus(request, spec) {
       `attestation request package ${spec.label} blockers must be an array`,
     );
   } else {
-    status.declaredBlockers = declaredBlockers
-      .map((blocker) => String(blocker))
-      .filter(Boolean);
+    try {
+      status.declaredBlockers = publicProductionBlockerStrings(
+        declaredBlockers,
+        `attestation request package ${spec.label} blockers`,
+      );
+    } catch (error) {
+      status.blockers.push(error instanceof Error ? error.message : String(error));
+    }
   }
   if (!status.readyForSignature) {
     status.blockers.push(
@@ -10206,11 +10371,10 @@ export async function auditBscGroth16AttestationStatus(options = {}) {
       ...signedAttestationMatchesRequestBlockers(entry, rolePayload, spec.label),
     );
   }
-  const manifestProductionBlockers = Array.isArray(
-    ownValue(manifest, "productionBlockers"),
-  )
-    ? ownValue(manifest, "productionBlockers").map((blocker) => String(blocker))
-    : [];
+  const manifestProductionBlockers = materialManifestProductionBlockerStrings(
+    manifest,
+    "BSC Groth16 material manifest productionBlockers",
+  );
   const transcriptValidation = common
     ? await transcriptValidationStatus({
         manifestPath,
@@ -10715,7 +10879,10 @@ export async function finalizeBscGroth16Attestations(options = {}) {
   });
   if (result.productionReady !== true) {
     const blockers = Array.isArray(result.productionBlockers)
-      ? result.productionBlockers.map((blocker) => String(blocker)).filter(Boolean)
+      ? publicProductionBlockerStrings(
+          result.productionBlockers,
+          "attestation finalization result.productionBlockers",
+        ).filter(Boolean)
       : [];
     throw new Error(
       "attestation finalization did not produce productionReady material" +

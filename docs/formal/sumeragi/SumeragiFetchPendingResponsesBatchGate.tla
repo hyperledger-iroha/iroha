@@ -427,7 +427,7 @@ FetchPendingResponsesBatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 FetchPendingResponsesBatchExactness ==
-  FetchPendingResponsesBatchMatchesSpec
+  /\ FetchPendingResponsesBatchMatchesSpec
 
 FetchPendingResponsesBatchCorrectnessEnvelope ==
   /\ TypeInvariant

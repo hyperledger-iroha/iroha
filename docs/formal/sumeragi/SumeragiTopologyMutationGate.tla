@@ -306,7 +306,7 @@ TopologyCanonicalizationExact ==
     ActualCanonOutput(c) = SpecCanonOutput(c)
 
 TopologyOrderedRosterMutationExactness ==
-  /\ SafetyFast
+  /\ TopologyMutationCoreSafety
   /\ TopologyRotationExact
   /\ TopologyNthRotationExact
   /\ TopologyConstructionExact

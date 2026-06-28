@@ -122,8 +122,7 @@ NonRbcPayloadBudgetMatchesSpec ==
        SpecBudget(c) <= SpecFrameCap(c)
 
 NonRbcPayloadBudgetExactness ==
-  NonRbcPayloadBudgetMatchesSpec
-
+  /\ NonRbcPayloadBudgetMatchesSpec
 NonRbcPayloadBudgetCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ NonRbcPayloadBudgetExactness

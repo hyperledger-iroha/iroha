@@ -277,7 +277,7 @@ SnapshotHintMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncSnapshotHintExactness ==
-  SnapshotHintMatchesSpec
+  /\ SnapshotHintMatchesSpec
 
 BlockSyncSnapshotHintCorrectnessEnvelope ==
   /\ TypeInvariant

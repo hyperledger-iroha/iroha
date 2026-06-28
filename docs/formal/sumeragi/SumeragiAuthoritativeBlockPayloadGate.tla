@@ -306,8 +306,13 @@ AuthoritativeBlockPayloadCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 AuthoritativeBlockPayloadExactness ==
-  AuthoritativeBlockPayloadCoreSafety
-
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ LocalAuthoritativePayloadsShortCircuit
+  /\ RejectedLocalOwnersNeedRbcFallback
+  /\ RbcHashAndAuthorityFilter
+  /\ AbsentPayloadRemainsMissing
+  /\ LookupShapeMatchesShortCircuit
 AuthoritativeBlockPayloadCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ AuthoritativeBlockPayloadExactness

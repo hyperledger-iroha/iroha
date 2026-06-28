@@ -382,6 +382,22 @@ AnchorModesMatch ==
   \A case \in AnchorCases:
     ActualAnchorMode(case) = SpecAnchorMode(case)
 
+RangePullRecoveryExactness ==
+  /\ ObservationTransitionMatches
+  /\ StageStepMatches
+  /\ TierAdvanceMatches
+  /\ TierLabelMatches
+  /\ TargetsMatch
+  /\ CooldownAllowsMatch
+  /\ CooldownDeadlineMatch
+  /\ CooldownRetentionMatch
+  /\ ReasonClassifiersMatch
+  /\ AnchorModesMatch
+
+RangePullRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RangePullRecoveryExactness
+
 Init ==
   checked = 0
 

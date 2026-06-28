@@ -270,12 +270,13 @@ StatusSafetyAnchors ==
   /\ SnapshotAnchors
 
 RbcStoreStatusExactness ==
-  Safety
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ StatusSafetyAnchors
 
 RbcStoreStatusCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ RbcStoreStatusExactness
-  /\ StatusSafetyAnchors
 
 BugResetEmptyKeepsPressure ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

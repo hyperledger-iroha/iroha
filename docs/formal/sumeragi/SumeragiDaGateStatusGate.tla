@@ -211,12 +211,15 @@ Next ==
 TypeInvariant ==
   checked \in 0..20
 
-Safety ==
+DaGateStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
 DaGateStatusExactness ==
-  Safety
+  /\ DaGateStatusActionsMatchSpec
+
+Safety ==
+  DaGateStatusExactness
 
 DaGateStatusCorrectnessEnvelope ==
   /\ TypeInvariant

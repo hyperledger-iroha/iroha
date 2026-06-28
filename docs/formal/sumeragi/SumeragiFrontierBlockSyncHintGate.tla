@@ -305,4 +305,16 @@ SafetyFast ==
   /\ DirectResponsePermitAccounting
   /\ DirectResponsePermitPruning
 
+FrontierBlockSyncHintExactness ==
+  /\ ActionsMatchSpec
+  /\ LatestGossipPauseMatchesHints
+  /\ SyncExternalHintsStoresBothFlags
+  /\ DirectResponsePermitAdmission
+  /\ DirectResponsePermitAccounting
+  /\ DirectResponsePermitPruning
+
+FrontierBlockSyncHintCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierBlockSyncHintExactness
+
 ====

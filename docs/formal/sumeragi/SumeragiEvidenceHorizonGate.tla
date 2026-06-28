@@ -181,8 +181,13 @@ EvidenceHorizonCoreSafety ==
   /\ RecentAndFutureEvidenceAllowed
 
 EvidenceHorizonExactness ==
-  EvidenceHorizonCoreSafety
-
+  /\ MatchesSpec
+  /\ ZeroHorizonDisablesFilter
+  /\ MissingSubjectDefaultsToCurrent
+  /\ SaturatingLowerBound
+  /\ InclusiveLowerBound
+  /\ StaleEvidenceRejected
+  /\ RecentAndFutureEvidenceAllowed
 EvidenceHorizonCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ EvidenceHorizonExactness

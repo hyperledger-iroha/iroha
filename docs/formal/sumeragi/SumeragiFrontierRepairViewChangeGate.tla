@@ -398,4 +398,14 @@ FrontierRepairViewChangeSafetyAnchors ==
 Safety ==
   FrontierRepairViewChangeSafetyAnchors
 
+FrontierRepairViewChangeExactness ==
+  /\ CauseAnchors
+  /\ EarlyExitAnchors
+  /\ RepairSourceAnchors
+  /\ SeedAndFetchAnchors
+  /\ PrecedenceAnchors
+FrontierRepairViewChangeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierRepairViewChangeExactness
+
 ====

@@ -338,32 +338,14 @@ MissingBlockViewChangeGroupedCases ==
 MissingBlockViewChangeCaseGroupsComplete ==
   MissingBlockViewChangeGroupedCases = Candidates
 
-MissingBlockViewChangeAuthorityExact ==
-  ViewChangeAuthority
-
-MissingBlockViewChangeDueExact ==
-  ViewChangeDueMatchesSpec
-
-MissingBlockViewChangeMarkExact ==
-  MarkingSemantics
-
-MissingBlockViewChangeClearExact ==
-  ClearDropsOnlyViewChangeState
-
-MissingBlockViewChangeSchedulerExact ==
-  SchedulerMatchesArmedWindows
-
-MissingBlockViewChangeDeferralExact ==
-  DeferralMatchesProgressAndBacklog
-
 MissingBlockViewChangeExactness ==
   /\ MissingBlockViewChangeCaseGroupsComplete
-  /\ MissingBlockViewChangeAuthorityExact
-  /\ MissingBlockViewChangeDueExact
-  /\ MissingBlockViewChangeMarkExact
-  /\ MissingBlockViewChangeClearExact
-  /\ MissingBlockViewChangeSchedulerExact
-  /\ MissingBlockViewChangeDeferralExact
+  /\ ViewChangeAuthority
+  /\ ViewChangeDueMatchesSpec
+  /\ MarkingSemantics
+  /\ ClearDropsOnlyViewChangeState
+  /\ SchedulerMatchesArmedWindows
+  /\ DeferralMatchesProgressAndBacklog
 
 MissingBlockViewChangeCorrectnessEnvelope ==
   /\ TypeInvariant

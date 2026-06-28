@@ -249,7 +249,11 @@ NoBugInvariant ==
   /\ NoSpuriousCheckpointWithoutQc
 
 ApplyCachedQcsExactness ==
-  NoBugInvariant
+  /\ CommitQcSelectionMatchesSpec
+  /\ CheckpointAttachmentMatchesSpec
+  /\ StakeSnapshotAttachmentMatchesSpec
+  /\ CommitVotesAttachmentMatchesSpec
+  /\ NoSpuriousCheckpointWithoutQc
 
 ApplyCachedQcsCorrectnessEnvelope ==
   /\ TypeInvariant

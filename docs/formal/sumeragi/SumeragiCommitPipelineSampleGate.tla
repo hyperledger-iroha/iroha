@@ -148,7 +148,7 @@ CommitPipelineSampleMatchesSpec ==
   ActualOutput = SpecOutput
 
 CommitPipelineSampleExactness ==
-  CommitPipelineSampleMatchesSpec
+  /\ CommitPipelineSampleMatchesSpec
 
 CommitPipelineSampleCorrectnessEnvelope ==
   /\ TypeInvariant

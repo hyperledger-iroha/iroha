@@ -256,8 +256,11 @@ NoBugInvariant == StaleMissingBlockRequestPruneCoreSafety
 
 SafetyFast == StaleMissingBlockRequestPruneCoreSafety
 
+StaleMissingBlockRequestPruneExactness ==
+  /\ StaleMissingBlockRequestPruneCoreSafety
+
 StaleMissingBlockRequestPruneCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ StaleMissingBlockRequestPruneCoreSafety
+  /\ StaleMissingBlockRequestPruneExactness
 
 ====

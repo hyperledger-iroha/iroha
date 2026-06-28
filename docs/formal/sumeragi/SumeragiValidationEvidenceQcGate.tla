@@ -163,8 +163,15 @@ TypeInvariant ==
 ValidationEvidenceQcMatchesSpec ==
   \A c \in Cases: ActualSelected(c) = SpecSelected(c)
 
+ValidationEvidenceQcExactness ==
+  /\ ValidationEvidenceQcMatchesSpec
+
+ValidationEvidenceQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationEvidenceQcExactness
+
 SafetyFast ==
-  ValidationEvidenceQcMatchesSpec
+  ValidationEvidenceQcExactness
 
 BugAcceptWithoutParent ==
   ActualSelected("no_parent") = SpecSelected("no_parent")

@@ -310,8 +310,7 @@ EvidenceCanonicalizationMatchesSpec ==
        /\ ActualPenaltyFlagsClear(c) = SpecPenaltyFlagsClear(c)
 
 EvidenceCanonicalizationExactness ==
-  EvidenceCanonicalizationMatchesSpec
-
+  /\ EvidenceCanonicalizationMatchesSpec
 EvidenceCanonicalizationCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ EvidenceCanonicalizationExactness

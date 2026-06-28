@@ -297,28 +297,13 @@ HardCapCleanupGroupedCases ==
 HardCapCleanupCaseGroupsComplete ==
   HardCapCleanupGroupedCases = Candidates
 
-HardCapCleanupPreservationExact ==
-  HardCapPreservationDecisionMatchesSpec
-
-HardCapCleanupLiveSameHeightExact ==
-  LiveCleanupPreservesSameHeightState
-
-HardCapCleanupPruningExact ==
-  CleanupStillPrunesDeadOrFutureState
-
-HardCapCleanupQuorumRepairExact ==
-  QuorumBackedRepairSurvivesCleanup
-
-HardCapCleanupEvidenceOwnerExact ==
-  FrontierEvidenceOwnershipRules
-
 MissingBlockHardCapCleanupExactness ==
   /\ HardCapCleanupCaseGroupsComplete
-  /\ HardCapCleanupPreservationExact
-  /\ HardCapCleanupLiveSameHeightExact
-  /\ HardCapCleanupPruningExact
-  /\ HardCapCleanupQuorumRepairExact
-  /\ HardCapCleanupEvidenceOwnerExact
+  /\ HardCapPreservationDecisionMatchesSpec
+  /\ LiveCleanupPreservesSameHeightState
+  /\ CleanupStillPrunesDeadOrFutureState
+  /\ QuorumBackedRepairSurvivesCleanup
+  /\ FrontierEvidenceOwnershipRules
 
 MissingBlockHardCapCleanupCorrectnessEnvelope ==
   /\ TypeInvariant

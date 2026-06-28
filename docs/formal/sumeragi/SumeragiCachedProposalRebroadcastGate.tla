@@ -239,10 +239,16 @@ CachedProposalRebroadcastSafetyAnchors ==
   /\ RebuildSourceAnchors
   /\ ReplayFanoutAnchors
 
+CachedProposalRebroadcastExactness ==
+  /\ AdmissionRejectsUnsafeInputs
+  /\ BackpressureAndCooldownSafety
+  /\ RebuildSourceSafety
+  /\ ReplayFanoutSafety
+  /\ CachedProposalRebroadcastSafetyAnchors
+
 CachedProposalRebroadcastCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ CachedProposalRebroadcastSafetyAnchors
+  /\ CachedProposalRebroadcastExactness
 
 Safety == CachedProposalRebroadcastSafetyAnchors
 

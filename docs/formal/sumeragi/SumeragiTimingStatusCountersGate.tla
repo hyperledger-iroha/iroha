@@ -227,7 +227,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..24
 
-Safety ==
+TimingStatusCountersActionsMatchSpec ==
   /\ ImplementationActions(PacemakerResetEmpty) =
        SpecActions(PacemakerResetEmpty)
   /\ ImplementationActions(PacemakerRecord) = SpecActions(PacemakerRecord)
@@ -275,7 +275,10 @@ Safety ==
        SpecActions(PrevoteResetAfterRecord)
 
 TimingStatusCountersExactness ==
-  Safety
+  /\ TimingStatusCountersActionsMatchSpec
+
+Safety ==
+  TimingStatusCountersExactness
 
 TimingStatusCountersCorrectnessEnvelope ==
   /\ TypeInvariant

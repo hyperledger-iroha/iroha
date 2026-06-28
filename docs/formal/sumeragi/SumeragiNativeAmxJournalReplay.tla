@@ -259,8 +259,7 @@ TailRepairKeepsCompletePrefix ==
   \A candidate \in tried:
     TailRepairCandidate(candidate) => ImplementationTailRepaired(candidate)
 
-Safety ==
-  /\ TypeInvariant
+NativeAmxJournalReplayExactness ==
   /\ ReplayMatchesSpec
   /\ NativePlansStayNative
   /\ SinglePlansStaySingle
@@ -273,5 +272,13 @@ Safety ==
   /\ DuplicateSameKeyUsesLastPut
   /\ CompactionReplayEquivalent
   /\ TailRepairKeepsCompletePrefix
+
+NativeAmxJournalReplayCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NativeAmxJournalReplayExactness
+
+Safety ==
+  /\ TypeInvariant
+  /\ NativeAmxJournalReplayExactness
 
 ====

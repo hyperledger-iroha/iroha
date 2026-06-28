@@ -340,8 +340,23 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+KeepFrontierPendingActiveExactness ==
+  /\ ResultsMatchSpec
+  /\ LiveFrontierOwnerRequired
+  /\ PendingPreservationRequiresPriorValidEvidence
+  /\ LocalVoteRequiresViewBridge
+  /\ InflightSourcesRequireMatchingHash
+  /\ PendingMissesDoNotBlockInflightFallbacks
+  /\ NoSourceRejected
+  /\ AcceptedSourceAnchors
+  /\ FrontierEligibilityRejectionAnchors
+  /\ PendingShapeRejectionAnchors
+  /\ LocalVoteBridgeRejectionAnchors
+  /\ InflightHashRejectionAnchors
+  /\ NoSourceRejectionAnchors
+
 KeepFrontierPendingActiveCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ NoBugInvariant
+  /\ KeepFrontierPendingActiveExactness
 
 ====

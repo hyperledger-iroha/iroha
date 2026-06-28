@@ -254,9 +254,16 @@ StakeSnapshotCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == StakeSnapshotCoreSafety
+StakeSnapshotExactness ==
+  /\ StakeSnapshotCoreSafety
 
-SafetyFast == StakeSnapshotCoreSafety
+StakeSnapshotCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ StakeSnapshotExactness
+
+NoBugInvariant == StakeSnapshotExactness
+
+SafetyFast == StakeSnapshotExactness
 
 BugSnapshotEmptyRosterReturnsSnapshot == NoBugInvariant
 BugSnapshotEmptyMapMissingFallback == NoBugInvariant

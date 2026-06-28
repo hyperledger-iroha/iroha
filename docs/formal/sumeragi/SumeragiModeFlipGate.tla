@@ -265,7 +265,7 @@ ModeFlipCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 ModeFlipExactness ==
-  ModeFlipCoreSafety
+  /\ ModeFlipCoreSafety
 
 ModeFlipCorrectnessEnvelope ==
   /\ TypeInvariant

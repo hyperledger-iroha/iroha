@@ -162,8 +162,7 @@ QcFallbackMatchesSpec ==
   /\ \A c \in FallbackCases: FallbackMatches(c)
 
 BlockSyncQcFallbackExactness ==
-  QcFallbackMatchesSpec
-
+  /\ QcFallbackMatchesSpec
 BlockSyncQcFallbackCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ BlockSyncQcFallbackExactness

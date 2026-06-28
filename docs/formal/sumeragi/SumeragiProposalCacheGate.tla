@@ -510,8 +510,29 @@ ProposalCacheCoreSafety ==
   /\ PruneNoopLeavesFutureEntries
 
 ProposalCacheExactness ==
-  ProposalCacheCoreSafety
-
+  /\ HintCountMatchesSpec
+  /\ ProposalCountMatchesSpec
+  /\ ObservedCountMatchesSpec
+  /\ EvictedCountMatchesSpec
+  /\ HintLimitEnforced
+  /\ ProposalLimitEnforced
+  /\ InsertedEntryRetainedWhenWithinLimit
+  /\ InsertedEntryObservedWhenRetained
+  /\ ZeroLimitKeepsNothing
+  /\ HintOverflowEvictsLowestKey
+  /\ ProposalOverflowEvictsLowestKey
+  /\ EvictionMetricMatchesOverflow
+  /\ NoEvictionMetricWithoutEviction
+  /\ ReplaceExistingDoesNotDuplicate
+  /\ PopHintRemovesHint
+  /\ PopHintKeepsObservedForProposal
+  /\ PopProposalRemovesProposal
+  /\ PopMissingNoChange
+  /\ HintEvictionKeepsObservedForProposal
+  /\ ObservedOnlyForLiveEntries
+  /\ PruneRemovesCommittedEntries
+  /\ PruneKeepsFutureEntries
+  /\ PruneNoopLeavesFutureEntries
 ProposalCacheCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ ProposalCacheExactness

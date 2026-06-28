@@ -238,7 +238,7 @@ VotePlaceholderMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncVotePlaceholderExactness ==
-  VotePlaceholderMatchesSpec
+  /\ VotePlaceholderMatchesSpec
 
 BlockSyncVotePlaceholderCorrectnessEnvelope ==
   /\ TypeInvariant

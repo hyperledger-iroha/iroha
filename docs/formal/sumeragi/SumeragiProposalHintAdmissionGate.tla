@@ -462,7 +462,7 @@ StaleHeightPrunesCommittedCacheOnly ==
 CleanHintsDoNotSuppressCommittedConflicts ==
   candidate \in AcceptedCases => ~conflict_suppressed
 
-Safety ==
+ProposalHintAdmissionExactness ==
   /\ AcceptMatchesSpec
   /\ DeferredMatchesSpec
   /\ DroppedMatchesSpec
@@ -490,5 +490,12 @@ Safety ==
   /\ CommittedConflictsAreSuppressedAndDropped
   /\ StaleHeightPrunesCommittedCacheOnly
   /\ CleanHintsDoNotSuppressCommittedConflicts
+
+Safety ==
+  ProposalHintAdmissionExactness
+
+ProposalHintAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalHintAdmissionExactness
 
 ====

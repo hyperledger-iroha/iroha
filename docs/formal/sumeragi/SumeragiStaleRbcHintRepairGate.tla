@@ -239,8 +239,20 @@ StaleRbcHintRepairCoreSafety ==
   /\ RejectedStaleRbcHasNoChunkSideEffects
   /\ NoCachedHintNeverRepairs
 
-NoBugInvariant == StaleRbcHintRepairCoreSafety
+StaleRbcHintRepairExactness ==
+  /\ ActionsMatchSpec
+  /\ HintBackedStaleChunkSeedsRepair
+  /\ HintRepairRequiresDaKindAndFrontier
+  /\ HintRepairRequiresExactCachedHint
+  /\ RejectedStaleRbcStillDrops
+  /\ RejectedStaleRbcHasNoChunkSideEffects
+  /\ NoCachedHintNeverRepairs
+StaleRbcHintRepairCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ StaleRbcHintRepairExactness
 
-SafetyFast == StaleRbcHintRepairCoreSafety
+NoBugInvariant == StaleRbcHintRepairExactness
+
+SafetyFast == StaleRbcHintRepairExactness
 
 ====

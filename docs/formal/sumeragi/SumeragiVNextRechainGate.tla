@@ -367,7 +367,7 @@ QuarantineAndQuorumFailClosed ==
 ValidEvidenceCanRechain ==
   candidate \in AcceptedCases => accepted
 
-Safety ==
+VNextRechainExactness ==
   /\ AcceptMatchesSpec
   /\ AcceptedTaintSetMatchesSpec
   /\ AcceptedCriticalPathMatchesSpec
@@ -378,5 +378,15 @@ Safety ==
   /\ InvalidEvidenceFailsClosed
   /\ QuarantineAndQuorumFailClosed
   /\ ValidEvidenceCanRechain
+
+Safety ==
+  VNextRechainExactness
+
+VNextRechainCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextRechainExactness
+
+SafetyFast ==
+  VNextRechainExactness
 
 ====

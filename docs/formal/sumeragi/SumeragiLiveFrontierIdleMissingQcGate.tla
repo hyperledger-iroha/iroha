@@ -176,4 +176,12 @@ LiveFrontierIdleMissingQcSafetyAnchors ==
 Safety ==
   LiveFrontierIdleMissingQcSafetyAnchors
 
+LiveFrontierIdleMissingQcExactness ==
+  /\ SuppressionPositiveAnchors
+  /\ SuppressionNegativeAnchors
+  /\ SuppressedBranchEffectAnchors
+LiveFrontierIdleMissingQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LiveFrontierIdleMissingQcExactness
+
 ====

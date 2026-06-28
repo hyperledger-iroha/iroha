@@ -264,7 +264,7 @@ ValuesStayInDomain ==
     /\ InitialPendingFinality(candidate) \in PendingFinality
     /\ ImplementationFinalPendingFinality(candidate) \in PendingFinality
 
-Safety ==
+EngineProposalStateExactness ==
   /\ AcceptedPhaseIsPrepare
   /\ AcceptedRoundPreserved
   /\ AcceptedLockPreserved
@@ -273,6 +273,13 @@ Safety ==
   /\ RejectedStatePreserved
   /\ RejectedPhasePreservedExactly
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineProposalStateExactness
+
+EngineProposalStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineProposalStateExactness
 
 =============================================================================
 ====

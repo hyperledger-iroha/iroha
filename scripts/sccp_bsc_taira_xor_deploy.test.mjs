@@ -4721,6 +4721,129 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
     /source_event_transaction_production_blockers\[0\].*non-empty canonical string/u,
     "BSC source event transaction malformed blocker entry",
   );
+  for (const [field, blocker, label] of [
+    [
+      "source_event_transaction_production_blockers",
+      "secret%2dtoken-source-event-blocker",
+      "BSC source event transaction percent-encoded sensitive blocker",
+    ],
+    [
+      "source_event_transaction_production_blockers",
+      "api%20token-source-event-blocker",
+      "BSC source event transaction percent-encoded whitespace sensitive blocker",
+    ],
+    [
+      "route_canary_production_blockers",
+      "private&#95;key-route-canary-blocker",
+      "BSC route canary HTML-entity sensitive blocker",
+    ],
+    [
+      "route_canary_production_blockers",
+      "private&#32;key-route-canary-blocker",
+      "BSC route canary HTML-entity whitespace sensitive blocker",
+    ],
+  ]) {
+    let caught;
+    try {
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          [field]: [blocker],
+        }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof Error, label);
+    assert.match(caught.message, /contains sensitive name/u, label);
+    assert.doesNotMatch(caught.message, new RegExp(blocker, "u"), label);
+  }
+  for (const [field, blocker, encodedBlocker, label] of [
+    [
+      "source_event_transaction_production_blockers",
+      "safe duplicated source event blocker",
+      "safe%20duplicated%20source%20event%20blocker",
+      "BSC source event decoded duplicate blocker",
+    ],
+    [
+      "route_canary_production_blockers",
+      "safe duplicated route canary blocker",
+      "safe duplicated route&#32;canary blocker",
+      "BSC route canary decoded duplicate blocker",
+    ],
+  ]) {
+    let caught;
+    try {
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          [field]: [blocker, encodedBlocker],
+        }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof Error, label);
+    assert.match(caught.message, /must not contain duplicate strings/u, label);
+    assert.doesNotMatch(caught.message, new RegExp(blocker, "u"), label);
+    assert.doesNotMatch(caught.message, new RegExp(encodedBlocker, "u"), label);
+  }
+  for (const [field, blocker, expected, label] of [
+    [
+      "source_event_transaction_production_blockers",
+      "source event blocker\nnext line",
+      /contains control character/u,
+      "BSC source event blocker newline",
+    ],
+    [
+      "route_canary_production_blockers",
+      "route canary blocker\tfield",
+      /contains control character/u,
+      "BSC route canary blocker tab",
+    ],
+    [
+      "source_event_transaction_production_blockers",
+      "source event blocker\x7fdel",
+      /contains control character/u,
+      "BSC source event blocker DEL",
+    ],
+    [
+      "route_canary_production_blockers",
+      "route canary blocker clé",
+      /must be printable ASCII/u,
+      "BSC route canary blocker non-ASCII",
+    ],
+    [
+      "source_event_transaction_production_blockers",
+      "source%0Aevent-blocker",
+      /contains decoded control character/u,
+      "BSC source event blocker percent-encoded newline",
+    ],
+    [
+      "route_canary_production_blockers",
+      "route&#9;canary-blocker",
+      /contains decoded control character/u,
+      "BSC route canary blocker HTML-entity tab",
+    ],
+    [
+      "route_canary_production_blockers",
+      "route%E2%80%AEcanary-blocker",
+      /contains decoded non-ASCII character/u,
+      "BSC route canary blocker percent-encoded bidi",
+    ],
+  ]) {
+    let caught;
+    try {
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          [field]: [blocker],
+        }),
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof Error, label);
+    assert.match(caught.message, expected, label);
+    assert.doesNotMatch(caught.message, new RegExp(blocker, "u"), label);
+  }
   assert.throws(
     () =>
       buildBscTairaXorRouteConfigToml(

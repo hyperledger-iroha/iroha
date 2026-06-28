@@ -250,7 +250,11 @@ NoBugInvariant ==
   /\ WorldOnlinePreferencePreserved
 
 BlockSyncUpdateTargetsExactness ==
-  NoBugInvariant
+  /\ TargetSelectionMatchesSpec
+  /\ CapAndLocalExclusion
+  /\ EligibilityMatchesInputs
+  /\ StrayPriorityPreserved
+  /\ WorldOnlinePreferencePreserved
 
 BlockSyncUpdateTargetsCorrectnessEnvelope ==
   /\ TypeInvariant

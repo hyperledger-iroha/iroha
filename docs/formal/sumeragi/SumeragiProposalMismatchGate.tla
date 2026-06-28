@@ -323,8 +323,21 @@ ProposalMismatchCoreSafety ==
   /\ NoMismatchOnlyWhenCompatible
 
 ProposalMismatchExactness ==
-  ProposalMismatchCoreSafety
-
+  /\ MismatchKindMatchesSpec
+  /\ MismatchFoundMatchesSpec
+  /\ MismatchRankMatchesSpec
+  /\ HeightMismatchHasPriority
+  /\ ViewMismatchAfterHeight
+  /\ ParentMismatchAfterView
+  /\ TxRootMismatchAfterParent
+  /\ StateRootMismatchAfterTx
+  /\ PayloadMismatchAfterCompatibleHeader
+  /\ ZeroStateRootCompatDoesNotReject
+  /\ ZeroStateRootCompatStillChecksPayload
+  /\ MatchingProposalAccepted
+  /\ GenesisParentDefaultZeroAccepted
+  /\ MissingTxRootDefaultZeroAccepted
+  /\ NoMismatchOnlyWhenCompatible
 ProposalMismatchCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ ProposalMismatchExactness

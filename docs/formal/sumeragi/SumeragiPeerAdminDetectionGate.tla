@@ -183,6 +183,12 @@ NoBugInvariant == PeerAdminDetectionCoreSafety
 
 SafetyFast == PeerAdminDetectionCoreSafety
 
+PeerAdminDetectionExactness ==
+  /\ PeerAdminDetectionCoreSafety
+PeerAdminDetectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PeerAdminDetectionExactness
+
 BugRejectExactRegister == NoBugInvariant
 BugRejectExactUnregister == NoBugInvariant
 BugSkipLowercase == NoBugInvariant

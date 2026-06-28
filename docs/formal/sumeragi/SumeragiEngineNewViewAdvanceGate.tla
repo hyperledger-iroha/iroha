@@ -444,7 +444,7 @@ ValuesStayInDomain ==
     /\ ImplementationOutputValidatorSet(candidate) \in Values
     /\ ImplementationPhaseAfter(candidate) \in Values
 
-Safety ==
+EngineNewViewAdvanceExactness ==
   /\ RoundHeightMatchesSpec
   /\ RoundViewMatchesSpec
   /\ RoundEpochMatchesSpec
@@ -465,5 +465,14 @@ Safety ==
   /\ RejectedNewViewEmitsNoAdvanceView
   /\ RejectedNewViewPreservesOwnershipAndPhase
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineNewViewAdvanceExactness
+
+EngineNewViewAdvanceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineNewViewAdvanceExactness
+
+SafetyFast == EngineNewViewAdvanceExactness
 
 ====

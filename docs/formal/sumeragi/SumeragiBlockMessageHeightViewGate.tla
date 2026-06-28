@@ -229,18 +229,22 @@ BlockMessageCompactWideningExactness ==
   /\ CompactWideningAnchors
 
 BlockMessageHeightViewExactness ==
-  /\ SafetyFast
-  /\ BlockMessageNoSlotExactness
-  /\ BlockMessageSlotProjectionExactness
-  /\ BlockMessageSourceSelectionExactness
-  /\ BlockMessageCompactWideningExactness
+  /\ HeightViewMatchesSpec
+  /\ NoSlotMessagesStayUnfiltered
+  /\ NoSlotProjectionAnchors
+  /\ SlotMessagesRemainFutureWindowEligible
+  /\ ProjectionSourcePreserved
+  /\ HeightViewOrderPreserved
+  /\ SlotProjectionAnchors
+  /\ SourceSelectionAnchors
+  /\ CompactChunkWidensSlot
+  /\ CompactWideningAnchors
   /\ BlockMessageHeightViewSafetyAnchors
 
 Safety == BlockMessageHeightViewExactness
 
 BlockMessageHeightViewCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ BlockMessageHeightViewSafetyAnchors
+  /\ BlockMessageHeightViewExactness
 
 ====

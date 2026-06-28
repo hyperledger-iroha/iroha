@@ -274,6 +274,16 @@ StrictNonOkErrorsReject ==
   /\ ActualGuardOutcome("lookup_read_failed", "strict") = "reject"
   /\ ActualGuardOutcome("lookup_spool_scan", "strict") = "reject"
 
+ManifestGuardExactness ==
+  /\ ManifestGuardMatchesSpec
+  /\ HashMismatchAlwaysRejects
+  /\ AuditNonHashErrorsWarn
+  /\ StrictNonOkErrorsReject
+
+ManifestGuardCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ManifestGuardExactness
+
 BugEnforceMissingAllows ==
   ActualEnforceResult("lookup_missing") = SpecEnforceResult("lookup_missing")
 

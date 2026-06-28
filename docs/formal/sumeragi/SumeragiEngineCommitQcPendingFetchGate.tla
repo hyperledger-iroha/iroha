@@ -372,7 +372,7 @@ FieldValuesStayInDomain ==
     /\ ImplementationFetchBlock(candidate) \in FieldValues
     /\ ImplementationFetchPayload(candidate) \in FieldValues
 
-Safety ==
+EngineCommitQcPendingFetchExactness ==
   /\ PendingSubjectMatchesSpec
   /\ PendingMapKeyMatchesSpec
   /\ PendingMapCertificateMatchesSpec
@@ -389,5 +389,14 @@ Safety ==
   /\ ReplayConflictNeverFetches
   /\ NoFetchWithoutMissingPayload
   /\ FieldValuesStayInDomain
+
+Safety ==
+  EngineCommitQcPendingFetchExactness
+
+EngineCommitQcPendingFetchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcPendingFetchExactness
+
+SafetyFast == EngineCommitQcPendingFetchExactness
 
 ====

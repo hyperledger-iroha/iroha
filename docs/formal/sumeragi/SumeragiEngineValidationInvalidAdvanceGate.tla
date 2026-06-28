@@ -263,7 +263,7 @@ ValuesStayInDomain ==
     /\ ImplementationSignVoteRound(candidate) \in RoundValues
     /\ ImplementationAdvanceOutputRound(candidate) \in RoundValues
 
-Safety ==
+EngineValidationInvalidAdvanceExactness ==
   /\ FinalRoundMatchesSpec
   /\ SignVoteRoundMatchesSpec
   /\ AdvanceOutputRoundMatchesSpec
@@ -274,5 +274,14 @@ Safety ==
   /\ IgnoredCallbacksPreserveRoundAndHaveNoOutputs
   /\ SaturatingMaxViewDoesNotWrap
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineValidationInvalidAdvanceExactness
+
+EngineValidationInvalidAdvanceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineValidationInvalidAdvanceExactness
+
+SafetyFast == EngineValidationInvalidAdvanceExactness
 
 ====

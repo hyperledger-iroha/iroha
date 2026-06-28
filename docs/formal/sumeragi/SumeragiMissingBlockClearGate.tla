@@ -85,7 +85,7 @@ MissingBlockClearMatchesSpec ==
   ActualOutput = SpecOutput
 
 MissingBlockClearExactness ==
-  MissingBlockClearMatchesSpec
+  /\ MissingBlockClearMatchesSpec
 
 MissingBlockClearCorrectnessEnvelope ==
   /\ TypeInvariant

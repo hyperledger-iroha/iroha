@@ -430,8 +430,16 @@ AuthoritativePayloadProgressCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 AuthoritativePayloadProgressExactness ==
-  AuthoritativePayloadProgressCoreSafety
-
+  /\ SourceMatchesSpec
+  /\ ActionsMatchSpec
+  /\ ValidPendingOwnersWin
+  /\ RejectedPendingOwnersFailClosed
+  /\ ValidInflightOwnersWin
+  /\ RejectedInflightOwnersFailClosed
+  /\ DeferredPayloadsAreNeverReturned
+  /\ CommittedKuraBlocksAreAuthoritative
+  /\ KuraMissesAndUncommittedBlocksStayMissing
+  /\ LookupShapeMatchesShortCircuit
 AuthoritativePayloadProgressCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ AuthoritativePayloadProgressExactness

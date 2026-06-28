@@ -383,7 +383,7 @@ ValuesStayInDomain ==
     /\ ImplementationCommittedBlock(input) \in Blocks
     /\ ImplementationCommittedReconfiguration(input) \in ReconfigurationValues
 
-Safety ==
+EngineHandleForwardingExactness ==
   /\ ProposalRoundForwarded
   /\ ProposalSubjectForwarded
   /\ ProposalHighestForwarded
@@ -400,6 +400,15 @@ Safety ==
   /\ CommittedReconfigurationForwarded
   /\ AllPayloadsForwarded
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineHandleForwardingExactness
+
+EngineHandleForwardingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineHandleForwardingExactness
+
+SafetyFast == EngineHandleForwardingExactness
 
 =============================================================================
 ====

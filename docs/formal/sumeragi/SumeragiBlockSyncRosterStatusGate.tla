@@ -207,8 +207,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+BlockSyncRosterStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 BlockSyncRosterStatusExactness ==
-  Safety
+  /\ BlockSyncRosterStatusActionsMatchSpec
 
 BlockSyncRosterStatusCorrectnessEnvelope ==
   /\ TypeInvariant

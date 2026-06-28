@@ -237,7 +237,7 @@ ValuesStayInDomain ==
     /\ SpecFinalPhase(candidate) \in PhaseValues
     /\ ImplementationFinalPhase(candidate) \in PhaseValues
 
-Safety ==
+EngineCommitQcPhaseExactness ==
   /\ FinalPhaseMatchesSpec
   /\ AvailableCommitQcsReturnToProposalPhase
   /\ MissingPayloadCommitQcsEnterPendingFinalityPhase
@@ -246,5 +246,14 @@ Safety ==
   /\ PendingConflictPreservesPhase
   /\ IgnoredCommitQcsNeverChangePhase
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineCommitQcPhaseExactness
+
+EngineCommitQcPhaseCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcPhaseExactness
+
+SafetyFast == EngineCommitQcPhaseExactness
 
 ====

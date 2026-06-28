@@ -61,6 +61,21 @@ APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
     "`deep` is intentionally Apalache-only in PR CI",
     "Every other PR baseline mode must have both a TLC runner case and README command.",
 )
+# Historical escape hatch for fast envelopes without direct *Exactness coverage.
+# Keep empty; new entries should be justified by an explicit formal debt note.
+LEGACY_FAST_ENVELOPE_WITHOUT_EXACTNESS = set()
+GENERIC_CORRECTNESS_CHECKS = {"NoBugInvariant", "Safety", "SafetyFast"}
+# The top-level TLC temporal property remains direct so TLC can level-analyze it.
+# Keep this narrow and stale-checked; helper envelopes should use *Exactness.
+TEMPORAL_CORRECTNESS_ENVELOPE_EXTRAS = {
+    (
+        "Sumeragi.tla",
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+    ): {
+        "EventuallyCommit",
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+    },
+}
 
 COMMAND_MODE_PATTERN = r"[A-Za-z0-9_.:/-]+"
 COMMAND_MODE_RE = re.compile(rf"^{COMMAND_MODE_PATTERN}$")
@@ -128,6 +143,23 @@ TLA_MODULE_RE = re.compile(
 )
 TLA_TERMINATOR_RE = re.compile(r"^={4}\s*$")
 TLA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+TLA_IDENTIFIER_EQUALITY_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*[A-Za-z_][A-Za-z0-9_]*$"
+)
+TLA_ACTIONS_MATCH_QUANTIFIER_RE = re.compile(
+    r"^\\A\s+([A-Za-z_][A-Za-z0-9_]*)\s+\\in\s+(?:Cases|Candidates):\s+"
+    r"ImplementationActions\(\1\)\s*=\s*SpecActions\(\1\)$"
+)
+TLA_DIRECT_ACTIONS_MATCH_RE = re.compile(
+    r"^ImplementationActions\(([A-Za-z_][A-Za-z0-9_]*)\)\s*=\s*"
+    r"SpecActions\(\1\)$"
+)
+TLA_MATCHES_QUANTIFIER_RE = re.compile(
+    r"^\\A\s+([A-Za-z_][A-Za-z0-9_]*)\s+\\in\s+"
+    r"(?:AllCases|Cases|Candidates):\s+Matches\(\1\)$"
+)
+TLA_DIRECT_MATCHES_CALL_RE = re.compile(r"^Matches\(.+\)$")
+TLA_WHOLE_BODY_QUANTIFIER_RE = re.compile(r"^\\[AE]\b")
 TLA_RESERVED_WORDS = {
     "ASSUME",
     "ASSUMPTION",
@@ -2399,7 +2431,7 @@ def cfg_fast_generic_check_errors(
     cfg_file: Path,
     runner_name: str,
 ) -> list[str]:
-    if not cfg_file.name.endswith("_fast.cfg"):
+    if not cfg_file.name.endswith("_fast.cfg") or "_bug_" in cfg_file.name:
         return []
 
     references, parse_errors = cfg_operator_references(cfg_file)
@@ -2407,15 +2439,580 @@ def cfg_fast_generic_check_errors(
         return []
 
     errors: list[str] = []
+    has_correctness_envelope = False
     for line_number, directive, operator in references:
         if directive not in CFG_CHECK_DIRECTIVES:
             continue
-        if operator not in {"NoBugInvariant", "Safety", "SafetyFast"}:
+        if operator.endswith("CorrectnessEnvelope"):
+            has_correctness_envelope = True
+        if operator not in GENERIC_CORRECTNESS_CHECKS:
             continue
         errors.append(
             f"{mode}: {runner_name} cfg {display_path(cfg_file)}:{line_number} "
             f"references generic check {operator}; fast configs must use a "
             "model-specific direct invariant"
+        )
+    if not has_correctness_envelope:
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_file)} has no "
+            "model-specific *CorrectnessEnvelope invariant/property check"
+        )
+    return errors
+
+
+def tla_static_identifiers(expression: str) -> set[str]:
+    """Return static TLA identifiers mentioned in an expression body."""
+
+    return {
+        identifier
+        for identifier in TLA_IDENTIFIER_SCAN_RE.findall(expression)
+        if is_tla_user_identifier(identifier)
+    }
+
+
+def tla_top_level_conjuncts(expression: str) -> list[str]:
+    """Return conservative top-level conjunction parts from a static body."""
+
+    text = strip_static_outer_parentheses(expression).strip()
+    conjuncts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            current.append(char)
+            in_string = not in_string
+            index += 1
+            continue
+        if not in_string:
+            if char in "([{":
+                depth += 1
+            elif char in ")]}" and depth > 0:
+                depth -= 1
+            if depth == 0 and text.startswith("/\\", index):
+                part = "".join(current).strip()
+                if part:
+                    conjuncts.append(part)
+                current = []
+                index += 2
+                continue
+        current.append(char)
+        index += 1
+
+    part = "".join(current).strip()
+    if part:
+        conjuncts.append(part)
+    return conjuncts
+
+
+def tla_zero_arity_conjunct_references(expression: str) -> list[str]:
+    """Return zero-arity operator references used as direct conjunction parts."""
+
+    references: list[str] = []
+    for conjunct in tla_top_level_conjuncts(expression):
+        normalized = strip_static_outer_parentheses(" ".join(conjunct.split()))
+        if TLA_IDENTIFIER_RE.fullmatch(normalized) and is_tla_user_identifier(
+            normalized
+        ):
+            references.append(normalized)
+    return references
+
+
+def duplicate_zero_arity_conjunct_references(expression: str) -> list[str]:
+    """Return repeated zero-arity conjunct references in stable order."""
+
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for reference in tla_zero_arity_conjunct_references(expression):
+        if reference in seen and reference not in duplicates:
+            duplicates.append(reference)
+        seen.add(reference)
+    return duplicates
+
+
+def tla_has_top_level_disjunction(expression: str) -> bool:
+    """Return whether an expression contains a top-level disjunction operator."""
+
+    text = strip_static_outer_parentheses(expression).strip()
+    depth = 0
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            in_string = not in_string
+            index += 1
+            continue
+        if not in_string:
+            if char in "([{":
+                depth += 1
+            elif char in ")]}" and depth > 0:
+                depth -= 1
+            if depth == 0 and text.startswith("\\/", index):
+                return True
+        index += 1
+    return False
+
+
+def exactness_definition_shape_errors(
+    mode: str,
+    module_path: Path,
+    cfg_file: Path,
+    cfg_line_number: int,
+    runner_name: str,
+    exactness_operator: str,
+    definitions: dict[str, tuple[int, str]],
+    reference_context: str,
+) -> list[str]:
+    exactness_definition = definitions.get(exactness_operator)
+    prefix = (
+        f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+        f"{cfg_line_number} {reference_context} {exactness_operator}"
+    )
+    if exactness_definition is None:
+        return [
+            f"{prefix} has no static "
+            f"single-expression definition in {display_path(module_path)}"
+        ]
+
+    exactness_line, exactness_body = exactness_definition
+    exactness_body = strip_static_outer_parentheses(exactness_body)
+    if exactness_body in {"TRUE", "FALSE"}:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is literal "
+            f"{exactness_body}"
+        ]
+    if exactness_body in GENERIC_CORRECTNESS_CHECKS:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} aliases generic "
+            f"{exactness_body}; compose concrete model predicates directly"
+        ]
+    if TLA_IDENTIFIER_EQUALITY_RE.fullmatch(exactness_body):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is raw scalar "
+            f"equality {exactness_body}; name the concrete model predicate and "
+            "compose it as a direct exactness conjunct"
+        ]
+    exactness_compact_body = " ".join(exactness_body.split())
+    if exactness_compact_body.startswith("~"):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is whole-body "
+            f"negation {exactness_compact_body}; name the concrete model "
+            "predicate and compose it as a direct exactness conjunct"
+        ]
+    if (
+        not exactness_compact_body.startswith(("/\\", "\\A ", "\\E "))
+        and tla_has_top_level_disjunction(exactness_body)
+    ):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is whole-body "
+            f"disjunction {exactness_compact_body}; name the concrete model "
+            "predicate and compose it as a direct exactness conjunct"
+        ]
+    if TLA_ACTIONS_MATCH_QUANTIFIER_RE.fullmatch(exactness_compact_body):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is whole-body "
+            f"implementation/spec action quantifier {exactness_compact_body}; "
+            "name the concrete model predicate and compose it as a direct "
+            "exactness conjunct"
+        ]
+    if TLA_MATCHES_QUANTIFIER_RE.fullmatch(exactness_compact_body):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is whole-body "
+            f"Matches quantifier {exactness_compact_body}; name the concrete "
+            "model predicate and compose it as a direct exactness conjunct"
+        ]
+    if TLA_WHOLE_BODY_QUANTIFIER_RE.match(exactness_compact_body):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} is whole-body "
+            f"quantifier {exactness_compact_body}; name the concrete model "
+            "predicate and compose it as a direct exactness conjunct"
+        ]
+    for conjunct in tla_top_level_conjuncts(exactness_body):
+        compact_conjunct = " ".join(
+            strip_static_outer_parentheses(conjunct).split()
+        )
+        if TLA_DIRECT_ACTIONS_MATCH_RE.fullmatch(compact_conjunct):
+            return [
+                f"{prefix} at "
+                f"{display_path(module_path)}:{exactness_line} contains "
+                "direct implementation/spec action conjunct "
+                f"{compact_conjunct}; name the concrete model predicate and "
+                "compose it as a direct exactness conjunct"
+            ]
+        if TLA_DIRECT_MATCHES_CALL_RE.fullmatch(compact_conjunct):
+            return [
+                f"{prefix} at "
+                f"{display_path(module_path)}:{exactness_line} contains "
+                f"direct Matches conjunct {compact_conjunct}; name the "
+                "concrete model predicate and compose it as a direct "
+                "exactness conjunct"
+            ]
+    if (
+        exactness_compact_body.startswith("/\\")
+        and not tla_zero_arity_conjunct_references(exactness_body)
+    ):
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains no direct "
+            "named exactness conjuncts; name the concrete model predicate and "
+            "compose it as a direct exactness conjunct"
+        ]
+
+    exactness_identifiers = tla_static_identifiers(exactness_body)
+    if len(exactness_identifiers) == 1 and exactness_body in exactness_identifiers:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} aliases "
+            f"{exactness_body}; inline concrete model predicates directly"
+        ]
+
+    generic_identifiers = sorted(
+        identifier
+        for identifier in exactness_identifiers
+        if identifier in GENERIC_CORRECTNESS_CHECKS
+    )
+    if "TypeInvariant" in exactness_identifiers:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} mentions "
+            "TypeInvariant; keep type invariants in *CorrectnessEnvelope "
+            "operators"
+        ]
+    if generic_identifiers:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} mentions generic "
+            f"{', '.join(generic_identifiers)}; compose concrete model "
+            "predicates directly"
+        ]
+    nested_exactness_identifiers = sorted(
+        identifier
+        for identifier in exactness_identifiers
+        if identifier.endswith("Exactness") and identifier != exactness_operator
+    )
+    if nested_exactness_identifiers:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} composes nested "
+            f"exactness {', '.join(nested_exactness_identifiers)}; inline "
+            "concrete model predicates directly"
+        ]
+
+    duplicate_conjuncts = duplicate_zero_arity_conjunct_references(exactness_body)
+    if duplicate_conjuncts:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} repeats exactness "
+            f"conjunct {', '.join(duplicate_conjuncts)}; remove duplicate "
+            "conjuncts so every obligation is counted once"
+        ]
+    literal_conjuncts: list[str] = []
+    aliased_conjuncts: list[str] = []
+    undefined_conjuncts: list[str] = []
+    for conjunct_operator in tla_zero_arity_conjunct_references(exactness_body):
+        conjunct_definition = definitions.get(conjunct_operator)
+        if conjunct_definition is None:
+            undefined_conjuncts.append(conjunct_operator)
+            continue
+        conjunct_line, conjunct_body = conjunct_definition
+        conjunct_body = strip_static_outer_parentheses(conjunct_body)
+        if conjunct_body in {"TRUE", "FALSE"}:
+            literal_conjuncts.append(
+                f"{conjunct_operator} at {display_path(module_path)}:"
+                f"{conjunct_line} is literal {conjunct_body}"
+            )
+            continue
+        conjunct_identifiers = tla_static_identifiers(conjunct_body)
+        if len(conjunct_identifiers) == 1 and conjunct_body in conjunct_identifiers:
+            aliased_conjuncts.append(
+                f"{conjunct_operator} at {display_path(module_path)}:"
+                f"{conjunct_line} aliases {conjunct_body}"
+            )
+    if undefined_conjuncts:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains undefined "
+            f"exactness conjunct {', '.join(undefined_conjuncts)}; define "
+            "named concrete model predicates before composing them"
+        ]
+    if literal_conjuncts:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains literal "
+            f"exactness conjunct {', '.join(literal_conjuncts)}; compose "
+            "concrete model predicates directly"
+        ]
+    if aliased_conjuncts:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains aliased "
+            f"exactness conjunct {', '.join(aliased_conjuncts)}; inline "
+            "concrete model predicates directly"
+        ]
+    return []
+
+
+def cfg_correctness_envelope_shape_errors(
+    mode: str,
+    module_path: Path,
+    cfg_file: Path,
+    runner_name: str,
+) -> list[str]:
+    if not cfg_file.name.endswith("_fast.cfg") or "_bug_" in cfg_file.name:
+        return []
+
+    references, parse_errors = cfg_operator_references(cfg_file)
+    if parse_errors:
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    errors: list[str] = []
+    legacy_without_exactness = False
+    for line_number, directive, operator in references:
+        if directive not in CFG_CHECK_DIRECTIVES:
+            continue
+        if not operator.endswith("CorrectnessEnvelope"):
+            continue
+        definition = definitions.get(operator)
+        if definition is None:
+            errors.append(
+                f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                f"{line_number} references correctness envelope {operator}, "
+                f"but {display_path(module_path)} has no static "
+                "single-expression definition for it"
+            )
+            continue
+        definition_line, body = definition
+        identifiers = tla_static_identifiers(body)
+        envelope_conjunct_references = set(tla_zero_arity_conjunct_references(body))
+        duplicate_conjuncts = duplicate_zero_arity_conjunct_references(body)
+        if duplicate_conjuncts:
+            errors.append(
+                f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                f"{line_number} references correctness envelope {operator}, "
+                f"but {display_path(module_path)}:{definition_line} repeats "
+                f"correctness-envelope conjunct {', '.join(duplicate_conjuncts)}; "
+                "remove duplicate conjuncts so every obligation is counted once"
+            )
+        if "TypeInvariant" not in identifiers:
+            errors.append(
+                f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                f"{line_number} references correctness envelope {operator}, "
+                f"but {display_path(module_path)}:{definition_line} does not "
+                "compose TypeInvariant"
+            )
+        elif "TypeInvariant" not in envelope_conjunct_references:
+            errors.append(
+                f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                f"{line_number} references correctness envelope {operator}, "
+                f"but {display_path(module_path)}:{definition_line} mentions "
+                "TypeInvariant outside a top-level conjunct; compose "
+                "TypeInvariant as a direct /\\ conjunct"
+            )
+        exactness_identifiers = sorted(
+            identifier for identifier in identifiers if identifier.endswith("Exactness")
+        )
+        if exactness_identifiers:
+            nested_exactness_identifiers = sorted(
+                identifier
+                for identifier in exactness_identifiers
+                if identifier not in envelope_conjunct_references
+            )
+            if nested_exactness_identifiers:
+                errors.append(
+                    f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                    f"{line_number} references correctness envelope {operator}, "
+                    f"but {display_path(module_path)}:{definition_line} mentions "
+                    f"exactness {', '.join(nested_exactness_identifiers)} outside "
+                    "top-level conjuncts; compose *Exactness operators as direct "
+                    "/\\ conjuncts"
+                )
+            generic_identifiers = sorted(
+                identifier
+                for identifier in identifiers
+                if identifier in GENERIC_CORRECTNESS_CHECKS
+            )
+            if generic_identifiers:
+                errors.append(
+                    f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                    f"{line_number} references correctness envelope {operator}, "
+                    f"but {display_path(module_path)}:{definition_line} mentions "
+                    f"generic {', '.join(generic_identifiers)}; compose concrete "
+                    "exactness predicates directly"
+                )
+            extra_identifiers = sorted(
+                identifier
+                for identifier in identifiers
+                if identifier != "TypeInvariant"
+                and not identifier.endswith("Exactness")
+                and identifier not in GENERIC_CORRECTNESS_CHECKS
+            )
+            allowed_extra_identifiers = TEMPORAL_CORRECTNESS_ENVELOPE_EXTRAS.get(
+                (module_path.name, operator), set()
+            )
+            unexpected_extra_identifiers = sorted(
+                identifier
+                for identifier in extra_identifiers
+                if identifier not in allowed_extra_identifiers
+            )
+            if unexpected_extra_identifiers:
+                errors.append(
+                    f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                    f"{line_number} references correctness envelope {operator}, "
+                    f"but {display_path(module_path)}:{definition_line} mentions "
+                    f"non-exactness {', '.join(unexpected_extra_identifiers)}; compose "
+                    "semantic obligations through *Exactness operators"
+                )
+            missing_allowed_extra_identifiers = sorted(
+                identifier
+                for identifier in allowed_extra_identifiers
+                if identifier not in extra_identifiers
+            )
+            if missing_allowed_extra_identifiers:
+                errors.append(
+                    f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                    f"{line_number} references correctness envelope {operator}, "
+                    f"but its temporal allowlist is stale for "
+                    f"{', '.join(missing_allowed_extra_identifiers)}"
+                )
+            nested_allowed_extra_identifiers = sorted(
+                identifier
+                for identifier in allowed_extra_identifiers
+                if identifier in extra_identifiers
+                and identifier not in envelope_conjunct_references
+            )
+            if nested_allowed_extra_identifiers:
+                errors.append(
+                    f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+                    f"{line_number} references correctness envelope {operator}, "
+                    f"but {display_path(module_path)}:{definition_line} mentions "
+                    f"allowlisted temporal {', '.join(nested_allowed_extra_identifiers)} "
+                    "outside top-level conjuncts; keep temporal exceptions as "
+                    "direct /\\ conjuncts"
+                )
+            for exactness_operator in exactness_identifiers:
+                errors.extend(
+                    exactness_definition_shape_errors(
+                        mode,
+                        module_path,
+                        cfg_file,
+                        line_number,
+                        runner_name,
+                        exactness_operator,
+                        definitions,
+                        (
+                            f"references correctness envelope {operator}, but "
+                            "exactness conjunct"
+                        ),
+                    )
+                )
+            continue
+        if mode in LEGACY_FAST_ENVELOPE_WITHOUT_EXACTNESS:
+            legacy_without_exactness = True
+            continue
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_file)}:{line_number} "
+            f"references correctness envelope {operator}, but "
+            f"{display_path(module_path)}:{definition_line} has no "
+            "model-specific *Exactness conjunct"
+        )
+
+    if mode in LEGACY_FAST_ENVELOPE_WITHOUT_EXACTNESS and not legacy_without_exactness:
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_file)} is listed in "
+            "LEGACY_FAST_ENVELOPE_WITHOUT_EXACTNESS, but its correctness "
+            "envelope already includes a model-specific *Exactness conjunct"
+        )
+    return errors
+
+
+def cfg_direct_exactness_shape_errors(
+    mode: str,
+    module_path: Path,
+    cfg_file: Path,
+    runner_name: str,
+) -> list[str]:
+    if not cfg_file.name.endswith("_fast.cfg") or "_bug_" in cfg_file.name:
+        return []
+
+    references, parse_errors = cfg_operator_references(cfg_file)
+    if parse_errors:
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    errors: list[str] = []
+    for line_number, directive, operator in references:
+        if directive not in CFG_CHECK_DIRECTIVES:
+            continue
+        if not operator.endswith("Exactness"):
+            continue
+        errors.extend(
+            exactness_definition_shape_errors(
+                mode,
+                module_path,
+                cfg_file,
+                line_number,
+                runner_name,
+                operator,
+                definitions,
+                "references direct exactness check",
+            )
+        )
+    return errors
+
+
+def cfg_direct_exactness_envelope_pairing_errors(
+    mode: str,
+    module_path: Path,
+    cfg_file: Path,
+    runner_name: str,
+) -> list[str]:
+    if not cfg_file.name.endswith("_fast.cfg") or "_bug_" in cfg_file.name:
+        return []
+
+    references, parse_errors = cfg_operator_references(cfg_file)
+    if parse_errors:
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    enveloped_exactness: set[str] = set()
+    for _, directive, operator in references:
+        if directive not in CFG_CHECK_DIRECTIVES:
+            continue
+        if not operator.endswith("CorrectnessEnvelope"):
+            continue
+        definition = definitions.get(operator)
+        if definition is None:
+            continue
+        enveloped_exactness.update(
+            identifier
+            for identifier in tla_static_identifiers(definition[1])
+            if identifier.endswith("Exactness")
+        )
+
+    errors: list[str] = []
+    for line_number, directive, operator in references:
+        if directive not in CFG_CHECK_DIRECTIVES:
+            continue
+        if not operator.endswith("Exactness"):
+            continue
+        if operator in enveloped_exactness:
+            continue
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
+            f"{line_number} references direct exactness check {operator}, "
+            "but no checked correctness envelope in that CFG composes it"
         )
     return errors
 
@@ -3087,6 +3684,21 @@ def main() -> int:
                     )
                 )
                 reference_errors.extend(
+                    cfg_correctness_envelope_shape_errors(
+                        mode, spec_files[0], cfg_file, "Apalache"
+                    )
+                )
+                reference_errors.extend(
+                    cfg_direct_exactness_shape_errors(
+                        mode, spec_files[0], cfg_file, "Apalache"
+                    )
+                )
+                reference_errors.extend(
+                    cfg_direct_exactness_envelope_pairing_errors(
+                        mode, spec_files[0], cfg_file, "Apalache"
+                    )
+                )
+                reference_errors.extend(
                     cfg_constant_binding_errors(mode, spec_files[0], cfg_file)
                 )
         for path in files:
@@ -3241,6 +3853,21 @@ def main() -> int:
                     )
                     tlc_reference_errors.extend(
                         cfg_trivial_check_operator_errors(
+                            mode, module_files[0], cfg_file, "TLC"
+                        )
+                    )
+                    tlc_reference_errors.extend(
+                        cfg_correctness_envelope_shape_errors(
+                            mode, module_files[0], cfg_file, "TLC"
+                        )
+                    )
+                    tlc_reference_errors.extend(
+                        cfg_direct_exactness_shape_errors(
+                            mode, module_files[0], cfg_file, "TLC"
+                        )
+                    )
+                    tlc_reference_errors.extend(
+                        cfg_direct_exactness_envelope_pairing_errors(
                             mode, module_files[0], cfg_file, "TLC"
                         )
                     )

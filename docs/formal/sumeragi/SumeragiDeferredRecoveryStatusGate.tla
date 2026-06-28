@@ -139,7 +139,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..11
 
-Safety ==
+DeferredRecoveryStatusActionsMatchSpec ==
   /\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
   /\ ImplementationActions(QcMissingPayloadRecord) =
        SpecActions(QcMissingPayloadRecord)
@@ -161,7 +161,10 @@ Safety ==
        SpecActions(ResetAfterRecordsClears)
 
 DeferredRecoveryStatusExactness ==
-  Safety
+  /\ DeferredRecoveryStatusActionsMatchSpec
+
+Safety ==
+  DeferredRecoveryStatusExactness
 
 DeferredRecoveryStatusCorrectnessEnvelope ==
   /\ TypeInvariant

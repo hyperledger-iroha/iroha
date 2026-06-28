@@ -493,10 +493,14 @@ SafetyAnchors ==
   /\ TimeoutRecordAnchors
   /\ ProjectionAnchors
 
+CommitInflightStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 CommitInflightStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ CommitInflightStatusExactness
 
 =============================================================================
 ====

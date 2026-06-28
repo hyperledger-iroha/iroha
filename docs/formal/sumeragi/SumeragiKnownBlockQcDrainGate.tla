@@ -391,8 +391,7 @@ MatchesSpec ==
   /\ removeBeforeApply = SpecRemoveBeforeApply(candidate)
 
 KnownBlockQcDrainExactness ==
-  MatchesSpec
-
+  /\ MatchesSpec
 KnownBlockQcDrainCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ KnownBlockQcDrainExactness

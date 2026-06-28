@@ -229,7 +229,7 @@ DispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BackgroundDispatchExactness ==
-  DispatchMatchesSpec
+  /\ DispatchMatchesSpec
 
 BackgroundDispatchCorrectnessEnvelope ==
   /\ TypeInvariant

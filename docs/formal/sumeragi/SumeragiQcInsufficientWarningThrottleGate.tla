@@ -220,5 +220,25 @@ BugGcZeroCooldownUsesZero ==
 BugClearKeepsEntries ==
   ImplementationActions(ClearResetsEntries) = SpecActions(ClearResetsEntries)
 
+QcInsufficientWarningThrottleExactness ==
+  /\ BugFirstSuppressed
+  /\ BugWithinCooldownLogs
+  /\ BugCooldownBoundarySuppressed
+  /\ BugSuppressedCountLost
+  /\ BugDifferentKindCollides
+  /\ BugDifferentPhaseCollides
+  /\ BugDifferentHashCollides
+  /\ BugDifferentHeightCollides
+  /\ BugDifferentViewCollides
+  /\ BugZeroCooldownSuppresses
+  /\ BugGcBoundaryPruned
+  /\ BugGcExpiredRetained
+  /\ BugGcZeroCooldownUsesZero
+  /\ BugClearKeepsEntries
+
+QcInsufficientWarningThrottleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcInsufficientWarningThrottleExactness
+
 =============================================================================
 ====

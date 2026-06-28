@@ -327,8 +327,7 @@ ProposalBatchMatchesSpec ==
   /\ \A c \in CanonCases: ActualCanonOutput(c) = SpecCanonOutput(c)
 
 ProposalBatchExactness ==
-  ProposalBatchMatchesSpec
-
+  /\ ProposalBatchMatchesSpec
 ProposalBatchCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ ProposalBatchExactness

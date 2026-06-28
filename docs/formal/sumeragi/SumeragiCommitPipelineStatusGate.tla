@@ -197,8 +197,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+CommitPipelineStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 CommitPipelineStatusExactness ==
-  Safety
+  /\ CommitPipelineStatusActionsMatchSpec
 
 CommitPipelineStatusCorrectnessEnvelope ==
   /\ TypeInvariant

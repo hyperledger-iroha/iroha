@@ -145,8 +145,17 @@ VNextStakeWeightCoreSafety ==
   /\ ActualQuorum("quorum_stake_mul_overflow") = FALSE
   /\ ActualQuorum("quorum_total_mul_overflow") = FALSE
 
-SafetyFast ==
-  VNextStakeWeightCoreSafety
+VNextStakeWeightExactness ==
+  /\ VNextStakeWeightCoreSafety
+VNextStakeWeightCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextStakeWeightExactness
+
+NoBugInvariant == VNextStakeWeightExactness
+
+Safety == VNextStakeWeightExactness
+
+SafetyFast == VNextStakeWeightExactness
 
 BugLookupEmptyReturnsZero ==
   ActualWeight("lookup_empty") = SpecWeight("lookup_empty")

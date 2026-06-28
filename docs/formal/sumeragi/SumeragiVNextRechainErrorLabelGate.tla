@@ -170,8 +170,15 @@ VNextRechainErrorLabelCoreSafety ==
   /\ \A c \in Cases: Matches(c)
   /\ PayloadLabelsStable
 
+VNextRechainErrorLabelExactness ==
+  /\ \A c \in Cases: Matches(c)
+  /\ PayloadLabelsStable
+VNextRechainErrorLabelCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextRechainErrorLabelExactness
+
 SafetyFast ==
-  VNextRechainErrorLabelCoreSafety
+  VNextRechainErrorLabelExactness
 
 BugEmptyEvidenceLabelWrong ==
   Matches(EmptyEvidence)

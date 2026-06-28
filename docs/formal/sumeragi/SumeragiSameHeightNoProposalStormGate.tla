@@ -431,9 +431,6 @@ SameHeightNoProposalStormCoreSafety ==
   /\ BreakSafety
   /\ ActivePendingSafety
 
-SafetyFast ==
-  SameHeightNoProposalStormCoreSafety
-
 ProgressAnchors ==
   /\ ProgressSafety
   /\ ImplementationActions(ProgressNoneToSome) = SpecActions(ProgressNoneToSome)
@@ -511,7 +508,18 @@ SameHeightNoProposalStormSafetyAnchors ==
   /\ BreakAnchors
   /\ ActivePendingAnchors
 
+SameHeightNoProposalStormExactness ==
+  /\ SameHeightNoProposalStormCoreSafety
+  /\ SameHeightNoProposalStormSafetyAnchors
+
+SameHeightNoProposalStormCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SameHeightNoProposalStormExactness
+
+SafetyFast ==
+  SameHeightNoProposalStormExactness
+
 Safety ==
-  SameHeightNoProposalStormSafetyAnchors
+  SameHeightNoProposalStormExactness
 
 ====

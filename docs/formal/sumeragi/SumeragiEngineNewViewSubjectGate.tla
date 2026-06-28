@@ -181,13 +181,20 @@ PayloadHashAlwaysZero ==
   \A candidate \in tried:
     ImplementationPayload(candidate) = "zero"
 
-Safety ==
+EngineNewViewSubjectExactness ==
   /\ SubjectFieldsMatchSpec
   /\ HighestCasesUseQcSubject
   /\ TickFallbackUsesZeroSubject
   /\ InvalidFallbackUsesRejectedBlockSubject
   /\ HighestBindingMatchesPresence
   /\ PayloadHashAlwaysZero
+
+Safety ==
+  EngineNewViewSubjectExactness
+
+EngineNewViewSubjectCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineNewViewSubjectExactness
 
 =============================================================================
 ====

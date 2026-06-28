@@ -309,7 +309,8 @@ RbcStatusPersistenceMatchesSpec ==
   /\ \A c \in TempPathCases:
        ActualTempPath(c) = SpecTempPath(c)
 
-RbcStatusPersistenceExactness == RbcStatusPersistenceMatchesSpec
+RbcStatusPersistenceExactness ==
+  /\ RbcStatusPersistenceMatchesSpec
 
 RbcStatusPersistenceCorrectnessEnvelope ==
   /\ TypeInvariant

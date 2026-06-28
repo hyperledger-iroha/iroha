@@ -288,7 +288,7 @@ BitmapFailuresFailClosed ==
     /\ ~bitmapOk
     /\ bitmapLen = 0
 
-Safety ==
+VNextChainOrderExactness ==
   /\ OrderOkMatchesSpec
   /\ InvalidOrdersFailClosed
   /\ ValidOrderCriticalPrefixMatches
@@ -304,5 +304,12 @@ Safety ==
   /\ BitmapOkMatchesSpec
   /\ BitmapLengthMatchesSpec
   /\ BitmapFailuresFailClosed
+
+Safety ==
+  VNextChainOrderExactness
+
+VNextChainOrderCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextChainOrderExactness
 
 ====

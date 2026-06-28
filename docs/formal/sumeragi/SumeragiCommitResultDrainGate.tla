@@ -338,7 +338,7 @@ NoReceiverDoesNothing ==
     /\ ~summary_recorded
     /\ ~progress_recorded
 
-Safety ==
+CommitResultDrainExactness ==
   /\ AppliedResultsMatchSpec
   /\ StaleResultsAreIgnored
   /\ OwnerlessResultsAreIgnored
@@ -362,8 +362,8 @@ Safety ==
   /\ EmptyAndDisconnectedStopDrainLoop
   /\ NoReceiverDoesNothing
 
-CommitResultDrainExactness ==
-  Safety
+Safety ==
+  CommitResultDrainExactness
 
 CommitResultDrainCorrectnessEnvelope ==
   /\ TypeInvariant

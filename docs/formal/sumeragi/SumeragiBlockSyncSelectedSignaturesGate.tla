@@ -367,7 +367,7 @@ SelectedSignatureMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncSelectedSignaturesExactness ==
-  SelectedSignatureMatchesSpec
+  /\ SelectedSignatureMatchesSpec
 
 BlockSyncSelectedSignaturesCorrectnessEnvelope ==
   /\ TypeInvariant

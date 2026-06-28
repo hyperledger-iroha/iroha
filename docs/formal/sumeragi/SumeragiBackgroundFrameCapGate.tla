@@ -295,7 +295,7 @@ FramePreparationMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BackgroundFrameCapExactness ==
-  FramePreparationMatchesSpec
+  /\ FramePreparationMatchesSpec
 
 BackgroundFrameCapCorrectnessEnvelope ==
   /\ TypeInvariant

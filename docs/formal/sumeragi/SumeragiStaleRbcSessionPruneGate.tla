@@ -360,8 +360,11 @@ NoBugInvariant == StaleRbcSessionPruneCoreSafety
 
 SafetyFast == StaleRbcSessionPruneCoreSafety
 
+StaleRbcSessionPruneExactness ==
+  /\ StaleRbcSessionPruneCoreSafety
+
 StaleRbcSessionPruneCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ StaleRbcSessionPruneCoreSafety
+  /\ StaleRbcSessionPruneExactness
 
 ====

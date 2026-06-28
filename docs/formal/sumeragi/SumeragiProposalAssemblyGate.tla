@@ -195,4 +195,23 @@ PermittedLockedParentCasesAssemble ==
        "regressedHighestReplacedByLock" \in assembled
   /\ "lockedChainExtends" \in tried => "lockedChainExtends" \in assembled
 
+ProposalAssemblyExactness ==
+  /\ AssembledMatchesSpec
+  /\ DeferredMatchesSpec
+  /\ SafeCandidatesAreAssembled
+  /\ UnsafeCandidatesAreDeferred
+  /\ ObserversNeverAssemble
+  /\ ActiveLocalVoteConflictNeverAssembles
+  /\ PendingVoteVerificationNeverAssembles
+  /\ MissingHighestQcNeverAssembles
+  /\ NonExtendingHighestQcNeverAssembles
+  /\ SplitVoteLockNeverAssembles
+  /\ CommittedEdgeConflictNeverAssembles
+  /\ PermittedVoteHistoryCasesAssemble
+  /\ PermittedLockedParentCasesAssemble
+
+ProposalAssemblyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalAssemblyExactness
+
 ====

@@ -244,7 +244,7 @@ ValuesStayInDomain ==
     /\ ImplementationVoteSubject(candidate) \in Subjects
     /\ ImplementationVoteHighestQc(candidate) \in HighestQcs
 
-Safety ==
+EngineProposalOutputExactness ==
   /\ AcceptedOutputShapeExact
   /\ AcceptedOutputsStayPaired
   /\ AcceptedValidateSubjectExact
@@ -254,6 +254,13 @@ Safety ==
   /\ AcceptedPrepareVoteHighestQcNone
   /\ RejectedProposalsEmitNothing
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineProposalOutputExactness
+
+EngineProposalOutputCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineProposalOutputExactness
 
 =============================================================================
 ====

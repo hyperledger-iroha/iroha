@@ -105,7 +105,7 @@ DetachedBlockBodyCommitQcMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 DetachedBlockBodyCommitQcExactness ==
-  DetachedBlockBodyCommitQcMatchesSpec
+  /\ DetachedBlockBodyCommitQcMatchesSpec
 
 DetachedBlockBodyCommitQcCorrectnessEnvelope ==
   /\ TypeInvariant

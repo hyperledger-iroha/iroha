@@ -527,7 +527,7 @@ RecoveryDoesNotEmitValidationResultEffects ==
     /\ ~acceptEffect
     /\ ~rejectEffect
 
-Safety ==
+VNextSlotLifecycleExactness ==
   /\ MatchesSpec
   /\ NoBaseNeverInstallsOrProgresses
   /\ CommittedSlotsAreSticky
@@ -544,5 +544,15 @@ Safety ==
   /\ TerminalTicksDoNotRecover
   /\ CommitPersistedCommits
   /\ RecoveryDoesNotEmitValidationResultEffects
+
+Safety ==
+  VNextSlotLifecycleExactness
+
+VNextSlotLifecycleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextSlotLifecycleExactness
+
+SafetyFast ==
+  VNextSlotLifecycleExactness
 
 ====

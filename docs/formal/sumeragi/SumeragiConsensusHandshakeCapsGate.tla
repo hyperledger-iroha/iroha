@@ -225,7 +225,7 @@ ConsensusHandshakeCapsCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 ConsensusHandshakeCapsExactness ==
-  ConsensusHandshakeCapsCoreSafety
+  /\ ConsensusHandshakeCapsCoreSafety
 
 ConsensusHandshakeCapsCorrectnessEnvelope ==
   /\ TypeInvariant

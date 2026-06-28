@@ -151,7 +151,7 @@ MissingRequestClearOutputMatchesSpec ==
   ActualOutput = SpecOutput
 
 MissingRequestClearExactness ==
-  MissingRequestClearOutputMatchesSpec
+  /\ MissingRequestClearOutputMatchesSpec
 
 MissingRequestClearCorrectnessEnvelope ==
   /\ TypeInvariant

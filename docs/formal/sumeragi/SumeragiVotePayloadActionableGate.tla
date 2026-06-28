@@ -171,8 +171,19 @@ VotePayloadActionableCoreSafety ==
   /\ NoSourceRejected
   /\ BadDeferredDoesNotBlockEarlySource
 
-NoBugInvariant == VotePayloadActionableCoreSafety
+VotePayloadActionableExactness ==
+  /\ ResultMatchesSpec
+  /\ EachSourceActionable
+  /\ DeferredIdentityMustMatch
+  /\ NoSourceRejected
+  /\ BadDeferredDoesNotBlockEarlySource
 
-SafetyFast == VotePayloadActionableCoreSafety
+VotePayloadActionableCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VotePayloadActionableExactness
+
+NoBugInvariant == VotePayloadActionableExactness
+
+SafetyFast == VotePayloadActionableExactness
 
 ====

@@ -338,8 +338,7 @@ DoubleVoteRecordingMatchesSpec ==
   /\ RecordMatches("record_commit_root_new")
 
 DoubleVoteRecordingExactness ==
-  DoubleVoteRecordingMatchesSpec
-
+  /\ DoubleVoteRecordingMatchesSpec
 DoubleVoteRecordingCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ DoubleVoteRecordingExactness

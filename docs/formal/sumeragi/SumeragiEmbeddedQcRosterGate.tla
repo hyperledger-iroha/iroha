@@ -272,7 +272,7 @@ AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
 
 EmbeddedQcRosterExactness ==
-  AllCasesMatchSpec
+  /\ AllCasesMatchSpec
 
 EmbeddedQcRosterCorrectnessEnvelope ==
   /\ TypeInvariant

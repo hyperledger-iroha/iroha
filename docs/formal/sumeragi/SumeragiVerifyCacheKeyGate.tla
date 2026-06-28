@@ -474,9 +474,20 @@ Next == UNCHANGED vars
 
 TypeInvariant == checked \in Candidates
 
-Safety ==
+VerifyCacheKeyMatchesSpec ==
   \A candidate \in Candidates:
     ImplDistinct(candidate) = SpecDistinct(candidate)
+
+VerifyCacheKeyExactness ==
+  /\ VerifyCacheKeyMatchesSpec
+
+VerifyCacheKeyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VerifyCacheKeyExactness
+
+NoBugInvariant == VerifyCacheKeyExactness
+
+Safety == VerifyCacheKeyExactness
 
 BugQcKeyOmitsPhase ==
   ImplDistinct(QcKeyPhase) = SpecDistinct(QcKeyPhase)

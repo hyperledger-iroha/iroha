@@ -315,7 +315,7 @@ NoSyntheticChangeValues ==
     /\ ImplementationStageAfter(candidate) \in Changes
     /\ ImplementationEmit(candidate) \in Changes
 
-Safety ==
+EngineReconfigurationStagingExactness ==
   /\ StageAfterMatchesSpec
   /\ EmitMatchesSpec
   /\ FreshBoundaryStagesAndActivates
@@ -328,5 +328,12 @@ Safety ==
   /\ ConflictsPreserveStagingAndStaySilent
   /\ BoundaryReplacesExistingStaging
   /\ NoSyntheticChangeValues
+
+Safety ==
+  EngineReconfigurationStagingExactness
+
+EngineReconfigurationStagingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineReconfigurationStagingExactness
 
 ====

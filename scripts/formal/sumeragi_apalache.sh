@@ -16,12 +16,14 @@ fi
 apalache_docker_image="${APALACHE_DOCKER_IMAGE:-ghcr.io/apalache-mc/apalache:${apalache_version}}"
 allow_docker_fallback="${APALACHE_ALLOW_DOCKER:-1}"
 expect_failure=0
+typecheck_only=0
 
 case "$mode" in
   fast)
     spec_file="$spec_dir/Sumeragi.tla"
     cfg_file="$spec_dir/Sumeragi_fast.cfg"
     apalache_length=10
+    typecheck_only=1
     ;;
   deep)
     spec_file="$spec_dir/Sumeragi.tla"
@@ -8602,11 +8604,19 @@ run_with_expected_status() {
 
 if [[ "$apalache_bin" == */* ]]; then
   if [[ -x "$apalache_bin" ]]; then
-    run_with_expected_status "$apalache_bin" --out-dir="$out_dir" check --length="$apalache_length" --config="$cfg_file" --run-dir="$run_dir" "$spec_file"
+    if [[ "$typecheck_only" == "1" ]]; then
+      run_with_expected_status "$apalache_bin" --out-dir="$out_dir" typecheck "$spec_file"
+    else
+      run_with_expected_status "$apalache_bin" --out-dir="$out_dir" check --length="$apalache_length" --config="$cfg_file" --run-dir="$run_dir" "$spec_file"
+    fi
     exit 0
   fi
 elif command -v "$apalache_bin" >/dev/null 2>&1; then
-  run_with_expected_status "$apalache_bin" --out-dir="$out_dir" check --length="$apalache_length" --config="$cfg_file" --run-dir="$run_dir" "$spec_file"
+  if [[ "$typecheck_only" == "1" ]]; then
+    run_with_expected_status "$apalache_bin" --out-dir="$out_dir" typecheck "$spec_file"
+  else
+    run_with_expected_status "$apalache_bin" --out-dir="$out_dir" check --length="$apalache_length" --config="$cfg_file" --run-dir="$run_dir" "$spec_file"
+  fi
   exit 0
 fi
 
@@ -8625,13 +8635,23 @@ if [[ "$allow_docker_fallback" != "0" ]] && [[ "$docker_daemon_available" == "1"
   run_rel="target/apalache/sumeragi-$mode"
   out_rel="target/apalache/out"
 
-  run_with_expected_status docker run --rm \
-    --user "$(id -u):$(id -g)" \
-    --env "JVM_ARGS=$JVM_ARGS" \
-    --volume "$root_dir:/work" \
-    --workdir /work \
-    "$apalache_docker_image" \
-    apalache-mc --out-dir="$out_rel" check --length="$apalache_length" --config="$cfg_rel" --run-dir="$run_rel" "$spec_rel"
+  if [[ "$typecheck_only" == "1" ]]; then
+    run_with_expected_status docker run --rm \
+      --user "$(id -u):$(id -g)" \
+      --env "JVM_ARGS=$JVM_ARGS" \
+      --volume "$root_dir:/work" \
+      --workdir /work \
+      "$apalache_docker_image" \
+      apalache-mc --out-dir="$out_rel" typecheck "$spec_rel"
+  else
+    run_with_expected_status docker run --rm \
+      --user "$(id -u):$(id -g)" \
+      --env "JVM_ARGS=$JVM_ARGS" \
+      --volume "$root_dir:/work" \
+      --workdir /work \
+      "$apalache_docker_image" \
+      apalache-mc --out-dir="$out_rel" check --length="$apalache_length" --config="$cfg_rel" --run-dir="$run_rel" "$spec_rel"
+  fi
   exit 0
 fi
 

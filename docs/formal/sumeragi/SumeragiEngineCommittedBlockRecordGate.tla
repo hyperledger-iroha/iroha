@@ -279,7 +279,7 @@ ValuesStayInDomain ==
       /\ SpecBlockAt(candidate, height) \in Blocks
       /\ ImplementationBlockAt(candidate, height) \in Blocks
 
-Safety ==
+EngineCommittedBlockRecordExactness ==
   /\ CommitMapMatchesSpec
   /\ FreshNotificationsRecordExactHeightBlock
   /\ DuplicateNotificationsPreserveMap
@@ -288,5 +288,14 @@ Safety ==
   /\ ExistingInputHeightNeverClearedOnReplay
   /\ FreshDoesNotOverwriteUnrelatedHeight
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineCommittedBlockRecordExactness
+
+EngineCommittedBlockRecordCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommittedBlockRecordExactness
+
+SafetyFast == EngineCommittedBlockRecordExactness
 
 ====

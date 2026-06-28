@@ -325,8 +325,12 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+IngressStatusCountersActionsMatchSpec ==
+  \A c \in Candidates:
+    ImplementationActions(c) = SpecActions(c)
+
 IngressStatusCountersExactness ==
-  Safety
+  /\ IngressStatusCountersActionsMatchSpec
 
 IngressStatusCountersCorrectnessEnvelope ==
   /\ TypeInvariant

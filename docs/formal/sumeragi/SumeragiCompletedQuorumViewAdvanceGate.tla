@@ -450,7 +450,10 @@ CompletedQuorumGenericPreservesSlotExact ==
        SpecOutput(GenericPreservesSlotState)
 
 CompletedQuorumViewAdvanceExactness ==
-  /\ SafetyFast
+  /\ SelectionExact
+  /\ ExactFrontierRoutesThroughSlot
+  /\ NonExactRoutesThroughGeneric
+  /\ SlotEventStateStable
   /\ CompletedQuorumExactSlotRouteExact
   /\ CompletedQuorumExactFallbackExact
   /\ CompletedQuorumGenericRouteExact

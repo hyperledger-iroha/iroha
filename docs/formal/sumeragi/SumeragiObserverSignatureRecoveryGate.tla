@@ -227,9 +227,12 @@ SafetyAnchors ==
   /\ MissingOrMismatchedQcRejectionAnchors
   /\ AcceptedCasesRequireObserverMismatchAndQc
 
+ObserverSignatureRecoveryExactness ==
+  /\ \A c \in Cases: ActualAccept(c) = SpecAccept(c)
+  /\ SafetyAnchors
+
 ObserverSignatureRecoveryCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ SafetyAnchors
+  /\ ObserverSignatureRecoveryExactness
 
 ====

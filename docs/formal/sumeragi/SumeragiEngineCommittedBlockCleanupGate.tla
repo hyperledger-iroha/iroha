@@ -268,7 +268,7 @@ NoCommitBlockOutput ==
   \A candidate \in tried:
     ~ImplementationEmitsCommitBlock(candidate)
 
-Safety ==
+EngineCommittedBlockCleanupExactness ==
   /\ RecordsMatchSpec
   /\ CleanupMatchesSpec
   /\ FreshCurrentNotificationsCleanup
@@ -277,6 +277,15 @@ Safety ==
   /\ ConflictingNotificationsAreNoops
   /\ PendingStateAndMapStayAligned
   /\ NoCommitBlockOutput
+
+Safety ==
+  EngineCommittedBlockCleanupExactness
+
+EngineCommittedBlockCleanupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommittedBlockCleanupExactness
+
+SafetyFast == EngineCommittedBlockCleanupExactness
 
 =============================================================================
 ====

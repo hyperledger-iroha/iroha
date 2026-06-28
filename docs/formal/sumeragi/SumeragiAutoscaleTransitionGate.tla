@@ -122,7 +122,7 @@ TransitionMatchesSpec ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
 
 AutoscaleTransitionExactness ==
-  TransitionMatchesSpec
+  /\ TransitionMatchesSpec
 
 AutoscaleTransitionCorrectnessEnvelope ==
   /\ TypeInvariant

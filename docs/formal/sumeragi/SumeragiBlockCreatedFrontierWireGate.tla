@@ -334,11 +334,14 @@ BlockCreatedRebroadcastExactness ==
   /\ RebroadcastAnchors
 
 BlockCreatedFrontierWireExactness ==
-  /\ SafetyFast
-  /\ BlockCreatedConstructorExactness
-  /\ BlockCreatedFrontierInfoCopyExactness
-  /\ BlockCreatedWireRebuildExactness
-  /\ BlockCreatedRebroadcastExactness
+  /\ ConstructorSafety
+  /\ FrontierInfoCopySafety
+  /\ WireRebuildSafety
+  /\ RebroadcastSafety
+  /\ ConstructorAnchors
+  /\ FrontierInfoCopyAnchors
+  /\ WireRebuildAnchors
+  /\ RebroadcastAnchors
   /\ BlockCreatedFrontierWireSafetyAnchors
 
 BlockCreatedFrontierWireCorrectnessEnvelope ==

@@ -310,7 +310,7 @@ CommitTopologyStateMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
 
 CommitTopologyStateExactness ==
-  CommitTopologyStateMatchesSpec
+  /\ CommitTopologyStateMatchesSpec
 
 CommitTopologyStateCorrectnessEnvelope ==
   /\ TypeInvariant

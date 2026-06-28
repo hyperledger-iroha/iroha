@@ -160,21 +160,20 @@ CommitAcceptsExact ==
   \A c \in Cases:
     ActualCommitAccepts(c) = SpecCommitAccepts(c)
 
+CaseTupleExact ==
+  \A c \in Cases: ActualCase(c) = SpecCase(c)
+
 PrevalidatedCommitArtifactExactness ==
   /\ TrustedArtifactExact
   /\ WitnessRootsExact
   /\ CommitAcceptsExact
-
-CaseTupleExact ==
-  \A c \in Cases: ActualCase(c) = SpecCase(c)
-
-PrevalidatedCommitArtifactFastSafety ==
-  /\ PrevalidatedCommitArtifactExactness
   /\ CaseTupleExact
+
+PrevalidatedCommitArtifactFastSafety == PrevalidatedCommitArtifactExactness
 
 PrevalidatedCommitArtifactCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ PrevalidatedCommitArtifactFastSafety
+  /\ PrevalidatedCommitArtifactExactness
 
 SafetyFast ==
   PrevalidatedCommitArtifactFastSafety

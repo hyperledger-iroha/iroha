@@ -249,9 +249,20 @@ RbcPreimageSafetyAnchors ==
   /\ EmptyDeliverEntryAnchors
   /\ BundledDeliverEntryAnchors
 
+RbcSigningPreimageExactness ==
+  /\ FieldsMatchSpec
+  /\ PreimagesBindDomain
+  /\ ReadyUsesReadyTypeOnly
+  /\ DeliverUsesDeliverTypeOnly
+  /\ PreimagesBindSubject
+  /\ PreimagesExcludeSelfSignatures
+  /\ DeliverBindsReadyCount
+  /\ EmptyDeliverHasNoReadyEntries
+  /\ BundledDeliverBindsReadyEntries
+  /\ RbcPreimageSafetyAnchors
+
 RbcSigningPreimageCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ RbcPreimageSafetyAnchors
+  /\ RbcSigningPreimageExactness
 
 ====

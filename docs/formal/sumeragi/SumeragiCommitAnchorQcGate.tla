@@ -203,16 +203,10 @@ CommitAnchorSelectionExact ==
   /\ HighestSelectionMatchesSpec
   /\ LockedSelectionMatchesSpec
 
-CommitAnchorPruneExact ==
-  PruneMatchesLockChange
-
-CommitAnchorStatusPublicationExact ==
-  StatusMatchesFinalSelections
-
 CommitAnchorQcPromotionExactness ==
   /\ CommitAnchorSelectionExact
-  /\ CommitAnchorPruneExact
-  /\ CommitAnchorStatusPublicationExact
+  /\ PruneMatchesLockChange
+  /\ StatusMatchesFinalSelections
 
 CommitAnchorQcPromotionCorrectnessEnvelope ==
   /\ TypeInvariant

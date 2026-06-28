@@ -281,8 +281,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+LaneDetailStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 LaneDetailStatusExactness ==
-  Safety
+  /\ LaneDetailStatusActionsMatchSpec
 
 LaneDetailStatusCorrectnessEnvelope ==
   /\ TypeInvariant

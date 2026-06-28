@@ -352,7 +352,7 @@ ValuesStayInDomain ==
     /\ ImplementationOutputSubject(candidate) \in Values
     /\ ImplementationOutputHighest(candidate) \in Values
 
-Safety ==
+EnginePrepareVoteCacheExactness ==
   /\ CacheKeyMatchesSpec
   /\ CacheSubjectMatchesSpec
   /\ OutputPhaseMatchesSpec
@@ -368,5 +368,14 @@ Safety ==
   /\ CacheNeverUsesWrongRoundForSafePrepare
   /\ CacheNeverUsesWrongSubjectForSafePrepare
   /\ ValuesStayInDomain
+
+Safety ==
+  EnginePrepareVoteCacheExactness
+
+EnginePrepareVoteCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePrepareVoteCacheExactness
+
+SafetyFast == EnginePrepareVoteCacheExactness
 
 ====

@@ -319,6 +319,15 @@ LockRejectedSinkCoreSafety ==
   /\ SuppressionDoesNotCreateDependencies
   /\ PurgeCoversAllSurfaces
 
+LockRejectedSinkExactness ==
+  /\ ActionsMatchSpec
+  /\ ActivityGatesFailClosed
+  /\ SuppressionDoesNotCreateDependencies
+  /\ PurgeCoversAllSurfaces
+LockRejectedSinkCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LockRejectedSinkExactness
+
 NoBugInvariant == LockRejectedSinkCoreSafety
 
 SafetyFast == LockRejectedSinkCoreSafety

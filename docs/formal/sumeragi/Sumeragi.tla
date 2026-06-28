@@ -12926,8 +12926,7 @@ SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==
   /\ FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope
   /\ RbcLifecycleAlwaysMatchesEndToEndEnvelope
 
-SumeragiConsensusCoreStateSafetyEnvelope ==
-  /\ TypeInvariant
+SumeragiConsensusCoreStateMatchesEnvelope ==
   /\ CommitImpliesQuorum
   /\ CommitImpliesStakeQuorum
   /\ CommitCertificateMatchesFinality
@@ -13021,6 +13020,10 @@ SumeragiConsensusCoreStateSafetyEnvelope ==
   /\ LiveChunkEvidenceStayInRbcHandoff
   /\ LiveReadyVotesStayInRbcHandoff
 
+SumeragiConsensusCoreStateSafetyEnvelope ==
+  /\ TypeInvariant
+  /\ SumeragiConsensusCoreStateMatchesEnvelope
+
 SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope ==
   [] SumeragiConsensusCoreStateSafetyEnvelope
 
@@ -13028,8 +13031,16 @@ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope ==
   /\ SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope
   /\ SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope
 
+SumeragiConsensusCoreAlwaysMatchesExactness ==
+  /\ SumeragiConsensusCoreStateMatchesEnvelope
 SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SumeragiConsensusCoreAlwaysMatchesExactness
   /\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope
   /\ EventuallyCommit
+
+SumeragiConsensusCoreFastCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SumeragiConsensusCoreAlwaysMatchesExactness
 
 ====

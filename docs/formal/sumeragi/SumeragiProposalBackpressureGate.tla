@@ -222,13 +222,20 @@ HealthyQueueWorkAllowed ==
   /\ ~ActualOnlyPacingBackpressure("healthy_none")
   /\ ActualAllowsQueueWork("healthy_none")
 
-Safety ==
+ProposalBackpressureExactness ==
   /\ ShouldDeferMatchesSpec
   /\ OnlyPacingMatchesSpec
   /\ AllowsQueueWorkMatchesSpec
   /\ PacingSignalsDeferButAllowQueueWork
   /\ HardBackpressureBlocksQueueWork
   /\ HealthyQueueWorkAllowed
+
+Safety ==
+  ProposalBackpressureExactness
+
+ProposalBackpressureCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalBackpressureExactness
 
 =============================================================================
 ====

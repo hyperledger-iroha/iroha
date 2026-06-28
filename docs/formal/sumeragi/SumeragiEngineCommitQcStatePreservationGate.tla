@@ -310,7 +310,7 @@ ValuesStayInDomain ==
     /\ InitialAvailablePayloads(candidate) \in AvailableStoreValues
     /\ ImplementationAvailablePayloads(candidate) \in AvailableStoreValues
 
-Safety ==
+EngineCommitQcStatePreservationExactness ==
   /\ AcceptedPreservesRound
   /\ AcceptedPreservesLockedQc
   /\ AcceptedPreservesPrepareVoteCache
@@ -321,5 +321,14 @@ Safety ==
   /\ RejectedPreservesAvailablePayloads
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineCommitQcStatePreservationExactness
+
+EngineCommitQcStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcStatePreservationExactness
+
+SafetyFast == EngineCommitQcStatePreservationExactness
 
 ====

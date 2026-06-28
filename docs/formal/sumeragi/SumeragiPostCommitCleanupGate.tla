@@ -397,15 +397,15 @@ PostCommitValidationInflightExactness ==
 
 PostCommitCleanupExactness ==
   /\ PostCommitCleanupCaseGroupsComplete
-  /\ PostCommitRbcCleanupExactness
-  /\ PostCommitPendingDescendantExactness
-  /\ PostCommitStalePendingExactness
-  /\ PostCommitQcProposalExactness
-  /\ PostCommitMissingRequestExactness
-  /\ PostCommitVoteCacheExactness
-  /\ PostCommitSlotViewExactness
-  /\ PostCommitRecoveryFrontierExactness
-  /\ PostCommitValidationInflightExactness
+  /\ PostCommitActionExactFor(PostCommitRbcCases)
+  /\ PostCommitActionExactFor(PostCommitPendingDescendantCases)
+  /\ PostCommitActionExactFor(PostCommitStalePendingCases)
+  /\ PostCommitActionExactFor(PostCommitQcProposalCases)
+  /\ PostCommitActionExactFor(PostCommitMissingRequestCases)
+  /\ PostCommitActionExactFor(PostCommitVoteCacheCases)
+  /\ PostCommitActionExactFor(PostCommitSlotViewCases)
+  /\ PostCommitActionExactFor(PostCommitRecoveryFrontierCases)
+  /\ PostCommitActionExactFor(PostCommitValidationInflightCases)
 
 PostCommitCleanupCorrectnessEnvelope ==
   /\ TypeInvariant

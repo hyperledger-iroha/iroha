@@ -137,7 +137,7 @@ RecordedPayloadAloneIsInsufficient ==
     =>
       candidate \in rejected
 
-Safety ==
+EnginePayloadLookupExactness ==
   /\ AcceptedMatchesSpec
   /\ RejectedMatchesSpec
   /\ ExactPairAccepted
@@ -146,5 +146,14 @@ Safety ==
   /\ WrongBlockWrongPayloadRejected
   /\ EmptyStoreRejected
   /\ RecordedPayloadAloneIsInsufficient
+
+Safety ==
+  EnginePayloadLookupExactness
+
+EnginePayloadLookupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePayloadLookupExactness
+
+SafetyFast == EnginePayloadLookupExactness
 
 ====

@@ -196,7 +196,7 @@ SafetyFast ==
 
 VoteVerifyWorkerConfigCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
+  /\ VoteVerifyWorkerConfigExactness
 
 BugAutoThreadsUseAvailable ==
   ActualAutoHigh = SpecAutoHigh

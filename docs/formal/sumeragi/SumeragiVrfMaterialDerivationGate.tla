@@ -208,7 +208,7 @@ NoRawIntermediateOutputs ==
   candidate = "derive" =>
     fields \cap {"raw_signature_returned", "message_returned"} = {}
 
-Safety ==
+VrfMaterialDerivationExactness ==
   /\ FieldsMatchSpec
   /\ MessageBindsRequiredInputs
   /\ MessageUsesBigEndianContext
@@ -218,5 +218,14 @@ Safety ==
   /\ CommitmentHashesReveal
   /\ ReturnShapeStable
   /\ NoRawIntermediateOutputs
+
+VrfMaterialDerivationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfMaterialDerivationExactness
+
+NoBugInvariant == VrfMaterialDerivationExactness
+
+Safety ==
+  VrfMaterialDerivationExactness
 
 ====

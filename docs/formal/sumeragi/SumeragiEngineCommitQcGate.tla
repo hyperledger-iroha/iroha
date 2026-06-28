@@ -229,4 +229,32 @@ IgnoredCommitQcsDoNotRecordHighest ==
 HighestFollowsAcceptedCommitQcs ==
   highest \subseteq committed \cup fetched
 
+EngineCommitQcExactness ==
+  /\ CommittedMatchesSpec
+  /\ FetchedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ SafeAvailableCommitQcsCommit
+  /\ SafeMissingPayloadCommitQcsFetch
+  /\ UnsafeCommitQcsAreIgnored
+  /\ WrongContextNeverAccepted
+  /\ WrongQuorumPolicyNeverAccepted
+  /\ StaleViewNeverAccepted
+  /\ CommittedHeightNeverAccepted
+  /\ PendingReplayNeverAccepted
+  /\ PendingConflictNeverAccepted
+  /\ NoCommitWithoutPayload
+  /\ NoFetchWhenPayloadAvailable
+  /\ AcceptedCommitQcsRecordHighest
+  /\ IgnoredCommitQcsDoNotRecordHighest
+  /\ HighestFollowsAcceptedCommitQcs
+
+EngineCommitQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcExactness
+
+SafetyFast == EngineCommitQcExactness
+
+Safety ==
+  EngineCommitQcCorrectnessEnvelope
+
 ====

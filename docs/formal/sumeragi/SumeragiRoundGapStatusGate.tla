@@ -362,10 +362,14 @@ RoundGapSafetyAnchors ==
   /\ PruneAndOverflowAnchors
   /\ SnapshotAnchors
 
+RoundGapStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ RoundGapSafetyAnchors
+
 RoundGapStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ RoundGapSafetyAnchors
+  /\ RoundGapStatusExactness
 
 BugResetEmptyKeepsSnapshot ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)

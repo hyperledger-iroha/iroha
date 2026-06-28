@@ -219,10 +219,13 @@ UnverifiedRosterSafetyAnchors ==
   /\ RosterAvailabilityAnchors
   /\ FallbackRuleAnchors
 
+RbcUnverifiedRosterExactness ==
+  /\ RbcUnverifiedRosterMatchesSpec
+  /\ UnverifiedRosterSafetyAnchors
+
 RbcUnverifiedRosterCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ UnverifiedRosterSafetyAnchors
+  /\ RbcUnverifiedRosterExactness
 
 PermissionedFutureNoPayloadAllows ==
   Matches("permissioned_future_no_payload_empty")

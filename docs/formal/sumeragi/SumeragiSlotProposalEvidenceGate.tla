@@ -476,8 +476,23 @@ SlotProposalEvidenceCoreSafety ==
   /\ RejectedSourceReturnAnchors
   /\ ShortCircuitAndFallbackAnchors
 
-NoBugInvariant == SlotProposalEvidenceCoreSafety
+SlotProposalEvidenceExactness ==
+  /\ ResultsMatchSpec
+  /\ ActionsMatchSpec
+  /\ AcceptedSourcesProduceEvidence
+  /\ WrongSlotAndIncompleteSourcesRejected
+  /\ FallbackAfterEarlierMissesPreserved
+  /\ LookupShapeMatchesShortCircuit
+  /\ ReturnActionMatchesResult
+  /\ AcceptedSourceActionAnchors
+  /\ RejectedSourceReturnAnchors
+  /\ ShortCircuitAndFallbackAnchors
+SlotProposalEvidenceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SlotProposalEvidenceExactness
 
-SafetyFast == SlotProposalEvidenceCoreSafety
+NoBugInvariant == SlotProposalEvidenceExactness
+
+SafetyFast == SlotProposalEvidenceExactness
 
 ====

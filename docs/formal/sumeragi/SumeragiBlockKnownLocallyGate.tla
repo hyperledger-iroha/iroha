@@ -223,8 +223,12 @@ BlockKnownLocallyCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 BlockKnownLocallyExactness ==
-  BlockKnownLocallyCoreSafety
-
+  /\ ActionsMatchSpec
+  /\ PendingEntriesAreKnownUnlessAborted
+  /\ InflightEntriesAreKnownUnlessAborted
+  /\ HashOnlyAndKuraCountAsKnown
+  /\ DeferredOnlyAndAbsentDoNotCountAsKnown
+  /\ LookupShapeMatchesShortCircuit
 BlockKnownLocallyCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ BlockKnownLocallyExactness

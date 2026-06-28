@@ -201,9 +201,12 @@ PacemakerCoreDirectSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
+PacemakerCoreExactness ==
+  /\ PacemakerCoreDirectSafety
+
 PacemakerCoreCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ PacemakerCoreDirectSafety
+  /\ PacemakerCoreExactness
 
 NoBugInvariant == PacemakerCoreDirectSafety
 

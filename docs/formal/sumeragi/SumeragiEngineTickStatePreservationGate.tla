@@ -247,7 +247,7 @@ ValuesStayInDomain ==
     /\ InitialReconfiguration(candidate) \in ReconfigurationValues
     /\ ImplementationReconfiguration(candidate) \in ReconfigurationValues
 
-Safety ==
+EngineTickStatePreservationExactness ==
   /\ TicksPreserveLockedQc
   /\ TicksPreserveHighestQc
   /\ TicksPreserveCommitVoteCache
@@ -257,5 +257,12 @@ Safety ==
   /\ TicksPreserveReconfiguration
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineTickStatePreservationExactness
+
+EngineTickStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineTickStatePreservationExactness
 
 ====

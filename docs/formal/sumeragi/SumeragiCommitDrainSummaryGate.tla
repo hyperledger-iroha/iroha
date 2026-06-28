@@ -135,7 +135,7 @@ CommitDrainSummaryMatchesSpec ==
   ActualOutput = SpecOutput
 
 CommitDrainSummaryExactness ==
-  CommitDrainSummaryMatchesSpec
+  /\ CommitDrainSummaryMatchesSpec
 
 CommitDrainSummaryCorrectnessEnvelope ==
   /\ TypeInvariant

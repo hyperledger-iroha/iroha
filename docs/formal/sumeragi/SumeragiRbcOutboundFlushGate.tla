@@ -297,9 +297,12 @@ SafetyAnchors ==
   /\ CleanupAnchors
   /\ CursorProgressAnchors
 
+RbcOutboundFlushExactness ==
+  /\ RbcOutboundFlushCoreSafety
+  /\ SafetyAnchors
+
 RbcOutboundFlushCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ SafetyAnchors
+  /\ RbcOutboundFlushExactness
 
 ====

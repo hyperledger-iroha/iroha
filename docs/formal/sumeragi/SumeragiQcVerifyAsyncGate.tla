@@ -465,7 +465,7 @@ PollDisconnectFailsClosed ==
     /\ ~invokeConsensusHandler
     /\ ~applyKnownBlockWork
 
-Safety ==
+QcVerifyAsyncExactness ==
   /\ MatchesSpec
   /\ CachedConsensusDoesNotDispatch
   /\ ConsensusInlineDoesNotOwnWorker
@@ -481,6 +481,13 @@ Safety ==
   /\ PollKnownResultAppliesWork
   /\ NormalPollKeepsResultReceiver
   /\ PollDisconnectFailsClosed
+
+Safety ==
+  QcVerifyAsyncExactness
+
+QcVerifyAsyncCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcVerifyAsyncExactness
 
 =============================================================================
 ====

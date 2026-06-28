@@ -321,6 +321,19 @@ Safety ==
   \A c \in Candidates:
     ImplProperty(c) = SpecProperty(c)
 
+VoteDuplicateKeyMatchesSpec ==
+  \A c \in Candidates:
+    ImplProperty(c) = SpecProperty(c)
+
+VoteDuplicateKeyExactness ==
+  /\ VoteDuplicateKeyMatchesSpec
+
+VoteDuplicateKeyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteDuplicateKeyExactness
+
+NoBugInvariant == VoteDuplicateKeyExactness
+
 BugMissingLogAccepts ==
   ImplProperty(MissingLogSameKey) = SpecProperty(MissingLogSameKey)
 

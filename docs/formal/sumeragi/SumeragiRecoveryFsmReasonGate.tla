@@ -296,7 +296,20 @@ RecoveryFsmReasonCoreSafety ==
   /\ SortMatchesTupleKey
   /\ RepresentativeSortTieBreaksStable
 
+RecoveryFsmReasonExactness ==
+  /\ FromReasonExact
+  /\ KnownLabelsNotOther
+  /\ UnknownLabelsFallbackOther
+  /\ RankValuesExact
+  /\ RankOrderExact
+  /\ RanksDistinct
+  /\ SortMatchesTupleKey
+  /\ RepresentativeSortTieBreaksStable
+RecoveryFsmReasonCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RecoveryFsmReasonExactness
+
 SafetyFast ==
-  RecoveryFsmReasonCoreSafety
+  RecoveryFsmReasonExactness
 
 ====

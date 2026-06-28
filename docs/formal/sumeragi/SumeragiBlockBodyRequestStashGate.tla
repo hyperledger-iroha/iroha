@@ -137,7 +137,7 @@ StashWindowMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockBodyRequestStashExactness ==
-  StashWindowMatchesSpec
+  /\ StashWindowMatchesSpec
 
 BlockBodyRequestStashCorrectnessEnvelope ==
   /\ TypeInvariant

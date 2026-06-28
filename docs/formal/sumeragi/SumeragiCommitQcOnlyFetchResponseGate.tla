@@ -227,7 +227,7 @@ CommitQcOnlyFetchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 CommitQcOnlyFetchExactness ==
-  CommitQcOnlyFetchMatchesSpec
+  /\ CommitQcOnlyFetchMatchesSpec
 
 CommitQcOnlyFetchCorrectnessEnvelope ==
   /\ TypeInvariant

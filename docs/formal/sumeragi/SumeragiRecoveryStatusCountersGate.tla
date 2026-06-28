@@ -177,12 +177,15 @@ Next ==
 TypeInvariant ==
   checked \in 0..15
 
-Safety ==
+RecoveryStatusCountersActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
 RecoveryStatusCountersExactness ==
-  Safety
+  /\ RecoveryStatusCountersActionsMatchSpec
+
+Safety ==
+  RecoveryStatusCountersExactness
 
 RecoveryStatusCountersCorrectnessEnvelope ==
   /\ TypeInvariant

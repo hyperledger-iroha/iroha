@@ -326,9 +326,12 @@ SafetyAnchors ==
   /\ PreviousRosterRecoveryOnlyForPreviousRosterFailures
   /\ CleanupAnchorCases
 
+ValidationFailureFinalizeExactness ==
+  /\ ValidationFailureFinalizeMatchesSpec
+  /\ SafetyAnchors
+
 ValidationFailureFinalizeCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ SafetyAnchors
+  /\ ValidationFailureFinalizeExactness
 
 ====

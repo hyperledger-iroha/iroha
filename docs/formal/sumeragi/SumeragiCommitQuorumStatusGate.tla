@@ -390,10 +390,14 @@ SafetyAnchors ==
   /\ JsonProjectionAnchors
   /\ TypedProjectionAnchors
 
+CommitQuorumStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 CommitQuorumStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ CommitQuorumStatusExactness
 
 =============================================================================
 ====

@@ -307,11 +307,18 @@ HeightPrunesKeepUpperBoundary ==
     RemoveBelowHeight \in ImplementationActions(candidate) =>
       KeepEqualHeight \notin ImplementationActions(candidate)
 
-Safety ==
+NewViewTrackerExactness ==
   /\ NewViewTrackerMatchesSpec
   /\ SelectionRequiresRosterQuorum
   /\ LocalVoteCountIsRosterBounded
   /\ HeightPrunesKeepUpperBoundary
+
+NewViewTrackerCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NewViewTrackerExactness
+
+Safety ==
+  NewViewTrackerExactness
 
 =============================================================================
 ====

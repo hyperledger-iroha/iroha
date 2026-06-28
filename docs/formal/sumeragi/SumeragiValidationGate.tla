@@ -297,4 +297,26 @@ NoStaleInflightAfterViewAdvance ==
 CompletedValidationClearsInflight ==
   validating = "None" \/ validating \notin completedSubjects
 
+ValidationCallbackOwnershipExactness ==
+  /\ UnknownValidationDoesNotAdvance
+  /\ CompletedValidationReplayDoesNotAdvance
+  /\ LateValidationAfterTimeoutDoesNotAdvance
+  /\ TimeoutClearsInflight
+  /\ InvalidValidationAdvancesAtMostOnce
+  /\ NoStaleInflightAfterViewAdvance
+  /\ CompletedValidationClearsInflight
+
+ValidationExactness ==
+  /\ UnknownValidationDoesNotAdvance
+  /\ CompletedValidationReplayDoesNotAdvance
+  /\ LateValidationAfterTimeoutDoesNotAdvance
+  /\ TimeoutClearsInflight
+  /\ InvalidValidationAdvancesAtMostOnce
+  /\ NoStaleInflightAfterViewAdvance
+  /\ CompletedValidationClearsInflight
+
+ValidationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationExactness
+
 ====

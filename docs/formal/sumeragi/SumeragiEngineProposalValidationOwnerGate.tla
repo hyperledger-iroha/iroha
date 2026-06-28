@@ -183,7 +183,7 @@ ValuesStayInDomain ==
     /\ SpecFinalOwner(candidate) \in OwnerValues
     /\ ImplementationFinalOwner(candidate) \in OwnerValues
 
-Safety ==
+EngineProposalValidationOwnerExactness ==
   /\ FinalOwnerMatchesSpec
   /\ AcceptedProposalsRecordExactSubject
   /\ AcceptedProposalsOverwriteExistingOwner
@@ -191,6 +191,13 @@ Safety ==
   /\ RejectedExistingOwnerPreserved
   /\ RejectedNoneOwnerPreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineProposalValidationOwnerExactness
+
+EngineProposalValidationOwnerCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineProposalValidationOwnerExactness
 
 =============================================================================
 ====

@@ -294,8 +294,11 @@ CommittedEdgeConflictCoreSafety ==
   /\ RecoveryWindowRespected
 
 CommittedEdgeConflictExactness ==
-  CommittedEdgeConflictCoreSafety
-
+  /\ ActionsMatchSpec
+  /\ SuppressionResultMatchesSpec
+  /\ NonConflictsDoNotMutate
+  /\ CanonicalStateProtected
+  /\ RecoveryWindowRespected
 CommittedEdgeConflictCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ CommittedEdgeConflictExactness

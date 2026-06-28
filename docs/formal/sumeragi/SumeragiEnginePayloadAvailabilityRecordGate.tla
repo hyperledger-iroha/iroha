@@ -209,7 +209,7 @@ ValuesStayInDomain ==
     /\ SpecFinalAvailable(candidate) \subseteq PairValues
     /\ ImplementationFinalAvailable(candidate) \subseteq PairValues
 
-Safety ==
+EnginePayloadAvailabilityRecordExactness ==
   /\ FinalAvailabilityMatchesSpec
   /\ EveryPayloadRecordsExactInputPair
   /\ NoWrongAvailabilityPairRecorded
@@ -218,5 +218,14 @@ Safety ==
   /\ PendingMismatchStillRecordsInputPair
   /\ DuplicateRecordIsIdempotent
   /\ ValuesStayInDomain
+
+Safety ==
+  EnginePayloadAvailabilityRecordExactness
+
+EnginePayloadAvailabilityRecordCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePayloadAvailabilityRecordExactness
+
+SafetyFast == EnginePayloadAvailabilityRecordExactness
 
 ====

@@ -269,8 +269,14 @@ ProposalStaleVoteMatchesSpec ==
   /\ \A c \in AssemblyCases:
        ActualAssemblyOutput(c) = SpecAssemblyOutput(c)
 
+ProposalStaleVoteExactness ==
+  /\ ProposalStaleVoteMatchesSpec
+ProposalStaleVoteCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalStaleVoteExactness
+
 SafetyFast ==
-  ProposalStaleVoteMatchesSpec
+  ProposalStaleVoteExactness
 
 BugBaseAllowsFutureView ==
   ActualBaseOutput("future_view_blocks") = SpecBaseOutput("future_view_blocks")

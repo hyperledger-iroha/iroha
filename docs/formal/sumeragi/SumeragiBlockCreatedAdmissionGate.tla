@@ -651,11 +651,39 @@ BlockCreatedAdmissionCommitExactness ==
   /\ InlineProposalContextIsCachedAndObserved
 
 BlockCreatedAdmissionExactness ==
-  /\ BlockCreatedAdmissionOutcomeExactness
-  /\ BlockCreatedAdmissionStateExactness
-  /\ BlockCreatedAdmissionReplayRepairExactness
-  /\ BlockCreatedAdmissionEvidenceExactness
-  /\ BlockCreatedAdmissionCommitExactness
+  /\ PayloadAcceptanceMatchesSpec
+  /\ DeferredMatchesSpec
+  /\ DroppedMatchesSpec
+  /\ PendingUpdateMatchesSpec
+  /\ PassiveRetainedMatchesSpec
+  /\ AuthoritativeOwnerMatchesSpec
+  /\ DuplicateHandlingMatchesSpec
+  /\ ReplayPreserveMatchesSpec
+  /\ DependencyRequestMatchesSpec
+  /\ DeferMarkerMatchesSpec
+  /\ ParentRequestMatchesSpec
+  /\ GapRequestMatchesSpec
+  /\ StaleCleanupMatchesSpec
+  /\ InvalidEvidenceMatchesSpec
+  /\ LockRejectMatchesSpec
+  /\ ProposalCacheMatchesSpec
+  /\ ProposalObservedMatchesSpec
+  /\ PayloadMismatchRecoveryMatchesSpec
+  /\ PhaseSampleMatchesSpec
+  /\ CommitPipelineMatchesSpec
+  /\ MissingRequestClearMatchesSpec
+  /\ AcceptedPayloadsUpdatePendingAndWakeCommit
+  /\ PassiveBranchesDoNotBecomeAuthoritative
+  /\ AuthoritativePayloadsOwnSlot
+  /\ DuplicateDropsButRefreshesPayloadState
+  /\ DeferredReplayDoesNotMutatePending
+  /\ MissingHighestArmsDependencyRepair
+  /\ FutureHeightRequestsParentsBeforeAdmission
+  /\ FutureHeightGapRequestsRangeRepair
+  /\ RejectedBlocksDoNotWakeCommitPipeline
+  /\ LockRejectedBlocksRecordLockRejection
+  /\ InvalidPayloadsEmitEvidenceWhenProposalContextExists
+  /\ InlineProposalContextIsCachedAndObserved
 
 BlockCreatedAdmissionCorrectnessEnvelope ==
   /\ TypeInvariant

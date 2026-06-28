@@ -450,7 +450,7 @@ ChannelDisconnectFailsClosed ==
     /\ ~keepResultRx
     /\ ~applyVote
 
-Safety ==
+VoteVerifyAsyncExactness ==
   /\ MatchesSpec
   /\ NoWorkerDispatchFallsBackInline
   /\ DuplicateDispatchDoesNotQueue
@@ -465,6 +465,14 @@ Safety ==
   /\ ValidSignatureAppliesOnce
   /\ NormalPollKeepsResultRx
   /\ ChannelDisconnectFailsClosed
+
+Safety == VoteVerifyAsyncExactness
+
+VoteVerifyAsyncCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteVerifyAsyncExactness
+
+NoBugInvariant == VoteVerifyAsyncExactness
 
 =============================================================================
 ====

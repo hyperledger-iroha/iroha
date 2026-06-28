@@ -211,7 +211,7 @@ LateInvalidResultSuppressedAfterHandlerCommitQc ==
     /\ InitialValidating(candidate)
     => ~ImplementationLateInvalidAdvances(candidate)
 
-Safety ==
+EngineCommitQcValidationCleanupExactness ==
   /\ ValidationAfterMatchesSpec
   /\ HandlerCommitQcsClearValidation
   /\ AcceptedCommitQcsClearValidation
@@ -224,5 +224,14 @@ Safety ==
   /\ CommittedHeightPreservesValidation
   /\ NoSyntheticValidationOwnership
   /\ LateInvalidResultSuppressedAfterHandlerCommitQc
+
+Safety ==
+  EngineCommitQcValidationCleanupExactness
+
+EngineCommitQcValidationCleanupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcValidationCleanupExactness
+
+SafetyFast == EngineCommitQcValidationCleanupExactness
 
 ====

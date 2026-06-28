@@ -199,7 +199,7 @@ ValuesStayInDomain ==
     /\ SpecFinalPhase(candidate) \in PhaseValues
     /\ ImplementationFinalPhase(candidate) \in PhaseValues
 
-Safety ==
+EnginePreparePhaseExactness ==
   /\ FinalPhaseMatchesSpec
   /\ AcceptedPrepareMovesToCommitPhase
   /\ RejectedPrefilterPreservesPhase
@@ -207,5 +207,14 @@ Safety ==
   /\ PendingFinalityPreservesPhase
   /\ IgnoredPrepareQcsNeverChangePhase
   /\ ValuesStayInDomain
+
+Safety ==
+  EnginePreparePhaseExactness
+
+EnginePreparePhaseCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePreparePhaseExactness
+
+SafetyFast == EnginePreparePhaseExactness
 
 ====

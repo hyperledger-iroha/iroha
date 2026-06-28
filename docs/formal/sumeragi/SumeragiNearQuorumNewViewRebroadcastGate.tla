@@ -222,5 +222,17 @@ PacemakerDeadlineNudge ==
 DispatchMetadata ==
   Matches("valid_rebroadcast_nudges")
 
+NearQuorumNewViewRebroadcastExactness ==
+  /\ AllCasesMatchSpec
+  /\ AdmissionGates
+  /\ CooldownGates
+  /\ DispatchAndReturn
+  /\ PacemakerDeadlineNudge
+  /\ DispatchMetadata
+
+NearQuorumNewViewRebroadcastCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NearQuorumNewViewRebroadcastExactness
+
 =============================================================================
 ====

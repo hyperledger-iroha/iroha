@@ -364,8 +364,20 @@ RbcAuthoritativePayloadProgressCoreSafety ==
   /\ LocalFallbackRequiresExactSlotAndPayloadHash
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == RbcAuthoritativePayloadProgressCoreSafety
+RbcAuthoritativePayloadProgressExactness ==
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ MetadataGateRejectsIncompleteSessions
+  /\ CompleteChunkPayloadsAreAuthoritative
+  /\ ChunkFailuresNeedLocalFallback
+  /\ LocalFallbackRequiresExactSlotAndPayloadHash
+  /\ LookupShapeMatchesShortCircuit
+RbcAuthoritativePayloadProgressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcAuthoritativePayloadProgressExactness
 
-SafetyFast == RbcAuthoritativePayloadProgressCoreSafety
+NoBugInvariant == RbcAuthoritativePayloadProgressExactness
+
+SafetyFast == RbcAuthoritativePayloadProgressExactness
 
 ====

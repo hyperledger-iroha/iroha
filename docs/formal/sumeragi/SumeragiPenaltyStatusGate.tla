@@ -305,10 +305,14 @@ PenaltyStatusSafetyAnchors ==
   /\ PenaltyCounterMutationAnchors
   /\ PenaltyProjectionAnchors
 
+PenaltyStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ PenaltyStatusSafetyAnchors
+
 PenaltyStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ PenaltyStatusSafetyAnchors
+  /\ PenaltyStatusExactness
 
 BugInitialCountersNonzero ==
   ImplementationActions(InitialZeros) = SpecActions(InitialZeros)

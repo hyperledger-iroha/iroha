@@ -420,10 +420,14 @@ SafetyAnchors ==
   /\ SnapshotProjectionAnchors
   /\ ResetAfterRecordsClearsAllAnchors
 
+ViewChangeCauseStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 ViewChangeCauseStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ ViewChangeCauseStatusExactness
 
 =============================================================================
 ====

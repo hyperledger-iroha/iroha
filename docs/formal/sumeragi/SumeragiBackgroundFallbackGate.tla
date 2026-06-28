@@ -150,7 +150,7 @@ DispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BackgroundFallbackExactness ==
-  DispatchMatchesSpec
+  /\ DispatchMatchesSpec
 
 BackgroundFallbackCorrectnessEnvelope ==
   /\ TypeInvariant

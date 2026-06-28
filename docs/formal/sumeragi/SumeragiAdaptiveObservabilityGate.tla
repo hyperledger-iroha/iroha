@@ -351,7 +351,7 @@ ActionsMatchSpec ==
     ImplementationActions(c) = SpecActions(c)
 
 AdaptiveObservabilityExactness ==
-  ActionsMatchSpec
+  /\ ActionsMatchSpec
 
 AdaptiveObservabilityCorrectnessEnvelope ==
   /\ TypeInvariant

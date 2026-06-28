@@ -362,8 +362,15 @@ BlockKnownForLockCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 BlockKnownForLockExactness ==
-  BlockKnownForLockCoreSafety
-
+  /\ ActionsMatchSpec
+  /\ KnownMatchesSpec
+  /\ PendingValidityIsRequired
+  /\ RejectedPendingFallsThroughToLaterSources
+  /\ InflightEntriesAreKnownUnlessAborted
+  /\ RejectedInflightFallsThroughToLaterSources
+  /\ HashOnlyAndKuraCountAsKnown
+  /\ DeferredOnlyAndAbsentDoNotCountAsKnown
+  /\ LookupShapeMatchesShortCircuit
 BlockKnownForLockCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ BlockKnownForLockExactness

@@ -208,8 +208,17 @@ TypeInvariant ==
 ActionsMatchSpec ==
   candidate = NoneCase \/ actions = SpecActions(candidate)
 
+VrfLocalStateExactness ==
+  /\ ActionsMatchSpec
+
+VrfLocalStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfLocalStateExactness
+
+NoBugInvariant == VrfLocalStateExactness
+
 Safety ==
-  ActionsMatchSpec
+  VrfLocalStateExactness
 
 =============================================================================
 ====

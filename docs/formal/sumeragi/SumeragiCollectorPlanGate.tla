@@ -325,9 +325,16 @@ CollectorPlanRetryGossipExactness ==
   /\ CollectorExhaustionExact
   /\ CollectorGossipFallbackExact
 
+CollectorPlanExactness ==
+  /\ CollectorConstructorStateExact
+  /\ CollectorCursorReadExact
+  /\ CollectorCursorAdvanceExact
+  /\ CollectorExhaustionExact
+  /\ CollectorGossipFallbackExact
+
 CollectorPlanCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ CollectorPlanRetryGossipExactness
+  /\ CollectorPlanExactness
 
 Safety ==
   /\ TargetLenPreserved

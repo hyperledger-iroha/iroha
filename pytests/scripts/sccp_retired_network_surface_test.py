@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from html import unescape as html_unescape
 import re
 from pathlib import Path
+from urllib.parse import unquote as url_unquote
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +15,10 @@ _ALE = "ale"
 _RUNTIME = "runtime"
 
 
-RETIRED_NETWORK_TOKEN_SEPARATOR = r"[\s._-]*"
+RETIRED_NETWORK_TOKEN_SEPARATOR = (
+    r"(?:[\s._:/|+=~\-\u200b\u200c\u200d\ufeff]|\\)*"
+)
+DECODED_RETIRED_NETWORK_NOTE_GLUE = r"(?:\s|\\n|\\|[\"'])*"
 
 
 def _retired_word(*parts: str) -> re.Pattern[str]:
@@ -41,6 +46,176 @@ BANNED_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(chr(0x57FA) + chr(0x677F), re.IGNORECASE),
     re.compile("".join(chr(code) for code in (0x0627, 0x0644, 0x0631, 0x0643, 0x064A, 0x0632, 0x0629))),
 )
+
+_DECODED_SUBSTRATE = "".join(("Sub", "strate"))
+_DECODED_POLKADOT = "".join(("Pol", "kadot"))
+RETIRED_NETWORK_CONFUSABLES = str.maketrans(
+    {
+        "Α": "A",
+        "А": "A",
+        "а": "a",
+        "Β": "B",
+        "В": "B",
+        "С": "C",
+        "с": "c",
+        "Е": "E",
+        "е": "e",
+        "І": "I",
+        "і": "i",
+        "Κ": "K",
+        "К": "K",
+        "κ": "k",
+        "к": "k",
+        "Μ": "M",
+        "М": "M",
+        "Ο": "O",
+        "О": "O",
+        "ο": "o",
+        "о": "o",
+        "Ρ": "P",
+        "Р": "P",
+        "ρ": "p",
+        "р": "p",
+        "Ѕ": "S",
+        "ѕ": "s",
+        "Τ": "T",
+        "Т": "T",
+        "τ": "t",
+        "т": "t",
+        "Χ": "X",
+        "Х": "X",
+        "χ": "x",
+        "х": "x",
+        "Υ": "Y",
+        "У": "Y",
+        "у": "y",
+    }
+)
+
+
+def _decoded_note_pattern(*parts: str) -> str:
+    return DECODED_RETIRED_NETWORK_NOTE_GLUE.join(re.escape(part) for part in parts)
+
+
+SCCP_DECODED_RETIRED_NETWORK_ALLOWED_SCOPE_PATTERNS = (
+    re.compile(
+        _decoded_note_pattern(
+            "SCCP",
+            "will",
+            "not",
+            "support",
+            _DECODED_SUBSTRATE,
+            "/",
+            _DECODED_POLKADOT,
+            "networks",
+            "for",
+            "now.",
+        ),
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        _decoded_note_pattern(
+            "Do",
+            "not",
+            "track",
+            _DECODED_SUBSTRATE,
+            "/",
+            _DECODED_POLKADOT,
+            "relayers,",
+            "route",
+            "manifests,",
+            "proof",
+        ),
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        _decoded_note_pattern(
+            _DECODED_SUBSTRATE,
+            "/",
+            _DECODED_POLKADOT,
+            "networks",
+            "are",
+        )
+        + (
+            rf"(?:explicitly{DECODED_RETIRED_NETWORK_NOTE_GLUE})?"
+            rf"(?:out{DECODED_RETIRED_NETWORK_NOTE_GLUE}"
+            rf"of{DECODED_RETIRED_NETWORK_NOTE_GLUE}scope|"
+            rf"intentionally{DECODED_RETIRED_NETWORK_NOTE_GLUE}unsupported|"
+            rf"not{DECODED_RETIRED_NETWORK_NOTE_GLUE}supported)"
+        ),
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        _decoded_note_pattern(
+            "No",
+            "current",
+            "source",
+            "proof,",
+            "manifest,",
+            "SDK",
+            "helper,",
+            "or",
+            "Torii",
+            "route",
+            "should",
+            "be",
+            "treated",
+            "as",
+            _DECODED_SUBSTRATE,
+            "/",
+            f"{_DECODED_POLKADOT}-compatible",
+        ),
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        _decoded_note_pattern(
+            "imply",
+            "hidden",
+            _DECODED_SUBSTRATE,
+            "/",
+            _DECODED_POLKADOT,
+            "compatibility",
+        ),
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        _decoded_note_pattern(
+            _DECODED_SUBSTRATE,
+            "/",
+            _DECODED_POLKADOT,
+            "no-support",
+            "sentence",
+        ),
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
+
+SCCP_DECODED_RETIRED_NETWORK_ALLOWED_CONTEXT = re.compile(
+    "|".join(
+        (
+            r"will\s+not\s+support",
+            r"not\s+support(?:ed)?",
+            r"unsupported",
+            r"out\s+of\s+(?:SCCP\s+)?scope",
+            r"no-support",
+            r"do\s+not\s+track",
+            r"support\s+boundary",
+            r"not-remaining-work",
+            r"current-release\s+support\s+boundary",
+            r"unsupported-scope",
+            re.escape("SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE"),
+            re.escape("SCCP_NOT_REMAINING_WORK_SCOPE_NOTE"),
+            rf"with\s+no\s+{re.escape(_DECODED_SUBSTRATE)}"
+            rf"/{re.escape(_DECODED_POLKADOT)}\s+network\s+support",
+            rf"excludes\s+{re.escape(_DECODED_SUBSTRATE)}"
+            rf"/{re.escape(_DECODED_POLKADOT)}\s+network\s+support",
+        )
+    ),
+    re.IGNORECASE | re.DOTALL,
+)
+SCCP_DECODED_RETIRED_NETWORK_SCAN_SKIP_FILES = {
+    Path("status.md"),
+}
 
 TEXT_SUFFIXES = {
     "",
@@ -186,6 +361,54 @@ def _scanned_files() -> list[Path]:
     return sorted(files)
 
 
+def _decoded_retired_network_match_is_allowed(
+    text: str, start: int, end: int
+) -> bool:
+    for pattern in SCCP_DECODED_RETIRED_NETWORK_ALLOWED_SCOPE_PATTERNS:
+        for match in pattern.finditer(text):
+            if match.start() <= start and end <= match.end():
+                return True
+
+    window = text[max(0, start - 180) : min(len(text), end + 180)]
+    return SCCP_DECODED_RETIRED_NETWORK_ALLOWED_CONTEXT.search(window) is not None
+
+
+def _decode_retired_network_surface_text(text: str) -> str:
+    decoded = html_unescape(text)
+    for _ in range(3):
+        next_decoded = url_unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    return decoded
+
+
+def _normalize_retired_network_confusables(text: str) -> str:
+    return text.translate(RETIRED_NETWORK_CONFUSABLES)
+
+
+def _decoded_retired_network_surface_violations(
+    relative: Path, text: str
+) -> list[str]:
+    if relative in SCCP_DECODED_RETIRED_NETWORK_SCAN_SKIP_FILES:
+        return []
+
+    decoded = _normalize_retired_network_confusables(
+        _decode_retired_network_surface_text(text)
+    )
+    violations: list[str] = []
+    for pattern in BANNED_PATTERNS:
+        match = pattern.search(decoded)
+        while match is not None:
+            if not _decoded_retired_network_match_is_allowed(
+                decoded, match.start(), match.end()
+            ):
+                line = decoded.count("\n", 0, match.start()) + 1
+                violations.append(f"{line}:decoded:{match.group(0)!r}")
+            match = pattern.search(decoded, match.end())
+    return violations
+
+
 def test_retired_network_surface_scan_roots_exist_and_are_nonempty() -> None:
     for root in SCAN_ROOTS:
         path = REPO_ROOT / root
@@ -232,17 +455,106 @@ def test_retired_network_patterns_catch_separator_obfuscation_examples() -> None
         (BANNED_PATTERNS[0], ("sub", "_", "strate")),
         (BANNED_PATTERNS[0], ("sub", ".", "strate")),
         (BANNED_PATTERNS[0], ("sub", " ", "strate")),
+        (BANNED_PATTERNS[0], ("sub", chr(0x200B), "strate")),
+        (BANNED_PATTERNS[0], ("sub", "/", "strate")),
+        (BANNED_PATTERNS[0], ("sub", ":", "strate")),
+        (BANNED_PATTERNS[0], ("sub", "|", "strate")),
+        (BANNED_PATTERNS[0], ("sub", "\\", "strate")),
         (BANNED_PATTERNS[2], ("pol", "-", "kadot")),
         (BANNED_PATTERNS[2], ("pol", "_", "kadot")),
+        (BANNED_PATTERNS[2], ("pol", chr(0xFEFF), "kadot")),
+        (BANNED_PATTERNS[2], ("pol", "/", "kadot")),
+        (BANNED_PATTERNS[2], ("pol", "+", "kadot")),
+        (BANNED_PATTERNS[2], ("pol", "=", "kadot")),
+        (BANNED_PATTERNS[2], ("pol", "~", "kadot")),
         (BANNED_PATTERNS[4], (_RUNTIME, ".", _SC, ".", _ALE)),
+        (BANNED_PATTERNS[4], (_RUNTIME, "::", _SC, "::", _ALE)),
         (BANNED_PATTERNS[7], ("x", "-", "cm")),
+        (BANNED_PATTERNS[7], ("x", "/", "cm")),
         (BANNED_PATTERNS[9], ("sp", "_", _RUNTIME)),
+        (BANNED_PATTERNS[9], ("sp", "::", _RUNTIME)),
         (BANNED_PATTERNS[10], ("frame", "-", "system")),
+        (BANNED_PATTERNS[10], ("frame", "::", "system")),
         (BANNED_PATTERNS[11], ("frame", ".", "support")),
+        (BANNED_PATTERNS[11], ("frame", "/", "support")),
     )
 
     for pattern, example in cases:
         assert pattern.search("".join(example))
+
+
+def test_retired_network_patterns_catch_html_entity_obfuscation_examples() -> None:
+    encoded_family = "".join(
+        ("Sub", "&#115;", "trate", "/", "Pol", "&#107;", "adot")
+    )
+    encoded_runtime = "".join(("sp", "&#95;", _RUNTIME))
+    adversarial_examples = (
+        f"operator added {encoded_family} relayer support",
+        f"operator added {encoded_family} route manifest",
+        f"operator added {encoded_runtime} proof codec",
+    )
+
+    for index, text in enumerate(adversarial_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"adversarial-{index}.md"), text
+        )
+
+    approved_examples = (
+        SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
+        f"the exact escaped {encoded_family} no-support sentence remains pinned",
+    )
+    for index, text in enumerate(approved_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"approved-{index}.md"), text
+        ) == []
+
+
+def test_retired_network_patterns_catch_url_percent_obfuscation_examples() -> None:
+    encoded_family = "".join(
+        ("Sub", "%73", "trate", "%2f", "Pol", "%6b", "adot")
+    )
+    double_encoded_family = "".join(
+        ("Sub", "%2573", "trate", "%252f", "Pol", "%256b", "adot")
+    )
+    encoded_runtime = "".join(("sp", "%5f", _RUNTIME))
+    adversarial_examples = (
+        f"operator added {encoded_family} relayer support",
+        f"operator added {double_encoded_family} route manifest",
+        f"operator added {encoded_runtime} proof codec",
+    )
+
+    for index, text in enumerate(adversarial_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"percent-adversarial-{index}.md"), text
+        )
+
+    approved_examples = (
+        "".join(
+            (
+                "SCCP will not support ",
+                encoded_family,
+                " networks for now.",
+            )
+        ),
+    )
+    for index, text in enumerate(approved_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"percent-approved-{index}.md"), text
+        ) == []
+
+
+def test_retired_network_patterns_catch_unicode_confusable_obfuscation_examples() -> None:
+    adversarial_examples = (
+        "operator added " + "".join(("Ѕ", "ub", "ѕ", "trate")) + " relayer support",
+        "operator added " + "".join(("Р", "ol", "κ", "adot")) + " route manifest",
+        "operator added " + "".join(("ѕ", "р", "_", _RUNTIME)) + " proof codec",
+        "operator added " + "".join(("Χ", "С", "Μ")) + " message bridge",
+    )
+
+    for index, text in enumerate(adversarial_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"confusable-adversarial-{index}.md"), text
+        )
 
 
 def test_retired_network_surface_scan_covers_expected_files() -> None:
@@ -322,5 +634,7 @@ def test_active_tree_excludes_retired_network_surface_tokens() -> None:
             while match is not None:
                 violations.append(f"{relative}:{match.start()}: {match.group(0)!r}")
                 match = pattern.search(text, match.end())
+        for violation in _decoded_retired_network_surface_violations(relative, text):
+            violations.append(f"{relative}:{violation}")
 
     assert violations == []

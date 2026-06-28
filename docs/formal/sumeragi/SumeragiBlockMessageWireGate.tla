@@ -220,11 +220,15 @@ WireDecodeExactness ==
   /\ DecodeAnchors
 
 BlockMessageWireExactness ==
-  /\ SafetyFast
-  /\ WireCacheConstructionExactness
-  /\ WireSerializationExactness
-  /\ WireFrameValidationExactness
-  /\ WireDecodeExactness
+  /\ CacheConstructionSafety
+  /\ SerializationSafety
+  /\ FrameRejectionSafety
+  /\ FramePrefixSafety
+  /\ DecodeSafety
+  /\ CacheConstructionAnchors
+  /\ SerializationAnchors
+  /\ FrameValidationAnchors
+  /\ DecodeAnchors
   /\ BlockMessageWireSafetyAnchors
 
 BlockMessageWireCorrectnessEnvelope ==

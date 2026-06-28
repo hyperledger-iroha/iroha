@@ -174,7 +174,7 @@ StrictlyHigherQcUnlocks ==
     } =>
       candidate \in accepted
 
-Safety ==
+EngineProposalLockExactness ==
   /\ AcceptedMatchesSpec
   /\ RejectedMatchesSpec
   /\ UnlockedProposalsAlwaysAccept
@@ -183,5 +183,12 @@ Safety ==
   /\ EqualQcNeverUnlocks
   /\ LowerQcNeverUnlocks
   /\ StrictlyHigherQcUnlocks
+
+Safety ==
+  EngineProposalLockExactness
+
+EngineProposalLockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineProposalLockExactness
 
 ====

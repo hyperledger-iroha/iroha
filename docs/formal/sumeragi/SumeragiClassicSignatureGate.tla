@@ -471,9 +471,23 @@ ClassicSignatureSafetyAnchors ==
   /\ ConcreteHighestFailuresFailClosed
   /\ ConcreteNposMissingVoteAnchor
 
+ClassicSignatureExactness ==
+  /\ AcceptMatchesSpec
+  /\ AcceptedReturnsBitmapSigners
+  /\ ReturnedSignersWithinRoster
+  /\ RejectedReturnsNoSigners
+  /\ ValidCasesAccepted
+  /\ ModeAndRosterFailuresFailClosed
+  /\ BitmapFailuresFailClosed
+  /\ QuorumFailuresFailClosed
+  /\ AggregateFailuresFailClosed
+  /\ VoteFailuresFailClosed
+  /\ HighestFailuresFailClosed
+  /\ NposAggregateMayTolerateMissingVotes
+  /\ ClassicSignatureSafetyAnchors
+
 ClassicSignatureCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ ClassicSignatureSafetyAnchors
+  /\ ClassicSignatureExactness
 
 ====

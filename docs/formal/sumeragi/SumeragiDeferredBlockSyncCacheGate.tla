@@ -315,7 +315,7 @@ DeferredBlockSyncCacheMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 DeferredBlockSyncCacheExactness ==
-  DeferredBlockSyncCacheMatchesSpec
+  /\ DeferredBlockSyncCacheMatchesSpec
 
 DeferredBlockSyncCacheCorrectnessEnvelope ==
   /\ TypeInvariant

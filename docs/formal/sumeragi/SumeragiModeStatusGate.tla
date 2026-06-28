@@ -253,8 +253,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+ModeStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 ModeStatusExactness ==
-  Safety
+  /\ ModeStatusActionsMatchSpec
 
 ModeStatusCorrectnessEnvelope ==
   /\ TypeInvariant

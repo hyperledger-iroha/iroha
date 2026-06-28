@@ -350,9 +350,16 @@ TopologyFanoutHelperExactness ==
   /\ RedundantSendFloorExact
   /\ TailFanoutSelectionExact
 
+TopologyFanoutExactness ==
+  /\ TopologyFanoutCoreSafety
+  /\ RedundantSendCountExact
+  /\ ViewChangeQuorumExact
+  /\ RedundantSendFloorExact
+  /\ TailFanoutSelectionExact
+
 TopologyFanoutCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ TopologyFanoutHelperExactness
+  /\ TopologyFanoutExactness
 
 BugRedundantZeroLenReturnsZero ==
   ActualRedundantSendR("redundant_len_zero") =

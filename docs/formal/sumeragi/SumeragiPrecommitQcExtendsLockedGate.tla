@@ -219,6 +219,13 @@ NoBugInvariant == PrecommitQcExtendsLockedCoreSafety
 
 SafetyFast == PrecommitQcExtendsLockedCoreSafety
 
+PrecommitQcExtendsLockedExactness ==
+  /\ PrecommitQcExtendsLockedCoreSafety
+
+PrecommitQcExtendsLockedCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrecommitQcExtendsLockedExactness
+
 BugRejectNonCommitPhase == NoBugInvariant
 BugRejectNoLock == NoBugInvariant
 BugRejectMissingLockedBlock == NoBugInvariant

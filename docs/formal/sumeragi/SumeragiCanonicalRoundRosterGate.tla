@@ -293,7 +293,7 @@ CanonicalRoundRosterMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
 
 CanonicalRoundRosterExactness ==
-  CanonicalRoundRosterMatchesSpec
+  /\ CanonicalRoundRosterMatchesSpec
 
 CanonicalRoundRosterCorrectnessEnvelope ==
   /\ TypeInvariant

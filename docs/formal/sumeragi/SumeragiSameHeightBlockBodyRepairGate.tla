@@ -195,8 +195,15 @@ TypeInvariant ==
 SameHeightBlockBodyRepairMatchesSpec ==
   \A c \in Cases: Matches(c)
 
+SameHeightBlockBodyRepairExactness ==
+  /\ SameHeightBlockBodyRepairMatchesSpec
+
+SameHeightBlockBodyRepairCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SameHeightBlockBodyRepairExactness
+
 SafetyFast ==
-  SameHeightBlockBodyRepairMatchesSpec
+  SameHeightBlockBodyRepairExactness
 
 PendingSourceAllowed ==
   Matches("pending_actionable")

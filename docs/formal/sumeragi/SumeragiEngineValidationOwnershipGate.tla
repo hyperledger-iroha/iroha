@@ -215,7 +215,7 @@ ValuesStayInDomain ==
     /\ SpecFinalOwner(candidate) \in OwnerValues
     /\ ImplementationFinalOwner(candidate) \in OwnerValues
 
-Safety ==
+EngineValidationOwnershipExactness ==
   /\ FinalOwnerMatchesSpec
   /\ CurrentValidClearsOwner
   /\ CurrentInvalidClearsOwner
@@ -226,5 +226,14 @@ Safety ==
   /\ SupersededCallbacksPreserveNone
   /\ IgnoredCallbacksPreserveOwnerExactly
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineValidationOwnershipExactness
+
+EngineValidationOwnershipCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineValidationOwnershipExactness
+
+SafetyFast == EngineValidationOwnershipExactness
 
 ====

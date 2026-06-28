@@ -482,13 +482,22 @@ ActorGateDropExactness ==
 
 ActorGatePriorityExactness ==
   /\ ActorGateCaseGroupsComplete
-  /\ ActorGateSpecProjectionExactness
-  /\ ActorGateInFlightExactness
-  /\ ActorGateAvailabilityExactness
-  /\ ActorGateUrgentDaRegularExactness
-  /\ ActorGateEntrySideEffectExactness
-  /\ ActorGateEntryStreakExactness
-  /\ ActorGateDropExactness
+  /\ MatchesSpec
+  /\ InFlightBlocksAll
+  /\ AvailabilityBodyYieldsToCriticalAfterBodyCap
+  /\ AvailabilityCriticalHonorsBodyBurst
+  /\ AvailabilityBurstYieldsToUrgentAndDa
+  /\ UrgentHonorsAvailabilityAndDaCaps
+  /\ DaCriticalHonorsAvailabilityAndUrgentCaps
+  /\ RegularHonorsAvailabilityDaAndUrgentCaps
+  /\ EntrySetsOwnershipAndConsumesWaiter
+  /\ BlockedEntriesHaveNoSideEffects
+  /\ AvailabilityEntryStreakEffects
+  /\ UrgentEntryStreakEffects
+  /\ DaCriticalAndRegularEntryResetStreaks
+  /\ DropClearsAndNotifies
+  /\ UrgentDropPreservesUrgentStreak
+  /\ NonUrgentDropResetsUrgentStreak
 
 ActorGatePriorityCorrectnessEnvelope ==
   /\ TypeInvariant

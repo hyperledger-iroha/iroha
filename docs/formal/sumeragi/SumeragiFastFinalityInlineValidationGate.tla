@@ -245,8 +245,27 @@ Safety ==
   /\ AcceptedCandidatesSatisfyAllGuards
   /\ ReturnedCountsMatchEligibleTxCounts
 
+FastFinalityInlineValidationExactness ==
+  /\ ResultMatchesSpec
+  /\ InlineRequiresDa
+  /\ PriorityReasonDisablesInline
+  /\ InlineRequiresNextHeight
+  /\ InlineRequiresProposalEvidence
+  /\ InflightBlocksInline
+  /\ InlineRequiresMatchingPayload
+  /\ ZeroCapDisablesInline
+  /\ InlineRequiresTxCountWithinCap
+  /\ ExactCapAllowed
+  /\ ReturnedCountMatchesTxCount
+  /\ AllCandidateResultsMatchSpec
+  /\ EligibleCaseResultAnchors
+  /\ GateRejectionAnchors
+  /\ CapBoundaryAnchors
+  /\ AcceptedCandidatesSatisfyAllGuards
+  /\ ReturnedCountsMatchEligibleTxCounts
+
 FastFinalityInlineValidationCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
+  /\ FastFinalityInlineValidationExactness
 
 ====

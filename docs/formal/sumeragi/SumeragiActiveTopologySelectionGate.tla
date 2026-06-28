@@ -270,8 +270,11 @@ ActiveTopologyFallbackExact ==
   /\ FallbackContract
 
 ActiveTopologySelectionExactness ==
-  /\ SafetyFast
   /\ AllCasesMatchSpec
+  /\ PrimarySourcePriority
+  /\ PopFilteringContract
+  /\ FallbackContract
+  /\ OutputShapeContract
   /\ ActiveTopologySourcePriorityExact
   /\ ActiveTopologyOutputNormalizationExact
   /\ ActiveTopologyPopFilterExact

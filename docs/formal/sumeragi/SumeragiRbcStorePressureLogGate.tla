@@ -258,7 +258,16 @@ PressureLogSafetyAnchors ==
   /\ SuppressedStateAnchors
   /\ LoggedStateAnchors
 
-RbcStorePressureLogExactness == PressureLogSafetyAnchors
+RbcStorePressureLogExactness ==
+  /\ AllCandidatesMatchSpec
+  /\ AllSpecActionsWithinDomain
+  /\ AllImplementationActionsWithinDomain
+  /\ ResetAnchors
+  /\ LabelAnchors
+  /\ TransitionAnchors
+  /\ ThrottleAnchors
+  /\ SuppressedStateAnchors
+  /\ LoggedStateAnchors
 
 RbcStorePressureLogCorrectnessEnvelope ==
   /\ TypeInvariant

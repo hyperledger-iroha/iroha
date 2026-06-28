@@ -326,7 +326,7 @@ VoteDeferralMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncVoteDeferralExactness ==
-  VoteDeferralMatchesSpec
+  /\ VoteDeferralMatchesSpec
 
 BlockSyncVoteDeferralCorrectnessEnvelope ==
   /\ TypeInvariant

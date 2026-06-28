@@ -220,8 +220,12 @@ HighestQcFetchBodyKnownCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 HighestQcFetchBodyKnownExactness ==
-  HighestQcFetchBodyKnownCoreSafety
-
+  /\ ActionsMatchSpec
+  /\ KuraBodiesSuppressFetch
+  /\ PendingBodiesSuppressFetchUnlessAborted
+  /\ InflightBodiesSuppressFetchUnlessAborted
+  /\ DeferredHashOnlyAndAbsentBodiesStillFetch
+  /\ LookupShapeMatchesShortCircuit
 HighestQcFetchBodyKnownCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ HighestQcFetchBodyKnownExactness

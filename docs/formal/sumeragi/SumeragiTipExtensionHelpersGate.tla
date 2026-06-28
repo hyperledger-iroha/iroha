@@ -150,8 +150,14 @@ TipExtensionHelpersMatchSpec ==
   /\ \A c \in ChainCases:
        ActualChainResult(c) = SpecChainResult(c)
 
+TipExtensionHelpersExactness ==
+  /\ TipExtensionHelpersMatchSpec
+TipExtensionHelpersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TipExtensionHelpersExactness
+
 SafetyFast ==
-  TipExtensionHelpersMatchSpec
+  TipExtensionHelpersExactness
 
 BugPendingMissingCommittedStale ==
   ActualPendingOutput("pending_missing_committed") =

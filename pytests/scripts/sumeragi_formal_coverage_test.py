@@ -3333,10 +3333,12 @@ def test_cfg_fast_generic_check_errors_rejects_fast_generic_checks(
         "Safety; fast configs must use a model-specific direct invariant",
         f"frontier-fast: Apalache cfg {cfg}:6 references generic check "
         "NoBugInvariant; fast configs must use a model-specific direct invariant",
+        f"frontier-fast: Apalache cfg {cfg} has no model-specific "
+        "*CorrectnessEnvelope invariant/property check",
     ]
 
 
-def test_cfg_fast_generic_check_errors_accepts_direct_fast_checks(
+def test_cfg_fast_generic_check_errors_rejects_fast_checks_without_envelope(
     tmp_path: Path,
 ) -> None:
     module = load_coverage_module()
@@ -3354,17 +3356,38 @@ def test_cfg_fast_generic_check_errors_accepts_direct_fast_checks(
         encoding="utf-8",
     )
 
-    assert (
-        module.cfg_fast_generic_check_errors("frontier-fast", cfg, "TLC")
-        == []
+    assert module.cfg_fast_generic_check_errors("frontier-fast", cfg, "TLC") == [
+        f"frontier-fast: TLC cfg {cfg} has no model-specific "
+        "*CorrectnessEnvelope invariant/property check"
+    ]
+
+
+def test_cfg_fast_generic_check_errors_accepts_enveloped_fast_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierExactness",
+                "INVARIANT FrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
     )
+
+    assert module.cfg_fast_generic_check_errors("frontier-fast", cfg, "TLC") == []
 
 
 def test_cfg_fast_generic_check_errors_ignores_mutation_configs(
     tmp_path: Path,
 ) -> None:
     module = load_coverage_module()
-    cfg = tmp_path / "SumeragiFrontier_bug_stale.cfg"
+    cfg = tmp_path / "SumeragiFrontier_bug_stale_not_fast.cfg"
     cfg.write_text(
         "\n".join(
             [
@@ -3380,6 +3403,2000 @@ def test_cfg_fast_generic_check_errors_ignores_mutation_configs(
     assert (
         module.cfg_fast_generic_check_errors(
             "frontier-bug-stale", cfg, "Apalache"
+        )
+        == []
+    )
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_missing_type_invariant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontier.tla"
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontier ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "FrontierDecisionMatchesSpec == 1 = 1",
+                "FrontierExactness ==",
+                "  /\\ FrontierDecisionMatchesSpec",
+                "FrontierCorrectnessEnvelope ==",
+                "  /\\ FrontierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierExactness",
+                "INVARIANT FrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "frontier-fast", tla, cfg, "Apalache"
+    ) == [
+        f"frontier-fast: Apalache cfg {cfg}:5 references correctness envelope "
+        f"FrontierCorrectnessEnvelope, but {tla}:9 does not compose TypeInvariant"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_missing_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontier.tla"
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontier ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SafetyFast == TRUE",
+                "FrontierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SafetyFast",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "frontier-fast", tla, cfg, "TLC"
+    ) == [
+        f"frontier-fast: TLC cfg {cfg}:4 references correctness envelope "
+        f"FrontierCorrectnessEnvelope, but {tla}:7 has no model-specific "
+        "*Exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_accepts_exactness_envelope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontier.tla"
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontier ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "FrontierDecisionMatchesSpec == 1 = 1",
+                "FrontierExactness ==",
+                "  /\\ FrontierDecisionMatchesSpec",
+                "FrontierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ FrontierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_correctness_envelope_shape_errors(
+            "frontier-fast", tla, cfg, "Apalache"
+        )
+        == []
+    )
+
+
+def test_cfg_correctness_envelope_shape_errors_has_no_legacy_exactness_debt(
+) -> None:
+    module = load_coverage_module()
+    assert module.LEGACY_FAST_ENVELOPE_WITHOUT_EXACTNESS == set()
+
+
+def test_cfg_correctness_envelope_shape_errors_has_no_direct_alias_exceptions(
+) -> None:
+    module = load_coverage_module()
+    assert not hasattr(module, "DIRECT_EXACTNESS_ALIAS_EXCEPTIONS")
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_fast_missing_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SafetyFast == TRUE",
+                "SumeragiConsensusCoreSafetyAnchors == TRUE",
+                "SumeragiConsensusCoreFastCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SafetyFast",
+                "  /\\ SumeragiConsensusCoreSafetyAnchors",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SumeragiConsensusCoreFastCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        f"SumeragiConsensusCoreFastCorrectnessEnvelope, but {tla}:8 has no "
+        "model-specific *Exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_literal_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiLiteral.tla"
+    cfg = tmp_path / "SumeragiLiteral_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiLiteral ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "LiteralExactness == TRUE",
+                "LiteralCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ LiteralExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT LiteralCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "literal-fast", tla, cfg, "Apalache"
+    ) == [
+        f"literal-fast: Apalache cfg {cfg}:4 references correctness envelope "
+        f"LiteralCorrectnessEnvelope, but exactness conjunct LiteralExactness "
+        f"at {tla}:5 is literal TRUE"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_nobuginvariant_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiNoBug.tla"
+    cfg = tmp_path / "SumeragiNoBug_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiNoBug ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "NoBugInvariant == TRUE",
+                "NoBugExactness == NoBugInvariant",
+                "NoBugCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ NoBugExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT NoBugCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "nobug-fast", tla, cfg, "TLC"
+    ) == [
+        f"nobug-fast: TLC cfg {cfg}:4 references correctness envelope "
+        f"NoBugCorrectnessEnvelope, but exactness conjunct NoBugExactness "
+        f"at {tla}:6 aliases generic NoBugInvariant; compose concrete model "
+        "predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_safetyfast_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiSafetyFast.tla"
+    cfg = tmp_path / "SumeragiSafetyFast_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSafetyFast ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "SafetyFast == ModelPredicate",
+                "SafetyFastExactness == SafetyFast",
+                "SafetyFastCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SafetyFastExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyFastCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "safetyfast-fast", tla, cfg, "Apalache"
+    ) == [
+        f"safetyfast-fast: Apalache cfg {cfg}:4 references correctness "
+        "envelope SafetyFastCorrectnessEnvelope, but exactness conjunct "
+        f"SafetyFastExactness at {tla}:7 aliases generic SafetyFast; compose "
+        "concrete model predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_safety_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiSafety.tla"
+    cfg = tmp_path / "SumeragiSafety_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSafety ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "Safety == ModelPredicate",
+                "SafetyExactness == Safety",
+                "SafetyCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SafetyExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "safety-fast", tla, cfg, "TLC"
+    ) == [
+        f"safety-fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SafetyCorrectnessEnvelope, but exactness conjunct SafetyExactness "
+        f"at {tla}:7 aliases generic Safety; compose concrete model "
+        "predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_mixed_generic_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiMixedSafety.tla"
+    cfg = tmp_path / "SumeragiMixedSafety_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiMixedSafety ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "Safety == ModelPredicate",
+                "MixedExactness ==",
+                "  /\\ Safety",
+                "  /\\ ModelPredicate",
+                "MixedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ MixedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT MixedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "mixed-safety-fast", tla, cfg, "Apalache"
+    ) == [
+        f"mixed-safety-fast: Apalache cfg {cfg}:4 references correctness "
+        "envelope MixedCorrectnessEnvelope, but exactness conjunct "
+        f"MixedExactness at {tla}:8 mentions generic Safety; compose concrete "
+        "model predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_exactness_direct_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiAliasEnvelope.tla"
+    cfg = tmp_path / "SumeragiAliasEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "AliasExactness == ModelPredicate",
+                "AliasCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ AliasExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT AliasCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "alias-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"alias-envelope-fast: Apalache cfg {cfg}:4 references correctness "
+        "envelope AliasCorrectnessEnvelope, but exactness conjunct "
+        f"AliasExactness at {tla}:6 aliases ModelPredicate; inline concrete "
+        "model predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_duplicate_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDuplicateEnvelope.tla"
+    cfg = tmp_path / "SumeragiDuplicateEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDuplicateEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "FirstPredicate == TRUE",
+                "SecondPredicate == TRUE",
+                "DuplicateExactness ==",
+                "  /\\ FirstPredicate",
+                "  /\\ SecondPredicate",
+                "  /\\ FirstPredicate",
+                "DuplicateCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DuplicateExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DuplicateCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "duplicate-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"duplicate-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope DuplicateCorrectnessEnvelope, but exactness "
+        f"conjunct DuplicateExactness at {tla}:8 repeats exactness conjunct "
+        "FirstPredicate; remove duplicate conjuncts so every obligation is "
+        "counted once"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_literal_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiLiteralConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiLiteralConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiLiteralConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "LiteralConjunct == TRUE",
+                "LiteralConjunctExactness ==",
+                "  /\\ LiteralConjunct",
+                "LiteralConjunctCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ LiteralConjunctExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT LiteralConjunctCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "literal-conjunct-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"literal-conjunct-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope LiteralConjunctCorrectnessEnvelope, but "
+        f"exactness conjunct LiteralConjunctExactness at {tla}:7 contains "
+        f"literal exactness conjunct LiteralConjunct at {tla}:5 is literal "
+        "TRUE; compose concrete model predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_undefined_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiUndefinedConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiUndefinedConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUndefinedConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "KnownPredicate == 1 = 1",
+                "MissingConjunctExactness ==",
+                "  /\\ KnownPredicate",
+                "  /\\ MissingPredicate",
+                "MissingConjunctCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ MissingConjunctExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT MissingConjunctCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "undefined-conjunct-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"undefined-conjunct-envelope-fast: TLC cfg {cfg}:4 references "
+        "correctness envelope MissingConjunctCorrectnessEnvelope, but "
+        f"exactness conjunct MissingConjunctExactness at {tla}:7 contains "
+        "undefined exactness conjunct MissingPredicate; define named concrete "
+        "model predicates before composing them"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_raw_scalar_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiRawScalarEnvelope.tla"
+    cfg = tmp_path / "SumeragiRawScalarEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiRawScalarEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ActualOutput == 1",
+                "SpecOutput == 1",
+                "RawScalarExactness ==",
+                "  ActualOutput = SpecOutput",
+                "RawScalarCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ RawScalarExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT RawScalarCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "raw-scalar-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"raw-scalar-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope RawScalarCorrectnessEnvelope, but exactness "
+        f"conjunct RawScalarExactness at {tla}:8 is raw scalar equality "
+        "ActualOutput = SpecOutput; name the concrete model predicate and "
+        "compose it as a direct exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_negated_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiNegatedEnvelope.tla"
+    cfg = tmp_path / "SumeragiNegatedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiNegatedEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ViolatesContract == FALSE",
+                "NegatedExactness ==",
+                "  ~ViolatesContract",
+                "NegatedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ NegatedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT NegatedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "negated-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"negated-envelope-fast: TLC cfg {cfg}:4 references correctness "
+        "envelope NegatedCorrectnessEnvelope, but exactness conjunct "
+        f"NegatedExactness at {tla}:7 is whole-body negation "
+        "~ViolatesContract; name the concrete model predicate and compose it "
+        "as a direct exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_disjunctive_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDisjunctiveEnvelope.tla"
+    cfg = tmp_path / "SumeragiDisjunctiveEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDisjunctiveEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "NoneCase == \"none\"",
+                "Candidate == \"none\"",
+                "FieldsMatch == TRUE",
+                "DisjunctiveExactness ==",
+                "  Candidate = NoneCase \\/ FieldsMatch",
+                "DisjunctiveCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DisjunctiveExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DisjunctiveCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "disjunctive-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"disjunctive-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope DisjunctiveCorrectnessEnvelope, but exactness "
+        f"conjunct DisjunctiveExactness at {tla}:9 is whole-body disjunction "
+        "Candidate = NoneCase \\/ FieldsMatch; name the concrete model "
+        "predicate and compose it as a direct exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_action_quantifier_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiActionQuantifierEnvelope.tla"
+    cfg = tmp_path / "SumeragiActionQuantifierEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiActionQuantifierEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Cases == {\"empty\"}",
+                "ImplementationActions(c) == {}",
+                "SpecActions(c) == {}",
+                "ActionQuantifierExactness ==",
+                "  \\A c \\in Cases: ImplementationActions(c) = SpecActions(c)",
+                "ActionQuantifierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ActionQuantifierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ActionQuantifierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "action-quantifier-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"action-quantifier-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope ActionQuantifierCorrectnessEnvelope, but "
+        f"exactness conjunct ActionQuantifierExactness at {tla}:9 is "
+        "whole-body implementation/spec action quantifier "
+        "\\A c \\in Cases: ImplementationActions(c) = SpecActions(c); name "
+        "the concrete model predicate and compose it as a direct exactness "
+        "conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_direct_action_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectActionConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiDirectActionConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectActionConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ImplementationActions(ResetEmpty) == {}",
+                "SpecActions(ResetEmpty) == {}",
+                "NamedActionMatch == ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)",
+                "DirectActionConjunctExactness ==",
+                "  /\\ NamedActionMatch",
+                "  /\\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)",
+                "DirectActionConjunctCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectActionConjunctExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectActionConjunctCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "direct-action-conjunct-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"direct-action-conjunct-envelope-fast: TLC cfg {cfg}:4 references "
+        "correctness envelope DirectActionConjunctCorrectnessEnvelope, but "
+        f"exactness conjunct DirectActionConjunctExactness at {tla}:9 "
+        "contains direct implementation/spec action conjunct "
+        "ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty); name "
+        "the concrete model predicate and compose it as a direct exactness "
+        "conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_direct_matches_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectMatchesConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiDirectMatchesConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectMatchesConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Case == \"empty\"",
+                "Matches(c) == TRUE",
+                "NamedMatches == Matches(Case)",
+                "DirectMatchesConjunctExactness ==",
+                "  /\\ NamedMatches",
+                "  /\\ Matches(Case)",
+                "DirectMatchesConjunctCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectMatchesConjunctExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectMatchesConjunctCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "direct-matches-conjunct-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"direct-matches-conjunct-envelope-fast: Apalache cfg {cfg}:4 "
+        "references correctness envelope "
+        "DirectMatchesConjunctCorrectnessEnvelope, but exactness conjunct "
+        f"DirectMatchesConjunctExactness at {tla}:9 contains direct Matches "
+        "conjunct Matches(Case); name the concrete model predicate and "
+        "compose it as a direct exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_unnamed_conjunct_bundle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiUnnamedConjunctEnvelope.tla"
+    cfg = tmp_path / "SumeragiUnnamedConjunctEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUnnamedConjunctEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Cases == {\"empty\"}",
+                "Matches(c) == TRUE",
+                "UnnamedConjunctExactness ==",
+                "  /\\ \\A c \\in Cases: Matches(c)",
+                "UnnamedConjunctCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ UnnamedConjunctExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT UnnamedConjunctCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "unnamed-conjunct-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"unnamed-conjunct-envelope-fast: TLC cfg {cfg}:4 references "
+        "correctness envelope UnnamedConjunctCorrectnessEnvelope, but "
+        f"exactness conjunct UnnamedConjunctExactness at {tla}:8 contains "
+        "no direct named exactness conjuncts; name the concrete model "
+        "predicate and compose it as a direct exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_matches_quantifier_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiMatchesQuantifierEnvelope.tla"
+    cfg = tmp_path / "SumeragiMatchesQuantifierEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiMatchesQuantifierEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Cases == {\"empty\"}",
+                "Matches(c) == TRUE",
+                "MatchesQuantifierExactness ==",
+                "  \\A c \\in Cases: Matches(c)",
+                "MatchesQuantifierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ MatchesQuantifierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT MatchesQuantifierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "matches-quantifier-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"matches-quantifier-envelope-fast: TLC cfg {cfg}:4 references "
+        "correctness envelope MatchesQuantifierCorrectnessEnvelope, but "
+        f"exactness conjunct MatchesQuantifierExactness at {tla}:8 is "
+        "whole-body Matches quantifier \\A c \\in Cases: Matches(c); name "
+        "the concrete model predicate and compose it as a direct exactness "
+        "conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_whole_body_quantifier_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiWholeQuantifierEnvelope.tla"
+    cfg = tmp_path / "SumeragiWholeQuantifierEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiWholeQuantifierEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Cases == {\"empty\"}",
+                "ActualResult(c) == TRUE",
+                "SpecResult(c) == TRUE",
+                "WholeQuantifierExactness ==",
+                "  \\A c \\in Cases: ActualResult(c) = SpecResult(c)",
+                "WholeQuantifierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ WholeQuantifierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT WholeQuantifierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "whole-quantifier-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"whole-quantifier-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope WholeQuantifierCorrectnessEnvelope, but "
+        f"exactness conjunct WholeQuantifierExactness at {tla}:9 is "
+        "whole-body quantifier \\A c \\in Cases: ActualResult(c) = "
+        "SpecResult(c); name the concrete model predicate and compose it as a "
+        "direct exactness conjunct"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_nested_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiNestedExactnessEnvelope.tla"
+    cfg = tmp_path / "SumeragiNestedExactnessEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiNestedExactnessEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == 1 = 1",
+                "ChildExactness ==",
+                "  /\\ ConcretePredicate",
+                "ParentExactness ==",
+                "  /\\ ChildExactness",
+                "ParentCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ParentExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ParentCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "nested-exactness-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"nested-exactness-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope ParentCorrectnessEnvelope, but exactness "
+        f"conjunct ParentExactness at {tla}:9 composes nested exactness "
+        "ChildExactness; inline concrete model predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_type_invariant_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiTypeExactnessEnvelope.tla"
+    cfg = tmp_path / "SumeragiTypeExactnessEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTypeExactnessEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "TypeMixedExactness ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ModelPredicate",
+                "TypeMixedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ TypeMixedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT TypeMixedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "type-exactness-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"type-exactness-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope TypeMixedCorrectnessEnvelope, but exactness "
+        f"conjunct TypeMixedExactness at {tla}:7 mentions TypeInvariant; keep "
+        "type invariants in *CorrectnessEnvelope operators"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_nested_type_and_exactness_mentions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiNestedEnvelope.tla"
+    cfg = tmp_path / "SumeragiNestedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiNestedEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "NestedExactness ==",
+                "  /\\ ModelPredicate",
+                "NestedCorrectnessEnvelope ==",
+                "  TypeInvariant => NestedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT NestedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "nested-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"nested-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope NestedCorrectnessEnvelope, but "
+        f"{tla}:9 mentions TypeInvariant outside a top-level conjunct; "
+        "compose TypeInvariant as a direct /\\ conjunct",
+        f"nested-envelope-fast: Apalache cfg {cfg}:4 references "
+        "correctness envelope NestedCorrectnessEnvelope, but "
+        f"{tla}:9 mentions exactness NestedExactness outside top-level "
+        "conjuncts; compose *Exactness operators as direct /\\ conjuncts",
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_duplicate_envelope_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDuplicateEnvelopeConjunct.tla"
+    cfg = tmp_path / "SumeragiDuplicateEnvelopeConjunct_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDuplicateEnvelopeConjunct ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "DuplicateExactness ==",
+                "  /\\ ModelPredicate",
+                "DuplicateCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DuplicateExactness",
+                "  /\\ DuplicateExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DuplicateCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "duplicate-envelope-conjunct-fast", tla, cfg, "TLC"
+    ) == [
+        f"duplicate-envelope-conjunct-fast: TLC cfg {cfg}:4 references "
+        "correctness envelope DuplicateCorrectnessEnvelope, but "
+        f"{tla}:9 repeats correctness-envelope conjunct DuplicateExactness; "
+        "remove duplicate conjuncts so every obligation is counted once"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_accepts_parenthesized_direct_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParenthesizedEnvelope.tla"
+    cfg = tmp_path / "SumeragiParenthesizedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParenthesizedEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "ParenthesizedExactness ==",
+                "  /\\ ModelPredicate",
+                "ParenthesizedCorrectnessEnvelope ==",
+                "  /\\ (TypeInvariant)",
+                "  /\\ (ParenthesizedExactness)",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ParenthesizedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "parenthesized-envelope-fast", tla, cfg, "Apalache"
+    ) == []
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_generic_envelope_body(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiMixedEnvelope.tla"
+    cfg = tmp_path / "SumeragiMixedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiMixedEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "SafetyFast == ModelPredicate",
+                "EnvelopeExactness ==",
+                "  /\\ ModelPredicate",
+                "MixedEnvelopeCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SafetyFast",
+                "  /\\ EnvelopeExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT MixedEnvelopeCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "mixed-envelope-fast", tla, cfg, "Apalache"
+    ) == [
+        f"mixed-envelope-fast: Apalache cfg {cfg}:4 references correctness "
+        f"envelope MixedEnvelopeCorrectnessEnvelope, but {tla}:10 mentions "
+        "generic SafetyFast; compose concrete exactness predicates directly"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_non_exactness_body(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiMixedAnchorEnvelope.tla"
+    cfg = tmp_path / "SumeragiMixedAnchorEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiMixedAnchorEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "EnvelopeExactness ==",
+                "  /\\ ModelPredicate",
+                "ModelPredicate == 1 = 1",
+                "ExtraAnchor == ModelPredicate",
+                "MixedAnchorCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ EnvelopeExactness",
+                "  /\\ ExtraAnchor",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT MixedAnchorCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "mixed-anchor-fast", tla, cfg, "TLC"
+    ) == [
+        f"mixed-anchor-fast: TLC cfg {cfg}:4 references correctness envelope "
+        f"MixedAnchorCorrectnessEnvelope, but {tla}:10 mentions non-exactness "
+        "ExtraAnchor; compose semantic obligations through *Exactness operators"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_accepts_top_level_temporal_extras(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == TRUE",
+                "EventuallyCommit == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == []
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_stale_temporal_allowlist(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == 1 = 1",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == TRUE",
+                "EventuallyCommit == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but its "
+        "temporal allowlist is stale for EventuallyCommit"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_top_level_direct_alias_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateSafetyEnvelope == 1 = 1",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  SumeragiConsensusCoreStateSafetyEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == TRUE",
+                "EventuallyCommit == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but exactness "
+        f"conjunct SumeragiConsensusCoreAlwaysMatchesExactness at {tla}:7 "
+        "aliases SumeragiConsensusCoreStateSafetyEnvelope; inline concrete "
+        "model predicates directly"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_mixed_generic_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectMixedSafety.tla"
+    cfg = tmp_path / "SumeragiDirectMixedSafety_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectMixedSafety ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "Safety == ModelPredicate",
+                "DirectMixedExactness ==",
+                "  /\\ Safety",
+                "  /\\ ModelPredicate",
+                "DirectMixedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ModelPredicate",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectMixedExactness",
+                "INVARIANT DirectMixedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-mixed-safety-fast", tla, cfg, "Apalache"
+    ) == [
+        f"direct-mixed-safety-fast: Apalache cfg {cfg}:4 references direct "
+        f"exactness check DirectMixedExactness at {tla}:8 mentions generic "
+        "Safety; compose concrete model predicates directly"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_direct_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectAlias.tla"
+    cfg = tmp_path / "SumeragiDirectAlias_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectAlias ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "DirectAliasExactness == ModelPredicate",
+                "DirectAliasCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectAliasExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectAliasExactness",
+                "INVARIANT DirectAliasCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-alias-fast", tla, cfg, "TLC"
+    ) == [
+        f"direct-alias-fast: TLC cfg {cfg}:4 references direct exactness "
+        f"check DirectAliasExactness at {tla}:6 aliases ModelPredicate; "
+        "inline concrete model predicates directly"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_nested_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectNestedExactness.tla"
+    cfg = tmp_path / "SumeragiDirectNestedExactness_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectNestedExactness ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == 1 = 1",
+                "ChildExactness ==",
+                "  /\\ ConcretePredicate",
+                "ParentExactness ==",
+                "  /\\ ChildExactness",
+                "ParentCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ParentExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ParentExactness",
+                "INVARIANT ParentCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-nested-exactness-fast", tla, cfg, "Apalache"
+    ) == [
+        f"direct-nested-exactness-fast: Apalache cfg {cfg}:4 references "
+        f"direct exactness check ParentExactness at {tla}:9 composes "
+        "nested exactness ChildExactness; inline concrete model predicates "
+        "directly"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_duplicate_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDuplicate.tla"
+    cfg = tmp_path / "SumeragiDirectDuplicate_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectDuplicate ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "FirstPredicate == TRUE",
+                "SecondPredicate == TRUE",
+                "DirectDuplicateExactness ==",
+                "  /\\ FirstPredicate",
+                "  /\\ SecondPredicate",
+                "  /\\ FirstPredicate",
+                "DirectDuplicateCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectDuplicateExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectDuplicateExactness",
+                "INVARIANT DirectDuplicateCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-duplicate-fast", tla, cfg, "TLC"
+    ) == [
+        f"direct-duplicate-fast: TLC cfg {cfg}:4 references direct exactness "
+        f"check DirectDuplicateExactness at {tla}:8 repeats exactness conjunct "
+        "FirstPredicate; remove duplicate conjuncts so every obligation is "
+        "counted once"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_aliased_exactness_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectAliasedConjunct.tla"
+    cfg = tmp_path / "SumeragiDirectAliasedConjunct_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectAliasedConjunct ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate == TRUE",
+                "WrappedPredicate == ConcretePredicate",
+                "WrappedExactness ==",
+                "  /\\ WrappedPredicate",
+                "WrappedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ WrappedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT WrappedExactness",
+                "INVARIANT WrappedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-aliased-conjunct-fast", tla, cfg, "TLC"
+    ) == [
+        f"direct-aliased-conjunct-fast: TLC cfg {cfg}:4 references direct "
+        f"exactness check WrappedExactness at {tla}:8 contains aliased "
+        f"exactness conjunct WrappedPredicate at {tla}:6 aliases "
+        "ConcretePredicate; inline concrete model predicates directly"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_type_invariant_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectTypeExactness.tla"
+    cfg = tmp_path / "SumeragiDirectTypeExactness_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectTypeExactness ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == 1 = 1",
+                "DirectTypeExactness ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ModelPredicate",
+                "DirectTypeCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectTypeExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectTypeExactness",
+                "INVARIANT DirectTypeCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-type-exactness-fast", tla, cfg, "TLC"
+    ) == [
+        f"direct-type-exactness-fast: TLC cfg {cfg}:4 references direct "
+        f"exactness check DirectTypeExactness at {tla}:7 mentions "
+        "TypeInvariant; keep type invariants in *CorrectnessEnvelope operators"
+    ]
+
+
+def test_cfg_direct_exactness_shape_errors_rejects_unnamed_parameterized_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiParameterizedExactness.tla"
+    cfg = tmp_path / "SumeragiParameterizedExactness_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiParameterizedExactness ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Cases == {1, 2}",
+                "Matches(c) == TRUE",
+                "ParameterizedExactness ==",
+                "  /\\ \\A c \\in Cases: Matches(c)",
+                "  /\\ \\A c \\in Cases: Matches(c)",
+                "ParameterizedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ParameterizedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ParameterizedExactness",
+                "INVARIANT ParameterizedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "parameterized-exactness-fast", tla, cfg, "Apalache"
+    ) == [
+        f"parameterized-exactness-fast: Apalache cfg {cfg}:4 references "
+        f"direct exactness check ParameterizedExactness at {tla}:8 contains "
+        "no direct named exactness conjuncts; name the concrete model "
+        "predicate and compose it as a direct exactness conjunct"
+    ]
+
+
+def test_cfg_direct_exactness_envelope_pairing_errors_rejects_unpaired_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiUnpairedExactness.tla"
+    cfg = tmp_path / "SumeragiUnpairedExactness_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUnpairedExactness ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "UnpairedExactness ==",
+                "  /\\ ModelPredicate",
+                "PairedExactness ==",
+                "  /\\ ModelPredicate",
+                "ModelPredicate == 1 = 1",
+                "PairedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ PairedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT UnpairedExactness",
+                "INVARIANT PairedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_envelope_pairing_errors(
+        "unpaired-exactness-fast", tla, cfg, "Apalache"
+    ) == [
+        f"unpaired-exactness-fast: Apalache cfg {cfg}:4 references direct "
+        "exactness check UnpairedExactness, but no checked correctness envelope "
+        "in that CFG composes it"
+    ]
+
+
+def test_cfg_direct_exactness_envelope_pairing_errors_accepts_paired_exactness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiPairedExactness.tla"
+    cfg = tmp_path / "SumeragiPairedExactness_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiPairedExactness ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "PairedExactness ==",
+                "  /\\ ModelPredicate",
+                "ModelPredicate == 1 = 1",
+                "PairedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ PairedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT PairedExactness",
+                "INVARIANT PairedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_direct_exactness_envelope_pairing_errors(
+            "paired-exactness-fast", tla, cfg, "TLC"
+        )
+        == []
+    )
+
+
+def test_cfg_correctness_envelope_shape_errors_accepts_fast_exactness_envelope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateSafetyEnvelope == 1 = 1",
+                "SumeragiConsensusCoreExactness ==",
+                "  /\\ SumeragiConsensusCoreStateSafetyEnvelope",
+                "SumeragiConsensusCoreFastCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SumeragiConsensusCoreFastCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_correctness_envelope_shape_errors(
+            "fast", tla, cfg, "Apalache"
         )
         == []
     )

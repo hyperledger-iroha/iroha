@@ -186,4 +186,19 @@ StakeRejectsInvalidInputs ==
 StakeRejectsOverTotal ==
   signedStake > totalStake => ~stakeAccepted
 
+QuorumPolicyExactness ==
+  /\ CountMatchesStrictSupermajority
+  /\ CountRejectsOverValidatorCount
+  /\ StakeMatchesStrictSupermajority
+  /\ ExactTwoThirdsStakeRejected
+  /\ StakeRejectsInvalidInputs
+  /\ StakeRejectsOverTotal
+
+Safety ==
+  QuorumPolicyExactness
+
+QuorumPolicyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QuorumPolicyExactness
+
 ====

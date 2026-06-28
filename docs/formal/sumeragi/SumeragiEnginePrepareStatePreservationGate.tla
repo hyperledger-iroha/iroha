@@ -260,7 +260,7 @@ ValuesStayInDomain ==
     /\ InitialCommitted(candidate) \in CommittedValues
     /\ ImplementationCommitted(candidate) \in CommittedValues
 
-Safety ==
+EnginePrepareStatePreservationExactness ==
   /\ AcceptedPreservesRound
   /\ AcceptedPreservesPendingFinality
   /\ AcceptedPreservesValidationOwner
@@ -271,6 +271,15 @@ Safety ==
   /\ RejectedPreservesCommittedRecord
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EnginePrepareStatePreservationExactness
+
+EnginePrepareStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePrepareStatePreservationExactness
+
+SafetyFast == EnginePrepareStatePreservationExactness
 
 =============================================================================
 ====

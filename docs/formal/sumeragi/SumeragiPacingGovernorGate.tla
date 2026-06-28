@@ -503,7 +503,7 @@ DecisionStaysWithinNormalizedBounds ==
     /\ new_factor_bps >= min_factor
     /\ new_factor_bps <= max_factor
 
-Safety ==
+PacingGovernorExactness ==
   /\ SpacingSumMatchesSpec
   /\ ViewChangeDeltaMatchesSpec
   /\ AverageSpacingMatchesSpec
@@ -528,6 +528,13 @@ Safety ==
   /\ CurrentAboveMaxStillUsesClampedDecision
   /\ DecisionRequiresFactorChange
   /\ DecisionStaysWithinNormalizedBounds
+
+Safety ==
+  PacingGovernorExactness
+
+PacingGovernorCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PacingGovernorExactness
 
 =============================================================================
 ====

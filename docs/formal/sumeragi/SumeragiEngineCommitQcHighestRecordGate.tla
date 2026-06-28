@@ -255,7 +255,7 @@ ValuesStayInDomain ==
     /\ SpecFinalHighest(candidate) \in QcValues
     /\ ImplementationFinalHighest(candidate) \in QcValues
 
-Safety ==
+EngineCommitQcHighestRecordExactness ==
   /\ FinalHighestMatchesSpec
   /\ AcceptedNoCurrentRecordsExactCommitQc
   /\ AcceptedImprovingRecordsExactCommitQc
@@ -264,5 +264,14 @@ Safety ==
   /\ PendingReplayConflictPreservesStoredHighest
   /\ IgnoredCommitQcsNeverRecord
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineCommitQcHighestRecordExactness
+
+EngineCommitQcHighestRecordCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitQcHighestRecordExactness
+
+SafetyFast == EngineCommitQcHighestRecordExactness
 
 ====

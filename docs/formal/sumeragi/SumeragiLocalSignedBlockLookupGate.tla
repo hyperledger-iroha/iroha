@@ -447,8 +447,16 @@ LocalSignedBlockLookupCoreSafety ==
   /\ LookupShapeMatchesPriority
 
 LocalSignedBlockLookupExactness ==
-  LocalSignedBlockLookupCoreSafety
-
+  /\ SourceMatchesSpec
+  /\ ActionsMatchSpec
+  /\ NormalLookupRejectsAbortedOwners
+  /\ BodyRepairIncludesAbortedOwners
+  /\ InvalidOwnersAreNeverReturned
+  /\ RejectedOwnersFallThrough
+  /\ RepairOwnerPriorityBeatsFallback
+  /\ DeferredAndKuraFallbacks
+  /\ AbsentBlocksRemainMissing
+  /\ LookupShapeMatchesPriority
 LocalSignedBlockLookupCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ LocalSignedBlockLookupExactness

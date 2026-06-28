@@ -211,10 +211,16 @@ FrontierQuorumOwnerActionableSafetyAnchors ==
   /\ ActionableSourceAnchors
   /\ LiveCleanupPreserveAnchors
 
+FrontierQuorumOwnerActionableExactness ==
+  /\ ActionableSourceSafety
+  /\ LiveCleanupPreserveSafety
+  /\ QuorumOwnerActionableRejectsNonExactInputs
+  /\ QuorumOwnerActionableHasExactPositiveEvidence
+  /\ FrontierQuorumOwnerActionableSafetyAnchors
+
 FrontierQuorumOwnerActionableCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ FrontierQuorumOwnerActionableSafetyAnchors
+  /\ FrontierQuorumOwnerActionableExactness
 
 Safety == FrontierQuorumOwnerActionableSafetyAnchors
 

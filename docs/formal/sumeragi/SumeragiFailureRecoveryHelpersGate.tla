@@ -361,6 +361,28 @@ SafetyFast ==
   /\ ReadyAnchors
   /\ ApplyAnchors
 
+FailureRecoveryHelpersExactness ==
+  /\ RealignMatchesSpec
+  /\ DropPendingMatchesSpec
+  /\ ViewCauseMatchesSpec
+  /\ BlockSyncReadyMatchesSpec
+  /\ ApplyAfterBlockMatchesSpec
+  /\ RealignPreservesUnrelatedAndAbsent
+  /\ DropPendingRequiresRealRequeueFailure
+  /\ ViewCauseMissingVotesPriority
+  /\ ReadyRequiresKnownBlockAndSuccessfulCreation
+  /\ ApplyNeverRunsAfterCreationError
+  /\ ApplyPresentQcInvokesCallback
+  /\ RealignAnchors
+  /\ DropPendingAnchors
+  /\ ViewCauseAnchors
+  /\ ReadyAnchors
+  /\ ApplyAnchors
+
+FailureRecoveryHelpersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FailureRecoveryHelpersExactness
+
 BugRealignSkipLockedReplacement ==
   ActualRealign("realign_both_failed_with_committed") =
     SpecRealign("realign_both_failed_with_committed")

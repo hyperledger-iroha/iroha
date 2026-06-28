@@ -312,4 +312,26 @@ OutputsStayTogether ==
       /\ (SignedNewView(candidate) <=> RoundAdvanced(candidate))
       /\ (SignedNewView(candidate) <=> ProposalPhase(candidate))
 
+EngineValidationResultExactness ==
+  /\ AcceptedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ CurrentValidConsumesAndStops
+  /\ CurrentInvalidAdvancesView
+  /\ IgnoredCallbacksHaveNoOutputs
+  /\ InvalidWithHighestUsesHighestSubject
+  /\ InvalidWithoutHighestUsesInvalidSubject
+  /\ InvalidWithHighestBindsHighestQc
+  /\ InvalidWithoutHighestDoesNotBindHighestQc
+  /\ SupersededCommitPreservesPendingFinality
+  /\ SupersededCommittedBlockPreservesCommittedState
+  /\ CurrentValidNeverEmitsNewView
+  /\ OutputsStayTogether
+
+Safety ==
+  EngineValidationResultExactness
+
+EngineValidationResultCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineValidationResultExactness
+
 ====

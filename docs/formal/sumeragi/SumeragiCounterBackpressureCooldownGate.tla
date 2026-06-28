@@ -237,7 +237,7 @@ CounterBackpressureCooldownCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 CounterBackpressureCooldownExactness ==
-  CounterBackpressureCooldownCoreSafety
+  /\ CounterBackpressureCooldownCoreSafety
 
 CounterBackpressureCooldownCorrectnessEnvelope ==
   /\ TypeInvariant

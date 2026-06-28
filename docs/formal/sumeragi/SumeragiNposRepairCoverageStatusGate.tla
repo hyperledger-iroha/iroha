@@ -170,8 +170,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+NposRepairCoverageStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 NposRepairCoverageStatusExactness ==
-  Safety
+  /\ NposRepairCoverageStatusActionsMatchSpec
 
 NposRepairCoverageStatusCorrectnessEnvelope ==
   /\ TypeInvariant
