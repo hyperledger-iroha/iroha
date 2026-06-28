@@ -30222,22 +30222,18 @@ function normalizeSubscriptionGetResponse(payload) {
 function normalizeOfflineReadinessResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(record, key);
-  const abi7Keys = [
+  const removedAbi7Keys = [
     "offline_kagemusha_abi7",
     "offline_kagemusha_abi7_mode",
     "offline_kagemusha_abi7_bridge_abi_version",
     "offline_kagemusha_abi7_circuit_id",
     "offline_kagemusha_abi7_artifacts",
   ];
-  const recursiveCompactKeys = [
-    "offline_kagemusha_recursive_compact_available",
-    "offline_kagemusha_recursive_compact_mode",
-    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-    "offline_kagemusha_recursive_compact_circuit_id",
-    "offline_kagemusha_recursive_compact_artifacts_available",
-  ];
-  const hasAbi7Family = abi7Keys.some(hasOwn);
-  const hasRecursiveCompactFamily = recursiveCompactKeys.some(hasOwn);
+  for (const key of removedAbi7Keys) {
+    if (hasOwn(key)) {
+      throw new TypeError(`${context}.${key} is not supported; use offline_kagemusha_recursive_compact_*`);
+    }
+  }
 
   const requireExactBoolean = (value, field) => {
     if (typeof value !== "boolean") {
@@ -30245,25 +30241,6 @@ function normalizeOfflineReadinessResponse(payload, context) {
     }
     return value;
   };
-  const decodeAbi7Family = () => ({
-    available: requireExactBoolean(record.offline_kagemusha_abi7, "offline_kagemusha_abi7"),
-    mode: requireExactNonEmptyString(
-      record.offline_kagemusha_abi7_mode,
-      `${context}.offline_kagemusha_abi7_mode`,
-    ),
-    bridgeAbiVersion: requireExactPositiveIntegerLike(
-      record.offline_kagemusha_abi7_bridge_abi_version,
-      `${context}.offline_kagemusha_abi7_bridge_abi_version`,
-    ),
-    circuitId: requireExactNonEmptyString(
-      record.offline_kagemusha_abi7_circuit_id,
-      `${context}.offline_kagemusha_abi7_circuit_id`,
-    ),
-    artifacts: requireExactBoolean(
-      record.offline_kagemusha_abi7_artifacts,
-      "offline_kagemusha_abi7_artifacts",
-    ),
-  });
   const decodeRecursiveCompactFamily = () => ({
     available: requireExactBoolean(
       record.offline_kagemusha_recursive_compact_available,
@@ -30287,43 +30264,9 @@ function normalizeOfflineReadinessResponse(payload, context) {
     ),
   });
 
-  if (!hasAbi7Family && !hasRecursiveCompactFamily) {
-    requireExactBoolean(record.offline_kagemusha_abi7, "offline_kagemusha_abi7");
-  }
-
-  const abi7Family = hasAbi7Family ? decodeAbi7Family() : null;
-  const recursiveCompactFamily = hasRecursiveCompactFamily ? decodeRecursiveCompactFamily() : null;
-  if (abi7Family && recursiveCompactFamily) {
-    for (const [property, abi7Field, recursiveCompactField] of [
-      ["available", "offline_kagemusha_abi7", "offline_kagemusha_recursive_compact_available"],
-      ["mode", "offline_kagemusha_abi7_mode", "offline_kagemusha_recursive_compact_mode"],
-      [
-        "bridgeAbiVersion",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-      ],
-      ["circuitId", "offline_kagemusha_abi7_circuit_id", "offline_kagemusha_recursive_compact_circuit_id"],
-      [
-        "artifacts",
-        "offline_kagemusha_abi7_artifacts",
-        "offline_kagemusha_recursive_compact_artifacts_available",
-      ],
-    ]) {
-      if (abi7Family[property] !== recursiveCompactFamily[property]) {
-        throw new TypeError(`${context}.${abi7Field} must match ${context}.${recursiveCompactField}`);
-      }
-    }
-  }
-
-  const abi7 = abi7Family ?? recursiveCompactFamily;
-  const recursiveCompact = recursiveCompactFamily ?? abi7Family;
+  const recursiveCompact = decodeRecursiveCompactFamily();
   const normalized = {
     ...record,
-    offline_kagemusha_abi7: abi7.available,
-    offline_kagemusha_abi7_mode: abi7.mode,
-    offline_kagemusha_abi7_bridge_abi_version: abi7.bridgeAbiVersion,
-    offline_kagemusha_abi7_circuit_id: abi7.circuitId,
-    offline_kagemusha_abi7_artifacts: abi7.artifacts,
     offline_kagemusha_recursive_compact_available: recursiveCompact.available,
     offline_kagemusha_recursive_compact_mode: recursiveCompact.mode,
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version:

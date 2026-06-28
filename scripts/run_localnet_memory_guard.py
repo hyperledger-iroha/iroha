@@ -26,6 +26,8 @@ DEFAULT_BATCH_INTERVAL = 1.0
 DEFAULT_QUEUE_SOFT_LIMIT = 0
 DEFAULT_QUEUE_HARD_LIMIT = 0
 DEFAULT_QUEUE_WAIT_TIMEOUT = 300.0
+DEFAULT_POST_LOAD_SAMPLE_SECONDS = 30.0
+DEFAULT_LOAD_RUNS = 1
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class MemorySample:
     total_rss_bytes: int
     max_peer_rss_bytes: int
     peers: int
+    phase: str
+    run_index: int
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -75,6 +79,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--queue-soft-limit", type=int, default=DEFAULT_QUEUE_SOFT_LIMIT)
     parser.add_argument("--queue-hard-limit", type=int, default=DEFAULT_QUEUE_HARD_LIMIT)
     parser.add_argument("--queue-wait-timeout", type=float, default=DEFAULT_QUEUE_WAIT_TIMEOUT)
+    parser.add_argument(
+        "--post-load-sample-seconds",
+        type=float,
+        default=DEFAULT_POST_LOAD_SAMPLE_SECONDS,
+        help="Seconds to keep sampling peer RSS after tx_load.py exits successfully.",
+    )
+    parser.add_argument(
+        "--load-runs",
+        type=int,
+        default=DEFAULT_LOAD_RUNS,
+        help="Number of tx_load.py runs to execute against the same localnet process lifetime.",
+    )
     parser.add_argument("--target-dir", type=Path)
     parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--debug", action="store_true", help="Use debug binaries instead of release.")
@@ -99,6 +115,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--memory-limit-gb must be greater than zero")
     if args.poll_interval <= 0:
         parser.error("--poll-interval must be greater than zero")
+    if args.post_load_sample_seconds < 0:
+        parser.error("--post-load-sample-seconds must not be negative")
+    if args.load_runs <= 0:
+        parser.error("--load-runs must be greater than zero")
     return args
 
 
@@ -246,13 +266,15 @@ def rss_bytes_for_pid(pid: int) -> int:
         return 0
 
 
-def sample_memory(processes: Iterable[PeerProcess]) -> MemorySample:
+def sample_memory(processes: Iterable[PeerProcess], phase: str, run_index: int) -> MemorySample:
     rss_values = [rss_bytes_for_pid(process.pid) for process in processes]
     return MemorySample(
         timestamp=time.time(),
         total_rss_bytes=sum(rss_values),
         max_peer_rss_bytes=max(rss_values, default=0),
         peers=len(rss_values),
+        phase=phase,
+        run_index=run_index,
     )
 
 
@@ -262,15 +284,37 @@ def stop_localnet(out_dir: Path) -> None:
         subprocess.run(["bash", str(stop_script)], cwd=out_dir, check=False)
 
 
-def write_report(path: Path, samples: list[MemorySample], tx_returncode: int | None) -> None:
+def write_report(
+    path: Path,
+    samples: list[MemorySample],
+    tx_returncode: int | None,
+    *,
+    memory_limit_bytes: int,
+    post_load_sample_seconds: float,
+    load_runs: int = DEFAULT_LOAD_RUNS,
+    tx_returncodes: Sequence[int | None] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "tx_returncode": tx_returncode,
+        "tx_returncodes": list(tx_returncodes or []),
+        "load_runs": load_runs,
+        "memory_limit_bytes": memory_limit_bytes,
+        "post_load_sample_seconds": post_load_sample_seconds,
         "peak_total_rss_bytes": max((sample.total_rss_bytes for sample in samples), default=0),
         "peak_peer_rss_bytes": max((sample.max_peer_rss_bytes for sample in samples), default=0),
+        "last_total_rss_bytes": samples[-1].total_rss_bytes if samples else 0,
+        "last_peer_rss_bytes": samples[-1].max_peer_rss_bytes if samples else 0,
         "samples": [sample.__dict__ for sample in samples],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def tx_load_log_path(out_dir: Path, run_index: int, load_runs: int) -> Path:
+    """Return the tx_load log path for a guarded load run."""
+    if load_runs == 1:
+        return out_dir / "tx_load.log"
+    return out_dir / f"tx_load_run_{run_index}.log"
 
 
 def terminate_child(proc: subprocess.Popen[object]) -> None:
@@ -308,41 +352,75 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     samples: list[MemorySample] = []
-    tx_log = args.out_dir / "tx_load.log"
-    tx_log.parent.mkdir(parents=True, exist_ok=True)
+    tx_returncodes: list[int | None] = []
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_memory_report(tx_returncode: int | None) -> None:
+        write_report(
+            report,
+            samples,
+            tx_returncode,
+            memory_limit_bytes=limit_bytes,
+            post_load_sample_seconds=args.post_load_sample_seconds,
+            load_runs=args.load_runs,
+            tx_returncodes=tx_returncodes,
+        )
+
+    def append_guarded_sample(phase: str, run_index: int) -> bool:
+        processes = peer_processes(args.out_dir)
+        sample = sample_memory(processes, phase, run_index)
+        samples.append(sample)
+        if sample.total_rss_bytes <= limit_bytes:
+            return False
+        print(
+            "memory guard tripped: "
+            f"{sample.total_rss_bytes} bytes RSS across {sample.peers} peers "
+            f"during {phase} (limit {limit_bytes})",
+            file=sys.stderr,
+        )
+        return True
+
     try:
-        with tx_log.open("w", encoding="utf-8") as log:
+        final_returncode = 0
+        for run_index in range(1, args.load_runs + 1):
+            tx_log = tx_load_log_path(args.out_dir, run_index, args.load_runs)
             tx_env = os.environ.copy()
             tx_env["PYTHONUNBUFFERED"] = "1"
-            tx_proc = subprocess.Popen(
-                build_tx_load_cmd(args),
-                cwd=args.iroha_dir,
-                env=tx_env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            try:
-                while tx_proc.poll() is None:
-                    processes = peer_processes(args.out_dir)
-                    sample = sample_memory(processes)
-                    samples.append(sample)
-                    if sample.total_rss_bytes > limit_bytes:
-                        print(
-                            "memory guard tripped: "
-                            f"{sample.total_rss_bytes} bytes RSS across {sample.peers} peers "
-                            f"(limit {limit_bytes})",
-                            file=sys.stderr,
-                        )
-                        terminate_child(tx_proc)
-                        write_report(report, samples, tx_proc.returncode)
+            with tx_log.open("w", encoding="utf-8") as log:
+                tx_proc = subprocess.Popen(
+                    build_tx_load_cmd(args),
+                    cwd=args.iroha_dir,
+                    env=tx_env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                try:
+                    while tx_proc.poll() is None:
+                        if append_guarded_sample("load", run_index):
+                            terminate_child(tx_proc)
+                            tx_returncodes.append(tx_proc.returncode)
+                            write_memory_report(tx_proc.returncode)
+                            return 3
+                        time.sleep(args.poll_interval)
+                finally:
+                    terminate_child(tx_proc)
+
+            tx_returncodes.append(tx_proc.returncode)
+            if tx_proc.returncode != 0:
+                final_returncode = int(tx_proc.returncode or 1)
+                break
+
+            if args.post_load_sample_seconds > 0:
+                deadline = time.monotonic() + args.post_load_sample_seconds
+                while time.monotonic() < deadline:
+                    if append_guarded_sample("post_load", run_index):
+                        write_memory_report(tx_proc.returncode)
                         return 3
                     time.sleep(args.poll_interval)
-            finally:
-                terminate_child(tx_proc)
 
-        write_report(report, samples, tx_proc.returncode)
-        return int(tx_proc.returncode or 0)
+        write_memory_report(final_returncode)
+        return int(final_returncode or 0)
     finally:
         stop_localnet(args.out_dir)
 

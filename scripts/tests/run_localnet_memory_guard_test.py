@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -20,6 +21,8 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.batch_size == 1_000
     assert args.queue_soft_limit == 0
     assert args.queue_hard_limit == 0
+    assert args.post_load_sample_seconds == 30.0
+    assert args.load_runs == 1
 
 
 def test_peer_count_below_four_is_rejected():
@@ -65,6 +68,56 @@ def test_base_api_port_uses_generated_client_config(tmp_path):
 
 def test_base_api_port_falls_back_when_client_config_missing(tmp_path):
     assert MODULE.base_api_port_from_client_config(tmp_path / "missing.toml", 48080) == 48080
+
+
+def test_write_report_records_limit_last_sample_and_phase(tmp_path):
+    report = tmp_path / "report.json"
+    samples = [
+        MODULE.MemorySample(
+            timestamp=1.0,
+            total_rss_bytes=10,
+            max_peer_rss_bytes=7,
+            peers=4,
+            phase="load",
+            run_index=1,
+        ),
+        MODULE.MemorySample(
+            timestamp=2.0,
+            total_rss_bytes=8,
+            max_peer_rss_bytes=5,
+            peers=4,
+            phase="post_load",
+            run_index=1,
+        ),
+    ]
+    MODULE.write_report(
+        report,
+        samples,
+        0,
+        memory_limit_bytes=100,
+        post_load_sample_seconds=30.0,
+        load_runs=2,
+        tx_returncodes=[0, 0],
+    )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["load_runs"] == 2
+    assert payload["tx_returncodes"] == [0, 0]
+    assert payload["memory_limit_bytes"] == 100
+    assert payload["post_load_sample_seconds"] == 30.0
+    assert payload["peak_total_rss_bytes"] == 10
+    assert payload["last_total_rss_bytes"] == 8
+    assert payload["samples"][0]["phase"] == "load"
+    assert payload["samples"][0]["run_index"] == 1
+    assert payload["samples"][1]["phase"] == "post_load"
+
+
+def test_tx_load_log_path_keeps_legacy_name_for_single_run(tmp_path):
+    assert MODULE.tx_load_log_path(tmp_path, 1, 1) == tmp_path / "tx_load.log"
+
+
+def test_tx_load_log_path_disambiguates_multiple_runs(tmp_path):
+    assert MODULE.tx_load_log_path(tmp_path, 2, 3) == tmp_path / "tx_load_run_2.log"
 
 
 def test_command_ownership_requires_matching_config_path(tmp_path):
