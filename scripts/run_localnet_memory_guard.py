@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 
 DEFAULT_OUT_DIR = Path("/tmp/iroha-oom-repro")
@@ -26,6 +27,8 @@ DEFAULT_BATCH_INTERVAL = 1.0
 DEFAULT_QUEUE_SOFT_LIMIT = 0
 DEFAULT_QUEUE_HARD_LIMIT = 0
 DEFAULT_QUEUE_WAIT_TIMEOUT = 300.0
+DEFAULT_POST_LOAD_SAMPLE_SECONDS = 30.0
+DEFAULT_LOAD_RUNS = 1
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,22 @@ class MemorySample:
     total_rss_bytes: int
     max_peer_rss_bytes: int
     peers: int
+    phase: str
+    run_index: int
+
+
+@dataclass(frozen=True)
+class StatusSnapshot:
+    """One compact /status sample from a guarded peer."""
+
+    timestamp: float
+    phase: str
+    run_index: int
+    peer_index: int
+    status_url: str
+    ok: bool
+    fields: dict[str, int | bool | str | None]
+    error: str | None = None
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -75,6 +94,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--queue-soft-limit", type=int, default=DEFAULT_QUEUE_SOFT_LIMIT)
     parser.add_argument("--queue-hard-limit", type=int, default=DEFAULT_QUEUE_HARD_LIMIT)
     parser.add_argument("--queue-wait-timeout", type=float, default=DEFAULT_QUEUE_WAIT_TIMEOUT)
+    parser.add_argument(
+        "--post-load-sample-seconds",
+        type=float,
+        default=DEFAULT_POST_LOAD_SAMPLE_SECONDS,
+        help="Seconds to keep sampling peer RSS after tx_load.py exits successfully.",
+    )
+    parser.add_argument(
+        "--load-runs",
+        type=int,
+        default=DEFAULT_LOAD_RUNS,
+        help="Number of tx_load.py runs to execute against the same localnet process lifetime.",
+    )
+    parser.add_argument(
+        "--no-status-snapshots",
+        action="store_true",
+        help="Do not fetch compact /status snapshots alongside RSS samples.",
+    )
     parser.add_argument("--target-dir", type=Path)
     parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--debug", action="store_true", help="Use debug binaries instead of release.")
@@ -99,6 +135,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--memory-limit-gb must be greater than zero")
     if args.poll_interval <= 0:
         parser.error("--poll-interval must be greater than zero")
+    if args.post_load_sample_seconds < 0:
+        parser.error("--post-load-sample-seconds must not be negative")
+    if args.load_runs <= 0:
+        parser.error("--load-runs must be greater than zero")
     return args
 
 
@@ -246,14 +286,107 @@ def rss_bytes_for_pid(pid: int) -> int:
         return 0
 
 
-def sample_memory(processes: Iterable[PeerProcess]) -> MemorySample:
+def sample_memory(processes: Iterable[PeerProcess], phase: str, run_index: int) -> MemorySample:
     rss_values = [rss_bytes_for_pid(process.pid) for process in processes]
     return MemorySample(
         timestamp=time.time(),
         total_rss_bytes=sum(rss_values),
         max_peer_rss_bytes=max(rss_values, default=0),
         peers=len(rss_values),
+        phase=phase,
+        run_index=run_index,
     )
+
+
+def status_url_for_peer(base_api_port: int, peer_index: int) -> str:
+    """Return the local Torii /status URL for a peer index."""
+    return f"http://127.0.0.1:{base_api_port + peer_index}/status"
+
+
+def _int_field(payload: dict, key: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_field(payload: dict, key: str) -> bool | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    return bool(value)
+
+
+def extract_status_fields(payload: dict) -> dict[str, int | bool | str | None]:
+    """Extract compact high-signal counters from Torii /status JSON."""
+    sumeragi = payload.get("sumeragi") or {}
+    pending_rbc = sumeragi.get("pending_rbc") or {}
+    tx_gossip = sumeragi.get("tx_gossip") or {}
+    return {
+        "blocks": _int_field(payload, "blocks"),
+        "blocks_non_empty": _int_field(payload, "blocks_non_empty"),
+        "txs_approved": _int_field(payload, "txs_approved"),
+        "txs_rejected": _int_field(payload, "txs_rejected"),
+        "queue_size": _int_field(payload, "queue_size"),
+        "queue_retained_bytes": _int_field(payload, "queue_retained_bytes")
+        or _int_field(sumeragi, "tx_queue_retained_bytes"),
+        "queue_max_retained_bytes": _int_field(payload, "queue_max_retained_bytes")
+        or _int_field(sumeragi, "tx_queue_max_retained_bytes"),
+        "queue_saturated": _bool_field(payload, "queue_saturated")
+        if "queue_saturated" in payload
+        else _bool_field(sumeragi, "tx_queue_saturated"),
+        "queue_saturated_by_count": _bool_field(sumeragi, "tx_queue_saturated_by_count"),
+        "queue_saturated_by_bytes": _bool_field(sumeragi, "tx_queue_saturated_by_bytes"),
+        "rbc_store_sessions": _int_field(sumeragi, "rbc_store_sessions"),
+        "rbc_store_bytes": _int_field(sumeragi, "rbc_store_bytes"),
+        "rbc_store_pressure_level": _int_field(sumeragi, "rbc_store_pressure_level"),
+        "rbc_store_evictions_total": _int_field(sumeragi, "rbc_store_evictions_total"),
+        "pending_rbc_sessions": _int_field(pending_rbc, "sessions"),
+        "pending_rbc_chunks": _int_field(pending_rbc, "chunks"),
+        "pending_rbc_bytes": _int_field(pending_rbc, "bytes"),
+        "tx_gossip_queued": _int_field(tx_gossip, "queued"),
+        "tx_gossip_evicted_total": _int_field(tx_gossip, "evicted_total"),
+    }
+
+
+def sample_statuses(base_api_port: int, peers: int, phase: str, run_index: int) -> list[StatusSnapshot]:
+    """Fetch compact /status snapshots from all local peers."""
+    snapshots = []
+    timestamp = time.time()
+    for peer_index in range(peers):
+        status_url = status_url_for_peer(base_api_port, peer_index)
+        request = Request(status_url, headers={"Accept": "application/json"})
+        try:
+            with urlopen(request, timeout=1.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            snapshots.append(
+                StatusSnapshot(
+                    timestamp=timestamp,
+                    phase=phase,
+                    run_index=run_index,
+                    peer_index=peer_index,
+                    status_url=status_url,
+                    ok=True,
+                    fields=extract_status_fields(payload),
+                )
+            )
+        except Exception as exc:  # noqa: PERF203
+            snapshots.append(
+                StatusSnapshot(
+                    timestamp=timestamp,
+                    phase=phase,
+                    run_index=run_index,
+                    peer_index=peer_index,
+                    status_url=status_url,
+                    ok=False,
+                    fields={},
+                    error=str(exc),
+                )
+            )
+    return snapshots
 
 
 def stop_localnet(out_dir: Path) -> None:
@@ -262,15 +395,39 @@ def stop_localnet(out_dir: Path) -> None:
         subprocess.run(["bash", str(stop_script)], cwd=out_dir, check=False)
 
 
-def write_report(path: Path, samples: list[MemorySample], tx_returncode: int | None) -> None:
+def write_report(
+    path: Path,
+    samples: list[MemorySample],
+    tx_returncode: int | None,
+    *,
+    memory_limit_bytes: int,
+    post_load_sample_seconds: float,
+    status_snapshots: Sequence[StatusSnapshot] = (),
+    load_runs: int = DEFAULT_LOAD_RUNS,
+    tx_returncodes: Sequence[int | None] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "tx_returncode": tx_returncode,
+        "tx_returncodes": list(tx_returncodes or []),
+        "load_runs": load_runs,
+        "memory_limit_bytes": memory_limit_bytes,
+        "post_load_sample_seconds": post_load_sample_seconds,
         "peak_total_rss_bytes": max((sample.total_rss_bytes for sample in samples), default=0),
         "peak_peer_rss_bytes": max((sample.max_peer_rss_bytes for sample in samples), default=0),
+        "last_total_rss_bytes": samples[-1].total_rss_bytes if samples else 0,
+        "last_peer_rss_bytes": samples[-1].max_peer_rss_bytes if samples else 0,
         "samples": [sample.__dict__ for sample in samples],
+        "status_snapshots": [snapshot.__dict__ for snapshot in status_snapshots],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def tx_load_log_path(out_dir: Path, run_index: int, load_runs: int) -> Path:
+    """Return the tx_load log path for a guarded load run."""
+    if load_runs == 1:
+        return out_dir / "tx_load.log"
+    return out_dir / f"tx_load_run_{run_index}.log"
 
 
 def terminate_child(proc: subprocess.Popen[object]) -> None:
@@ -308,41 +465,79 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     samples: list[MemorySample] = []
-    tx_log = args.out_dir / "tx_load.log"
-    tx_log.parent.mkdir(parents=True, exist_ok=True)
+    status_snapshots: list[StatusSnapshot] = []
+    tx_returncodes: list[int | None] = []
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_memory_report(tx_returncode: int | None) -> None:
+        write_report(
+            report,
+            samples,
+            tx_returncode,
+            memory_limit_bytes=limit_bytes,
+            post_load_sample_seconds=args.post_load_sample_seconds,
+            status_snapshots=status_snapshots,
+            load_runs=args.load_runs,
+            tx_returncodes=tx_returncodes,
+        )
+
+    def append_guarded_sample(phase: str, run_index: int) -> bool:
+        processes = peer_processes(args.out_dir)
+        sample = sample_memory(processes, phase, run_index)
+        samples.append(sample)
+        if not args.no_status_snapshots:
+            status_snapshots.extend(sample_statuses(args.base_api_port, args.peers, phase, run_index))
+        if sample.total_rss_bytes <= limit_bytes:
+            return False
+        print(
+            "memory guard tripped: "
+            f"{sample.total_rss_bytes} bytes RSS across {sample.peers} peers "
+            f"during {phase} (limit {limit_bytes})",
+            file=sys.stderr,
+        )
+        return True
+
     try:
-        with tx_log.open("w", encoding="utf-8") as log:
+        final_returncode = 0
+        for run_index in range(1, args.load_runs + 1):
+            tx_log = tx_load_log_path(args.out_dir, run_index, args.load_runs)
             tx_env = os.environ.copy()
             tx_env["PYTHONUNBUFFERED"] = "1"
-            tx_proc = subprocess.Popen(
-                build_tx_load_cmd(args),
-                cwd=args.iroha_dir,
-                env=tx_env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            try:
-                while tx_proc.poll() is None:
-                    processes = peer_processes(args.out_dir)
-                    sample = sample_memory(processes)
-                    samples.append(sample)
-                    if sample.total_rss_bytes > limit_bytes:
-                        print(
-                            "memory guard tripped: "
-                            f"{sample.total_rss_bytes} bytes RSS across {sample.peers} peers "
-                            f"(limit {limit_bytes})",
-                            file=sys.stderr,
-                        )
-                        terminate_child(tx_proc)
-                        write_report(report, samples, tx_proc.returncode)
+            with tx_log.open("w", encoding="utf-8") as log:
+                tx_proc = subprocess.Popen(
+                    build_tx_load_cmd(args),
+                    cwd=args.iroha_dir,
+                    env=tx_env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                try:
+                    while tx_proc.poll() is None:
+                        if append_guarded_sample("load", run_index):
+                            terminate_child(tx_proc)
+                            tx_returncodes.append(tx_proc.returncode)
+                            write_memory_report(tx_proc.returncode)
+                            return 3
+                        time.sleep(args.poll_interval)
+                finally:
+                    terminate_child(tx_proc)
+
+            tx_returncodes.append(tx_proc.returncode)
+            if tx_proc.returncode != 0:
+                final_returncode = int(tx_proc.returncode or 1)
+                break
+
+            if args.post_load_sample_seconds > 0:
+                deadline = time.monotonic() + args.post_load_sample_seconds
+                while time.monotonic() < deadline:
+                    if append_guarded_sample("post_load", run_index):
+                        write_memory_report(tx_proc.returncode)
                         return 3
                     time.sleep(args.poll_interval)
-            finally:
-                terminate_child(tx_proc)
 
-        write_report(report, samples, tx_proc.returncode)
-        return int(tx_proc.returncode or 0)
+        write_memory_report(final_returncode)
+        return int(final_returncode or 0)
     finally:
         stop_localnet(args.out_dir)
 

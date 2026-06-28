@@ -45,7 +45,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
-    func testCounterpartyVerifierDispatchesCanonicalAbi7PlatformAliases() {
+    func testCounterpartyVerifierRejectsRemovedPlatformAliasesBeforeDispatch() {
         for platform in ["ios-appattest", "ios-app-attest"] {
             let binding = ToriiOfflineDeviceBinding(
                 platform: platform,
@@ -64,7 +64,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             ) { error in
                 XCTAssertEqual(
                     (error as? OfflineProofVerifierError)?.errorDescription,
-                    "Missing offline device binding challenge hash."
+                    "Unsupported offline device binding platform."
                 )
             }
         }
@@ -85,7 +85,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 (error as? OfflineProofVerifierError)?.errorDescription,
-                "Offline device binding is incomplete."
+                "Unsupported offline device binding platform."
             )
         }
     }

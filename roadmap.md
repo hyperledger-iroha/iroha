@@ -18,11 +18,14 @@ and completed history lives in [`status.md`](./status.md).
   estimate per queued transaction), and Torii now rejects single and batch
   ingress before admission work when the count/byte budget is already saturated
   or the incoming batch cannot fit its minimum retained-byte charge. The current
-  100,000-transaction attempted burst report
-  `/tmp/iroha-oom-repro-20260628-100k-post-128m-burst/memory_guard_report.json`
-  completed under the 8 GiB guard (`6,289,670,144` bytes peak total RSS,
-  `1,621,311,488` bytes largest peer), with queue-full responses treated as
-  expected node-side backpressure rather than harness failure. Tune the
+  100,000-transaction attempted burst report with 120 seconds of post-load
+  sampling
+  `/tmp/iroha-oom-repro-20260628-100k-post-128m-postload120/memory_guard_report.json`
+  completed under the 8 GiB guard (`6,180,683,776` bytes peak total RSS,
+  `1,563,443,200` bytes largest peer), dropped to `3,639,918,592` bytes total
+  RSS during post-load sampling, and flattened across the final samples, with
+  queue-full responses treated as expected node-side backpressure rather than
+  harness failure. Tune the
   retained-byte default, Torii admission shedding, or the per-peer P2P outbound
   frame queue caps only if future release-gate reports show real operator
   backpressure needs different limits. Deferred P2P outbound frames held while a peer session is
@@ -570,13 +573,13 @@ and completed history lives in [`status.md`](./status.md).
   The non-C# SDK gates now also consume a regenerated checked-in ABI-7
   recursive-spend archive fixture after aligning data-model/core reserved
   recursive verifier evidence to
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1`. The Python
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4`. The Python
   native generator derives `verify_result` from the same typed verify request
   context used by the committed fixture, and the policy guard pins the
   refreshed archive hashes plus an ABI-7 archive-drift negative control. The
   same policy guard rejects stale current-profile roadmap prose so release
-  handoffs keep naming the active `255x1` profile source and binary instead of
-  older verifier-witness profiles.
+  handoffs keep naming the active `64x4` profile source and binary instead of
+  retired verifier-witness profiles.
   Those same SDK decoders now also include trailing-field vectors that append a
   valid extra Norito field to the nested `verifierKeyId`, recursive-proof, and
   `ProofBox` objects, proving surplus proof metadata is rejected before native
@@ -1074,48 +1077,44 @@ and completed history lives in [`status.md`](./status.md).
   TODO(C# Windows): certify matching C# exact indexed hop-evidence diagnostics
   for transfer public-input shape, same-root rejection, multi-hop continuity,
   chain-id mismatch, and asset mismatch on a Windows host.
-- Kagemusha Offline/Offline V2 readiness parsers must treat the legacy
-  `offline_kagemusha_abi7*` key family and the
-  `offline_kagemusha_recursive_compact_*` key family as aliases for the same
-  derived node signal. Legacy-only and recursive-compact-only bodies remain
-  supported, but when both families are present their enablement, mode, bridge
-  ABI, circuit-id, and artifact values must match or parsing fails closed.
-  Present alias values must also keep their expected exact types: booleans as
-  JSON booleans, strings as non-empty unpadded strings, and bridge ABI values as
-  positive exact integers or canonical positive decimal strings with no sign or
-  leading zeroes. The focused JVM SDK runner and SDK parity guard now pin the
+- Kagemusha Offline/Offline V2 readiness parsers must reject the removed
+  `offline_kagemusha_abi7*` key family outright. First-release readiness uses
+  only the `offline_kagemusha_recursive_compact_*` key family, and every
+  canonical field is required with exact types: booleans as JSON booleans,
+  strings as non-empty unpadded strings, and bridge ABI values as positive exact
+  integers or canonical positive decimal strings with no sign or leading
+  zeroes. The focused JVM SDK runner and SDK parity guard now pin the
   Kotlin/JVM Offline and Offline V2 readiness client tests plus the Android Java
-  Offline Torii client and parser harness tests, including exact
-  conflict/type/range diagnostics for malformed alias bodies. JavaScript
-  source/package-dist, Python, and Swift Torii readiness parsing now merge the
-  short and recursive-compact Kagemusha alias families, accept either complete
-  family by itself, reject partial/mismatched alias pairs, and enforce exact
-  booleans, unpadded non-empty strings, and positive signed-32-bit ABI values
-  before wallet code sees the readiness snapshot. Swift also decodes the
-  current ABI-7 readiness body without requiring retired Offline Note metadata
-  fields. The consolidated JavaScript recursive Kagemusha SDK runner
-  must keep selecting the three `getOfflineReadiness` readiness tests for
-  canonical payloads, noncanonical ABI rejection, and legacy-only rejection,
-  with SDK parity and JavaScript meta-test coverage pinning those selectors.
-  Torii's own Offline and Offline V2 readiness handlers must derive ABI-7
-  availability directly from `settlement.offline.kagemusha_enabled`; the
-  removed `kagemusha_force_legacy` configuration field must stay absent from
-  readiness source and response bodies. The SDK parity guard now tracks the
-  Torii handler source, the Torii Offline/Offline V2 readiness smoke files, and
-  their workflow paths; the mobile offline-readiness negative control injects
-  legacy-gate and smoke-assertion drift to prove the guard rejects both. Torii
+  Offline Torii client and parser harness tests, including removed-field, type,
+  and range diagnostics for malformed bodies. JavaScript source/package-dist,
+  TypeScript declarations, Python, and Swift Torii readiness parsing now fail
+  closed when any removed ABI-7 readiness field is present, reject
+  recursive-compact payloads with missing or noncanonical required values, and
+  expose only the canonical recursive compact snapshot to wallet code. The
+  consolidated JavaScript recursive Kagemusha SDK runner must keep selecting
+  the four `getOfflineReadiness` readiness tests for canonical payloads,
+  noncanonical ABI rejection, removed ABI-7 field rejection, and
+  missing-recursive-compact-family rejection, with SDK parity and JavaScript
+  meta-test coverage pinning those selectors. Torii's own Offline and Offline
+  V2 readiness handlers must derive
+  recursive compact availability directly from
+  `settlement.offline.kagemusha_enabled`; the removed
+  `kagemusha_force_legacy` configuration field must stay absent from readiness
+  source and response bodies. The SDK parity guard now tracks the Torii handler
+  source, the Torii Offline/Offline V2 readiness smoke files, and their
+  workflow paths; the mobile offline-readiness negative control injects removed
+  gate and smoke-assertion drift to prove the guard rejects both. Torii
   readiness must also keep mobile artifact archive availability false: Torii
   reports native runtime readiness, while Core API serves and gates mobile
   artifacts. JavaScript, Python, Swift, Kotlin/JVM, and Android Java canonical
-  readiness tests now pin `offline_kagemusha_abi7_artifacts=false` and
+  readiness tests now pin
   `offline_kagemusha_recursive_compact_artifacts_available=false`, and the SDK
   parity artifact-contract negative control mutates those fixtures and Torii
   smoke assertions back to artifact-true to prove drift is rejected. Swift's
   `hasKagemushaRecursiveCompactMetadata` helper must remain independent from
-  artifact archive availability when the short and verbose artifact aliases
-  agree. TODO(C# Windows): certify the same artifact-false Torii readiness
-  contract in the C# SDK on a Windows host without changing it from this
-  non-C# pass.
+  artifact archive availability. TODO(C# Windows): certify the same
+  artifact-false Torii readiness contract in the C# SDK on a Windows host
+  without changing it from this non-C# pass.
 - Confidential-v2 JVM/Android proof assembly now has typed transfer and
   unshield witness/request codecs for the production native bridge. Keep wallet
   integrations on these builders instead of raw witness bytes so canonical
@@ -1276,7 +1275,7 @@ and completed history lives in [`status.md`](./status.md).
     and certify multi-profile record-backed lineage-witness redeem cases on
     the Windows .NET runner.
   - Update and certify the C# shared ABI-7 archive fixture assertions for the
-    regenerated current `255x1` profile hashes on the Windows host:
+    regenerated current `64x4` profile hashes on the Windows host:
     append-bundle
     `4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906`,
     verify-request
@@ -3232,7 +3231,7 @@ and completed history lives in [`status.md`](./status.md).
   verifier-key bytes have been checked against the full circuits in explicit
   expensive equivalence tests, and the release CLI has been rebuilt with that
   path. The current replacement run must use a freshly rebuilt
-  `target/release/iroha` from the `255x1` profile source, passed explicitly
+  `target/release/iroha` from the `64x4` profile source, passed explicitly
   with `--iroha-bin`, before its evidence can satisfy the release gate.
   A replacement production-width staged run is in progress; the remaining
   lineage release blocker is successful init/append key-artifact generation plus
@@ -3273,7 +3272,7 @@ and completed history lives in [`status.md`](./status.md).
   after about 9h26m with no artifacts. A detached replacement retry is in
   progress, but 2026-06-25 stale logs showed mixed binary provenance on some
   attempts; the current replacement must use the freshly rebuilt
-  `target/release/iroha` `255x1` binary through `--iroha-bin`. The remaining
+  `target/release/iroha` `64x4` binary through `--iroha-bin`. The remaining
   compact-key release blocker is a successful rerun that
   produces artifacts and is finalized into `artifacts/kagemusha`.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
@@ -14520,7 +14519,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   each witness passes preflight. The data model now exposes a
   reserved-mode recursive aggregation evidence statement that
   Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
-  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` verifier-witness
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
   profile plus the declared verifier opening length to the same ordered hop
   transcript. Reserved compact projection checks validate mode `2` against that
   recursive evidence and the compact token's folded public inputs, but public
@@ -14576,7 +14575,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   recursive circuit work. A cheap
   production-layout guard now pins
   the `n = 128` recursive verifier shape (seven rounds, `[64, 32, 16, 8, 4, 2,
-  1]` generator-fold layers, 255-by-1 scalar coverage, and 262 represented
+  1]` generator-fold layers, 64-by-4 scalar coverage, and 262 represented
   windowed MSM gadgets), and a fixed-window table plan pins the shared-table
   target at 532 table families versus 90,440 naive point-table copies
   (723,520 duplicated point rows) with `trusted_setup_required = false`. Both

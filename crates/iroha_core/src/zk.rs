@@ -147,15 +147,16 @@ where
     if proving_key.is_empty() {
         return Err("proving key archive payload must be non-empty".to_owned());
     }
-    let archive = norito::to_bytes(&Halo2IpaProvingKeyArchive {
-        version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
-        circuit_family: circuit_family.to_owned(),
-        vk_commitment,
-        proving_key,
-    })
-    .map_err(|err| format!("failed to encode proving key archive: {err}"))?;
-    std::io::Write::write_all(writer, &archive)
-        .map_err(|err| format!("failed to write proving key archive: {err}"))
+    norito::core::to_writer_seek(
+        writer,
+        &Halo2IpaProvingKeyArchive {
+            version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
+            circuit_family: circuit_family.to_owned(),
+            vk_commitment,
+            proving_key,
+        },
+    )
+    .map_err(|err| format!("failed to write proving key archive: {err}"))
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -38879,6 +38880,29 @@ mod halo2_ipa_proving_key_archive_tests {
             raw_err.contains("failed to decode proving key archive"),
             "unexpected raw-key error: {raw_err}"
         );
+    }
+
+    #[test]
+    fn halo2_ipa_proving_key_archive_seek_writer_matches_byte_encoder() {
+        let vk_commitment = [0x51; 32];
+        let proving_key = (0u8..=63).collect::<Vec<_>>();
+        let expected = encode_halo2_ipa_proving_key_archive(
+            "kagemusha-folded-v1",
+            vk_commitment,
+            proving_key.clone(),
+        )
+        .expect("encode proving key archive");
+
+        let mut writer = std::io::Cursor::new(Vec::new());
+        write_halo2_ipa_proving_key_archive(
+            &mut writer,
+            "kagemusha-folded-v1",
+            vk_commitment,
+            proving_key,
+        )
+        .expect("stream proving key archive");
+
+        assert_eq!(writer.into_inner(), expected);
     }
 }
 

@@ -13263,7 +13263,7 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
           verifier_entrypoint:
             "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
           platform_payload: {
-            platform: "evm_contract_call",
+            platform: "EvmGroth16ContractCall",
             payload: {
               proof_bytes: "aa55",
               public_inputs: {
@@ -13705,6 +13705,152 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
       finalityProof: "bb66",
     },
   });
+});
+
+test("getSccpMessageProofJob preserves Groth16 proof summary destination binding", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const staleDestinationBindingHash = "58".repeat(32);
+  const summaryDestinationBindingHash = "59".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        chain_family: "Evm",
+        chain: "bsc-testnet",
+        local_domain: 0,
+        counterparty_domain: 2,
+        security_model: "RecursiveZk",
+        anchor_governance: "CryptographicProof",
+        destination_binding: {
+          version: 1,
+          key: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
+          binding_hash: staleDestinationBindingHash,
+        },
+        proof_family: "groth16-bn254-v1",
+        verifier_backend: { version: 1, key: "evm-groth16-bn254-v1" },
+        message_backend: "sccp/groth16-bn254-v1/bsc",
+        registry_backend: "bridge/sccp/groth16-bn254-v1/bsc",
+        manifest_seed: "iroha:sccp:bridge-proof:message:groth16:v1:bsc",
+        finality_model: "EthereumBeaconExecution",
+        verifier_target: "EvmContract",
+        submission_template: {
+          version: 1,
+          encoding: "evm_abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          required_arguments: [
+            { key: "proof_bytes", description: "Groth16 proof bytes." },
+            { key: "public_inputs", description: "SCCP public input words." },
+            { key: "statement_hash", description: "SCCP statement hash." },
+          ],
+        },
+        submission_package: {
+          version: 1,
+          proof_family: "groth16-bn254-v1",
+          verifier_backend: { version: 1, key: "evm-groth16-bn254-v1" },
+          envelope_encoding: "evm_abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          platform_payload: {
+            platform: "EvmGroth16ContractCall",
+            payload: {
+              proof_bytes: "aa55",
+              public_inputs: {
+                message_id: messageId,
+                payload_hash: payloadHash,
+                target_domain_word: "00".repeat(31) + "02",
+                commitment_root: commitmentRoot,
+                finality_height_word: "00".repeat(31) + "13",
+                finality_block_hash: finalityBlockHash,
+              },
+              statement_hash: "55".repeat(32),
+            },
+          },
+          arguments: [
+            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
+            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
+          ],
+          envelope_bytes: "77",
+        },
+        groth16_proof_summary: {
+          platform_payload: "evm_groth16_contract_call",
+          version: 1,
+          proof_len_bytes: 384,
+          public_input_word_count: 6,
+          groth16_public_signal_count: 9,
+          message_id: messageId,
+          source_domain: 0,
+          commitment_root: commitmentRoot,
+          destination_binding_key: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
+          destination_binding_hash: summaryDestinationBindingHash,
+        },
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 2,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        payload_kind: "transfer",
+        payload_projection: {
+          Transfer: {
+            version: 1,
+            source_domain: 0,
+            dest_domain: 2,
+            nonce: "21",
+            asset_home_domain: 0,
+            asset_id: { TextUtf8: { value: "xor#universal" } },
+            amount: "77",
+            sender: { TextUtf8: { value: "nexus:soraswap" } },
+            recipient: { EvmHex: { bytes: "12".repeat(20) } },
+            route_id: { TextUtf8: { value: "nexus:bsc:xor" } },
+          },
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 2,
+            message_id: messageId,
+            payload_hash: payloadHash,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1, amount: "77" } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
+
+  assert.equal(result.destinationBinding.bindingHash, staleDestinationBindingHash);
+  assert.deepEqual(result.groth16ProofSummary, {
+    platformPayload: "evm_groth16_contract_call",
+    version: 1,
+    proofLenBytes: 384,
+    publicInputWordCount: 6,
+    groth16PublicSignalCount: 9,
+    messageId,
+    sourceDomain: 0,
+    commitmentRoot,
+    destinationBindingKey: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
+    destinationBindingHash: summaryDestinationBindingHash,
+  });
+  assert.equal(result.proofEnvelopeSummary, null);
+  assert.equal(result.submissionPackage.platformPayload.kind, "evm_groth16_contract_call");
 });
 
 test("getSccpMessageProofJob rejects invalid TRON payload projection", async () => {
@@ -22594,11 +22740,6 @@ test("queryTriggers rejects unsupported option keys", async () => {
 function canonicalOfflineReadinessPayload(overrides = {}) {
   return {
     offline_telemetry: true,
-    offline_kagemusha_abi7: true,
-    offline_kagemusha_abi7_mode: "recursive_compact_v1",
-    offline_kagemusha_abi7_bridge_abi_version: 7,
-    offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_abi7_artifacts: false,
     offline_kagemusha_recursive_compact_available: true,
     offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
@@ -22608,29 +22749,13 @@ function canonicalOfflineReadinessPayload(overrides = {}) {
   };
 }
 
-const OFFLINE_READINESS_ABI7_FIELDS = [
+const OFFLINE_READINESS_REMOVED_ABI7_FIELDS = [
   "offline_kagemusha_abi7",
   "offline_kagemusha_abi7_mode",
   "offline_kagemusha_abi7_bridge_abi_version",
   "offline_kagemusha_abi7_circuit_id",
   "offline_kagemusha_abi7_artifacts",
 ];
-
-const OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS = [
-  "offline_kagemusha_recursive_compact_available",
-  "offline_kagemusha_recursive_compact_mode",
-  "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-  "offline_kagemusha_recursive_compact_circuit_id",
-  "offline_kagemusha_recursive_compact_artifacts_available",
-];
-
-function omitOfflineReadinessFields(fields) {
-  const payload = canonicalOfflineReadinessPayload();
-  for (const field of fields) {
-    delete payload[field];
-  }
-  return payload;
-}
 
 test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
@@ -22656,65 +22781,10 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
-
-  for (const aliasOnlyPayload of [
-    omitOfflineReadinessFields(OFFLINE_READINESS_ABI7_FIELDS),
-    omitOfflineReadinessFields(OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS),
-  ]) {
-    const aliasClient = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: aliasOnlyPayload,
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    assert.deepEqual(await aliasClient.getOfflineReadiness(), readiness);
-  }
 });
 
 test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
   const cases = [
-    [
-      "offline_kagemusha_abi7",
-      "true",
-      /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
-    ],
-    [
-      "offline_kagemusha_abi7_mode",
-      " recursive_compact_v1",
-      /offline readiness response\.offline_kagemusha_abi7_mode must not contain surrounding whitespace/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      0,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      -1,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      7.5,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      "007",
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      " 7",
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      2147483648,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range/,
-    ],
     [
       "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
       0,
@@ -22757,42 +22827,26 @@ test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
       `${field}=${String(value)} should be rejected`,
     );
   }
+});
 
-  for (const [override, pattern] of [
-    [
-      { offline_kagemusha_recursive_compact_available: false },
-      /offline readiness response\.offline_kagemusha_abi7 must match offline readiness response\.offline_kagemusha_recursive_compact_available/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_mode: "recursive_compact_v2" },
-      /offline readiness response\.offline_kagemusha_abi7_mode must match offline readiness response\.offline_kagemusha_recursive_compact_mode/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 8 },
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must match offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v2" },
-      /offline readiness response\.offline_kagemusha_abi7_circuit_id must match offline readiness response\.offline_kagemusha_recursive_compact_circuit_id/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_artifacts_available: true },
-      /offline readiness response\.offline_kagemusha_abi7_artifacts must match offline readiness response\.offline_kagemusha_recursive_compact_artifacts_available/,
-    ],
-  ]) {
+test("getOfflineReadiness rejects removed ABI-7 readiness fields", async () => {
+  for (const field of OFFLINE_READINESS_REMOVED_ABI7_FIELDS) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
         createResponse({
           status: 200,
-          jsonData: canonicalOfflineReadinessPayload(override),
+          jsonData: canonicalOfflineReadinessPayload({ [field]: true }),
           headers: { "content-type": "application/json" },
         }),
     });
-    await assert.rejects(() => client.getOfflineReadiness(), pattern);
+    await assert.rejects(
+      () => client.getOfflineReadiness(),
+      new RegExp(`offline readiness response\\.${field} is not supported; use offline_kagemusha_recursive_compact_\\*`),
+    );
   }
 });
 
-test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
+test("getOfflineReadiness rejects payload missing recursive compact family", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
@@ -22811,7 +22865,7 @@ test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
 
   await assert.rejects(
     () => client.getOfflineReadiness(),
-    /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+    /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
   );
 });
 

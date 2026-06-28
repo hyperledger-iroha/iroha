@@ -28439,7 +28439,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             evidence_path = create_compact_key_evidence(Path(temp) / "compact")
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             evidence["opening_len"] = 4.0
-            evidence["ipa_k"] = 8.0
+            evidence["ipa_k"] = 12.0
             evidence["record_version"] = 1.0
             write_json(evidence_path, evidence)
 
@@ -41014,7 +41014,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             evidence["opening_len"] = 128.0
-            evidence["ipa_k"] = 8.0
+            evidence["ipa_k"] = 12.0
             write_json(evidence_path, evidence)
 
             result = readiness.check_lineage_proof_evidence(evidence_path)

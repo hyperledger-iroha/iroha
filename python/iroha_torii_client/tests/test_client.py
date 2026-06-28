@@ -6,7 +6,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 from urllib.parse import quote
 
 import pytest
@@ -5641,11 +5641,6 @@ def test_trigger_registration_deletion_and_query() -> None:
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "offline_telemetry": True,
-        "offline_kagemusha_abi7": True,
-        "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-        "offline_kagemusha_abi7_bridge_abi_version": 7,
-        "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-        "offline_kagemusha_abi7_artifacts": False,
         "offline_kagemusha_recursive_compact_available": True,
         "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
@@ -5656,29 +5651,13 @@ def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     return payload
 
 
-OFFLINE_READINESS_ABI7_FIELDS = (
+OFFLINE_READINESS_REMOVED_ABI7_FIELDS = (
     "offline_kagemusha_abi7",
     "offline_kagemusha_abi7_mode",
     "offline_kagemusha_abi7_bridge_abi_version",
     "offline_kagemusha_abi7_circuit_id",
     "offline_kagemusha_abi7_artifacts",
 )
-
-OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS = (
-    "offline_kagemusha_recursive_compact_available",
-    "offline_kagemusha_recursive_compact_mode",
-    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-    "offline_kagemusha_recursive_compact_circuit_id",
-    "offline_kagemusha_recursive_compact_artifacts_available",
-)
-
-
-def _offline_readiness_payload_without(fields: Iterable[str]) -> Dict[str, Any]:
-    payload = _offline_readiness_payload()
-    for field in fields:
-        del payload[field]
-    return payload
-
 
 def test_get_offline_readiness_parses_payload() -> None:
     session = RecordingSession()
@@ -5687,11 +5666,6 @@ def test_get_offline_readiness_parses_payload() -> None:
 
     readiness = client.get_offline_readiness()
 
-    assert readiness.offline_kagemusha_abi7 is True
-    assert readiness.offline_kagemusha_abi7_mode == "recursive_compact_v1"
-    assert readiness.offline_kagemusha_abi7_bridge_abi_version == 7
-    assert readiness.offline_kagemusha_abi7_circuit_id == "kagemusha-recursive-compact-v1"
-    assert readiness.offline_kagemusha_abi7_artifacts is False
     assert readiness.offline_kagemusha_recursive_compact_available is True
     assert readiness.offline_kagemusha_recursive_compact_mode == "recursive_compact_v1"
     assert readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version == 7
@@ -5707,73 +5681,9 @@ def test_get_offline_readiness_parses_payload() -> None:
     assert call["method"] == "GET"
     assert call["url"].endswith("/v1/offline/readiness")
 
-    for alias_only_payload in (
-        _offline_readiness_payload_without(OFFLINE_READINESS_ABI7_FIELDS),
-        _offline_readiness_payload_without(OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS),
-    ):
-        session = RecordingSession()
-        session.queue(StubResponse(payload=alias_only_payload))
-        client = ToriiClient("http://node.test", session=session)
-        alias_readiness = client.get_offline_readiness()
-        assert alias_readiness.offline_kagemusha_abi7 is True
-        assert alias_readiness.offline_kagemusha_abi7_mode == "recursive_compact_v1"
-        assert alias_readiness.offline_kagemusha_abi7_bridge_abi_version == 7
-        assert alias_readiness.offline_kagemusha_abi7_circuit_id == "kagemusha-recursive-compact-v1"
-        assert alias_readiness.offline_kagemusha_abi7_artifacts is False
-        assert alias_readiness.offline_kagemusha_recursive_compact_available is True
-        assert alias_readiness.offline_kagemusha_recursive_compact_mode == "recursive_compact_v1"
-        assert alias_readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version == 7
-        assert alias_readiness.offline_kagemusha_recursive_compact_circuit_id == "kagemusha-recursive-compact-v1"
-        assert alias_readiness.offline_kagemusha_recursive_compact_artifacts_available is False
-
 
 def test_get_offline_readiness_rejects_noncanonical_abi_versions() -> None:
     cases = [
-        (
-            "offline_kagemusha_abi7",
-            "true",
-            "offline readiness.offline_kagemusha_abi7 must be a boolean",
-        ),
-        (
-            "offline_kagemusha_abi7_mode",
-            " recursive_compact_v1",
-            "offline readiness.offline_kagemusha_abi7_mode must not contain surrounding whitespace",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            0,
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            -1,
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            7.5,
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must be an integer",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            True,
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must be an integer",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            "007",
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            " 7",
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version",
-            2_147_483_648,
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
-        ),
         (
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             0,
@@ -5809,37 +5719,24 @@ def test_get_offline_readiness_rejects_noncanonical_abi_versions() -> None:
         with pytest.raises(RuntimeError, match=re.escape(message)):
             client.get_offline_readiness()
 
-    for overrides, message in (
-        (
-            {"offline_kagemusha_recursive_compact_available": False},
-            "offline readiness.offline_kagemusha_abi7 must match offline readiness.offline_kagemusha_recursive_compact_available",
-        ),
-        (
-            {"offline_kagemusha_recursive_compact_mode": "recursive_compact_v2"},
-            "offline readiness.offline_kagemusha_abi7_mode must match offline readiness.offline_kagemusha_recursive_compact_mode",
-        ),
-        (
-            {"offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 8},
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must match offline readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-        ),
-        (
-            {"offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v2"},
-            "offline readiness.offline_kagemusha_abi7_circuit_id must match offline readiness.offline_kagemusha_recursive_compact_circuit_id",
-        ),
-        (
-            {"offline_kagemusha_recursive_compact_artifacts_available": True},
-            "offline readiness.offline_kagemusha_abi7_artifacts must match offline readiness.offline_kagemusha_recursive_compact_artifacts_available",
-        ),
-    ):
+
+def test_get_offline_readiness_rejects_removed_abi7_fields() -> None:
+    for field in OFFLINE_READINESS_REMOVED_ABI7_FIELDS:
         session = RecordingSession()
-        session.queue(StubResponse(payload=_offline_readiness_payload(**overrides)))
+        session.queue(StubResponse(payload=_offline_readiness_payload(**{field: True})))
         client = ToriiClient("http://node.test", session=session)
 
-        with pytest.raises(RuntimeError, match=re.escape(message)):
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape(
+                f"offline readiness.{field} is not supported; "
+                "use offline_kagemusha_recursive_compact_*"
+            ),
+        ):
             client.get_offline_readiness()
 
 
-def test_get_offline_readiness_rejects_legacy_only_payload() -> None:
+def test_get_offline_readiness_rejects_missing_recursive_compact_family() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -5855,7 +5752,10 @@ def test_get_offline_readiness_rejects_legacy_only_payload() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="offline_kagemusha_abi7"):
+    with pytest.raises(
+        RuntimeError,
+        match="offline_kagemusha_recursive_compact_available",
+    ):
         client.get_offline_readiness()
 
 

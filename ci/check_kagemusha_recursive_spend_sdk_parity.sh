@@ -3651,7 +3651,8 @@ def check_javascript_sdk_script(errors):
         and "ToriiClient canonical auth rejects non-byte private key arrays" in script
         and "getOfflineReadiness fetches canonical readiness payload" in script
         and "getOfflineReadiness rejects noncanonical ABI versions" in script
-        and "getOfflineReadiness rejects legacy-only readiness payload" in script
+        and "getOfflineReadiness rejects removed ABI-7 readiness fields" in script
+        and "getOfflineReadiness rejects payload missing recursive compact family" in script
         and "subscription plan and create endpoints send normalized payloads" in script
         and "subscription action endpoints send normalized payloads" in script
         and "getSubscription returns null on 404" in script
@@ -7588,8 +7589,16 @@ def check_mobile_confidential_note_coverage(texts, errors):
 def check_mobile_offline_readiness_coverage(texts, errors):
     torii_readiness = texts["crates/iroha_torii/src/lib.rs"]
     require(
-        torii_readiness.count("let offline_kagemusha_abi7 = offline.kagemusha_enabled;") == 2,
-        "Torii offline readiness handler missing direct kagemusha_enabled ABI-7 gate",
+        torii_readiness.count(
+            "let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;"
+        )
+        == 2,
+        "Torii offline readiness handler missing direct kagemusha_enabled recursive compact gate",
+        errors,
+    )
+    require(
+        "offline_kagemusha_abi7" not in torii_readiness,
+        "Torii offline readiness handler must not emit removed ABI-7 alias fields",
         errors,
     )
     require(
@@ -7613,29 +7622,30 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             (
                 '"offline_kagemusha_enabled"',
                 '"offline_kagemusha_force_legacy"',
+                '"offline_kagemusha_abi7"',
+                '"offline_kagemusha_abi7_mode"',
+                '"offline_kagemusha_abi7_bridge_abi_version"',
+                '"offline_kagemusha_abi7_circuit_id"',
+                '"offline_kagemusha_abi7_artifacts"',
             ),
             label,
             errors,
         )
-    alias_diagnostics = (
-        "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
-        "offline_kagemusha_abi7_mode and offline_kagemusha_recursive_compact_mode must match",
-        "offline_kagemusha_abi7_bridge_abi_version and offline_kagemusha_recursive_compact_required_native_bridge_abi_version must match",
-        "offline_kagemusha_abi7_circuit_id and offline_kagemusha_recursive_compact_circuit_id must match",
-        "offline_kagemusha_abi7_artifacts and offline_kagemusha_recursive_compact_artifacts_available must match",
-        "offline_kagemusha_abi7 must be a boolean",
-        "offline_kagemusha_abi7_mode must be a string",
+    removed_abi7_diagnostics = (
+        "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
+    )
+    canonical_readiness_diagnostics = (
         "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
-        "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
-        "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
-        "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
         "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
-        "offline_kagemusha_abi7_circuit_id must be a string",
-        "offline_kagemusha_abi7_artifacts must be a boolean",
+        "offline_kagemusha_recursive_compact_available must be a boolean",
         "offline_kagemusha_recursive_compact_artifacts_available must be a boolean",
     )
     for relative, label in (
@@ -7669,11 +7679,11 @@ def check_mobile_offline_readiness_coverage(texts, errors):
     for relative, label in (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
-            "Kotlin Offline readiness ABI-7 parser",
+            "Kotlin Offline readiness canonical parser",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
-            "Android Java Offline readiness ABI-7 parser",
+            "Android Java Offline readiness canonical parser",
         ),
     ):
         require_contains(
@@ -7682,17 +7692,14 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             (
                 "parseOfflineReadiness",
                 "parseOfflineV2Readiness",
+                "rejectRemovedKagemushaAbi7ReadinessFields",
                 "offline_kagemusha_abi7",
                 "offline_kagemusha_recursive_compact_available",
-                "offline_kagemusha_abi7_mode",
                 "offline_kagemusha_recursive_compact_mode",
-                "offline_kagemusha_abi7_bridge_abi_version",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-                "offline_kagemusha_abi7_circuit_id",
                 "offline_kagemusha_recursive_compact_circuit_id",
-                "offline_kagemusha_abi7_artifacts",
                 "offline_kagemusha_recursive_compact_artifacts_available",
-                "must match",
+                "is not supported; use offline_kagemusha_recursive_compact_*",
                 "must be an exact non-empty string",
                 "must be an exact integer string",
                 "must be a boolean",
@@ -7715,19 +7722,16 @@ def check_mobile_offline_readiness_coverage(texts, errors):
             relative,
             (
                 "readinessUsesCanonicalGetPathAndParsesBody",
-                "readinessParsesShortAbi7Aliases",
-                "readinessRejectsConflictingAbi7AliasesAndVerboseValues",
-                "readinessRejectsMalformedPresentAliasValues",
-                "readinessAcceptsMatchingAbi7AliasesAndVerboseValues",
-                "offline_kagemusha_abi7_bridge_abi_version",
+                "readinessRejectsRemovedAbi7Aliases",
+                "readinessRejectsMalformedCanonicalValues",
+                "removedAbi7ReadinessFieldCases",
+                "malformedCanonicalBodies",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-                "+7",
                 "007",
-                "offline_kagemusha_abi7_circuit_id",
                 "offline_kagemusha_recursive_compact_circuit_id",
-                "offline_kagemusha_abi7_artifacts",
                 "offline_kagemusha_recursive_compact_artifacts_available",
-                *alias_diagnostics,
+                *removed_abi7_diagnostics,
+                *canonical_readiness_diagnostics,
             ),
             label,
             errors,
@@ -7767,22 +7771,19 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         texts,
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
         (
-            "parsesOfflineReadinessShortAbi7Aliases",
-            "parsesOfflineReadinessMatchingAbi7Aliases",
-            "rejectsOfflineReadinessConflictingAbi7Aliases",
-            "rejectsOfflineReadinessMalformedAbi7Aliases",
-            "parsesOfflineV2ReadinessShortAbi7Aliases",
-            "rejectsOfflineV2ReadinessConflictingAbi7Aliases",
-            "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
-            "offline_kagemusha_abi7_bridge_abi_version",
+            "rejectsOfflineReadinessRemovedAbi7Aliases",
+            "rejectsOfflineReadinessMalformedCanonicalValues",
+            "parsesOfflineV2Readiness",
+            "rejectsOfflineV2ReadinessRemovedAbi7Aliases",
+            "rejectsOfflineV2ReadinessMalformedCanonicalValues",
+            "REMOVED_ABI7_READINESS_CASES",
+            "malformedCanonicalReadinessCases",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            "+7",
             "007",
-            "offline_kagemusha_abi7_circuit_id",
             "offline_kagemusha_recursive_compact_circuit_id",
-            "offline_kagemusha_abi7_artifacts",
             "offline_kagemusha_recursive_compact_artifacts_available",
-            *alias_diagnostics,
+            *removed_abi7_diagnostics,
+            *canonical_readiness_diagnostics,
         ),
         "Android Java Offline readiness parser tests",
         errors,
@@ -7790,27 +7791,24 @@ def check_mobile_offline_readiness_coverage(texts, errors):
     for relative, label in (
         (
             "javascript/iroha_js/src/toriiClient.js",
-            "JavaScript Torii offline readiness alias parser",
+            "JavaScript Torii offline readiness canonical parser",
         ),
         (
             "javascript/iroha_js/dist/toriiClient.js",
-            "JavaScript package-dist Torii offline readiness alias parser",
+            "JavaScript package-dist Torii offline readiness canonical parser",
         ),
     ):
         require_contains(
             texts,
             relative,
             (
-                "const hasAbi7Family = abi7Keys.some(hasOwn);",
-                "const hasRecursiveCompactFamily = recursiveCompactKeys.some(hasOwn);",
+                "const removedAbi7Keys = [",
+                "throw new TypeError(`${context}.${key} is not supported; use offline_kagemusha_recursive_compact_*`);",
                 "const requireExactBoolean = (value, field) =>",
-                "const decodeAbi7Family = () =>",
                 "const decodeRecursiveCompactFamily = () =>",
                 "requireExactNonEmptyString(",
-                "must match ${context}.${recursiveCompactField}",
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-                "const abi7 = abi7Family ?? recursiveCompactFamily;",
-                "const recursiveCompact = recursiveCompactFamily ?? abi7Family;",
+                "const recursiveCompact = decodeRecursiveCompactFamily();",
             ),
             label,
             errors,
@@ -7819,16 +7817,13 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         texts,
         "python/iroha_torii_client/client.py",
         (
-            "has_abi7_family = any(field in payload for field in abi7_fields)",
-            "has_recursive_compact_family = any(",
-            "def decode_abi7_family() -> Dict[str, Any]:",
+            "removed_abi7_fields = (",
+            "is not supported; ",
+            "use offline_kagemusha_recursive_compact_*",
             "def decode_recursive_compact_family() -> Dict[str, Any]:",
-            "offline readiness.{abi7_field} must match",
-            "offline readiness.{recursive_compact_field}",
-            "abi7 = abi7_family or recursive_compact_family",
-            "recursive_compact = recursive_compact_family or abi7_family",
+            "recursive_compact = decode_recursive_compact_family()",
         ),
-        "Python Torii offline readiness alias parser",
+        "Python Torii offline readiness canonical parser",
         errors,
     )
     require_contains(
@@ -7836,62 +7831,71 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
         (
             "private struct KagemushaReadinessFamily",
-            "let hasAbi7Family = Self.containsAny(",
             "let hasRecursiveCompactFamily = Self.containsAny(",
-            "private static func decodeAbi7Family(",
+            "try Self.rejectRemovedAbi7Fields(in: container)",
+            "private static func rejectRemovedAbi7Fields(",
             "private static func decodeRecursiveCompactFamily(",
             "private static func decodeRequiredExactString(",
-            "private static func requireMatching<T: Equatable>(",
-            "must match \\(rhsKey.stringValue)",
-            "let abi7 = abi7Family ?? recursiveCompactFamily!",
-            "let recursiveCompact = recursiveCompactFamily ?? abi7Family!",
+            "is not supported; use offline_kagemusha_recursive_compact_*",
+            "let recursiveCompact = try Self.decodeRecursiveCompactFamily(from: container)",
         ),
-        "Swift Torii offline readiness alias parser",
+        "Swift Torii offline readiness canonical parser",
         errors,
     )
     require_contains(
         texts,
         "javascript/iroha_js/test/toriiClient.test.js",
         (
-            "OFFLINE_READINESS_ABI7_FIELDS",
-            "OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS",
-            "omitOfflineReadinessFields",
-            "assert.deepEqual(await aliasClient.getOfflineReadiness(), readiness);",
-            "offline_kagemusha_abi7 must match offline readiness response\\.offline_kagemusha_recursive_compact_available",
-            "offline_kagemusha_abi7_bridge_abi_version must match offline readiness response\\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "OFFLINE_READINESS_REMOVED_ABI7_FIELDS",
+            "getOfflineReadiness rejects removed ABI-7 readiness fields",
+            "is not supported; use offline_kagemusha_recursive_compact_\\\\*",
             "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
         ),
-        "JavaScript Torii offline readiness alias tests",
+        "JavaScript Torii offline readiness removed-field tests",
         errors,
     )
     require_contains(
         texts,
         "python/iroha_torii_client/tests/test_client.py",
         (
-            "OFFLINE_READINESS_ABI7_FIELDS",
-            "OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS",
-            "_offline_readiness_payload_without",
-            "alias_readiness = client.get_offline_readiness()",
-            "offline readiness.offline_kagemusha_abi7 must match offline readiness.offline_kagemusha_recursive_compact_available",
-            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must match offline readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "OFFLINE_READINESS_REMOVED_ABI7_FIELDS",
+            "test_get_offline_readiness_rejects_removed_abi7_fields",
+            "is not supported; ",
+            "use offline_kagemusha_recursive_compact_*",
             "offline readiness.offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
         ),
-        "Python Torii offline readiness alias tests",
+        "Python Torii offline readiness removed-field tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        (
+            "export interface ToriiOfflineReadinessResponse",
+            "offline_kagemusha_recursive_compact_available: boolean;",
+            "offline_kagemusha_recursive_compact_mode: string;",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;",
+            "offline_kagemusha_recursive_compact_circuit_id: string;",
+            "offline_kagemusha_recursive_compact_artifacts_available: boolean;",
+        ),
+        "JavaScript Torii offline readiness TypeScript declarations",
+        errors,
+    )
+    require(
+        "offline_kagemusha_abi7:" not in texts["javascript/iroha_js/index.d.ts"],
+        "JavaScript Torii offline readiness TypeScript declarations must not expose removed ABI-7 aliases",
         errors,
     )
     require_contains(
         texts,
         "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
         (
-            "let compactOnlyPayload",
-            "let abi7OnlyPayload",
-            "for aliasPayload in [compactOnlyPayload, abi7OnlyPayload]",
-            "XCTAssertTrue(aliasReadiness.hasKagemushaRecursiveCompactMetadata)",
-            "offline_kagemusha_abi7 must match offline_kagemusha_recursive_compact_available",
-            "offline_kagemusha_abi7_bridge_abi_version must match offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "testGetOfflineReadinessParsesKagemushaRecursiveCompactMetadata",
+            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
             "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
         ),
-        "Swift Torii offline readiness alias tests",
+        "Swift Torii offline readiness removed-field tests",
         errors,
     )
 
@@ -7900,15 +7904,14 @@ def check_offline_readiness_artifact_contract(texts, errors):
     require_contains(
         texts,
         "crates/iroha_torii/src/lib.rs",
-        (
-            "Mobile artifact archives are",
-            "served and gated by Core API",
-            "let offline_kagemusha_abi7_artifacts = false;",
-            '"offline_kagemusha_abi7_artifacts"',
-            '"offline_kagemusha_recursive_compact_artifacts_available"',
-        ),
-        "Torii offline readiness artifact contract",
-        errors,
+            (
+                "Mobile artifact archives are",
+                "served and gated by Core API",
+                "let offline_kagemusha_recursive_compact_artifacts = false;",
+                '"offline_kagemusha_recursive_compact_artifacts_available"',
+            ),
+            "Torii offline readiness artifact contract",
+            errors,
     )
     for relative, label in (
         (
@@ -7924,7 +7927,6 @@ def check_offline_readiness_artifact_contract(texts, errors):
             texts,
             relative,
             (
-                '\\"offline_kagemusha_abi7_artifacts\\":false',
                 '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
             ),
             label,
@@ -7934,7 +7936,6 @@ def check_offline_readiness_artifact_contract(texts, errors):
         texts,
         "javascript/iroha_js/test/toriiClient.test.js",
         (
-            "offline_kagemusha_abi7_artifacts: false",
             "offline_kagemusha_recursive_compact_artifacts_available: false",
         ),
         "JavaScript Torii offline readiness artifact contract",
@@ -7944,7 +7945,6 @@ def check_offline_readiness_artifact_contract(texts, errors):
         texts,
         "javascript/iroha_js/test/integrationTorii.test.js",
         (
-            "assert.equal(readiness.offline_kagemusha_abi7_artifacts, false);",
             "assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);",
         ),
         "JavaScript optional Torii offline readiness artifact contract",
@@ -7954,9 +7954,7 @@ def check_offline_readiness_artifact_contract(texts, errors):
         texts,
         "python/iroha_torii_client/tests/test_client.py",
         (
-            '"offline_kagemusha_abi7_artifacts": False',
             '"offline_kagemusha_recursive_compact_artifacts_available": False',
-            "assert readiness.offline_kagemusha_abi7_artifacts is False",
             "assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False",
         ),
         "Python Torii offline readiness artifact contract",
@@ -7967,13 +7965,17 @@ def check_offline_readiness_artifact_contract(texts, errors):
         "Swift Torii offline readiness metadata helper must not require artifact archives for metadata",
         errors,
     )
+    require(
+        "&& offlineKagemushaRecursiveCompactArtifactsAvailable"
+        not in texts["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"],
+        "Swift Torii offline readiness metadata helper must not require artifact archives for metadata",
+        errors,
+    )
     require_contains(
         texts,
         "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
         (
-            '"offline_kagemusha_abi7_artifacts": false',
             '"offline_kagemusha_recursive_compact_artifacts_available": false',
-            "XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)",
             "XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
             "XCTAssertTrue(readiness.hasKagemushaRecursiveCompactMetadata)",
         ),
@@ -11148,9 +11150,10 @@ def check_javascript_torii_runner_coverage(texts, errors):
         "javascript/iroha_js/test/toriiClient.test.js",
         (
             "getOfflineReadiness rejects noncanonical ABI versions",
+            "getOfflineReadiness rejects removed ABI-7 readiness fields",
             "canonicalOfflineReadinessPayload",
-            "offline_kagemusha_abi7_bridge_abi_version",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "OFFLINE_READINESS_REMOVED_ABI7_FIELDS",
             "must be an exact positive integer string",
             "must fit in signed 32-bit range",
             '"007"',
@@ -15042,7 +15045,8 @@ def check_python(texts, errors):
     require(
         "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload" in script
         and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions" in script
-        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_legacy_only_payload" in script,
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_removed_abi7_fields" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_missing_recursive_compact_family" in script,
         "Kagemusha Python SDK script must run Torii offline readiness ABI exactness regressions",
         errors,
     )
@@ -15405,8 +15409,9 @@ def check_python(texts, errors):
         "python/iroha_torii_client/tests/test_client.py",
         (
             "test_get_offline_readiness_rejects_noncanonical_abi_versions",
+            "test_get_offline_readiness_rejects_removed_abi7_fields",
             "_offline_readiness_payload",
-            "offline_kagemusha_abi7_bridge_abi_version",
+            "OFFLINE_READINESS_REMOVED_ABI7_FIELDS",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             "must be an exact positive integer string",
             "must fit in signed 32-bit range",
@@ -17125,8 +17130,12 @@ def check_swift(texts, errors):
         (
             "testCounterpartyVerifierRejectsPaddedPlatformBeforeDispatch",
             "testCounterpartyVerifierRejectsCaseChangedPlatformBeforeDispatch",
+            "testCounterpartyVerifierRejectsRemovedPlatformAliasesBeforeDispatch",
             'platform: " ios"',
+            '"ios-appattest"',
+            '"ios-app-attest"',
             'platform: "IOS"',
+            'platform: "android-keymint"',
             'platform: "Android"',
             "IosOfflineProofVerifier().verifyDeviceProof",
             "AndroidOfflineProofVerifier().verifyDeviceBinding",
@@ -18253,15 +18262,14 @@ def check_swift(texts, errors):
         torii_client,
         (
             "public struct ToriiOfflineReadiness",
-            "offlineKagemushaAbi7",
-            "offlineKagemushaAbi7BridgeAbiVersion",
             "offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion",
             "hasKagemushaRecursiveCompactMetadata",
+            "rejectRemovedAbi7Fields",
             "decodeExactPositiveAbiVersion",
             "must be an exact positive integer string",
             "must fit in signed 32-bit range",
         ),
-        "Swift Torii offline readiness ABI exactness",
+        "Swift Torii offline readiness canonical ABI exactness",
         errors,
     )
     require_contains(
@@ -18403,9 +18411,9 @@ def check_swift(texts, errors):
         texts,
         torii_client_test,
         (
-            "testGetOfflineReadinessParsesKagemushaAbi7Metadata",
+            "testGetOfflineReadinessParsesKagemushaRecursiveCompactMetadata",
             "testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions",
-            '"offline_kagemusha_abi7_bridge_abi_version": "7"',
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             "hasKagemushaRecursiveCompactMetadata",
             "must be an exact positive integer string",
@@ -28505,8 +28513,12 @@ if mode == "--negative-control-python-sdk-offline-readiness-test-filter-script":
             "Python SDK offline readiness noncanonical ABI test filter",
         ),
         (
-            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_legacy_only_payload"',
-            "Python SDK offline readiness legacy-only payload test filter",
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_removed_abi7_fields"',
+            "Python SDK offline readiness removed ABI-7 field test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_missing_recursive_compact_family"',
+            "Python SDK offline readiness missing recursive compact family test filter",
         ),
     )
     detected_messages = []
@@ -31704,11 +31716,11 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
     targets = (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
-            "Kotlin Offline readiness ABI-7 parser",
+            "Kotlin Offline readiness canonical parser",
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
-            "Android Java Offline readiness ABI-7 parser",
+            "Android Java Offline readiness canonical parser",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
@@ -31741,20 +31753,36 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
     )
     replacements = (
         (
-            "readinessRejectsMalformedPresentAliasValues",
-            "readinessAllowsMalformedPresentAliasValues",
+            "readinessRejectsRemovedAbi7Aliases",
+            "readinessAllowsRemovedAbi7Aliases",
+        ),
+        (
+            "readinessRejectsMalformedCanonicalValues",
+            "readinessAllowsMalformedCanonicalValues",
         ),
         (
             "v2ReadinessUsesCanonicalGetPathAndParsesResponse",
             "v2ReadinessUsesNoncanonicalGetPathAndParsesResponse",
         ),
         (
-            "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
-            "allowsOfflineV2ReadinessMalformedAbi7Aliases",
+            "rejectsOfflineReadinessRemovedAbi7Aliases",
+            "allowsOfflineReadinessRemovedAbi7Aliases",
         ),
         (
-            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
-            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available may diverge",
+            "rejectsOfflineReadinessMalformedCanonicalValues",
+            "allowsOfflineReadinessMalformedCanonicalValues",
+        ),
+        (
+            "rejectsOfflineV2ReadinessRemovedAbi7Aliases",
+            "allowsOfflineV2ReadinessRemovedAbi7Aliases",
+        ),
+        (
+            "rejectsOfflineV2ReadinessMalformedCanonicalValues",
+            "allowsOfflineV2ReadinessMalformedCanonicalValues",
+        ),
+        (
+            "rejectRemovedKagemushaAbi7ReadinessFields",
+            "allowRemovedKagemushaAbi7ReadinessFields",
         ),
         (
             "must be an exact integer string",
@@ -31773,18 +31801,6 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
             "offline_kagemusha_recursive_compact_mode may be padded",
         ),
         (
-            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
-            "offline_kagemusha_abi7_bridge_abi_version may be coerced",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
-            "offline_kagemusha_abi7_bridge_abi_version may be non-positive",
-        ),
-        (
-            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
-            "offline_kagemusha_abi7_bridge_abi_version may overflow",
-        ),
-        (
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be noncanonical",
         ),
@@ -31801,8 +31817,28 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may overflow",
         ),
         (
-            "let offline_kagemusha_abi7 = offline.kagemusha_enabled;",
-            "let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;",
+            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
+            "offline_kagemusha_abi7 may be accepted",
+        ),
+        (
+            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
+            "offline_kagemusha_abi7_mode may be accepted",
+        ),
+        (
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
+            "offline_kagemusha_abi7_bridge_abi_version may be accepted",
+        ),
+        (
+            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
+            "offline_kagemusha_abi7_circuit_id may be accepted",
+        ),
+        (
+            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
+            "offline_kagemusha_abi7_artifacts may be accepted",
+        ),
+        (
+            "let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;",
+            "let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;",
         ),
         (
             '"offline_kagemusha_enabled"',
@@ -31812,11 +31848,15 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
             '"offline_kagemusha_force_legacy"',
             '"offline_kagemusha_force_legacy_removed_from_test"',
         ),
+        (
+            '"offline_kagemusha_abi7"',
+            '"offline_kagemusha_abi7_removed_from_test"',
+        ),
     )
-    exact_alias_drift_labels = [
+    exact_readiness_drift_labels = [
         (
             "Kotlin Offline readiness client tests",
-            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
+            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline readiness client tests",
@@ -31824,15 +31864,19 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Kotlin Offline readiness client tests",
-            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline readiness client tests",
-            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline readiness client tests",
-            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
+        ),
+        (
+            "Kotlin Offline readiness client tests",
+            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline readiness client tests",
@@ -31852,7 +31896,7 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Kotlin Offline V2 readiness client tests",
-            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
+            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline V2 readiness client tests",
@@ -31860,15 +31904,19 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Kotlin Offline V2 readiness client tests",
-            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline V2 readiness client tests",
-            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline V2 readiness client tests",
-            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
+        ),
+        (
+            "Kotlin Offline V2 readiness client tests",
+            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Kotlin Offline V2 readiness client tests",
@@ -31888,7 +31936,7 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Android Java Offline readiness parser tests",
-            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
+            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Android Java Offline readiness parser tests",
@@ -31896,15 +31944,19 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         ),
         (
             "Android Java Offline readiness parser tests",
-            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Android Java Offline readiness parser tests",
-            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Android Java Offline readiness parser tests",
-            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
+        ),
+        (
+            "Android Java Offline readiness parser tests",
+            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
         ),
         (
             "Android Java Offline readiness parser tests",
@@ -31925,17 +31977,17 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
     ]
     def expected_offline_readiness_labels(label):
         explicit_labels = {
-            "Kotlin Offline readiness ABI-7 parser": (
-                "Kotlin Offline readiness ABI-7 parser missing must be an exact integer string",
+            "Kotlin Offline readiness canonical parser": (
+                "Kotlin Offline readiness canonical parser missing rejectRemovedKagemushaAbi7ReadinessFields",
             ),
-            "Android Java Offline readiness ABI-7 parser": (
-                "Android Java Offline readiness ABI-7 parser missing must be an exact integer string",
+            "Android Java Offline readiness canonical parser": (
+                "Android Java Offline readiness canonical parser missing rejectRemovedKagemushaAbi7ReadinessFields",
             ),
             "Android Java Offline Torii readiness client tests": (
                 "Android Java Offline Torii readiness client tests missing v2ReadinessUsesCanonicalGetPathAndParsesResponse",
             ),
             "Torii offline readiness handler": (
-                "Torii offline readiness handler missing direct kagemusha_enabled ABI-7 gate",
+                "Torii offline readiness handler missing direct kagemusha_enabled recursive compact gate",
                 "Torii offline readiness handler must not reference removed kagemusha_force_legacy",
             ),
             "Torii offline readiness smoke legacy-field absence": (
@@ -31950,7 +32002,7 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
         labels = list(explicit_labels.get(label, ()))
         labels.extend(
             f"{expected_label} missing {diagnostic}"
-            for expected_label, diagnostic in exact_alias_drift_labels
+            for expected_label, diagnostic in exact_readiness_drift_labels
             if expected_label == label
         )
         return labels
@@ -32065,28 +32117,23 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "crates/iroha_torii/src/lib.rs",
             (
                 (
-                    "let offline_kagemusha_abi7_artifacts = false;",
-                    "let offline_kagemusha_abi7_artifacts = true;",
+                    "let offline_kagemusha_recursive_compact_artifacts = false;",
+                    "let offline_kagemusha_recursive_compact_artifacts = true;",
                 ),
             ),
             (
-                "Torii offline readiness artifact contract missing let offline_kagemusha_abi7_artifacts = false;",
+                "Torii offline readiness artifact contract missing let offline_kagemusha_recursive_compact_artifacts = false;",
             ),
         ),
         (
             "crates/iroha_torii/tests/offline_readiness_smoke.rs",
             (
                 (
-                    '\\"offline_kagemusha_abi7_artifacts\\":false',
-                    '\\"offline_kagemusha_abi7_artifacts\\":true',
-                ),
-                (
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
                 ),
             ),
             (
-                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_abi7_artifacts\\":false',
                 'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
             ),
         ),
@@ -32094,16 +32141,11 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
             (
                 (
-                    '\\"offline_kagemusha_abi7_artifacts\\":false',
-                    '\\"offline_kagemusha_abi7_artifacts\\":true',
-                ),
-                (
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
                 ),
             ),
             (
-                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_abi7_artifacts\\":false',
                 'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
             ),
         ),
@@ -32111,16 +32153,11 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "javascript/iroha_js/test/toriiClient.test.js",
             (
                 (
-                    "offline_kagemusha_abi7_artifacts: false",
-                    "offline_kagemusha_abi7_artifacts: true",
-                ),
-                (
                     "offline_kagemusha_recursive_compact_artifacts_available: false",
                     "offline_kagemusha_recursive_compact_artifacts_available: true",
                 ),
             ),
             (
-                "JavaScript Torii offline readiness artifact contract missing offline_kagemusha_abi7_artifacts: false",
                 "JavaScript Torii offline readiness artifact contract missing offline_kagemusha_recursive_compact_artifacts_available: false",
             ),
         ),
@@ -32128,16 +32165,11 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "javascript/iroha_js/test/integrationTorii.test.js",
             (
                 (
-                    "assert.equal(readiness.offline_kagemusha_abi7_artifacts, false);",
-                    "assert.equal(readiness.offline_kagemusha_abi7_artifacts, true);",
-                ),
-                (
                     "assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);",
                     "assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, true);",
                 ),
             ),
             (
-                "JavaScript optional Torii offline readiness artifact contract missing assert.equal(readiness.offline_kagemusha_abi7_artifacts, false);",
                 "JavaScript optional Torii offline readiness artifact contract missing assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);",
             ),
         ),
@@ -32145,16 +32177,8 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "python/iroha_torii_client/tests/test_client.py",
             (
                 (
-                    '"offline_kagemusha_abi7_artifacts": False',
-                    '"offline_kagemusha_abi7_artifacts": True',
-                ),
-                (
                     '"offline_kagemusha_recursive_compact_artifacts_available": False',
                     '"offline_kagemusha_recursive_compact_artifacts_available": True',
-                ),
-                (
-                    "assert readiness.offline_kagemusha_abi7_artifacts is False",
-                    "assert readiness.offline_kagemusha_abi7_artifacts is True",
                 ),
                 (
                     "assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False",
@@ -32162,9 +32186,7 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
                 ),
             ),
             (
-                'Python Torii offline readiness artifact contract missing "offline_kagemusha_abi7_artifacts": False',
                 'Python Torii offline readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": False',
-                "Python Torii offline readiness artifact contract missing assert readiness.offline_kagemusha_abi7_artifacts is False",
                 "Python Torii offline readiness artifact contract missing assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False",
             ),
         ),
@@ -32172,8 +32194,8 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
             (
                 (
-                    "&& offlineKagemushaRecursiveCompactAvailable",
-                    "&& offlineKagemushaAbi7Artifacts\n            && offlineKagemushaRecursiveCompactAvailable",
+                    '&& offlineKagemushaRecursiveCompactCircuitId == "kagemusha-recursive-compact-v1"',
+                    '&& offlineKagemushaRecursiveCompactCircuitId == "kagemusha-recursive-compact-v1"\n            && offlineKagemushaRecursiveCompactArtifactsAvailable',
                 ),
             ),
             (
@@ -32184,16 +32206,8 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
             (
                 (
-                    '"offline_kagemusha_abi7_artifacts": false',
-                    '"offline_kagemusha_abi7_artifacts": true',
-                ),
-                (
                     '"offline_kagemusha_recursive_compact_artifacts_available": false',
                     '"offline_kagemusha_recursive_compact_artifacts_available": true',
-                ),
-                (
-                    "XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)",
-                    "XCTAssertTrue(readiness.offlineKagemushaAbi7Artifacts)",
                 ),
                 (
                     "XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
@@ -32201,9 +32215,7 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
                 ),
             ),
             (
-                'Swift Torii offline readiness artifact contract missing "offline_kagemusha_abi7_artifacts": false',
                 'Swift Torii offline readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": false',
-                "Swift Torii offline readiness artifact contract missing XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)",
                 "Swift Torii offline readiness artifact contract missing XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
             ),
         ),
@@ -36889,6 +36901,12 @@ if mode == "--negative-control-js-torii-runner-coverage":
             "getOfflineReadiness rejects noncanonical ABI versions",
             "getOfflineReadiness allows noncanonical ABI versions",
             "JavaScript Torii offline readiness ABI exactness tests",
+        ),
+        (
+            "javascript/iroha_js/test/toriiClient.test.js",
+            "getOfflineReadiness rejects removed ABI-7 readiness fields",
+            "getOfflineReadiness allows removed ABI-7 readiness fields",
+            "JavaScript Torii offline readiness removed-field tests",
         ),
     )
     detected_messages = []

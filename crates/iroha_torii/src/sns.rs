@@ -5,17 +5,23 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use dashmap::DashMap;
 use iroha_core::{
-    sns::{SnsError as CoreSnsError, SnsNamespace, get_name_record, policy_by_id},
+    sns::{
+        SnsError as CoreSnsError, SnsNamespace, get_name_record, policy_by_id,
+        selector_for_namespace_literal,
+    },
     state::{StateReadOnly, StateReadOnlyWithTransactions},
 };
 use iroha_data_model::sns::{
-    FreezeNameRequestV1, GovernanceHookV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId,
-    TransferNameRequestV1, UpdateControllersRequestV1,
+    FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, NameSelectorV1, RegisterNameRequestV1,
+    RenewNameRequestV1, SuffixId, TransferNameRequestV1, UpdateControllersRequestV1,
 };
 use std::sync::Arc;
 
 use crate::{JsonBody, SharedAppState};
+
+const SNS_NAME_CACHE_MAX_ENTRIES: usize = 4096;
 
 /// HTTP-friendly error wrapper for SNS routes.
 #[derive(Debug)]
@@ -70,16 +76,94 @@ fn record_registrar_status<T>(
     });
 }
 
-fn current_ledger_time_ms(app: &SharedAppState) -> u64 {
-    let latest_block_ms = app.state.view().latest_block().map_or(0, |block| {
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    });
+fn current_ledger_time_ms_from_latest_block(latest_block_ms: u64) -> u64 {
     let wall_clock_ms = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .ok()
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
         .unwrap_or(latest_block_ms);
     wall_clock_ms.max(latest_block_ms)
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct SnsNameRecordCacheKey {
+    suffix_id: SuffixId,
+    label: String,
+}
+
+impl SnsNameRecordCacheKey {
+    fn from_selector(selector: &NameSelectorV1) -> Self {
+        Self {
+            suffix_id: selector.suffix_id,
+            label: selector.normalized_label().to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum CachedSnsNameRecord {
+    Found(NameRecordV1),
+    NotFound(String),
+}
+
+#[derive(Clone, Debug)]
+struct SnsNameRecordCacheEntry {
+    block_height: u64,
+    outcome: CachedSnsNameRecord,
+}
+
+/// Per-Torii cache for SNS name reads. Entries are valid only for the latest
+/// block height observed when the lookup was performed.
+#[derive(Debug, Default)]
+pub(crate) struct SnsNameRecordCache {
+    entries: DashMap<SnsNameRecordCacheKey, SnsNameRecordCacheEntry>,
+}
+
+impl SnsNameRecordCache {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    fn get(
+        &self,
+        key: &SnsNameRecordCacheKey,
+        block_height: u64,
+    ) -> Option<Result<NameRecordV1, SnsError>> {
+        let entry = self.entries.get(key)?;
+        if entry.block_height != block_height {
+            return None;
+        }
+        Some(match &entry.outcome {
+            CachedSnsNameRecord::Found(record) => Ok(record.clone()),
+            CachedSnsNameRecord::NotFound(message) => Err(SnsError::NotFound(message.clone())),
+        })
+    }
+
+    fn insert_found(&self, key: SnsNameRecordCacheKey, block_height: u64, record: NameRecordV1) {
+        self.insert(key, block_height, CachedSnsNameRecord::Found(record));
+    }
+
+    fn insert_not_found(&self, key: SnsNameRecordCacheKey, block_height: u64, message: String) {
+        self.insert(key, block_height, CachedSnsNameRecord::NotFound(message));
+    }
+
+    fn insert(&self, key: SnsNameRecordCacheKey, block_height: u64, outcome: CachedSnsNameRecord) {
+        if self.entries.len() >= SNS_NAME_CACHE_MAX_ENTRIES {
+            self.entries.clear();
+        }
+        self.entries.insert(
+            key,
+            SnsNameRecordCacheEntry {
+                block_height,
+                outcome,
+            },
+        );
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 async fn run_blocking_sns<T>(
@@ -130,17 +214,40 @@ pub async fn handle_get_name(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, SnsError> {
     let app_for_job = Arc::clone(&app);
+    let cache = Arc::clone(&app.sns_name_cache);
     let record = run_blocking_sns("get_name", move || {
         let namespace = SnsNamespace::from_path(&namespace).map_err(SnsError::from)?;
         let view = app_for_job.state.view();
-        get_name_record(
+        let latest_block = view.latest_block();
+        let block_height = latest_block
+            .as_ref()
+            .map_or(0, |block| block.header().height().get());
+        let latest_block_ms = latest_block.as_ref().map_or(0, |block| {
+            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+        });
+        let selector =
+            selector_for_namespace_literal(namespace, &literal, &view.nexus.dataspace_catalog)
+                .map_err(SnsError::from)?;
+        let cache_key = SnsNameRecordCacheKey::from_selector(&selector);
+        if let Some(cached) = cache.get(&cache_key, block_height) {
+            return cached;
+        }
+        let result = get_name_record(
             view.world(),
             &view.nexus.dataspace_catalog,
             namespace,
             &literal,
-            current_ledger_time_ms(&app_for_job),
+            current_ledger_time_ms_from_latest_block(latest_block_ms),
         )
-        .map_err(SnsError::from)
+        .map_err(SnsError::from);
+        match &result {
+            Ok(record) => cache.insert_found(cache_key, block_height, record.clone()),
+            Err(SnsError::NotFound(message)) => {
+                cache.insert_not_found(cache_key, block_height, message.clone());
+            }
+            Err(SnsError::BadRequest(_) | SnsError::Conflict(_) | SnsError::Internal(_)) => {}
+        }
+        result
     })
     .await?;
     Ok(JsonBody(record))
@@ -241,6 +348,34 @@ mod tests {
     };
     use std::time::Duration;
 
+    fn cache_selector(label: &str) -> NameSelectorV1 {
+        NameSelectorV1 {
+            version: NameSelectorV1::VERSION,
+            suffix_id: iroha_core::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+            label: label.to_owned(),
+        }
+    }
+
+    fn cache_key(label: &str) -> SnsNameRecordCacheKey {
+        let selector = cache_selector(label);
+        SnsNameRecordCacheKey::from_selector(&selector)
+    }
+
+    fn cache_record(label: &str) -> NameRecordV1 {
+        let selector = cache_selector(label);
+        NameRecordV1::new(
+            selector,
+            iroha_test_samples::ALICE_ID.clone(),
+            Vec::new(),
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        )
+    }
+
     #[test]
     fn metric_namespace_uses_fixed_namespace_paths() {
         assert_eq!(
@@ -285,6 +420,56 @@ mod tests {
     fn direct_sns_mutation_disabled_returns_client_error() {
         let response = direct_sns_mutation_disabled("register_name").into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn sns_name_cache_returns_found_within_same_block() {
+        let cache = SnsNameRecordCache::new();
+        let key = cache_key("clear-orbit-3941@hbl.sbp");
+        let record = cache_record("clear-orbit-3941@hbl.sbp");
+
+        cache.insert_found(key.clone(), 12, record.clone());
+
+        let cached = cache.get(&key, 12).expect("cache entry").expect("record");
+        assert_eq!(cached, record);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn sns_name_cache_returns_not_found_within_same_block() {
+        let cache = SnsNameRecordCache::new();
+        let key = cache_key("missing-alias@hbl.sbp");
+
+        cache.insert_not_found(
+            key.clone(),
+            12,
+            "registration `missing-alias@hbl.sbp` not found".to_owned(),
+        );
+
+        match cache.get(&key, 12).expect("cache entry") {
+            Err(SnsError::NotFound(message)) => {
+                assert_eq!(message, "registration `missing-alias@hbl.sbp` not found");
+            }
+            other => panic!("expected cached not found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sns_name_cache_ignores_entries_from_older_block() {
+        let cache = SnsNameRecordCache::new();
+        let key = cache_key("late-alias@hbl.sbp");
+        let record = cache_record("late-alias@hbl.sbp");
+
+        cache.insert_not_found(
+            key.clone(),
+            12,
+            "registration `late-alias@hbl.sbp` not found".to_owned(),
+        );
+        assert!(cache.get(&key, 13).is_none());
+
+        cache.insert_found(key.clone(), 13, record.clone());
+        let cached = cache.get(&key, 13).expect("cache entry").expect("record");
+        assert_eq!(cached, record);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

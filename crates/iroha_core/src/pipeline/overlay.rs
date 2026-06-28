@@ -90,6 +90,7 @@ struct TairaXorSccpRoute {
     label: &'static str,
     dest_domain: u32,
     recipient_codec: u8,
+    record_amount_scale: u32,
 }
 
 const SCCP_TAIRA_XOR_ROUTES: &[TairaXorSccpRoute] = &[
@@ -98,12 +99,14 @@ const SCCP_TAIRA_XOR_ROUTES: &[TairaXorSccpRoute] = &[
         label: "taira_tron_xor",
         dest_domain: iroha_sccp::SCCP_DOMAIN_TRON,
         recipient_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+        record_amount_scale: 0,
     },
     TairaXorSccpRoute {
         route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID,
         label: "taira_bsc_xor",
         dest_domain: iroha_sccp::SCCP_DOMAIN_BSC,
         recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+        record_amount_scale: SCCP_TAIRA_XOR_SETTLEMENT_SCALE,
     },
 ];
 
@@ -615,16 +618,44 @@ fn pow10_u128(exponent: u32) -> Option<u128> {
     Some(value)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TairaXorAmountConversionError {
+    Precision,
+    Width,
+}
+
 fn numeric_to_taira_xor_minor_units(
     amount: &iroha_primitives::numeric::Numeric,
-) -> Result<u128, &'static str> {
+) -> Result<u128, TairaXorAmountConversionError> {
     let amount = amount.clone().trim_trailing_zeros();
     if amount.scale() > SCCP_TAIRA_XOR_SETTLEMENT_SCALE {
-        return Err("precision");
+        return Err(TairaXorAmountConversionError::Precision);
     }
-    let mantissa = amount.try_mantissa_u128().ok_or("width")?;
-    let multiplier = pow10_u128(SCCP_TAIRA_XOR_SETTLEMENT_SCALE - amount.scale()).ok_or("width")?;
-    mantissa.checked_mul(multiplier).ok_or("width")
+    let mantissa = amount
+        .try_mantissa_u128()
+        .ok_or(TairaXorAmountConversionError::Width)?;
+    let multiplier = pow10_u128(SCCP_TAIRA_XOR_SETTLEMENT_SCALE - amount.scale())
+        .ok_or(TairaXorAmountConversionError::Width)?;
+    mantissa
+        .checked_mul(multiplier)
+        .ok_or(TairaXorAmountConversionError::Width)
+}
+
+fn taira_xor_record_amount_to_minor_units(
+    route: TairaXorSccpRoute,
+    amount: u128,
+) -> Result<u128, OverlayBuildError> {
+    if route.record_amount_scale > SCCP_TAIRA_XOR_SETTLEMENT_SCALE {
+        return Err(sccp_admission_error(format!(
+            "{} record amount scale exceeds TAIRA XOR settlement scale",
+            route.label
+        )));
+    }
+    let multiplier = pow10_u128(SCCP_TAIRA_XOR_SETTLEMENT_SCALE - route.record_amount_scale)
+        .ok_or_else(|| sccp_admission_error(format!("{} record amount overflow", route.label)))?;
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| sccp_admission_error(format!("{} record amount overflow", route.label)))
 }
 
 fn sender_route_label(
@@ -679,10 +710,11 @@ fn validate_taira_xor_sccp_settlement_burns<R: StateReadOnly>(
         if !labels.contains(&route.label) {
             labels.push(route.label);
         }
+        let required_amount = taira_xor_record_amount_to_minor_units(route, transfer.amount)?;
         checked_add_sccp_amount(
             &mut required_by_sender,
             sender,
-            transfer.amount,
+            required_amount,
             "required TAIRA XOR SCCP transfer",
         )?;
     }
@@ -712,15 +744,14 @@ fn validate_taira_xor_sccp_settlement_burns<R: StateReadOnly>(
         }
         let amount = match numeric_to_taira_xor_minor_units(&burn.object) {
             Ok(amount) => amount,
-            Err("precision") => {
+            Err(TairaXorAmountConversionError::Precision) => {
                 saw_too_precise_candidate.insert(sender, true);
                 continue;
             }
-            Err("width") => {
+            Err(TairaXorAmountConversionError::Width) => {
                 saw_too_wide_candidate.insert(sender, true);
                 continue;
             }
-            Err(_) => unreachable!("numeric conversion only reports precision or width errors"),
         };
         checked_add_sccp_amount(
             &mut burned_by_sender,
@@ -2822,7 +2853,7 @@ mod tests {
         assert!(matches!(
             err,
             OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 10 burned XOR base units")
+                if msg.contains("requires at least 10000000000 burned XOR base units")
                     && msg.contains("observed 0")
         ));
     }
@@ -2834,7 +2865,7 @@ mod tests {
             taira_xor_burn_instruction(
                 &authority,
                 asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 9).unwrap(),
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
             ),
             taira_tron_xor_record_instruction(&authority, 10),
         ];
@@ -2850,7 +2881,7 @@ mod tests {
             taira_xor_burn_instruction(
                 &authority,
                 asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 9).unwrap(),
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
             ),
             taira_tron_xor_hex_record_instruction(&authority, 10),
         ];
@@ -2866,7 +2897,7 @@ mod tests {
             taira_xor_burn_instruction(
                 &authority,
                 asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 9).unwrap(),
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
             ),
             taira_tron_xor_record_instruction(&authority, 10),
             taira_tron_xor_record_instruction(&authority, 9),
@@ -2877,8 +2908,8 @@ mod tests {
         assert!(matches!(
             err,
             OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 19 burned XOR base units")
-                    && msg.contains("observed 10")
+                if msg.contains("requires at least 19000000000 burned XOR base units")
+                    && msg.contains("observed 10000000000")
         ));
     }
 
@@ -2890,7 +2921,7 @@ mod tests {
             taira_xor_burn_instruction(
                 &other,
                 asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 9).unwrap(),
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
             ),
             taira_tron_xor_record_instruction(&authority, 10),
         ];
@@ -2900,7 +2931,7 @@ mod tests {
         assert!(matches!(
             err,
             OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 10 burned XOR base units")
+                if msg.contains("requires at least 10000000000 burned XOR base units")
                     && msg.contains("observed 0")
         ));
     }
@@ -2916,7 +2947,7 @@ mod tests {
             taira_xor_burn_instruction(
                 &authority,
                 wrong_asset_definition_id,
-                iroha_primitives::numeric::Numeric::try_new(10, 9).unwrap(),
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
             ),
             taira_tron_xor_record_instruction(&authority, 10),
         ];
@@ -2926,13 +2957,13 @@ mod tests {
         assert!(matches!(
             err,
             OverlayBuildError::ZkProof(msg)
-                if msg.contains("requires at least 10 burned XOR base units")
+                if msg.contains("requires at least 10000000000 burned XOR base units")
                     && msg.contains("observed 0")
         ));
     }
 
     #[test]
-    fn taira_tron_xor_record_accepts_fractional_scale_burn_as_taira_minor_units() {
+    fn taira_tron_xor_record_rejects_bsc_scaled_burn_as_too_small() {
         let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
         let instructions = vec![
             taira_xor_burn_instruction(
@@ -2943,8 +2974,14 @@ mod tests {
             taira_tron_xor_record_instruction(&authority, 1_000_000_000),
         ];
 
-        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
-            .expect("fractional XOR burn must be converted to TAIRA minor units");
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("BSC-scaled burn must not satisfy a raw TAIRA -> TRON record");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("requires at least 1000000000000000000 burned XOR base units")
+                    && msg.contains("observed 1000000000")
+        ));
     }
 
     #[test]

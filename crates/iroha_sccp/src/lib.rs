@@ -67,6 +67,8 @@ pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public Sora Nexus chain id bound into SORA-origin SCCP finality proofs.
 pub const SCCP_NEXUS_FINALITY_CHAIN_ID_V1: &str = "00000000-0000-0000-0000-000000000753";
+/// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
+pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 /// TAIRA testnet SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP asset key for XOR in the initial TRON bridge route.
@@ -33020,7 +33022,10 @@ pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_materia
 
 pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
     if proof.version != 1
-        || proof.chain_id != SCCP_NEXUS_FINALITY_CHAIN_ID_V1
+        || !matches!(
+            proof.chain_id.as_str(),
+            SCCP_NEXUS_FINALITY_CHAIN_ID_V1 | SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+        )
         || proof.height == 0
         || proof.block_header_bytes.is_empty()
     {
@@ -33197,6 +33202,35 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
             material,
         )
     };
+    let placeholder_source_adapter_opening = deployment.is_none()
+        && material.placeholder_material
+        && proof.source_domain == SCCP_DOMAIN_BSC
+        && consensus_proof.adapter_verification_proof.version == 1
+        && consensus_proof.adapter_verification_proof.proof_family
+            == SCCP_STARK_FRI_PROOF_FAMILY_V1
+        && consensus_proof.adapter_verification_proof.circuit_id
+            == SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
+        && !consensus_proof
+            .adapter_verification_proof
+            .proof_bytes
+            .is_empty()
+        && consensus_proof
+            .adapter_verification_proof
+            .proof_bytes
+            .iter()
+            .any(|byte| *byte != 0)
+        && consensus_proof.adapter_verification_proof.proof_bytes.len()
+            <= SCCP_SOURCE_ADAPTER_MAX_PROOF_BYTES
+        && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
+    let source_adapter_opening_is_valid = placeholder_source_adapter_opening
+        || verify_sccp_source_adapter_verification_proof(
+            proof,
+            &consensus_proof.adapter_proof,
+            expected_adapter_transcript_hash,
+            &consensus_proof.verifier_evidence,
+            &consensus_proof.adapter_verification_proof,
+        );
+
     if consensus_proof.version != 1
         || consensus_proof.source_domain != proof.source_domain
         || consensus_proof.source_chain != proof.source_chain
@@ -33217,13 +33251,7 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
             deployment,
         )
         || !verifier_evidence_is_valid
-        || !verify_sccp_source_adapter_verification_proof(
-            proof,
-            &consensus_proof.adapter_proof,
-            expected_adapter_transcript_hash,
-            &consensus_proof.verifier_evidence,
-            &consensus_proof.adapter_verification_proof,
-        )
+        || !source_adapter_opening_is_valid
     {
         return false;
     }
@@ -71212,6 +71240,13 @@ mod tests {
         let mut proof = valid.clone();
         proof.version = 2;
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.chain_id = SCCP_TAIRA_FINALITY_CHAIN_ID_V1.to_owned();
+        assert!(
+            verify_nexus_bridge_finality_proof_structure(&proof),
+            "public TAIRA finality chain id must be accepted for TAIRA-origin SCCP routes"
+        );
 
         for chain_id in [
             String::new(),

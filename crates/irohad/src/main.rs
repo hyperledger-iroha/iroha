@@ -4108,6 +4108,13 @@ impl Iroha {
                 )
             }
             Err(error) if snapshot_read_error_is_recoverable(&error) => {
+                if hard_fork_snapshot_bootstrap_enabled() {
+                    iroha_logger::error!(
+                        ?error,
+                        "hard-fork snapshot bootstrap refused to rebuild state from Kura after snapshot load failure"
+                    );
+                    return Err(Report::new(error).change_context(StartError::InitKura));
+                }
                 iroha_logger::warn!(
                     ?error,
                     "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
@@ -4173,6 +4180,19 @@ impl Iroha {
                     .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
                 block_count.0 = usize::try_from(prune_height)
                     .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            }
+        }
+
+        if loaded_state_from_snapshot && hard_fork_snapshot_bootstrap_enabled() {
+            let snapshot_hashes = state.committed_block_hashes_snapshot();
+            kura.hard_fork_extend_hash_only_from_snapshot(&snapshot_hashes)
+                .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+            if state.committed_height() > block_count.0 {
+                block_count.0 = state.committed_height();
+                iroha_logger::warn!(
+                    state_height = state.committed_height(),
+                    "hard-fork snapshot bootstrap: promoted Kura block count to snapshot state height"
+                );
             }
         }
 

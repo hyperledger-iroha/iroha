@@ -6146,21 +6146,22 @@ fn validate_sccp_groth16_proof_bytes_for_bundle(
     let Some(proof_bytes) = proof_bytes else {
         return Ok(());
     };
-    let public_inputs =
-        iroha_sccp::sccp_message_transparent_public_inputs(bundle).ok_or_else(|| {
-            sccp_bad_request(format!(
-                "{label} cannot be checked against SCCP public inputs"
-            ))
-        })?;
     let Some(proof) = iroha_sccp::decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes) else {
         return Err(sccp_bad_request(format!(
             "{label} must be a canonical Groth16 BN254 proof tuple"
         )));
     };
+    let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(bundle);
+    let expected_message_id = public_inputs
+        .as_ref()
+        .map_or(bundle.commitment.message_id, |inputs| inputs.message_id);
+    let expected_commitment_root = public_inputs
+        .as_ref()
+        .map_or(bundle.commitment_root, |inputs| inputs.commitment_root);
     if proof.version != 1
-        || proof.message_id != public_inputs.message_id
+        || proof.message_id != expected_message_id
         || proof.source_domain != manifest.local_domain
-        || proof.commitment_root != public_inputs.commitment_root
+        || proof.commitment_root != expected_commitment_root
         || iroha_sccp::encode_sccp_evm_groth16_bn254_proof_bytes(&proof) != proof_bytes
     {
         return Err(sccp_bad_request(format!(

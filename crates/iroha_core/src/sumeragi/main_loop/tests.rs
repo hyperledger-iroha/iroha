@@ -206995,36 +206995,41 @@ fn emit_pipeline_events_matches_formal_gate() {
     }
 
     super::emit_pipeline_events(&sender, vec![event_a.clone(), event_b.clone()]);
-    match receiver.try_recv().expect("pipeline batch delivered") {
-        EventBox::PipelineBatch(events) => {
-            assert_eq!(events, vec![event_a.clone(), event_b.clone()]);
-        }
-        other => panic!("expected batch, got {other:?}"),
+    match receiver.try_recv().expect("first pipeline event delivered") {
+        EventBox::Pipeline(event) => assert_eq!(event, event_a.clone()),
+        other => panic!("expected first pipeline event, got {other:?}"),
+    }
+    match receiver
+        .try_recv()
+        .expect("second pipeline event delivered")
+    {
+        EventBox::Pipeline(event) => assert_eq!(event, event_b.clone()),
+        other => panic!("expected second pipeline event, got {other:?}"),
     }
 
     super::emit_pipeline_events(
         &sender,
         vec![event_a.clone(), event_b.clone(), event_c.clone()],
     );
-    match receiver
-        .try_recv()
-        .expect("three-event pipeline batch delivered")
+    for (idx, expected) in [event_a.clone(), event_b.clone(), event_c]
+        .into_iter()
+        .enumerate()
     {
-        EventBox::PipelineBatch(events) => {
-            assert_eq!(events, vec![event_a.clone(), event_b.clone(), event_c]);
+        match receiver.try_recv().expect("pipeline event delivered") {
+            EventBox::Pipeline(event) => assert_eq!(event, expected, "event {idx}"),
+            other => panic!("expected ordered pipeline event {idx}, got {other:?}"),
         }
-        other => panic!("expected ordered three-event batch, got {other:?}"),
     }
 
     super::emit_pipeline_events(&sender, vec![event_b.clone(), event_b.clone()]);
-    match receiver
-        .try_recv()
-        .expect("duplicate pipeline batch delivered")
-    {
-        EventBox::PipelineBatch(events) => {
-            assert_eq!(events, vec![event_b.clone(), event_b.clone()]);
+    for idx in 0..2 {
+        match receiver
+            .try_recv()
+            .expect("duplicate pipeline event delivered")
+        {
+            EventBox::Pipeline(event) => assert_eq!(event, event_b.clone(), "duplicate {idx}"),
+            other => panic!("expected duplicate-preserving event {idx}, got {other:?}"),
         }
-        other => panic!("expected duplicate-preserving batch, got {other:?}"),
     }
 
     let (closed_sender, closed_receiver) = tokio::sync::broadcast::channel(4);

@@ -123,7 +123,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             debug_packet_loss_inbound_percent: 0,
             debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             soranet_handshake: A::SoranetHandshake {
                 descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
                 client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -172,6 +172,14 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
+            p2p_outbound_frame_queue_max_high_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap: nonzero!(128usize),
             consensus_ingress_rate_per_sec:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,

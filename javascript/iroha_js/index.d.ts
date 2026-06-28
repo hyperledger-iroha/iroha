@@ -1047,6 +1047,47 @@ export interface TairaXorBscToTairaSourceProofPackageInput {
   settlement_defaults?: TairaXorBscToTairaSettlementFragment;
 }
 
+export interface BscPlaceholderSourceChainProofEnvelopeInput {
+  messageId?: string;
+  message_id?: string;
+  payloadHash?: string;
+  payload_hash?: string;
+  commitmentRoot?: string;
+  commitment_root?: string;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  receipt?: Record<string, unknown>;
+  block?: Record<string, unknown>;
+  blockReceipts?: readonly Record<string, unknown>[];
+  block_receipts?: readonly Record<string, unknown>[];
+  receiptRootIndex?: string | number | bigint;
+  receipt_root_index?: string | number | bigint;
+  transactionIndex?: string | number | bigint;
+  transaction_index?: string | number | bigint;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  blockNumber?: string | number | bigint;
+  block_number?: string | number | bigint;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  blockHash?: string;
+  block_hash?: string;
+}
+
+export interface BscPlaceholderSourceChainProofEnvelopeResult {
+  readonly sourceProofHex: string;
+  readonly sourceProofBytes: Uint8Array;
+  readonly sourceEventDigest: string;
+  readonly observedSourceEventDigest: string;
+  readonly sourceEventLeafHash: string;
+  readonly receiptOrMessageRoot: string;
+  readonly finalityHeight: string;
+  readonly finalityBlockHash: string;
+  readonly receiptsRoot: string;
+  readonly receiptRootIndex: string;
+  readonly syntheticRootMarker: boolean;
+}
+
 export interface TairaXorTronToTairaBoundSourceProofPackage {
   readonly messageBundle: Record<string, unknown>;
   readonly settlement: Readonly<
@@ -7218,6 +7259,9 @@ export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(
   receiptRoot: string,
 ): Uint8Array;
+export function buildBscPlaceholderSourceChainProofEnvelope(
+  input: BscPlaceholderSourceChainProofEnvelopeInput,
+): BscPlaceholderSourceChainProofEnvelopeResult;
 export function canonicalEthSyncCommitteePayloadBytes(
   input: EthSyncCommitteePayloadInput,
 ): Uint8Array;
@@ -13268,11 +13312,6 @@ export interface SubscriptionActionResponse {
 }
 
 export interface ToriiOfflineReadinessResponse {
-  offline_kagemusha_abi7: boolean;
-  offline_kagemusha_abi7_mode: string;
-  offline_kagemusha_abi7_bridge_abi_version: number;
-  offline_kagemusha_abi7_circuit_id: string;
-  offline_kagemusha_abi7_artifacts: boolean;
   offline_kagemusha_recursive_compact_available: boolean;
   offline_kagemusha_recursive_compact_mode: string;
   offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;
@@ -13671,7 +13710,7 @@ export interface ToriiSccpEvmWordPublicInputs {
 
 export type ToriiSccpPlatformSubmissionPayload =
   | {
-      kind: "evm_contract_call" | "tron_contract_call";
+      kind: "evm_contract_call" | "evm_groth16_contract_call" | "tron_contract_call";
       value: {
         proofBytes: string;
         publicInputs: ToriiSccpEvmWordPublicInputs;
@@ -13722,6 +13761,33 @@ export interface ToriiSccpCounterpartySubmissionPackage {
   envelopeBytes: string;
 }
 
+export interface ToriiSccpProofEnvelopeSummary {
+  version: number;
+  backend: string;
+  circuitId: string;
+  vkHash: string;
+  publicInputsSchemaHash: string;
+  publicInputsSchemaLenBytes: number;
+  publicInputColumnCount: number;
+  publicInputWordCount: number;
+  openProofLenBytes: number;
+  backendProofLenBytes: number;
+  auxLenBytes: number;
+}
+
+export interface ToriiSccpGroth16ProofSummary {
+  platformPayload: string;
+  version: number;
+  proofLenBytes: number;
+  publicInputWordCount: number;
+  groth16PublicSignalCount: number;
+  messageId: string;
+  sourceDomain: number;
+  commitmentRoot: string;
+  destinationBindingKey: string;
+  destinationBindingHash: string;
+}
+
 export interface ToriiSccpMessageTransparentProofArtifact {
   version: number;
   localDomain: number;
@@ -13738,6 +13804,8 @@ export interface ToriiSccpMessageTransparentProofArtifact {
   verifierTarget: ToriiSccpProofVerifierTarget;
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   proofBytes: string;
+  proofEnvelopeSummary: ToriiSccpProofEnvelopeSummary | null;
+  groth16ProofSummary?: ToriiSccpGroth16ProofSummary;
   submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;
 }
@@ -13826,6 +13894,8 @@ export interface ToriiSccpCounterpartyProofJob {
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   payloadKind: string;
   payloadProjection: ToriiSccpPayloadProjection;
+  proofEnvelopeSummary: ToriiSccpProofEnvelopeSummary | null;
+  groth16ProofSummary?: ToriiSccpGroth16ProofSummary;
   submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
   submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;

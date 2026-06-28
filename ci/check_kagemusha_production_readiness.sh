@@ -322,8 +322,8 @@ TEXT_REQUIREMENTS = {
         "Remaining compact-token release work is to attach signed device-lab evidence",
         "packaged one-hop and append proving-key artifacts",
         "receiver admission can trust that metadata",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
-        "255-by-1 scalar coverage",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+        "64-by-4 scalar coverage",
         "compact-first SDK selection",
         "production proof-log artifact",
         "ABI-7 recursive compact key evidence",
@@ -502,8 +502,8 @@ TEXT_REQUIREMENTS = {
         "The reserved `kagemusha-recursive-spend-lineage-v1` profile is the enabled",
         "witnessless chain-admission path for constant-size lineage proofs inside the",
         "64-hop cap",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
-        "255-by-1 fixed-window Vesta verifier witness profile",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+        "64-by-4 fixed-window Vesta verifier witness profile",
         "The routine readiness route still validates the ABI-6 reserved-lineage",
         "recursive spend verifier and redemption surface",
         "SDK preferred-mode selection can choose ABI-7 compact",
@@ -2905,7 +2905,7 @@ TEXT_REQUIREMENTS = {
         "sha256=(?P<vk_sha256>",
         "MAX_COMPACT_KEY_GENERATOR_LOG_BYTES",
         "EXPECTED_COMPACT_KEY_OPENING_LEN = 4",
-        "EXPECTED_COMPACT_KEY_IPA_K = 8",
+        "EXPECTED_COMPACT_KEY_IPA_K = 12",
         "EXPECTED_COMPACT_KEY_BACKEND = \"halo2/ipa\"",
         "EXPECTED_COMPACT_KEY_CIRCUIT_ID = \"kagemusha-recursive-compact-v1\"",
         "EXPECTED_COMPACT_KEY_RECORD_NAMESPACE = \"offline_kagemusha\"",
@@ -10270,12 +10270,12 @@ if mode == "--negative-control-offline-doc-verifier-profile-exactness":
     def mutate_offline_doc_verifier_profile() -> None:
         override_text(
             "docs/source/offline_kagemusha.md",
-            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
+            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
             "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3",
         )
         override_text(
             "roadmap.md",
-            "255-by-1 scalar coverage",
+            "64-by-4 scalar coverage",
             "85-by-3 scalar coverage",
         )
 

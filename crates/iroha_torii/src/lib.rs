@@ -1576,6 +1576,7 @@ struct AppState {
     soracloud_public_inflight: Arc<tokio::sync::Semaphore>,
     soracloud_public_inflight_total: usize,
     sns_mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    sns_name_cache: Arc<sns::SnsNameRecordCache>,
     zk_ivm_prove_inflight: Arc<tokio::sync::Semaphore>,
     zk_ivm_prove_slots: Arc<tokio::sync::Semaphore>,
     zk_ivm_prove_slots_total: usize,
@@ -6219,25 +6220,13 @@ async fn handler_offline_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
+    let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
     let offline_kagemusha_abi7 = offline.kagemusha_enabled;
-    // Mobile artifact archives are served and gated by Core API.
-    let offline_kagemusha_abi7_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry(
-            "offline_kagemusha_abi7_artifacts",
-            offline_kagemusha_abi7_artifacts,
-        ),
         json_entry(
             "offline_kagemusha_recursive_compact_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_available,
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_mode",
@@ -6253,8 +6242,16 @@ async fn handler_offline_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7_artifacts,
+            offline_kagemusha_abi7,
         ),
+        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
+        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
+        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
+        json_entry(
+            "offline_kagemusha_abi7_circuit_id",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+        ),
+        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -6264,25 +6261,13 @@ async fn handler_offline_v2_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
+    let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
     let offline_kagemusha_abi7 = offline.kagemusha_enabled;
-    // Mobile artifact archives are served and gated by Core API.
-    let offline_kagemusha_abi7_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry(
-            "offline_kagemusha_abi7_artifacts",
-            offline_kagemusha_abi7_artifacts,
-        ),
         json_entry(
             "offline_kagemusha_recursive_compact_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_available,
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_mode",
@@ -6298,8 +6283,16 @@ async fn handler_offline_v2_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7_artifacts,
+            offline_kagemusha_abi7,
         ),
+        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
+        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
+        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
+        json_entry(
+            "offline_kagemusha_abi7_circuit_id",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+        ),
+        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -41224,6 +41217,7 @@ impl Torii {
             soracloud_public_inflight,
             soracloud_public_inflight_total,
             sns_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
             zk_ivm_prove_inflight,
             zk_ivm_prove_slots,
             zk_ivm_prove_slots_total,
@@ -45302,6 +45296,7 @@ pub(crate) mod tests_runtime_handlers {
             soracloud_public_inflight,
             soracloud_public_inflight_total,
             sns_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            sns_name_cache: Arc::new(sns::SnsNameRecordCache::new()),
             zk_ivm_prove_inflight,
             zk_ivm_prove_slots,
             zk_ivm_prove_slots_total,

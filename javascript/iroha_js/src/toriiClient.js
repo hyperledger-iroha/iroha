@@ -14791,7 +14791,7 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
   }
   const platformByEnumKey = {
     EvmContractCall: "evm_contract_call",
-    EvmGroth16ContractCall: "evm_contract_call",
+    EvmGroth16ContractCall: "evm_groth16_contract_call",
     TronContractCall: "tron_contract_call",
     SolanaProgramInstruction: "solana_program_instruction",
     TonInternalMessage: "ton_internal_message",
@@ -14809,10 +14809,19 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
 
 function normalizeSccpPlatformSubmissionPayload(value, context) {
   const record = normalizeSccpPlatformSubmissionPayloadRecord(value, context);
-  const platform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const rawPlatform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const platform =
+    {
+      EvmContractCall: "evm_contract_call",
+      EvmGroth16ContractCall: "evm_groth16_contract_call",
+      TronContractCall: "tron_contract_call",
+      SolanaProgramInstruction: "solana_program_instruction",
+      TonInternalMessage: "ton_internal_message",
+    }[rawPlatform] ?? rawPlatform;
   const payload = ensureRecord(record.payload, `${context}.payload`);
   switch (platform) {
     case "evm_contract_call":
+    case "evm_groth16_contract_call":
     case "tron_contract_call":
       return {
         kind: platform,
@@ -15178,6 +15187,46 @@ function normalizeSccpProofManifest(value, context) {
   };
 }
 
+function normalizeSccpGroth16ProofSummary(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    platformPayload: requireNonEmptyString(record.platform_payload, `${context}.platform_payload`),
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    proofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.proof_len_bytes,
+      `${context}.proof_len_bytes`,
+      { allowZero: false },
+    ),
+    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_word_count,
+      `${context}.public_input_word_count`,
+      { allowZero: false },
+    ),
+    groth16PublicSignalCount: ToriiClient._normalizeUnsignedInteger(
+      record.groth16_public_signal_count,
+      `${context}.groth16_public_signal_count`,
+      { allowZero: false },
+    ),
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    sourceDomain: ToriiClient._normalizeUnsignedInteger(
+      record.source_domain,
+      `${context}.source_domain`,
+      { allowZero: true },
+    ),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    destinationBindingKey: requireNonEmptyString(
+      record.destination_binding_key,
+      `${context}.destination_binding_key`,
+    ),
+    destinationBindingHash: normalizeHex32String(
+      record.destination_binding_hash,
+      `${context}.destination_binding_hash`,
+    ),
+  };
+}
+
 function normalizeSccpMessageTransparentProofArtifact(payload) {
   const context = "sccp message proof artifact response";
   const record = ensureRecord(payload, context);
@@ -15260,6 +15309,14 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
             record.proof_envelope_summary,
             `${context}.proof_envelope_summary`,
           ),
+    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
+      ? {}
+      : {
+          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
+            record.groth16_proof_summary,
+            `${context}.groth16_proof_summary`,
+          ),
+        }),
     submissionPackage: normalizeSccpCounterpartySubmissionPackage(
       record.submission_package,
       `${context}.submission_package`,
@@ -15386,6 +15443,14 @@ function normalizeSccpCounterpartyProofJob(payload) {
             record.proof_envelope_summary,
             `${context}.proof_envelope_summary`,
           ),
+    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
+      ? {}
+      : {
+          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
+            record.groth16_proof_summary,
+            `${context}.groth16_proof_summary`,
+          ),
+        }),
     submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
       record.submission_template,
       `${context}.submission_template`,
@@ -30222,22 +30287,18 @@ function normalizeSubscriptionGetResponse(payload) {
 function normalizeOfflineReadinessResponse(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(record, key);
-  const abi7Keys = [
+  const removedAbi7Keys = [
     "offline_kagemusha_abi7",
     "offline_kagemusha_abi7_mode",
     "offline_kagemusha_abi7_bridge_abi_version",
     "offline_kagemusha_abi7_circuit_id",
     "offline_kagemusha_abi7_artifacts",
   ];
-  const recursiveCompactKeys = [
-    "offline_kagemusha_recursive_compact_available",
-    "offline_kagemusha_recursive_compact_mode",
-    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-    "offline_kagemusha_recursive_compact_circuit_id",
-    "offline_kagemusha_recursive_compact_artifacts_available",
-  ];
-  const hasAbi7Family = abi7Keys.some(hasOwn);
-  const hasRecursiveCompactFamily = recursiveCompactKeys.some(hasOwn);
+  for (const key of removedAbi7Keys) {
+    if (hasOwn(key)) {
+      throw new TypeError(`${context}.${key} is not supported; use offline_kagemusha_recursive_compact_*`);
+    }
+  }
 
   const requireExactBoolean = (value, field) => {
     if (typeof value !== "boolean") {
@@ -30245,25 +30306,6 @@ function normalizeOfflineReadinessResponse(payload, context) {
     }
     return value;
   };
-  const decodeAbi7Family = () => ({
-    available: requireExactBoolean(record.offline_kagemusha_abi7, "offline_kagemusha_abi7"),
-    mode: requireExactNonEmptyString(
-      record.offline_kagemusha_abi7_mode,
-      `${context}.offline_kagemusha_abi7_mode`,
-    ),
-    bridgeAbiVersion: requireExactPositiveIntegerLike(
-      record.offline_kagemusha_abi7_bridge_abi_version,
-      `${context}.offline_kagemusha_abi7_bridge_abi_version`,
-    ),
-    circuitId: requireExactNonEmptyString(
-      record.offline_kagemusha_abi7_circuit_id,
-      `${context}.offline_kagemusha_abi7_circuit_id`,
-    ),
-    artifacts: requireExactBoolean(
-      record.offline_kagemusha_abi7_artifacts,
-      "offline_kagemusha_abi7_artifacts",
-    ),
-  });
   const decodeRecursiveCompactFamily = () => ({
     available: requireExactBoolean(
       record.offline_kagemusha_recursive_compact_available,
@@ -30287,43 +30329,9 @@ function normalizeOfflineReadinessResponse(payload, context) {
     ),
   });
 
-  if (!hasAbi7Family && !hasRecursiveCompactFamily) {
-    requireExactBoolean(record.offline_kagemusha_abi7, "offline_kagemusha_abi7");
-  }
-
-  const abi7Family = hasAbi7Family ? decodeAbi7Family() : null;
-  const recursiveCompactFamily = hasRecursiveCompactFamily ? decodeRecursiveCompactFamily() : null;
-  if (abi7Family && recursiveCompactFamily) {
-    for (const [property, abi7Field, recursiveCompactField] of [
-      ["available", "offline_kagemusha_abi7", "offline_kagemusha_recursive_compact_available"],
-      ["mode", "offline_kagemusha_abi7_mode", "offline_kagemusha_recursive_compact_mode"],
-      [
-        "bridgeAbiVersion",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-      ],
-      ["circuitId", "offline_kagemusha_abi7_circuit_id", "offline_kagemusha_recursive_compact_circuit_id"],
-      [
-        "artifacts",
-        "offline_kagemusha_abi7_artifacts",
-        "offline_kagemusha_recursive_compact_artifacts_available",
-      ],
-    ]) {
-      if (abi7Family[property] !== recursiveCompactFamily[property]) {
-        throw new TypeError(`${context}.${abi7Field} must match ${context}.${recursiveCompactField}`);
-      }
-    }
-  }
-
-  const abi7 = abi7Family ?? recursiveCompactFamily;
-  const recursiveCompact = recursiveCompactFamily ?? abi7Family;
+  const recursiveCompact = decodeRecursiveCompactFamily();
   const normalized = {
     ...record,
-    offline_kagemusha_abi7: abi7.available,
-    offline_kagemusha_abi7_mode: abi7.mode,
-    offline_kagemusha_abi7_bridge_abi_version: abi7.bridgeAbiVersion,
-    offline_kagemusha_abi7_circuit_id: abi7.circuitId,
-    offline_kagemusha_abi7_artifacts: abi7.artifacts,
     offline_kagemusha_recursive_compact_available: recursiveCompact.available,
     offline_kagemusha_recursive_compact_mode: recursiveCompact.mode,
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version:
