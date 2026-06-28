@@ -713,6 +713,252 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 detail = EVIDENCE._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("evidence-hidden", detail)
+        hidden = "token=evidence-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = EVIDENCE._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=evidence-ancestor-secret"
+        path_type = type(EVIDENCE.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._reject_symlinked_existing_ancestors(
+                            EVIDENCE.Path("ancestor") / "leaf",
+                            display_label="summary_out",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=evidence-reader-inspect-secret"
+        path_type = type(EVIDENCE.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = EVIDENCE.Path(raw_root) / "evidence.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._read_regular_file(path, display_label="evidence")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect evidence", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_file_stat_failures_return_false(self):
+        hidden = "token=evidence-alias-stat-secret"
+        path_type = type(EVIDENCE.Path("."))
+        original_stat = path_type.stat
+        cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for failure in cases:
+            with self.subTest(error=type(failure).__name__):
+
+                def failing_stat(_self, *args, error=failure, **kwargs):
+                    raise error
+
+                path_type.stat = failing_stat
+                try:
+                    self.assertFalse(
+                        EVIDENCE._same_existing_file(
+                            EVIDENCE.Path("left"),
+                            EVIDENCE.Path("right"),
+                        )
+                    )
+                finally:
+                    path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=evidence-resolve-secret"
+        path_type = type(EVIDENCE.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+        target = EVIDENCE.Path("canary-summary.json")
+        for name, failure in failure_cases:
+            with self.subTest(name=name):
+
+                def failing_resolve(self, *args, error=failure, **kwargs):
+                    if self == target:
+                        raise error
+                    return original_resolve(self, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._reject_duplicate_paths([target], "--canary-summary")
+                finally:
+                    path_type.resolve = original_resolve
+
+                message = str(caught.exception)
+                self.assertIn("cannot resolve --canary-summary[0]", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(target), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=evidence-reader-open-secret"
+        cleanup_hidden = "token=evidence-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "evidence.summary.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = EVIDENCE.os.fdopen
+            original_close = EVIDENCE.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            EVIDENCE.os.fdopen = failing_fdopen
+            EVIDENCE.os.close = failing_close
+            try:
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="evidence-summary",
+                    )
+            finally:
+                EVIDENCE.os.fdopen = original_fdopen
+                EVIDENCE.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open evidence-summary for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=evidence-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            EVIDENCE.os.fdopen = failing_fdopen
+            EVIDENCE.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="evidence-summary",
+                    )
+            finally:
+                EVIDENCE.os.fdopen = original_fdopen
+                EVIDENCE.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open evidence-summary for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=evidence-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            EVIDENCE.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    EVIDENCE._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="evidence-summary",
+                    )
+            finally:
+                EVIDENCE.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open evidence-summary for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -867,6 +1113,171 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIn("must not be a symlink", message)
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
+
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=evidence-output-inspect-secret"
+        path_type = type(EVIDENCE.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden)),
+            ("exists_runtime", "exists", RuntimeError(hidden)),
+            ("lstat_os", "lstat", OSError(5, hidden)),
+            ("lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._ensure_text_output_target(
+                            EVIDENCE.Path("summary.json"),
+                            display_label="summary_out",
+                            create_parent=False,
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_parent_creation_failures_do_not_echo_detail(self):
+        hidden = "token=evidence-output-create-secret"
+        path_type = type(EVIDENCE.Path("."))
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("mkdir_os", OSError(5, hidden)),
+            ("mkdir_runtime", RuntimeError(hidden)),
+            ("mkdir_type", TypeError(hidden)),
+            ("mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                            EVIDENCE._ensure_text_output_target(
+                                EVIDENCE.Path(raw_root) / "out" / "summary.json",
+                                display_label="summary_out",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=evidence-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for summary_out"),
+            ("replace", None, "cannot replace summary_out"),
+            ("fsync_runtime", None, "cannot write temporary output for summary_out"),
+            ("replace_runtime", None, "cannot replace summary_out"),
+            ("fsync", "unlink", "cannot write temporary output for summary_out"),
+            ("fsync", "close", "cannot write temporary output for summary_out"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for summary_out"),
+            ("fsync", "close_runtime", "cannot write temporary output for summary_out"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "evidence.summary.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = EVIDENCE.os.fsync
+                original_replace = EVIDENCE.os.replace
+                original_unlink = EVIDENCE.os.unlink
+                original_close = EVIDENCE.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                EVIDENCE.os.fsync = failing_fsync
+                EVIDENCE.os.replace = failing_replace
+                EVIDENCE.os.unlink = failing_unlink
+                EVIDENCE.os.close = failing_close
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="summary_out",
+                        )
+                finally:
+                    EVIDENCE.os.fsync = original_fsync
+                    EVIDENCE.os.replace = original_replace
+                    EVIDENCE.os.unlink = original_unlink
+                    EVIDENCE.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
@@ -1032,6 +1443,60 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=evidence-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--summary-out"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--summary-out",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--summary-out")],
+                "--summary-out requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                stdout_buffer = io.StringIO()
+                stderr_buffer = io.StringIO()
+                with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+                    stderr_buffer
+                ):
+                    rc = EVIDENCE.main(argv)
+                stdout = stdout_buffer.getvalue()
+                stderr = stderr_buffer.getvalue()
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("evidence-argv-secret", stderr)
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = (
@@ -1499,6 +1964,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertNotIn(str(root), error)
 
     def test_direct_run_scalar_paths_must_be_paths_before_input_loading(self):
+        hidden = "evidence-hostile-scalar-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             args = argparse.Namespace(
@@ -1509,7 +1980,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 provider="local-bank",
                 environment="preprod",
                 default_rail_profile=None,
-                summary_out=object(),
+                summary_out=HostilePathLike(),
                 max_canary_age_days=36500,
                 max_trust_age_days=36500,
                 max_trust_source_age_days=36500,
@@ -1537,6 +2008,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(stdout.getvalue(), "")
             message = str(caught.exception)
             self.assertIn("summary_out must be a path", message)
+            self.assertNotIn(hidden, message)
             self.assertNotIn("does not exist", message)
             self.assertNotIn(str(root), message)
 
@@ -1661,8 +2133,34 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertNotIn(str(root), message)
 
     def test_direct_run_repeatable_paths_must_be_lists_before_input_loading(self):
+        hidden = "evidence-hostile-repeatable-path-list-secret"
+        pathlike_hidden = "evidence-hostile-repeatable-pathlike-secret"
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={pathlike_hidden}")
+
         cases = (
             ("canary bare string", "canary_summary", "canary.summary.json", "--canary-summary"),
+            (
+                "canary hostile list",
+                "canary_summary",
+                HostileList(["canary.summary.json"]),
+                "--canary-summary",
+            ),
+            (
+                "canary hostile pathlike",
+                "canary_summary",
+                [HostilePathLike()],
+                "--canary-summary[0]",
+            ),
             ("canary bad entry", "canary_summary", [object()], "--canary-summary[0]"),
             ("trust bare string", "trust_summary", "trust.summary.json", "--trust-summary"),
             ("trust bad entry", "trust_summary", [object()], "--trust-summary[0]"),
@@ -1711,10 +2209,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(stdout.getvalue(), "")
                     error = str(caught.exception)
-                    if "bare string" in name:
+                    if not label.endswith("[0]"):
                         self.assertIn(f"{label} must be a repeatable path list", error)
                     else:
                         self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn(hidden, error)
+                    self.assertNotIn(pathlike_hidden, error)
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 
@@ -1986,6 +2486,386 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertIn("control characters", message)
                 self.assertNotIn(hidden, message)
                 self.assertNotIn("evidence-string-leak", message)
+
+    def test_archive_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "evidence-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        required = EVIDENCE._required_string(
+            {"path": HostileText("summary")},
+            "path",
+            "summary",
+        )
+        self.assertEqual(required, "summary")
+        self.assertIs(type(required), str)
+        clean_list = EVIDENCE._required_clean_string_list(
+            {"oids": [HostileText("1.2.3")]},
+            "oids",
+            "bundle",
+        )
+        self.assertEqual(clean_list, ["1.2.3"])
+        self.assertIs(type(clean_list[0]), str)
+        provider = EVIDENCE._required_cli_string(HostileText("local-bank"), "--provider")
+        self.assertEqual(provider, "local-bank")
+        self.assertIs(type(provider), str)
+        profile_id = EVIDENCE._optional_cli_profile_id(
+            HostileText("swift-cbpr-plus"),
+            "--default-rail-profile",
+        )
+        self.assertEqual(profile_id, "swift-cbpr-plus")
+        self.assertIs(type(profile_id), str)
+        rail_message_id = EVIDENCE._nullable_rail_message_id(
+            {"rail_message_id": HostileText("rail-message")},
+            "rail_message_id",
+            "receipt",
+        )
+        self.assertEqual(rail_message_id, "rail-message")
+        self.assertIs(type(rail_message_id), str)
+        receipt_path = EVIDENCE._validate_receipt_path(
+            HostileText("receipts/one.receipt.json"),
+            "receipt",
+        )
+        self.assertEqual(receipt_path, "receipts/one.receipt.json")
+        self.assertIs(type(receipt_path), str)
+        self.assertEqual(
+            EVIDENCE._validate_config_path(HostileText("configs/canary.json"), "config"),
+            "configs/canary.json",
+        )
+        self.assertEqual(
+            EVIDENCE._validate_trust_bundle_path(
+                HostileText("trust/bundle.json"),
+                "trust",
+            ),
+            "trust/bundle.json",
+        )
+        self.assertEqual(
+            EVIDENCE._validate_xml_path(HostileText("messages/pacs.xml"), "xml"),
+            "messages/pacs.xml",
+        )
+        self.assertEqual(
+            EVIDENCE._validate_notary_anchor_path(
+                HostileText(EVIDENCE.LATEST_ANCHOR_FILE),
+                "anchor",
+                "1" * 64,
+            ),
+            EVIDENCE.LATEST_ANCHOR_FILE,
+        )
+        self.assertEqual(
+            EVIDENCE._validate_artifact_path(HostileText("artifacts/store"), "artifact"),
+            "artifacts/store",
+        )
+        self.assertIsNotNone(
+            EVIDENCE._parse_timestamp(HostileText("2026-01-01T00:00:00Z"), "ts")
+        )
+        der_summary = EVIDENCE._required_der_summary_entries(
+            {
+                "x509_crls": [
+                    {
+                        "label": HostileText("CRL"),
+                        "sha256": "1" * 64,
+                        "byte_len": 1,
+                    }
+                ]
+            },
+            "x509_crls",
+            "bundle",
+        )
+        self.assertEqual(der_summary, {"1" * 64: 1})
+        present = EVIDENCE._reject_unknown_keys(
+            {HostileText("path"): "summary"},
+            {"path"},
+            "summary",
+        )
+        self.assertEqual(present, {"path"})
+        self.assertTrue(all(type(key) is str for key in present))
+
+        cases = (
+            (
+                "required",
+                lambda: EVIDENCE._required_string(
+                    {"path": HostileText("summary\x1b")}, "path", "summary"
+                ),
+            ),
+            (
+                "cli-required",
+                lambda: EVIDENCE._required_cli_string(
+                    HostileText("local-bank\x1b"),
+                    "--provider",
+                ),
+            ),
+            (
+                "cli-profile",
+                lambda: EVIDENCE._optional_cli_profile_id(
+                    HostileText("swift-cbpr-plus\x1b"),
+                    "--default-rail-profile",
+                ),
+            ),
+            (
+                "nullable-rail-message-id",
+                lambda: EVIDENCE._nullable_rail_message_id(
+                    {"rail_message_id": HostileText("rail-message\x1b")},
+                    "rail_message_id",
+                    "receipt",
+                ),
+            ),
+            (
+                "receipt-path",
+                lambda: EVIDENCE._validate_receipt_path(
+                    HostileText("receipts/one.receipt.json\x1b"),
+                    "receipt",
+                ),
+            ),
+            (
+                "der-label",
+                lambda: EVIDENCE._required_der_summary_entries(
+                    {
+                        "x509_crls": [
+                            {
+                                "label": HostileText("CRL\x1b"),
+                                "sha256": "1" * 64,
+                                "byte_len": 1,
+                            }
+                        ]
+                    },
+                    "x509_crls",
+                    "bundle",
+                ),
+            ),
+            (
+                "timestamp",
+                lambda: EVIDENCE._parse_timestamp(
+                    HostileText("2026-01-01T00:00:00Z\x1b"),
+                    "ts",
+                ),
+            ),
+            (
+                "list",
+                lambda: EVIDENCE._required_clean_string_list(
+                    {"oids": [HostileText("1.2.3\x1b")]}, "oids", "bundle"
+                ),
+            ),
+            (
+                "secret-scan",
+                lambda: EVIDENCE._check_no_secret_material(
+                    {"metadata": HostileText("warning \x1b[31mred")}
+                ),
+            ),
+            (
+                "require-object-dict-subclass",
+                lambda: EVIDENCE._require_object(
+                    HostileDict({"path": "summary"}),
+                    "summary",
+                ),
+            ),
+            (
+                "clean-list-subclass",
+                lambda: EVIDENCE._required_clean_string_list(
+                    {"oids": HostileList(["1.2.3"])},
+                    "oids",
+                    "bundle",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: EVIDENCE._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: EVIDENCE._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: EVIDENCE._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "secret-key",
+                lambda: EVIDENCE._check_no_secret_material(
+                    {HostileText("private_key"): "redacted"}
+                ),
+            ),
+            (
+                "control-key",
+                lambda: EVIDENCE._check_no_secret_material(
+                    {HostileText("metadata\x1b"): "redacted"}
+                ),
+            ),
+            (
+                "unknown-key",
+                lambda: EVIDENCE._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"path"},
+                    "summary",
+                ),
+            ),
+            (
+                "non-string-key",
+                lambda: EVIDENCE._check_no_secret_material({HostileKey(): "redacted"}),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: EVIDENCE._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"path"},
+                    "summary",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: EVIDENCE._reject_unknown_keys(
+                    HostileDict({"path": "redacted"}),
+                    {"path"},
+                    "summary",
+                ),
+            ),
+            (
+                "forbidden-metadata-key",
+                lambda: EVIDENCE._reject_forbidden_receipt_metadata(
+                    {HostileText("anchor_path"): "anchor.json"},
+                    {"anchor_path"},
+                    "receipt[0]",
+                    "rail_gateway",
+                ),
+            ),
+            (
+                "forbidden-metadata-non-string-key",
+                lambda: EVIDENCE._reject_forbidden_receipt_metadata(
+                    {HostileKey(): "anchor.json"},
+                    {"anchor_path"},
+                    "receipt[0]",
+                    "rail_gateway",
+                ),
+            ),
+            (
+                "secret-list-subclass",
+                lambda: EVIDENCE._check_no_secret_material(HostileList(["redacted"])),
+            ),
+            (
+                "secret-dict-subclass",
+                lambda: EVIDENCE._check_no_secret_material(
+                    HostileDict({"metadata": "redacted"})
+                ),
+            ),
+            (
+                "stage-preview",
+                lambda: EVIDENCE._required_stage_preview(
+                    {"stdout_preview": HostileText("ok\x1b")},
+                    "stdout_preview",
+                    "stage",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
+    def test_public_canary_summary_rejects_hostile_container_subclasses(self):
+        hidden = "evidence-public-canary-container-secret"
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list_len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"list_deepcopy={hidden}")
+
+        class HostileDict(dict):
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError(f"dict_get={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"dict_deepcopy={hidden}")
+
+        cases = (
+            (
+                "top-level",
+                lambda: EVIDENCE._public_canary_summary(HostileDict({"path": "x"})),
+                {},
+            ),
+            (
+                "nested-receipt-summary",
+                lambda: EVIDENCE._public_canary_summary(
+                    {
+                        "path": "canary.json",
+                        "_internal": "redacted",
+                        "receipt_summary": HostileDict({"receipts": []}),
+                    }
+                )["receipt_summary"],
+                "unsupported",
+            ),
+            (
+                "nested-stage-list",
+                lambda: EVIDENCE._public_canary_summary(
+                    {"path": "canary.json", "stages": HostileList([])}
+                )["stages"],
+                "unsupported",
+            ),
+            (
+                "non-finite-elapsed-seconds",
+                lambda: EVIDENCE._public_canary_summary(
+                    {"path": "canary.json", "elapsed_seconds": float("inf")}
+                )["elapsed_seconds"],
+                "unsupported",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                try:
+                    result = action()
+                except Exception as error:
+                    self.fail(
+                        "hostile container method was invoked: "
+                        f"{type(error).__name__}"
+                    )
+                self.assertEqual(result, expected)
+
+        output = EVIDENCE._public_canary_summary(
+            {"path": "canary.json", "_internal": "redacted"}
+        )
+        self.assertNotIn("_internal", output)
 
     def test_internal_unsupported_der_kind_diagnostics_do_not_echo_kind(self):
         cases = (
@@ -2484,6 +3364,35 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(summary["canary_summaries"][0]["finished_at"], "2026-06-04T00:00:01+00:00")
             self.assertEqual(summary["canary_summaries"][0]["stage_names"], ["rail", "notary", "verify"])
             self.assertEqual(summary["canary_summaries"][0]["stage_dry_run"], [False, False, False])
+            self.assertEqual(
+                summary["canary_summaries"][0]["stage_command_modes"],
+                [
+                    {
+                        "name": "rail",
+                        "rail_uses_message": False,
+                        "rail_submitted_message_count": 1,
+                        "notary_uses_all": False,
+                        "notary_endpoint_count": 0,
+                        "notary_published_anchor_count": 0,
+                    },
+                    {
+                        "name": "notary",
+                        "rail_uses_message": False,
+                        "rail_submitted_message_count": 0,
+                        "notary_uses_all": False,
+                        "notary_endpoint_count": 1,
+                        "notary_published_anchor_count": 1,
+                    },
+                    {
+                        "name": "verify",
+                        "rail_uses_message": False,
+                        "rail_submitted_message_count": 0,
+                        "notary_uses_all": False,
+                        "notary_endpoint_count": 0,
+                        "notary_published_anchor_count": 0,
+                    },
+                ],
+            )
             self.assertEqual(
                 [stage["name"] for stage in summary["canary_summaries"][0]["stage_windows"]],
                 ["rail", "notary", "verify"],
@@ -5073,6 +5982,31 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_direct_receipt_verifier_runtime_startup_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-runtime-startup-secret"
+
+        def raising_popen(*_args, **_kwargs):
+            raise RuntimeError(hidden)
+
+        original_popen = EVIDENCE.subprocess.Popen
+        EVIDENCE.subprocess.Popen = raising_popen
+        try:
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                EVIDENCE._run_command_bounded(
+                    [str(Path(tempfile.gettempdir()) / hidden / "verifier")],
+                    128,
+                    1.0,
+                )
+        finally:
+            EVIDENCE.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("receipt verifier could not be started", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(tempfile.gettempdir(), message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
     def test_direct_receipt_verifier_output_read_failure_is_controlled_without_echo(self):
         hidden = "token=evidence-verifier-pipe-secret"
 
@@ -5097,6 +6031,210 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_direct_receipt_verifier_runtime_pipe_read_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-runtime-pipe-secret"
+
+        class FailingPipe:
+            def read(self, _size):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = FailingPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        original_popen = EVIDENCE.subprocess.Popen
+        EVIDENCE.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                EVIDENCE._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            EVIDENCE.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("receipt verifier output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_direct_receipt_verifier_runtime_pipe_close_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-runtime-close-secret"
+
+        class ClosingPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = ClosingPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        original_popen = EVIDENCE.subprocess.Popen
+        EVIDENCE.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                EVIDENCE._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            EVIDENCE.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("receipt verifier output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_direct_receipt_verifier_runtime_wait_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-runtime-wait-secret"
+        cleanup_hidden = "token=evidence-verifier-runtime-kill-secret"
+        cases = (
+            ("wait failure", "wait"),
+            ("invalid returncode", "returncode"),
+        )
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        for name, mode in cases:
+            with self.subTest(name=name):
+
+                class FakeProcess:
+                    stdout = EmptyPipe()
+                    stderr = EmptyPipe()
+
+                    def wait(self, timeout=None):
+                        if mode == "wait":
+                            raise RuntimeError(hidden)
+                        return hidden
+
+                    def kill(self):
+                        raise RuntimeError(cleanup_hidden)
+
+                def fake_popen(*_args, **_kwargs):
+                    return FakeProcess()
+
+                original_popen = EVIDENCE.subprocess.Popen
+                EVIDENCE.subprocess.Popen = fake_popen
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._run_command_bounded(
+                            [sys.executable, "-c", "print('ok')"],
+                            128,
+                            1.0,
+                        )
+                finally:
+                    EVIDENCE.subprocess.Popen = original_popen
+
+                message = str(caught.exception)
+                self.assertIn("receipt verifier did not finish cleanly", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_direct_receipt_verifier_runtime_thread_join_failure_is_controlled_without_echo(self):
+        hidden = "token=evidence-verifier-runtime-thread-secret"
+        cases = ("join", "is_alive")
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = EmptyPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        for mode in cases:
+            with self.subTest(mode=mode):
+
+                class FakeThread:
+                    def __init__(self, *, target, args, daemon):
+                        self._target = target
+                        self._args = args
+
+                    def start(self):
+                        self._target(*self._args)
+
+                    def join(self, timeout=None):
+                        if mode == "join":
+                            raise RuntimeError(hidden)
+
+                    def is_alive(self):
+                        if mode == "is_alive":
+                            raise RuntimeError(hidden)
+                        return False
+
+                original_popen = EVIDENCE.subprocess.Popen
+                original_thread = EVIDENCE.threading.Thread
+                EVIDENCE.subprocess.Popen = fake_popen
+                EVIDENCE.threading.Thread = FakeThread
+                try:
+                    with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                        EVIDENCE._run_command_bounded(
+                            [sys.executable, "-c", "print('ok')"],
+                            128,
+                            1.0,
+                        )
+                finally:
+                    EVIDENCE.subprocess.Popen = original_popen
+                    EVIDENCE.threading.Thread = original_thread
+
+                message = str(caught.exception)
+                self.assertIn("receipt verifier output could not be read", message)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
     def test_direct_receipt_verifier_pipe_reader_clamps_bytes_like_chunks_by_byte_length(self):
         class FakePipe:
             def __init__(self, chunks):
@@ -5120,6 +6258,41 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 )
                 self.assertEqual(captured, expected)
                 self.assertTrue(truncated)
+
+    def test_direct_receipt_verifier_pipe_reader_rejects_hostile_bytes_subclasses(self):
+        hidden = "token=evidence-hostile-pipe-secret"
+
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        class HostileBytes(bytes):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytes_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytes_len={hidden}")
+
+        class HostileBytearray(bytearray):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytearray_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytearray_len={hidden}")
+
+        cases = (
+            ("bytes-subclass", HostileBytes(b"abcdefgh")),
+            ("bytearray-subclass", HostileBytearray(b"abcdefgh")),
+        )
+        for name, chunk in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(OSError) as caught:
+                    EVIDENCE._read_limited_pipe(FakePipe([chunk]), 6)
+                self.assertIn("non-byte data", str(caught.exception))
+                self.assertNotIn(hidden, str(caught.exception))
 
     def test_direct_receipt_verifier_pipe_reader_rejects_non_byte_chunks_without_echo(self):
         hidden = "token=evidence-verifier-pipe-secret"
@@ -6004,9 +7177,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
             entries[0]["status_code"] = 200
             entries[0]["response_body_sha256"] = "f" * 64
-            entries[0]["anchor_path"] = (
-                f"/ops/iso/other-notary/anchors/{entries[0]['index_sha256']}.notary.json"
-            )
+            entries[0]["anchor_path"] = "/ops/iso/other-notary/latest.notary.json"
             entries[0]["store_dir"] = "/ops/iso/other-notary-store"
             entries[0]["index_path"] = "/ops/iso/other-notary/messages.index.json"
             entries[0]["record_count"] = 2
@@ -6113,10 +7284,36 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             original_receipt = next(Path(notary_receipts).glob("*.receipt.json"))
             extra_receipt = Path(notary_receipts) / "extra-unreferenced.receipt.json"
             extra_receipt.write_bytes(original_receipt.read_bytes())
+            extra_export_dir = root / "audit-export-extra"
+            extra_export_dir.mkdir()
+            extra_index = {
+                "version": 1,
+                "record_count": 1,
+                "records": [audit_test.sample_record("extra-msg-1")],
+            }
+            extra_index = audit_test.with_digest(
+                extra_index,
+                audit_test.ADAPTER.INDEX_DIGEST_FIELD,
+            )
+            _index, extra_anchor, _anchor_path = audit_test.write_export(
+                extra_export_dir,
+                index=extra_index,
+                store_dir=root / "audit-store-extra",
+                write_record_sources_flag=True,
+            )
+            extra_anchor_path = extra_export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
             extra_body = receipt_test.rewrite_receipt(
                 extra_receipt,
                 lambda body: body.update(
                     {
+                        "anchor_path": str(extra_anchor_path),
+                        "anchor_sha256": extra_anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": extra_anchor[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                        "record_count": extra_anchor["record_count"],
                         "response_body_sha256": EVIDENCE.sha256_hex(b"extra"),
                         "response_body_preview": "extra",
                     }
@@ -6299,7 +7496,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
-            self.assertIn("stdout_preview.receipts[3].source_path duplicates", stderr)
+            self.assertIn("stdout_preview.receipts[2].anchor_path duplicates", stderr)
             self.assertNotIn("latest.notary.json", stderr)
             self.assertNotIn("rail-drop-1.xml", stderr)
 
@@ -6357,6 +7554,92 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 with self.assertRaisesRegex(EVIDENCE.EvidenceError, expected):
                     EVIDENCE._verify_receipt_verifier_summary(
                         receipt_summary,
+                        "receipt verifier summary",
+                        args,
+                    )
+
+    def test_notary_receipt_source_material_fields_cannot_be_relabelled_within_summary(self):
+        args = argparse.Namespace(
+            allow_failed_receipts=False,
+            allow_insecure_http=False,
+            allow_legacy_colr007=False,
+            allow_default_profile=False,
+            allow_receipt_source_missing=False,
+        )
+        receipt_summary = json.loads(receipt_stdout())
+        notary_receipt = next(
+            receipt
+            for receipt in receipt_summary["receipts"]
+            if receipt["receipt_kind"] == "iso-audit-notary"
+        )
+        base_index_sha256 = notary_receipt["index_sha256"]
+        cases = (
+            (
+                "same-anchor-path",
+                lambda receipt: (
+                    receipt.__setitem__("anchor_sha256", "7" * 64),
+                    receipt.__setitem__("index_sha256", "8" * 64),
+                ),
+                r"receipts\[2\]\.anchor_path duplicates .*receipts\[0\]\.anchor_path",
+            ),
+            (
+                "same-anchor-digest",
+                lambda receipt: (
+                    receipt.__setitem__(
+                        "anchor_path",
+                        "/ops/iso/notary-alt/latest.notary.json",
+                    ),
+                    receipt.__setitem__(
+                        "index_path",
+                        "/ops/iso/notary-alt/messages.index.json",
+                    ),
+                    receipt.__setitem__("index_sha256", "8" * 64),
+                ),
+                r"receipts\[2\]\.anchor_sha256 duplicates .*receipts\[0\]\.anchor_sha256",
+            ),
+            (
+                "same-index-path",
+                lambda receipt: (
+                    receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary/anchors/{'8' * 64}.notary.json",
+                    ),
+                    receipt.__setitem__("anchor_sha256", "7" * 64),
+                    receipt.__setitem__("index_sha256", "8" * 64),
+                ),
+                r"receipts\[2\]\.index_path duplicates .*receipts\[0\]\.index_path",
+            ),
+            (
+                "same-index-digest",
+                lambda receipt: (
+                    receipt.__setitem__(
+                        "anchor_path",
+                        f"/ops/iso/notary-alt/anchors/{base_index_sha256}.notary.json",
+                    ),
+                    receipt.__setitem__(
+                        "index_path",
+                        "/ops/iso/notary-alt/messages.index.json",
+                    ),
+                    receipt.__setitem__("anchor_sha256", "7" * 64),
+                ),
+                r"receipts\[2\]\.index_sha256 duplicates .*receipts\[0\]\.index_sha256",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                body = json.loads(json.dumps(receipt_summary))
+                copied = dict(notary_receipt)
+                copied["path"] = f"/ops/iso/relabelled-within/{name}.receipt.json"
+                copied["receipt_sha256"] = "9" * 64
+                copied["response_body_sha256"] = "6" * 64
+                mutate(copied)
+                body["receipts"].append(copied)
+                body["verified_receipts"] = len(body["receipts"])
+                digest_receipt_summary(body)
+
+                with self.assertRaisesRegex(EVIDENCE.EvidenceError, expected):
+                    EVIDENCE._verify_receipt_verifier_summary(
+                        body,
                         "receipt verifier summary",
                         args,
                     )
@@ -7734,6 +9017,35 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
                     self.assertNotIn(hidden, stderr)
+
+    def test_canary_child_command_entries_normalize_hostile_str_subclasses(self):
+        hidden = "evidence-hostile-command-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"strip={hidden}")
+
+            def startswith(self, *_args, **_kwargs):
+                raise RuntimeError(f"startswith={hidden}")
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            body = valid_canary_summary()
+            body["stages"][0]["command"][3] = HostileText(" /ops/iso/inbox")
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("stages[0].command[3] must not have surrounding whitespace", stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_numeric_child_command_flags_reject_unicode_digits_without_echo(self):
         hidden = "\u0663.5"
@@ -10996,6 +12308,60 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 stderr,
             )
             self.assertNotIn(hidden_path, stderr)
+
+    def test_notary_receipt_anchor_paths_must_match_all_command_policy(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = []
+
+            digest_anchor = valid_canary_summary()
+            receipt_summary = json.loads(digest_anchor["stages"][2]["stdout_preview"])
+            notary_receipt = next(
+                receipt
+                for receipt in receipt_summary["receipts"]
+                if receipt["receipt_kind"] == "iso-audit-notary"
+            )
+            notary_receipt["anchor_path"] = (
+                f"/ops/iso/notary/anchors/{notary_receipt['index_sha256']}.notary.json"
+            )
+            digest_anchor["stages"][2]["stdout_preview"] = (
+                json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                + "\n"
+            )
+            digest_anchor.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(digest_anchor),
+                    "receipt_summary records digest-addressed notary anchor "
+                    "but notary command omitted --all",
+                    notary_receipt["index_sha256"],
+                )
+            )
+
+            latest_with_all = valid_canary_summary()
+            latest_with_all["stages"][1]["command"].append("--all")
+            latest_with_all.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(latest_with_all),
+                    "receipt_summary records latest notary anchor but notary command "
+                    "used --all",
+                )
+            )
+
+            for body, message, *hidden_values in cases:
+                with self.subTest(message=message):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    for hidden_value in hidden_values:
+                        self.assertNotIn(hidden_value, stderr)
 
     def test_failed_skipped_truncated_and_weak_verify_stages_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

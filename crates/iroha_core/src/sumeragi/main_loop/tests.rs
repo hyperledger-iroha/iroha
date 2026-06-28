@@ -202,6 +202,48 @@ fn vote_identity_key_for_vote(
     )
 }
 
+fn test_qc_vote_key(height: u64, view: u64, seed: u8) -> super::QcVoteKey {
+    (
+        Phase::Commit,
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])),
+        height,
+        view,
+        0,
+        Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]),
+        0,
+    )
+}
+
+#[test]
+fn bounded_qc_insert_decision_evicts_oldest_existing_key() {
+    let older = test_qc_vote_key(2, 0, 0x21);
+    let current = test_qc_vote_key(3, 0, 0x22);
+    let incoming = test_qc_vote_key(4, 0, 0x23);
+    let mut entries = BTreeMap::new();
+    entries.insert(older, ());
+    entries.insert(current, ());
+
+    assert_eq!(
+        super::bounded_qc_insert_decision(&entries, incoming, 2),
+        super::BoundedQcInsertDecision::Evict(older)
+    );
+}
+
+#[test]
+fn bounded_qc_insert_decision_drops_older_incoming_key() {
+    let current = test_qc_vote_key(3, 0, 0x31);
+    let newer = test_qc_vote_key(4, 0, 0x32);
+    let stale_incoming = test_qc_vote_key(2, 0, 0x33);
+    let mut entries = BTreeMap::new();
+    entries.insert(current, ());
+    entries.insert(newer, ());
+
+    assert_eq!(
+        super::bounded_qc_insert_decision(&entries, stale_incoming, 2),
+        super::BoundedQcInsertDecision::DropIncoming
+    );
+}
+
 fn record_test_worker_slot_ingress(
     kind: super::status::WorkerQueueKind,
     _height: u64,
@@ -3209,6 +3251,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
             missing_request_stale_height_margin: iroha_config::parameters::defaults::sumeragi::
                 RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+            pending_block_cap: iroha_config::parameters::defaults::sumeragi::
+                RECOVERY_PENDING_BLOCK_CAP,
             pending_block_sync_cap: iroha_config::parameters::defaults::sumeragi::
                 RECOVERY_PENDING_BLOCK_SYNC_CAP,
             pending_proposal_cap: iroha_config::parameters::defaults::sumeragi::
@@ -3269,7 +3313,11 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
             payload_chunks_per_tick:
                 iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
-                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
+            outbound_queue_max_sessions:
+                iroha_config::parameters::defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_SESSIONS,
+            outbound_queue_max_bytes:
+                iroha_config::parameters::defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_BYTES,
+            inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
             store_max_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
             store_soft_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
             store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_BYTES,
@@ -4629,6 +4677,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
@@ -4655,6 +4705,14 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         consensus_ingress_rate_per_sec:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
         consensus_ingress_burst:
@@ -17570,6 +17628,99 @@ async fn known_block_qc_enqueue_formal_gate_matrix() {
     assert!(
         matches!(full_wake_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "failed wake send should not enqueue an extra wake"
+    );
+
+    actor.known_block_qc_work.clear();
+    actor.wake_tx = None;
+    for offset in 0..=super::KNOWN_BLOCK_QC_WORK_CAP {
+        let mut capped_qc = qc.clone();
+        capped_qc.height = height.saturating_add(u64::try_from(offset).expect("offset fits u64"));
+        capped_qc.subject_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([u8::try_from(offset % 251).expect("offset byte"); Hash::LENGTH]),
+        );
+        capped_qc.chain_order_hash =
+            Hash::prehashed([u8::try_from((offset + 1) % 251).expect("offset byte"); Hash::LENGTH]);
+        actor.enqueue_known_block_qc_work(make_work(capped_qc, false, Some(true)));
+    }
+    assert_eq!(
+        actor.known_block_qc_work.len(),
+        super::KNOWN_BLOCK_QC_WORK_CAP,
+        "known-block QC work must stay bounded"
+    );
+    let mut oldest_qc = qc.clone();
+    oldest_qc.height = height;
+    oldest_qc.subject_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
+    oldest_qc.chain_order_hash = Hash::prehashed([1; Hash::LENGTH]);
+    assert!(
+        !actor
+            .known_block_qc_work
+            .contains_key(&Actor::qc_tally_key(&oldest_qc)),
+        "oldest retained work should be evicted once the cap is exceeded"
+    );
+    let mut stale_qc = qc.clone();
+    stale_qc.height = height.saturating_sub(1);
+    stale_qc.subject_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFA; Hash::LENGTH]));
+    let stale_key = Actor::qc_tally_key(&stale_qc);
+    actor.enqueue_known_block_qc_work(make_work(stale_qc, false, Some(true)));
+    assert_eq!(
+        actor.known_block_qc_work.len(),
+        super::KNOWN_BLOCK_QC_WORK_CAP,
+        "stale incoming known-block QC work must not grow the bounded queue"
+    );
+    assert!(
+        !actor.known_block_qc_work.contains_key(&stale_key),
+        "stale incoming work should be dropped instead of evicting newer work"
+    );
+
+    actor.deferred_qcs.clear();
+    actor.deferred_qc_roster_state.clear();
+    for offset in 0..=super::DEFERRED_ROSTER_QC_CAP {
+        let mut capped_qc = qc.clone();
+        capped_qc.height = height.saturating_add(u64::try_from(offset).expect("offset fits u64"));
+        capped_qc.subject_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([u8::try_from(offset % 251).expect("offset byte"); Hash::LENGTH]),
+        );
+        capped_qc.chain_order_hash =
+            Hash::prehashed([u8::try_from((offset + 1) % 251).expect("offset byte"); Hash::LENGTH]);
+        actor.defer_qc_for_roster(capped_qc, "test_deferred_roster_qc_cap");
+    }
+    assert_eq!(
+        actor.deferred_qcs.len(),
+        super::DEFERRED_ROSTER_QC_CAP,
+        "deferred roster QCs must stay bounded"
+    );
+    assert_eq!(
+        actor.deferred_qc_roster_state.len(),
+        actor.deferred_qcs.len(),
+        "deferred roster metadata must stay paired with deferred QCs"
+    );
+    let mut oldest_deferred_qc = qc.clone();
+    oldest_deferred_qc.height = height;
+    oldest_deferred_qc.subject_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
+    oldest_deferred_qc.chain_order_hash = Hash::prehashed([1; Hash::LENGTH]);
+    assert!(
+        !actor
+            .deferred_qcs
+            .contains_key(&Actor::qc_tally_key(&oldest_deferred_qc)),
+        "oldest deferred roster QC should be evicted once the cap is exceeded"
+    );
+    let mut stale_deferred_qc = qc.clone();
+    stale_deferred_qc.height = height.saturating_sub(1);
+    stale_deferred_qc.subject_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFB; Hash::LENGTH]));
+    let stale_deferred_key = Actor::qc_tally_key(&stale_deferred_qc);
+    actor.defer_qc_for_roster(stale_deferred_qc, "test_deferred_roster_qc_cap_stale");
+    assert_eq!(
+        actor.deferred_qcs.len(),
+        super::DEFERRED_ROSTER_QC_CAP,
+        "stale incoming deferred roster QC must not grow the bounded queue"
+    );
+    assert!(
+        !actor.deferred_qcs.contains_key(&stale_deferred_key),
+        "stale incoming deferred roster QC should be dropped instead of evicting newer QCs"
     );
 
     actor.wake_tx = None;
@@ -35144,8 +35295,13 @@ async fn flush_rbc_outbound_chunks_respects_per_tick_budget_for_deferred_queue()
         .get(&key)
         .expect("expected outbound chunks after first flush");
     assert_eq!(
-        entry.cursor, 2,
-        "first flush should respect per-tick chunk budget"
+        entry.cursor, 0,
+        "sent chunks should be physically drained from the retained queue"
+    );
+    assert_eq!(
+        entry.chunks.len(),
+        1,
+        "first flush should retain only the unsent chunk"
     );
 
     let _ = harness.actor.flush_rbc_outbound_chunks(Instant::now());
@@ -35158,6 +35314,63 @@ async fn flush_rbc_outbound_chunks_respects_per_tick_budget_for_deferred_queue()
             .outbound_chunks
             .contains_key(&key),
         "second flush should send the remaining chunk"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_outbound_queue_cap_evicts_old_rebroadcast_entries() {
+    let mut harness = test_actor_harness(4).await;
+    harness.actor.config.rbc.outbound_queue_max_sessions = 1;
+    harness.actor.config.rbc.outbound_queue_max_bytes = usize::MAX;
+    let roster = harness.actor.effective_commit_topology();
+    let old_block = sample_block(3, 0, None);
+    let new_block = sample_block(4, 0, Some(old_block.hash()));
+    let old_key = Actor::session_key(&old_block.hash(), 3, 0);
+    let new_key = Actor::session_key(&new_block.hash(), 4, 0);
+
+    for (key, byte) in [(old_key, 0x11), (new_key, 0x22)] {
+        let chunks = vec![crate::sumeragi::consensus::RbcChunk {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![byte; 32],
+        }];
+        assert!(
+            harness
+                .actor
+                .dispatch_rbc_outbound_chunks(
+                    key,
+                    0,
+                    Some(super::RbcOutboundSeed::full(chunks, &roster))
+                )
+                .stored,
+            "expected outbound chunk queue to be seeded"
+        );
+    }
+
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .outbound_chunks
+            .contains_key(&old_key),
+        "old rebroadcast entry should be evicted when the queue exceeds the session cap"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .outbound_chunks
+            .contains_key(&new_key),
+        "newly protected rebroadcast entry should be retained"
     );
 
     harness.shutdown.send();
@@ -35210,7 +35423,7 @@ async fn broadcast_rbc_session_plan_posts_single_chunk_immediately_before_init()
     };
     let plan = super::rbc::RbcSessionPlan {
         key,
-        session,
+        session: Some(session),
         init,
         chunks: vec![chunk],
         roster: roster.clone(),
@@ -35355,9 +35568,9 @@ async fn authoritative_exact_frontier_slot_keeps_rbc_plan_install_and_broadcast_
         })
         .cloned()
         .expect("leader signature");
-    let plan = super::rbc::RbcSessionPlan {
+    let mut plan = super::rbc::RbcSessionPlan {
         key: session_key,
-        session,
+        session: Some(session),
         init: crate::sumeragi::consensus::RbcInit {
             block_hash,
             height,
@@ -35390,8 +35603,12 @@ async fn authoritative_exact_frontier_slot_keeps_rbc_plan_install_and_broadcast_
     let _ = take_background_log(&background_log);
 
     actor
-        .install_rbc_session_plan(&plan)
+        .install_rbc_session_plan(&mut plan)
         .expect("install session plan");
+    assert!(
+        plan.session.is_none(),
+        "installing an RBC session plan should move the session out of the broadcast plan"
+    );
     assert!(
         actor
             .subsystems
@@ -35719,7 +35936,12 @@ async fn broadcast_rbc_session_plan_posts_all_initial_chunks_before_init() {
     ];
     let plan = super::rbc::RbcSessionPlan {
         key,
-        session: RbcSession::test_new(3, Some(Hash::prehashed([0x33; 32])), None, 0),
+        session: Some(RbcSession::test_new(
+            3,
+            Some(Hash::prehashed([0x33; 32])),
+            None,
+            0,
+        )),
         init: crate::sumeragi::consensus::RbcInit {
             block_hash: key.0,
             height: key.1,
@@ -72746,6 +72968,8 @@ async fn stale_pending_block_requeues_transactions() {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
@@ -72772,6 +72996,14 @@ async fn stale_pending_block_requeues_transactions() {
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         consensus_ingress_rate_per_sec:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
         consensus_ingress_burst:
@@ -73206,8 +73438,16 @@ fn heartbeat_block_for_state_is_stable_for_same_signer_and_round_inputs() {
 
     assert_eq!(first_block.hash(), second_block.hash());
     assert_eq!(
-        first_block.transactions_vec()[0].hash_as_entrypoint(),
-        second_block.transactions_vec()[0].hash_as_entrypoint()
+        first_block
+            .external_transactions()
+            .next()
+            .expect("heartbeat transaction")
+            .hash_as_entrypoint(),
+        second_block
+            .external_transactions()
+            .next()
+            .expect("heartbeat transaction")
+            .hash_as_entrypoint()
     );
 }
 
@@ -73223,8 +73463,16 @@ fn heartbeat_block_for_state_changes_block_hash_when_signer_changes() {
         heartbeat_block_for_state(&state, &chain_id, 2, 1, None, &second_signer_kp, 0);
 
     assert_ne!(
-        first_block.transactions_vec()[0].hash_as_entrypoint(),
-        second_block.transactions_vec()[0].hash_as_entrypoint()
+        first_block
+            .external_transactions()
+            .next()
+            .expect("heartbeat transaction")
+            .hash_as_entrypoint(),
+        second_block
+            .external_transactions()
+            .next()
+            .expect("heartbeat transaction")
+            .hash_as_entrypoint()
     );
     assert_ne!(first_block.hash(), second_block.hash());
 }
@@ -159261,7 +159509,7 @@ async fn handle_rbc_init_kura_payload_hydrates_without_missing_block_request() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work() {
+async fn duplicate_block_created_hydrates_inline_without_seed_queue_clone() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -159349,7 +159597,7 @@ async fn duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work() 
     );
 
     let (work_tx, work_rx) = mpsc::sync_channel(1);
-    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let (_result_tx, result_rx) = mpsc::sync_channel(1);
     actor.subsystems.da_rbc.rbc.seed_tx = Some(work_tx);
     actor.subsystems.da_rbc.rbc.seed_rx = Some(result_rx);
 
@@ -159382,7 +159630,7 @@ async fn duplicate_block_created_hydrates_inline_when_seed_queue_accepts_work() 
                 .unwrap_or(0),
             |session| session.total_chunks(),
         ),
-        "duplicate BlockCreated should hydrate payload inline once seed work is queued"
+        "duplicate BlockCreated should hydrate payload inline without queuing seed work"
     );
     assert!(
         session.is_some_and(|session| session.sent_ready)
@@ -159407,7 +159655,7 @@ session_delivered={:?} summary_delivered={:?} summary_ready_count={:?}",
             .rbc
             .seed_inflight
             .contains_key(&session_key),
-        "inline hydration should clear seed in-flight marker immediately"
+        "inline hydration should leave no seed in-flight marker"
     );
     let entries = take_background_log(&background_log);
     assert!(
@@ -159417,27 +159665,9 @@ session_delivered={:?} summary_delivered={:?} summary_ready_count={:?}",
         "inline duplicate hydration should queue DELIVER traffic before seed completion"
     );
 
-    let work = work_rx.try_recv().expect("seed work queued");
-    let seeded_session = Actor::build_rbc_session_from_payload(
-        &work.payload_bytes,
-        work.payload_hash,
-        work.chunking.chunk_size_bytes,
-        work.epoch,
-    )
-    .expect("seed session from work");
-    result_tx
-        .send(super::rbc::RbcSeedResult {
-            key: work.key,
-            payload_hash: work.payload_hash,
-            outcome: Ok(seeded_session),
-            elapsed: Duration::from_millis(1),
-        })
-        .expect("send seed result");
-
-    let progressed = actor.poll_rbc_seed_results_inner();
     assert!(
-        !progressed,
-        "stale queued seed result should be ignored once inline hydration already completed"
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "duplicate BlockCreated inline hydration must not retain a cloned payload in seed work"
     );
     assert!(
         !actor
@@ -159446,7 +159676,7 @@ session_delivered={:?} summary_delivered={:?} summary_ready_count={:?}",
             .rbc
             .seed_inflight
             .contains_key(&session_key),
-        "seed in-flight marker should clear once seed result is applied"
+        "seed in-flight marker should remain clear when no seed work is queued"
     );
     let session = actor.subsystems.da_rbc.rbc.sessions.get(&session_key);
     let summary = actor.subsystems.da_rbc.rbc.status_handle.get(&session_key);
@@ -159465,12 +159695,12 @@ session_delivered={:?} summary_delivered={:?} summary_ready_count={:?}",
                 .unwrap_or(0),
             |session| session.total_chunks(),
         ),
-        "inline-hydrated session should remain fully hydrated after stale seed result is drained"
+        "inline-hydrated session should remain fully hydrated without a seed worker result"
     );
     assert!(
         session.is_some_and(|session| session.delivered)
             || summary.as_ref().is_some_and(|summary| summary.delivered),
-        "stale seed completion should not roll back immediate DELIVER progress"
+        "skipping duplicate seed work should not roll back immediate DELIVER progress"
     );
 
     harness.shutdown.send();
@@ -159548,6 +159778,15 @@ async fn block_created_accepts_payload_after_proposal_mismatch() {
     assert!(
         actor.pending.pending_blocks.contains_key(&block.hash()),
         "BlockCreated should be accepted even after proposal mismatch"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block.hash())
+            .expect("pending block")
+            .payload_bytes_cached_for_tests(),
+        "BlockCreated pending state should not retain a duplicate encoded payload cache"
     );
     assert!(
         actor
@@ -186806,6 +187045,8 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         dns_refresh_interval: None,
         dns_refresh_ttl: None,
         p2p_proxy: None,
@@ -186832,6 +187073,14 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         consensus_ingress_rate_per_sec:
             iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
         consensus_ingress_burst:
@@ -187238,10 +187487,6 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
     assert!(
         outcome.pending.aborted,
         "pending block should be marked aborted"
-    );
-    assert!(
-        outcome.pending.tx_batch.is_none(),
-        "tx batch should be cleared after requeue"
     );
     assert!(
         !outcome.drop_pending,
@@ -197401,6 +197646,53 @@ fn insert_pending_block(actor: &mut Actor, height: u64, view: u64) -> SessionKey
     key
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn pending_block_cap_evicts_lowest_ranked_body() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.recovery.pending_block_cap = 2;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let stale_key = insert_pending_block(actor, 4, 0);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&stale_key.0)
+        .expect("stale pending block exists")
+        .retire_same_height();
+    let commit_key = insert_pending_block(actor, 2, 0);
+    let commit_epoch = actor.epoch_for_height(commit_key.1);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&commit_key.0)
+        .expect("commit-evidence pending block exists")
+        .note_commit_qc_observed(commit_epoch);
+    let protected_key = insert_pending_block(actor, 3, 0);
+
+    assert!(
+        actor.enforce_pending_block_cap(protected_key.0, "test_pending_block_cap"),
+        "protected pending block should remain after cap enforcement"
+    );
+
+    assert_eq!(actor.pending.pending_blocks.len(), 2);
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&stale_key.0),
+        "retired payload-only body should be evicted first"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&commit_key.0),
+        "commit-QC-observed body should be retained"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&protected_key.0),
+        "incoming protected body should be retained"
+    );
+    harness.shutdown.send();
+}
+
 fn insert_active_pending_block(actor: &mut Actor, view: u64) -> SessionKey {
     let height = actor
         .state
@@ -198072,6 +198364,25 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
         .set_external_entrypoints(base.external_entrypoints_cloned().collect());
     legacy_cache_only_mismatch.set_execution_context(base.execution_context().cloned());
 
+    let cacheless_payload = BlockPayload {
+        header: base.header(),
+        transactions: Vec::new(),
+        external_entrypoints: base.external_entrypoints_cloned().collect(),
+        execution_context: base.execution_context().cloned(),
+        da_commitments: base.da_commitments().cloned(),
+        da_proof_policies: base.da_proof_policies().cloned(),
+        da_pin_intents: base.da_pin_intents().cloned(),
+        previous_roster_evidence: base.previous_roster_evidence().cloned(),
+        npos_consensus_effects: base.npos_consensus_effects().cloned(),
+    };
+    let cacheless_block = SignedBlock::presigned_with_payload(
+        BlockSignature::new(
+            0,
+            checked_signature_of_hash(ALICE_KEYPAIR.private_key(), base.header().hash()),
+        ),
+        cacheless_payload,
+    );
+
     for (label, stable_block) in [
         ("result root changed", result_root_changed),
         ("extra signature", extra_signature_block),
@@ -198081,6 +198392,7 @@ fn block_payload_bytes_matches_canonicalization_formal_gate() {
             "legacy signed transaction cache mismatch",
             legacy_cache_only_mismatch,
         ),
+        ("empty legacy signed transaction cache", cacheless_block),
     ] {
         assert_eq!(
             super::proposals::block_payload_bytes(&stable_block),
@@ -203931,6 +204243,28 @@ fn rbc_session_delivered_payload_matches_requires_complete_chunks() {
     );
 }
 
+#[test]
+fn rbc_session_complete_payload_hash_matches_rs16_payload_chunks_without_joining() {
+    let payload = b"rs16 complete payload hash from data chunks".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let layout = RbcPayloadLayout::new(RbcEncoding::Rs16, 6, payload.len() as u64, 3, 2)
+        .expect("valid RS16 layout");
+    let total_chunks = u32::try_from(layout.total_chunks().expect("layout has chunk count"))
+        .expect("chunk count fits u32");
+    let mut session =
+        RbcSession::new_with_layout(layout, total_chunks, Some(payload_hash), None, None, 0)
+            .expect("session");
+
+    let outcome = super::rbc::apply_hydrated_payload(&mut session, &payload, payload_hash, 6);
+    assert!(outcome.all_chunks_present);
+    let chunks = session
+        .payload_chunk_slices()
+        .expect("complete RS16 session exposes payload chunks");
+    assert_eq!(Hash::new_from_chunks(&chunks), payload_hash);
+    assert_eq!(session.payload_hash_from_chunks(), Some(payload_hash));
+    assert!(session.complete_payload_matches(&payload_hash));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn pending_block_validation_priority_requires_complete_rbc_delivery_evidence() {
     let mut harness = test_actor_harness(4).await;
@@ -205468,11 +205802,8 @@ fn prev_block_mismatch_requeues_payload() {
     );
     let tx = sample_transaction();
     let block = block_with_txs(9, 3, None, vec![tx.clone()]);
-    let outcome = super::handle_prev_block_mismatch(
-        &queue,
-        &state,
-        block.external_entrypoints_cloned().collect(),
-    );
+    let outcome =
+        super::handle_prev_block_mismatch(&queue, &state, block.external_entrypoints_cloned());
 
     assert_eq!(outcome.requeued, 1, "payload should be requeued");
     assert_eq!(outcome.failures, 0, "requeue should succeed under capacity");

@@ -1561,9 +1561,11 @@ impl Actor {
         let should_requeue =
             pending.validation_status != ValidationStatus::Invalid && !pending.aborted;
         if should_requeue {
-            let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
-            let (_requeued, failures, _duplicates, _) =
-                requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
+            let (_requeued, failures, _duplicates, _) = requeue_block_transactions(
+                self.queue.as_ref(),
+                self.state.as_ref(),
+                pending.block.external_entrypoints_cloned(),
+            );
             if failures > 0 {
                 warn!(
                     height = slot.height,
@@ -1697,7 +1699,6 @@ impl Actor {
         let height = pending.height;
         let view = pending.view;
         let parent = pending.block.header().prev_block_hash();
-        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
         let reason_label = validation_reject_reason_label(err);
         let proposal_epoch = self.epoch_for_height(height);
         pending.validation_status = ValidationStatus::Invalid;
@@ -1721,10 +1722,12 @@ impl Actor {
                 )
             })
             .map(Box::new);
+        let (_requeued, failures, _duplicates, _) = requeue_block_transactions(
+            self.queue.as_ref(),
+            self.state.as_ref(),
+            pending.block.external_entrypoints_cloned(),
+        );
         let _ = pending;
-
-        let (_requeued, failures, _duplicates, _) =
-            requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
         if failures > 0 {
             warn!(
                 height,

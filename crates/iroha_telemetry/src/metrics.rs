@@ -4387,6 +4387,12 @@ pub struct SumeragiConsensusStatus {
     pub tx_queue_depth: u64,
     /// Configured queue capacity on this peer.
     pub tx_queue_capacity: u64,
+    /// Estimated retained queue bytes on this peer.
+    #[norito(default)]
+    pub tx_queue_retained_bytes: u64,
+    /// Configured retained queue byte budget on this peer.
+    #[norito(default)]
+    pub tx_queue_max_retained_bytes: u64,
     /// Whether the local transaction queue is saturated.
     pub tx_queue_saturated: bool,
     /// Epoch length in blocks (NPoS mode; zero when not applicable).
@@ -4535,6 +4541,8 @@ struct SumeragiConsensusStatusPayload {
     commit_qc_epoch: u64,
     commit_qc_signatures_total: u64,
     commit_qc_validator_set_len: u64,
+    tx_queue_retained_bytes: u64,
+    tx_queue_max_retained_bytes: u64,
 }
 
 fn decode_field<'a, T: DecodeFromSlice<'a>>(
@@ -4910,6 +4918,16 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
             commit_qc_signatures_total,
             commit_qc_validator_set_len,
         ) = decode_commit_fields(bytes, &mut used)?;
+        let tx_queue_retained_bytes = if used < bytes.len() {
+            decode_field::<u64>(bytes, &mut used)?
+        } else {
+            0
+        };
+        let tx_queue_max_retained_bytes = if used < bytes.len() {
+            decode_field::<u64>(bytes, &mut used)?
+        } else {
+            0
+        };
 
         Ok((
             Self {
@@ -4959,6 +4977,8 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
                 commit_qc_epoch,
                 commit_qc_signatures_total,
                 commit_qc_validator_set_len,
+                tx_queue_retained_bytes,
+                tx_queue_max_retained_bytes,
             },
             used,
         ))
@@ -4981,6 +5001,8 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
             block_created_proposal_mismatch_total: status.block_created_proposal_mismatch_total,
             tx_queue_depth: status.tx_queue_depth,
             tx_queue_capacity: status.tx_queue_capacity,
+            tx_queue_retained_bytes: status.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
             tx_queue_saturated: status.tx_queue_saturated,
             epoch_length_blocks: status.epoch_length_blocks,
             epoch_commit_deadline_offset: status.epoch_commit_deadline_offset,
@@ -5034,6 +5056,8 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
             block_created_proposal_mismatch_total: payload.block_created_proposal_mismatch_total,
             tx_queue_depth: payload.tx_queue_depth,
             tx_queue_capacity: payload.tx_queue_capacity,
+            tx_queue_retained_bytes: payload.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: payload.tx_queue_max_retained_bytes,
             tx_queue_saturated: payload.tx_queue_saturated,
             epoch_length_blocks: payload.epoch_length_blocks,
             epoch_commit_deadline_offset: payload.epoch_commit_deadline_offset,
@@ -6126,6 +6150,8 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
             .get(),
         tx_queue_depth: metrics.sumeragi_tx_queue_depth.get(),
         tx_queue_capacity: metrics.sumeragi_tx_queue_capacity.get(),
+        tx_queue_retained_bytes: metrics.sumeragi_tx_queue_retained_bytes.get(),
+        tx_queue_max_retained_bytes: metrics.sumeragi_tx_queue_max_retained_bytes.get(),
         tx_queue_saturated: metrics.sumeragi_tx_queue_saturated.get() != 0,
         epoch_length_blocks: metrics.sumeragi_epoch_length_blocks.get(),
         epoch_commit_deadline_offset: metrics.sumeragi_epoch_commit_deadline_offset.get(),
@@ -6692,6 +6718,10 @@ pub struct Metrics {
     pub sumeragi_tx_queue_depth: GenericGauge<AtomicU64>,
     /// Transaction queue capacity observed by consensus.
     pub sumeragi_tx_queue_capacity: GenericGauge<AtomicU64>,
+    /// Estimated retained transaction queue bytes observed by consensus.
+    pub sumeragi_tx_queue_retained_bytes: GenericGauge<AtomicU64>,
+    /// Retained transaction queue byte budget observed by consensus.
+    pub sumeragi_tx_queue_max_retained_bytes: GenericGauge<AtomicU64>,
     /// Queue capacity saturation flag observed by consensus (0 = healthy, 1 = saturated).
     pub sumeragi_tx_queue_saturated: GenericGauge<AtomicU64>,
     /// Total pending blocks tracked by consensus.
@@ -9119,6 +9149,16 @@ impl Default for Metrics {
         let sumeragi_tx_queue_capacity = GenericGauge::new(
             "sumeragi_tx_queue_capacity",
             "Transaction queue capacity observed by consensus",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_retained_bytes = GenericGauge::new(
+            "sumeragi_tx_queue_retained_bytes",
+            "Estimated retained transaction queue bytes observed by consensus",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_max_retained_bytes = GenericGauge::new(
+            "sumeragi_tx_queue_max_retained_bytes",
+            "Retained transaction queue byte budget observed by consensus",
         )
         .expect("Infallible");
         let sumeragi_tx_queue_saturated = GenericGauge::new(
@@ -14478,6 +14518,8 @@ impl Default for Metrics {
             settlement_haircut_total,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
+            sumeragi_tx_queue_retained_bytes,
+            sumeragi_tx_queue_max_retained_bytes,
             sumeragi_tx_queue_saturated,
             sumeragi_pending_blocks_total,
             sumeragi_pending_blocks_blocking,
@@ -15055,6 +15097,8 @@ impl Default for Metrics {
             social_open_escrows,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
+            sumeragi_tx_queue_retained_bytes,
+            sumeragi_tx_queue_max_retained_bytes,
             sumeragi_tx_queue_saturated,
             sumeragi_pending_blocks_total,
             sumeragi_pending_blocks_blocking,
@@ -19783,6 +19827,8 @@ mod test {
                 block_created_proposal_mismatch_total: 0,
                 tx_queue_depth: 5,
                 tx_queue_capacity: 20,
+                tx_queue_retained_bytes: 1_024,
+                tx_queue_max_retained_bytes: 65_536,
                 tx_queue_saturated: false,
                 epoch_length_blocks: 0,
                 epoch_commit_deadline_offset: 0,
@@ -19969,6 +20015,8 @@ mod test {
                 "block_created_proposal_mismatch_total": 0,
                 "tx_queue_depth": 5,
                 "tx_queue_capacity": 20,
+                "tx_queue_retained_bytes": 1_024,
+                "tx_queue_max_retained_bytes": 65_536,
                 "tx_queue_saturated": false,
                 "epoch_length_blocks": 0,
                 "epoch_commit_deadline_offset": 0,
@@ -20139,6 +20187,8 @@ mod test {
                 "block_created_proposal_mismatch_total": 0,
                 "tx_queue_depth": 5,
                 "tx_queue_capacity": 20,
+                "tx_queue_retained_bytes": 1024,
+                "tx_queue_max_retained_bytes": 65536,
                 "tx_queue_saturated": false,
                 "epoch_length_blocks": 0,
                 "epoch_commit_deadline_offset": 0,

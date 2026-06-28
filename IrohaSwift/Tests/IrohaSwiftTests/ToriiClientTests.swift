@@ -6615,6 +6615,80 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsEncodesScopeSelectorFilter() async throws {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        StubURLProtocol.handler = { request in
+            self.assertDecodedPath(request, contains: "/v1/accounts/\(accountId)/assets")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let scopeFilter = components?.queryItems?.first(where: { $0.name == "scope" })?.value
+            XCTAssertEqual(scopeFilter, "global")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            return (response, "[]".data(using: .utf8)!)
+        }
+
+        let balances = try await makeClient().getAssets(accountId: accountId, scope: "global")
+        XCTAssertEqual(balances.count, 0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsRejectsPaddedScopeBeforeNetwork() async {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        StubURLProtocol.handler = { request in
+            XCTFail("getAssets should validate scope before dispatch")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().getAssets(accountId: accountId, scope: " global")
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload for padded scope, got \(error)")
+            }
+            XCTAssertTrue(
+                reason.contains("scope must not contain surrounding whitespace"),
+                "Expected scope whitespace diagnostic, got \(reason)"
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountAssetQueryHelpersRejectSurroundingWhitespace() async {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let assetId = roseAssetDefinitionId
+        let cases: [(String, () async throws -> Void)] = [
+            (
+                "account assets asset selector",
+                { _ = try await self.makeClient().getAssets(accountId: accountId, asset: " \(assetId)") }
+            ),
+            (
+                "account transactions asset selector",
+                { _ = try await self.makeClient().getTransactions(accountId: accountId, assetDefinitionId: "\(assetId) ") }
+            ),
+            (
+                "explorer transfers asset selector",
+                { _ = try await self.makeClient().getExplorerTransfers(assetDefinitionId: " \(assetId)") }
+            ),
+            (
+                "explorer transfer summaries asset selector",
+                { _ = try await self.makeClient().getExplorerTransferSummaries(assetDefinitionId: "\(assetId) ") }
+            ),
+        ]
+
+        for (label, action) in cases {
+            await XCTAssertThrowsErrorAsync(try await action()) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload for \(label), got \(error)")
+                }
+                XCTAssertTrue(
+                    reason.contains("surrounding whitespace"),
+                    "Expected whitespace diagnostic for \(label), got \(reason)"
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
             self.assertDecodedPath(request, contains: "/v1/accounts/sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB/transactions")
@@ -6811,6 +6885,89 @@ final class ToriiClientTests: XCTestCase {
             return XCTFail("Expected instruction box json to contain a kind string.")
         }
         XCTAssertEqual(kind, "Transfer")
+    }
+
+    func testCanonicalQuerySelectorsRejectSurroundingWhitespace() {
+        let accountId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+        let cases: [(String, () throws -> Void)] = [
+            (
+                "explorer instructions account",
+                { _ = try ToriiExplorerInstructionsParams(account: " \(accountId)").queryItems() }
+            ),
+            (
+                "explorer instructions authority",
+                { _ = try ToriiExplorerInstructionsParams(authority: "\(accountId) ").queryItems() }
+            ),
+            (
+                "explorer instructions asset",
+                { _ = try ToriiExplorerInstructionsParams(assetDefinitionId: " \(assetId)").queryItems() }
+            ),
+            (
+                "explorer transactions authority",
+                { _ = try ToriiExplorerTransactionsParams(authority: "\(accountId) ").queryItems() }
+            ),
+            (
+                "explorer transactions asset",
+                { _ = try ToriiExplorerTransactionsParams(assetDefinitionId: "\(assetId) ").queryItems() }
+            ),
+            (
+                "explorer rwas owner",
+                { _ = try ToriiExplorerRwasParams(ownedBy: " \(accountId)").queryItems() }
+            ),
+            (
+                "contract activity authority",
+                { _ = try ToriiContractActivityParams(authority: "\(accountId) ").queryItems() }
+            ),
+            (
+                "contract activity address",
+                { _ = try ToriiContractActivityParams(contractAddress: " cntr:deadbeef").queryItems() }
+            ),
+            (
+                "contract activity alias",
+                { _ = try ToriiContractActivityParams(contractAlias: "benefits::paynet ").queryItems() }
+            ),
+            (
+                "contract event authority",
+                { _ = try ToriiContractEventParams(authority: " \(accountId)").queryItems() }
+            ),
+            (
+                "contract event address",
+                { _ = try ToriiContractEventParams(contractAddress: "cntr:deadbeef ").queryItems() }
+            ),
+            (
+                "contract event alias",
+                { _ = try ToriiContractEventParams(contractAlias: " benefits::paynet").queryItems() }
+            ),
+            (
+                "contract event participant",
+                { _ = try ToriiContractEventParams(participant: "merchant@paynet ").queryItems() }
+            ),
+            (
+                "contract event asset",
+                { _ = try ToriiContractEventParams(assetId: " \(assetId)").queryItems() }
+            ),
+            (
+                "subscription owner",
+                { _ = try ToriiSubscriptionListParams(ownedBy: "\(accountId) ").queryItems() }
+            ),
+            (
+                "uaid portfolio asset",
+                { _ = try ToriiUaidPortfolioQuery(assetId: " \(assetId)").queryItems() }
+            ),
+        ]
+
+        for (label, action) in cases {
+            XCTAssertThrowsError(try action(), label) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload for \(label), got \(error)")
+                }
+                XCTAssertTrue(
+                    reason.contains("surrounding whitespace"),
+                    "Expected whitespace diagnostic for \(label), got \(reason)"
+                )
+            }
+        }
     }
 
     func testExplorerTransferDetailsParsesAsset() throws {
@@ -9009,7 +9166,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let response = try await makeClient().getUaidPortfolio(uaid: "  UAID:\(uaidHex.uppercased())  ")
+        let response = try await makeClient().getUaidPortfolio(uaid: "UAID:\(uaidHex.uppercased())")
         XCTAssertEqual(response.uaid, "uaid:\(uaidHex)")
         XCTAssertEqual(response.totals.accounts, 2)
         XCTAssertEqual(response.dataspaces.first?.accounts.first?.assets.first?.assetId,
@@ -9017,6 +9174,28 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.dataspaces.first?.accounts.first?.assets.first?.assetDefinitionId,
                        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         XCTAssertEqual(response.dataspaces.first?.accounts.first?.assets.first?.quantity, "500")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork() async {
+        StubURLProtocol.handler = { _ in
+            XCTFail("getUaidPortfolio should validate UAID before dispatch")
+            throw URLError(.badURL)
+        }
+        let uaidHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+        for literal in [
+            " uaid:\(uaidHex)",
+            "uaid:\(uaidHex) ",
+            "uaid: \(uaidHex)"
+        ] {
+            await XCTAssertThrowsErrorAsync(try await makeClient().getUaidPortfolio(uaid: literal)) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("uaid must not contain surrounding whitespace"))
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9083,7 +9262,7 @@ final class ToriiClientTests: XCTestCase {
             ToriiAccountOnboardingRequest(
                 alias: "alice@universal",
                 accountId: "sora-account",
-                uaid: "  UAID:\(uaidHex.uppercased())  ",
+                uaid: "UAID:\(uaidHex.uppercased())",
                 identityCommitmentHex: "  \(commitmentHex.uppercased())  "
             )
         )
@@ -9456,22 +9635,19 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessParsesRecursiveVerifierMetadata() async throws {
+    func testGetOfflineReadinessParsesKagemushaAbi7Metadata() async throws {
         let payload = """
         {
-          "offline_note": true,
-          "offline_one_use_keys": true,
-          "offline_recursive_note_proof": true,
-          "offline_recursive_note_proof_backend": "halo2/ipa",
-          "offline_recursive_note_proof_circuit_id": "offline-note-recursive",
-          "offline_recursive_note_proof_public_inputs_schema_hash": "\(String(repeating: "a", count: 64))",
-          "offline_recursive_note_proof_public_instance_columns": 16,
-          "offline_recursive_note_proof_verifier_key_id": {
-            "backend": "halo2/ipa",
-            "name": "offline-note-recursive"
-          },
-          "offline_fountain_qr": true,
-          "offline_sync_optional": true,
+          "offline_kagemusha_abi7": true,
+          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+          "offline_kagemusha_abi7_bridge_abi_version": "7",
+          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_abi7_artifacts": false,
+          "offline_kagemusha_recursive_compact_available": true,
+          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
+          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
+          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_recursive_compact_artifacts_available": false,
           "offline_telemetry": true
         }
         """.data(using: .utf8)!
@@ -9487,12 +9663,132 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let readiness = try await makeClient().getOfflineReadiness()
-        XCTAssertTrue(readiness.offlineNote)
-        XCTAssertTrue(readiness.offlineRecursiveNoteProof)
-        XCTAssertTrue(readiness.offlineFountainQr)
-        XCTAssertTrue(readiness.hasCanonicalRecursiveVerifierMetadata)
-        XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.backend, "halo2/ipa")
-        XCTAssertEqual(readiness.offlineRecursiveNoteProofVerifierKeyId?.name, OfflineNoteConstants.recursiveVerifierName)
+        XCTAssertTrue(readiness.offlineKagemushaAbi7)
+        XCTAssertEqual(readiness.offlineKagemushaAbi7Mode, "recursive_compact_v1")
+        XCTAssertEqual(readiness.offlineKagemushaAbi7BridgeAbiVersion, 7)
+        XCTAssertEqual(readiness.offlineKagemushaAbi7CircuitId, "kagemusha-recursive-compact-v1")
+        XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)
+        XCTAssertTrue(readiness.offlineKagemushaRecursiveCompactAvailable)
+        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion, 7)
+        XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
+        XCTAssertTrue(readiness.offlineTelemetry)
+        XCTAssertFalse(readiness.offlineNote)
+        XCTAssertFalse(readiness.hasCanonicalRecursiveVerifierMetadata)
+        XCTAssertTrue(readiness.hasKagemushaRecursiveCompactMetadata)
+
+        let compactOnlyPayload = """
+        {
+          "offline_kagemusha_recursive_compact_available": true,
+          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
+          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
+          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_recursive_compact_artifacts_available": false,
+          "offline_telemetry": true
+        }
+        """.data(using: .utf8)!
+        let abi7OnlyPayload = """
+        {
+          "offline_kagemusha_abi7": true,
+          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+          "offline_kagemusha_abi7_bridge_abi_version": "7",
+          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_abi7_artifacts": false,
+          "offline_telemetry": true
+        }
+        """.data(using: .utf8)!
+
+        for aliasPayload in [compactOnlyPayload, abi7OnlyPayload] {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, aliasPayload)
+            }
+
+            let aliasReadiness = try await makeClient().getOfflineReadiness()
+            XCTAssertTrue(aliasReadiness.offlineKagemushaAbi7)
+            XCTAssertEqual(aliasReadiness.offlineKagemushaAbi7Mode, "recursive_compact_v1")
+            XCTAssertEqual(aliasReadiness.offlineKagemushaAbi7BridgeAbiVersion, 7)
+            XCTAssertEqual(aliasReadiness.offlineKagemushaAbi7CircuitId, "kagemusha-recursive-compact-v1")
+            XCTAssertFalse(aliasReadiness.offlineKagemushaAbi7Artifacts)
+            XCTAssertTrue(aliasReadiness.offlineKagemushaRecursiveCompactAvailable)
+            XCTAssertEqual(aliasReadiness.offlineKagemushaRecursiveCompactMode, "recursive_compact_v1")
+            XCTAssertEqual(aliasReadiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion, 7)
+            XCTAssertEqual(aliasReadiness.offlineKagemushaRecursiveCompactCircuitId, "kagemusha-recursive-compact-v1")
+            XCTAssertFalse(aliasReadiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
+            XCTAssertTrue(aliasReadiness.hasKagemushaRecursiveCompactMetadata)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
+        func payload(abi7Enabled: String = "true",
+                     abi7Mode: String = "\"recursive_compact_v1\"",
+                     abi7: String = "7",
+                     abi7Circuit: String = "\"kagemusha-recursive-compact-v1\"",
+                     abi7Artifacts: String = "false",
+                     compactAvailable: String = "true",
+                     compactMode: String = "\"recursive_compact_v1\"",
+                     compact: String = "7",
+                     compactCircuit: String = "\"kagemusha-recursive-compact-v1\"",
+                     compactArtifacts: String = "false") -> Data {
+            """
+            {
+              "offline_kagemusha_abi7": \(abi7Enabled),
+              "offline_kagemusha_abi7_mode": \(abi7Mode),
+              "offline_kagemusha_abi7_bridge_abi_version": \(abi7),
+              "offline_kagemusha_abi7_circuit_id": \(abi7Circuit),
+              "offline_kagemusha_abi7_artifacts": \(abi7Artifacts),
+              "offline_kagemusha_recursive_compact_available": \(compactAvailable),
+              "offline_kagemusha_recursive_compact_mode": \(compactMode),
+              "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": \(compact),
+              "offline_kagemusha_recursive_compact_circuit_id": \(compactCircuit),
+              "offline_kagemusha_recursive_compact_artifacts_available": \(compactArtifacts),
+              "offline_telemetry": true
+            }
+            """.data(using: .utf8)!
+        }
+
+        let cases: [(Data, String)] = [
+            (payload(abi7Enabled: "\"true\""), "Expected to decode Bool"),
+            (payload(abi7Mode: "\" recursive_compact_v1\""), "offline_kagemusha_abi7_mode must not contain surrounding whitespace"),
+            (payload(abi7: "0"), "offline_kagemusha_abi7_bridge_abi_version must be a positive integer"),
+            (payload(abi7: "\"007\""), "offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string"),
+            (payload(abi7: "2147483648"), "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range"),
+            (payload(compact: "0"), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
+            (payload(compact: "\" 7\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
+            (payload(compact: "\"2147483648\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
+            (payload(compactAvailable: "1"), "Expected to decode Bool"),
+            (payload(compactCircuit: "\"kagemusha-recursive-compact-v1 \""), "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace"),
+            (payload(compactAvailable: "false"), "offline_kagemusha_abi7 must match offline_kagemusha_recursive_compact_available"),
+            (payload(compactMode: "\"recursive_compact_v2\""), "offline_kagemusha_abi7_mode must match offline_kagemusha_recursive_compact_mode"),
+            (payload(compact: "8"), "offline_kagemusha_abi7_bridge_abi_version must match offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
+            (payload(compactCircuit: "\"kagemusha-recursive-compact-v2\""), "offline_kagemusha_abi7_circuit_id must match offline_kagemusha_recursive_compact_circuit_id"),
+            (payload(compactArtifacts: "true"), "offline_kagemusha_abi7_artifacts must match offline_kagemusha_recursive_compact_artifacts_available")
+        ]
+
+        for (body, expectedMessage) in cases {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, body)
+            }
+
+            do {
+                _ = try await makeClient().getOfflineReadiness()
+                XCTFail("expected malformed ABI readiness response to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(expectedMessage),
+                    "expected \(expectedMessage), got \(error)"
+                )
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

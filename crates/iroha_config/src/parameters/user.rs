@@ -9225,6 +9225,12 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN"
     )]
     pub missing_request_stale_height_margin: u64,
+    /// Maximum full pending block bodies retained in memory.
+    #[config(
+        env = "SUMERAGI_RECOVERY_PENDING_BLOCK_CAP",
+        default = "defaults::sumeragi::RECOVERY_PENDING_BLOCK_CAP"
+    )]
+    pub pending_block_cap: usize,
     /// Maximum deferred block-sync updates retained in memory.
     #[config(
         env = "SUMERAGI_RECOVERY_PENDING_BLOCK_SYNC_CAP",
@@ -9530,6 +9536,18 @@ pub struct SumeragiRbc {
         default = "defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK"
     )]
     pub payload_chunks_per_tick: usize,
+    /// Maximum RBC outbound rebroadcast sessions retained in memory.
+    #[config(
+        env = "SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_SESSIONS",
+        default = "defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_SESSIONS"
+    )]
+    pub outbound_queue_max_sessions: usize,
+    /// Maximum RBC outbound rebroadcast bytes retained in memory.
+    #[config(
+        env = "SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_BYTES",
+        default = "defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_BYTES"
+    )]
+    pub outbound_queue_max_bytes: usize,
     /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
     #[config(
         env = "SUMERAGI_RBC_INLINE_BLOCK_CREATED_BACKUP",
@@ -10545,6 +10563,15 @@ impl Sumeragi {
         } else {
             true
         };
+        let pending_block_cap_ok = if recovery.pending_block_cap == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.recovery.pending_block_cap must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
         let pending_proposal_cap_ok = if recovery.pending_proposal_cap == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -10655,15 +10682,21 @@ impl Sumeragi {
         } else {
             true
         };
-        let rbc_payload_budget_ok =
-            if rbc.payload_chunks_per_tick == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+        let rbc_payload_budget_ok = if rbc.payload_chunks_per_tick == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
                     "sumeragi.advanced.rbc.payload_chunks_per_tick must be greater than zero",
+                ),
+            );
+            false
+        } else if rbc.outbound_queue_max_sessions == 0 || rbc.outbound_queue_max_bytes == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.rbc.outbound_queue_max_sessions and outbound_queue_max_bytes must be greater than zero",
                 ));
-                false
-            } else {
-                true
-            };
+            false
+        } else {
+            true
+        };
         let vnext_ok =
             if vnext.performance_window_samples == 0 {
                 emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
@@ -10735,6 +10768,7 @@ impl Sumeragi {
             && sidecar_mismatch_retry_cap_ok
             && sidecar_mismatch_ttl_ok
             && range_pull_escalation_after_hash_misses_ok
+            && pending_block_cap_ok
             && pending_block_sync_cap_ok
             && pending_proposal_cap_ok
             && missing_fetch_aggressive_after_attempts_ok
@@ -10964,6 +10998,7 @@ impl Sumeragi {
                 ),
                 range_pull_escalation_after_hash_misses: recovery_hash_miss_cap_before_range_pull,
                 missing_request_stale_height_margin: recovery.missing_request_stale_height_margin,
+                pending_block_cap: recovery.pending_block_cap.max(1),
                 pending_block_sync_cap: recovery.pending_block_sync_cap.max(1),
                 pending_proposal_cap: recovery.pending_proposal_cap.max(1),
                 missing_fetch_aggressive_after_attempts: recovery
@@ -11007,6 +11042,8 @@ impl Sumeragi {
                 session_ttl: std::time::Duration::from_millis(rbc.session_ttl_ms),
                 rebroadcast_sessions_per_tick: rbc.rebroadcast_sessions_per_tick,
                 payload_chunks_per_tick: rbc.payload_chunks_per_tick,
+                outbound_queue_max_sessions: rbc.outbound_queue_max_sessions,
+                outbound_queue_max_bytes: rbc.outbound_queue_max_bytes,
                 inline_block_created_backup: rbc.inline_block_created_backup,
                 store_max_sessions: rbc.store_max_sessions,
                 store_soft_sessions: rbc.store_soft_sessions,
@@ -12449,6 +12486,9 @@ pub struct Network {
     /// Maximum deferred outbound frames retained per peer while session is missing.
     #[config(default = "defaults::network::DEFERRED_SEND_MAX_PER_PEER")]
     pub deferred_send_max_per_peer: usize,
+    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    #[config(default = "defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER")]
+    pub deferred_send_max_bytes_per_peer: usize,
     /// Enable QUIC transport (feature-gated).
     #[config(env = "P2P_QUIC", default)]
     pub quic_enabled: bool,
@@ -12558,6 +12598,18 @@ pub struct Network {
     /// Capacity for the per-peer post queue (bounded mode only).
     #[config(default = "defaults::network::P2P_POST_QUEUE_CAP")]
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    #[config(default = "defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES")]
+    pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
+    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    #[config(default = "defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES")]
+    pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
+    /// Maximum encrypted high-priority outbound frames retained per peer.
+    #[config(default = "defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES")]
+    pub p2p_outbound_frame_queue_max_high_frames: NonZeroUsize,
+    /// Maximum encrypted low-priority outbound frames retained per peer.
+    #[config(default = "defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES")]
+    pub p2p_outbound_frame_queue_max_low_frames: NonZeroUsize,
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     #[config(default = "defaults::network::P2P_SUBSCRIBER_QUEUE_CAP")]
     pub p2p_subscriber_queue_cap: NonZeroUsize,
@@ -12759,6 +12811,7 @@ impl Network {
             dial_timeout_ms: dial_timeout,
             deferred_send_ttl_ms,
             deferred_send_max_per_peer,
+            deferred_send_max_bytes_per_peer,
             dns_refresh_interval_ms: dns_refresh_interval,
             dns_refresh_ttl_ms: dns_refresh_ttl,
             quic_enabled,
@@ -12782,6 +12835,10 @@ impl Network {
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
+            p2p_outbound_frame_queue_max_high_bytes,
+            p2p_outbound_frame_queue_max_low_bytes,
+            p2p_outbound_frame_queue_max_high_frames,
+            p2p_outbound_frame_queue_max_low_frames,
             p2p_subscriber_queue_cap,
             consensus_ingress_rate_per_sec,
             consensus_ingress_burst,
@@ -12986,6 +13043,7 @@ impl Network {
                 dial_timeout,
                 deferred_send_ttl: deferred_send_ttl_ms.get().max(min_interval),
                 deferred_send_max_per_peer: deferred_send_max_per_peer.max(1),
+                deferred_send_max_bytes_per_peer: deferred_send_max_bytes_per_peer.max(1),
                 peer_gossip_period,
                 peer_gossip_max_period,
                 trust_gossip,
@@ -13022,6 +13080,10 @@ impl Network {
                 p2p_queue_cap_high,
                 p2p_queue_cap_low,
                 p2p_post_queue_cap,
+                p2p_outbound_frame_queue_max_high_bytes,
+                p2p_outbound_frame_queue_max_low_bytes,
+                p2p_outbound_frame_queue_max_high_frames,
+                p2p_outbound_frame_queue_max_low_frames,
                 p2p_subscriber_queue_cap,
                 consensus_ingress_rate_per_sec,
                 consensus_ingress_burst,
@@ -13168,6 +13230,9 @@ pub struct Queue {
     /// Use this option to apply throttling.
     #[config(default = "defaults::queue::CAPACITY_PER_USER")]
     pub capacity_per_user: NonZeroUsize,
+    /// Estimated maximum retained queue memory budget in bytes.
+    #[config(default = "defaults::queue::MAX_RETAINED_BYTES")]
+    pub max_retained_bytes: NonZeroU64,
     /// The transaction will be dropped after this time if it is still in the queue.
     #[config(default = "defaults::queue::TRANSACTION_TIME_TO_LIVE.into()")]
     pub transaction_time_to_live_ms: DurationMs,
@@ -13191,6 +13256,7 @@ impl Queue {
         let Self {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
             expired_cull_batch,
@@ -13200,6 +13266,7 @@ impl Queue {
         actual::Queue {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
             expired_cull_batch,
@@ -13265,6 +13332,9 @@ pub struct Offline {
     /// Enable Kagemusha shielded offline-offline payments.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
     pub kagemusha_enabled: bool,
+    /// Force legacy non-Kagemusha offline readiness behavior even when Kagemusha is enabled.
+    #[config(default = "false")]
+    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -13277,6 +13347,7 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_force_legacy: false,
         }
     }
 }
@@ -13503,6 +13574,7 @@ impl Offline {
             escrow_required,
             escrow_accounts,
             kagemusha_enabled,
+            kagemusha_force_legacy,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -13557,6 +13629,7 @@ impl Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_enabled,
+            kagemusha_force_legacy,
         }
     }
 }
@@ -24422,6 +24495,24 @@ publish_delay_seconds = 17
             actual.transaction_gossiper.gossip_resend_ticks,
             defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS
         );
+    }
+
+    #[test]
+    fn network_deferred_send_byte_cap_defaults_and_clamps_zero() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.network.deferred_send_max_bytes_per_peer,
+            defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER
+        );
+
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("deferred_send_max_bytes_per_peer".into(), Value::Integer(0));
+        let actual = load_root(table);
+        assert_eq!(actual.network.deferred_send_max_bytes_per_peer, 1);
     }
 
     #[test]

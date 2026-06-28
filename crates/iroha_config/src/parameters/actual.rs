@@ -1713,6 +1713,8 @@ pub struct Network {
     pub deferred_send_ttl: Duration,
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub deferred_send_max_per_peer: usize,
+    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    pub deferred_send_max_bytes_per_peer: usize,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -1804,6 +1806,14 @@ pub struct Network {
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
+    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
+    /// Maximum encrypted high-priority outbound frames retained per peer.
+    pub p2p_outbound_frame_queue_max_high_frames: NonZeroUsize,
+    /// Maximum encrypted low-priority outbound frames retained per peer.
+    pub p2p_outbound_frame_queue_max_low_frames: NonZeroUsize,
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     pub p2p_subscriber_queue_cap: NonZeroUsize,
     /// Optional per-peer consensus ingress rate (msgs/sec). When None, ingress limiting is disabled.
@@ -2478,6 +2488,8 @@ pub struct Queue {
     pub capacity: NonZeroUsize,
     /// Per-user transaction limit in the queue.
     pub capacity_per_user: NonZeroUsize,
+    /// Estimated maximum retained queue memory budget in bytes.
+    pub max_retained_bytes: NonZeroU64,
     /// Transaction time-to-live.
     pub transaction_time_to_live: Duration,
     /// Minimum interval between expired-transaction sweeps.
@@ -4468,6 +4480,7 @@ impl Default for Queue {
             transaction_time_to_live: defaults::queue::TRANSACTION_TIME_TO_LIVE,
             capacity: defaults::queue::CAPACITY,
             capacity_per_user: defaults::queue::CAPACITY_PER_USER,
+            max_retained_bytes: defaults::queue::MAX_RETAINED_BYTES,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
             plan_journal_enabled: defaults::queue::PLAN_JOURNAL_ENABLED,
@@ -4851,6 +4864,8 @@ pub struct SumeragiRecovery {
     pub range_pull_escalation_after_hash_misses: u32,
     /// Height margin used to prune stale missing-block requests once head advances.
     pub missing_request_stale_height_margin: u64,
+    /// Maximum full pending block bodies retained in memory.
+    pub pending_block_cap: usize,
     /// Maximum deferred block-sync updates retained in memory.
     pub pending_block_sync_cap: usize,
     /// Maximum cached proposal entries retained in memory.
@@ -4920,6 +4935,10 @@ pub struct SumeragiRbc {
     pub rebroadcast_sessions_per_tick: usize,
     /// Maximum RBC payload chunks broadcast per tick.
     pub payload_chunks_per_tick: usize,
+    /// Maximum RBC outbound rebroadcast sessions retained in memory.
+    pub outbound_queue_max_sessions: usize,
+    /// Maximum RBC outbound rebroadcast bytes retained in memory.
+    pub outbound_queue_max_bytes: usize,
     /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
     pub inline_block_created_backup: bool,
     /// Maximum number of persisted RBC session summaries retained on disk.
@@ -8679,6 +8698,8 @@ pub struct Offline {
     /// `KagemushaTransfer` enforces this gate before forwarding to the shared
     /// shielded ZK asset accumulator.
     pub kagemusha_enabled: bool,
+    /// Whether runtime readiness should force the legacy non-Kagemusha path.
+    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -8691,6 +8712,7 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_force_legacy: false,
         }
     }
 }
@@ -9847,6 +9869,10 @@ mod tests {
         assert!(
             offline.kagemusha_enabled,
             "Kagemusha must remain enabled by default"
+        );
+        assert!(
+            !offline.kagemusha_force_legacy,
+            "Kagemusha legacy fallback must be disabled by default"
         );
     }
 

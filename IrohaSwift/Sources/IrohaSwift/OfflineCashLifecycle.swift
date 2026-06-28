@@ -2,6 +2,7 @@ import Foundation
 
 public enum OfflineCashConfigurationSnapshotError: Error, Equatable, LocalizedError {
     case offlinePaymentsDisabled
+    case malformedSnapshot(field: String)
     case missingIssuerPublicKey
     case expired(expiresAtMs: UInt64, nowMs: UInt64)
     case unsupportedNativeBridgeAbi(required: UInt32, actual: UInt32?)
@@ -10,6 +11,8 @@ public enum OfflineCashConfigurationSnapshotError: Error, Equatable, LocalizedEr
         switch self {
         case .offlinePaymentsDisabled:
             return "Offline cash is disabled in the cached configuration snapshot."
+        case let .malformedSnapshot(field):
+            return "Offline cash configuration snapshot field \(field) is malformed."
         case .missingIssuerPublicKey:
             return "Offline cash requires a cached issuer public key before offline exchange."
         case let .expired(expiresAtMs, nowMs):
@@ -60,8 +63,25 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
         guard offlinePaymentsEnabled else {
             throw OfflineCashConfigurationSnapshotError.offlinePaymentsDisabled
         }
-        guard Self.isCanonicalSnapshotText(issuerPublicKeyBase64) else {
+        try Self.requireCanonicalSnapshotText(chainId, fieldName: "chainId")
+        try Self.requireCanonicalSnapshotText(assetDefinitionId, fieldName: "assetDefinitionId")
+        if let artifactSetId {
+            try Self.requireCanonicalSnapshotText(artifactSetId, fieldName: "artifactSetId")
+        }
+        if let circuitId {
+            try Self.requireCanonicalSnapshotText(circuitId, fieldName: "circuitId")
+        }
+        guard OfflineIssuerPublicKey.isValid(issuerPublicKeyBase64) else {
             throw OfflineCashConfigurationSnapshotError.missingIssuerPublicKey
+        }
+        if let nativeBridgeAbiVersion, nativeBridgeAbiVersion == 0 {
+            throw OfflineCashConfigurationSnapshotError.malformedSnapshot(field: "nativeBridgeAbiVersion")
+        }
+        if let requiredNativeBridgeAbiVersion, requiredNativeBridgeAbiVersion == 0 {
+            throw OfflineCashConfigurationSnapshotError.malformedSnapshot(field: "requiredNativeBridgeAbiVersion")
+        }
+        if let expiresAtMs, expiresAtMs <= createdAtMs {
+            throw OfflineCashConfigurationSnapshotError.malformedSnapshot(field: "expiresAtMs")
         }
         if let expiresAtMs, expiresAtMs <= nowMs {
             throw OfflineCashConfigurationSnapshotError.expired(expiresAtMs: expiresAtMs, nowMs: nowMs)
@@ -79,6 +99,12 @@ public struct OfflineCashConfigurationSnapshot: Codable, Equatable, Sendable {
         guard let value, !value.isEmpty else { return false }
         return value.unicodeScalars.allSatisfy { scalar in
             scalar.value > 0x20 && scalar.value <= 0x7E
+        }
+    }
+
+    private static func requireCanonicalSnapshotText(_ value: String, fieldName: String) throws {
+        guard isCanonicalSnapshotText(value) else {
+            throw OfflineCashConfigurationSnapshotError.malformedSnapshot(field: fieldName)
         }
     }
 }

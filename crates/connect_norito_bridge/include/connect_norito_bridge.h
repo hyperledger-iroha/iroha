@@ -170,6 +170,75 @@ int32_t connect_norito_encode_defund_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+// Retired compatibility entry point for classic `RedeemOfflineNote` payments
+// with transaction metadata. Always fails without producing signed transaction
+// bytes; production offline payments must use Kagemusha transfer/redeem flows.
+int32_t connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* metadata_json_ptr, unsigned long metadata_json_len,
+    const uint8_t* redeem_norito_ptr, unsigned long redeem_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Retired compatibility entry point for classic `AuditOfflineNote` payments
+// with transaction metadata. Always fails without producing signed transaction
+// bytes; production offline payments must use Kagemusha transfer/redeem flows.
+int32_t connect_norito_encode_audit_offline_note_signed_transaction_with_metadata(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* metadata_json_ptr, unsigned long metadata_json_len,
+    const uint8_t* audit_norito_ptr, unsigned long audit_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Retired compatibility entry point for classic `IssueOfflineNote` payments
+// with transaction metadata. Always fails without producing signed transaction
+// bytes; production offline top-ups must use Kagemusha online-to-offline flows.
+int32_t connect_norito_encode_issue_offline_note_signed_transaction_with_metadata(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* metadata_json_ptr, unsigned long metadata_json_len,
+    const uint8_t* issue_norito_ptr, unsigned long issue_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Retired compatibility entry point for classic Offline Note defund payments
+// with transaction metadata. Always fails without producing signed transaction
+// bytes; production offline payments must use Kagemusha transfer/redeem flows.
+int32_t connect_norito_encode_defund_offline_note_signed_transaction_with_metadata(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* metadata_json_ptr, unsigned long metadata_json_len,
+    const uint8_t* audit_trail_ptr, unsigned long audit_trail_len, uint32_t audit_trail_count,
+    const uint8_t* redeem_norito_ptr, unsigned long redeem_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 // Generate a recursive Halo2/IPA proof for an Offline redemption against a chain-supplied verifying key.
 // Input: Norito-archive bytes of `OfflineNoteRedeem` and `VerifyingKeyBox`.
 // Output: Norito-archive bytes of `OfflineNoteRecursiveProof`.

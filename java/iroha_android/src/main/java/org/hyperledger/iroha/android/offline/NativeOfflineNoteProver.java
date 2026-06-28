@@ -50,11 +50,19 @@ public final class NativeOfflineNoteProver {
   static boolean detectNativeAvailability(final Runnable loadLibrary, final Runnable probeSymbol) {
     try {
       loadLibrary.run();
+    } catch (final UnsatisfiedLinkError | SecurityException ignored) {
+      return false;
+    } catch (final RuntimeException ignored) {
+      return false;
+    }
+    try {
       probeSymbol.run();
       return true;
     } catch (final IllegalArgumentException ignored) {
       return true;
     } catch (final UnsatisfiedLinkError | SecurityException ignored) {
+      return false;
+    } catch (final RuntimeException ignored) {
       return false;
     }
   }

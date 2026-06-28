@@ -776,6 +776,7 @@ LINEAGE_KEY_RELEASE_TOOLING_REQUIREMENTS = {
 }
 SUMMARY_OUT_PATH_INVALID_CODE = "kagemusha_summary_out_path_invalid"
 READINESS_SECTION_LABELS: dict[str, str] = {
+    "top_level": "top-level readiness summary",
     "abi6_reserved_lineage": "ABI-6 Reserved-lineage fixture",
     "abi7_recursive_compact": "ABI-7 recursive compact fixture",
     "lineage_key_release_tooling": "lineage key release tooling",
@@ -784,6 +785,7 @@ READINESS_SECTION_LABELS: dict[str, str] = {
     "localnet_lifecycle_evidence": "Kagemusha localnet lifecycle evidence",
     "android_device_lab": "Android device-lab evidence",
 }
+READINESS_JSON_MAX_DEPTH = 32
 
 
 def utc_now() -> str:
@@ -803,39 +805,388 @@ def blocker(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return item
 
 
+def _is_nonempty_trimmed_readiness_string(value: Any) -> bool:
+    return type(value) is str and value != "" and value == value.strip()
+
+
+def _readiness_blocker_field(item: dict[Any, Any], field: str) -> Any:
+    for key, candidate in item.items():
+        if type(key) is str and key == field:
+            return candidate
+    return None
+
+
+def _is_readiness_blocker_entry(item: Any) -> bool:
+    return (
+        type(item) is dict
+        and _is_nonempty_trimmed_readiness_string(
+            _readiness_blocker_field(item, "code")
+        )
+        and _is_nonempty_trimmed_readiness_string(
+            _readiness_blocker_field(item, "message")
+        )
+    )
+
+
+def _readiness_blocker_entry_has_safe_identity(item: dict[Any, Any]) -> bool:
+    raw_code = _readiness_blocker_field(item, "code")
+    raw_message = _readiness_blocker_field(item, "message")
+    code, code_ok = _readiness_json_safe_value(raw_code)
+    message, message_ok = _readiness_json_safe_value(raw_message)
+    return code_ok and message_ok and code == raw_code and message == raw_message
+
+
+def _readiness_json_safe_value(
+    value: Any,
+    *,
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> tuple[Any, bool]:
+    displayed = _display_evidence_value(value)
+    if displayed is not value:
+        return displayed, False
+    if value is None or type(value) in (str, bool):
+        return value, True
+    if type(value) is int:
+        return value, True
+    if type(value) is float:
+        if math.isfinite(value):
+            return value, True
+        return EVIDENCE_NONFINITE_NUMBER_REDACTION, False
+    if _depth >= READINESS_JSON_MAX_DEPTH:
+        return EVIDENCE_UNSUPPORTED_VALUE_REDACTION, False
+    if type(value) is list:
+        if _seen is None:
+            _seen = set()
+        identity = id(value)
+        if identity in _seen:
+            return EVIDENCE_UNSUPPORTED_VALUE_REDACTION, False
+        _seen.add(identity)
+        values: list[Any] = []
+        ok = True
+        try:
+            for item in value:
+                safe_item, item_ok = _readiness_json_safe_value(
+                    item,
+                    _seen=_seen,
+                    _depth=_depth + 1,
+                )
+                values.append(safe_item)
+                ok = ok and item_ok
+            return values, ok
+        finally:
+            _seen.remove(identity)
+    if type(value) is dict:
+        if _seen is None:
+            _seen = set()
+        identity = id(value)
+        if identity in _seen:
+            return EVIDENCE_UNSUPPORTED_VALUE_REDACTION, False
+        _seen.add(identity)
+        values: dict[str, Any] = {}
+        ok = True
+        try:
+            for key, item in value.items():
+                if type(key) is not str:
+                    ok = False
+                    continue
+                safe_key = _display_evidence_field(key)
+                if safe_key != key:
+                    ok = False
+                safe_item, item_ok = _readiness_json_safe_value(
+                    item,
+                    _seen=_seen,
+                    _depth=_depth + 1,
+                )
+                if safe_key != key:
+                    safe_item = EVIDENCE_UNSUPPORTED_VALUE_REDACTION
+                    item_ok = False
+                if safe_key in values:
+                    ok = False
+                    continue
+                values[safe_key] = safe_item
+                ok = ok and item_ok
+            return values, ok
+        finally:
+            _seen.remove(identity)
+    return EVIDENCE_UNSUPPORTED_VALUE_REDACTION, False
+
+
+def _normalized_readiness_blocker_entry(
+    item: dict[Any, Any],
+) -> tuple[dict[str, Any], bool]:
+    normalized: dict[str, Any] = {}
+    ok = True
+    for key, value in item.items():
+        if type(key) is not str:
+            ok = False
+            continue
+        safe_key = _display_evidence_field(key)
+        if safe_key != key:
+            ok = False
+        safe_value, value_ok = _readiness_json_safe_value(value)
+        if safe_key != key:
+            safe_value = EVIDENCE_UNSUPPORTED_VALUE_REDACTION
+            value_ok = False
+        if safe_key in normalized:
+            ok = False
+            continue
+        normalized[safe_key] = safe_value
+        ok = ok and value_ok
+    return normalized, ok
+
+
+def _section_extra_field_shape_blockers(
+    section_key: str,
+    section: dict[Any, Any],
+) -> list[dict[str, Any]]:
+    label = READINESS_SECTION_LABELS[section_key]
+    blockers: list[dict[str, Any]] = []
+    seen_fields: set[str] = set()
+    for key, value in section.items():
+        if type(key) is not str:
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_json_shape",
+                    f"{label} section field key must be a JSON string",
+                    section=section_key,
+                )
+            )
+            continue
+        if key in ("ok", "blockers"):
+            continue
+        safe_key = _display_evidence_field(key)
+        if safe_key != key:
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_json_shape",
+                    f"{label} section field name must be safe JSON",
+                    section=section_key,
+                    field=safe_key,
+                )
+            )
+        if safe_key in seen_fields:
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_json_shape",
+                    f"{label} section field name collides after normalization",
+                    section=section_key,
+                    field=safe_key,
+                )
+            )
+            continue
+        seen_fields.add(safe_key)
+        _, value_ok = _readiness_json_safe_value(value)
+        if not value_ok:
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_json_shape",
+                    f"{label} section field must be strict JSON",
+                    section=section_key,
+                    field=safe_key,
+                )
+            )
+    return blockers
+
+
+def _section_blocker_entry_shape_blockers(
+    section_key: str,
+    section_blockers: list[Any],
+) -> list[dict[str, Any]]:
+    label = READINESS_SECTION_LABELS[section_key]
+    blockers: list[dict[str, Any]] = []
+    for index, item in enumerate(section_blockers):
+        if type(item) is not dict:
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_blocker_shape",
+                    f"{label} blocker {index} must be a JSON object",
+                    section=section_key,
+                    index=index,
+                )
+            )
+            continue
+        code = _readiness_blocker_field(item, "code")
+        if not _is_nonempty_trimmed_readiness_string(code):
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_blocker_shape",
+                    f"{label} blocker {index} code must be a non-empty trimmed string",
+                    section=section_key,
+                    index=index,
+                    field="code",
+                )
+            )
+        message = _readiness_blocker_field(item, "message")
+        if not _is_nonempty_trimmed_readiness_string(message):
+            blockers.append(
+                blocker(
+                    "kagemusha_readiness_section_blocker_shape",
+                    f"{label} blocker {index} message must be a non-empty trimmed string",
+                    section=section_key,
+                    index=index,
+                    field="message",
+                )
+            )
+        if _is_readiness_blocker_entry(item):
+            _, json_ok = _normalized_readiness_blocker_entry(item)
+            code_safe = _readiness_json_safe_value(code) == (code, True)
+            message_safe = _readiness_json_safe_value(message) == (message, True)
+            if not code_safe:
+                blockers.append(
+                    blocker(
+                        "kagemusha_readiness_section_blocker_json_shape",
+                        f"{label} blocker {index} code must be strict JSON",
+                        section=section_key,
+                        index=index,
+                        field="code",
+                    )
+                )
+            if not message_safe:
+                blockers.append(
+                    blocker(
+                        "kagemusha_readiness_section_blocker_json_shape",
+                        f"{label} blocker {index} message must be strict JSON",
+                        section=section_key,
+                        index=index,
+                        field="message",
+                    )
+                )
+            if not json_ok and code_safe and message_safe:
+                blockers.append(
+                    blocker(
+                        "kagemusha_readiness_section_blocker_json_shape",
+                        f"{label} blocker {index} must be strict JSON",
+                        section=section_key,
+                        index=index,
+                    )
+                )
+    return blockers
+
+
 def _section_readiness_blockers(
     section_key: str,
-    section: Mapping[str, Any],
+    section: Any,
 ) -> list[dict[str, Any]]:
     """Fail closed when an internal readiness checker reports an unusable section."""
 
     label = READINESS_SECTION_LABELS[section_key]
-    section_blockers = section.get("blockers")
-    if not isinstance(section_blockers, list):
+    if type(section) is not dict:
         return [
+            blocker(
+                "kagemusha_readiness_section_shape",
+                f"{label} section must be a JSON object",
+                section=section_key,
+            )
+        ]
+    section_blockers = section.get("blockers")
+    field_shape_blockers = _section_extra_field_shape_blockers(section_key, section)
+    if type(section_blockers) is not list:
+        return [
+            *field_shape_blockers,
             blocker(
                 "kagemusha_readiness_section_blockers_shape",
                 f"{label} blockers must be a JSON array",
                 section=section_key,
             )
         ]
-    if section.get("ok") is not True and not section_blockers:
+    entry_shape_blockers = _section_blocker_entry_shape_blockers(
+        section_key,
+        section_blockers,
+    )
+    section_ok = section.get("ok")
+    if not isinstance(section_ok, bool):
         return [
+            *field_shape_blockers,
+            *entry_shape_blockers,
+            blocker(
+                "kagemusha_readiness_section_ok_shape",
+                f"{label} ok must be a JSON boolean",
+                section=section_key,
+            )
+        ]
+    consistency_blockers: list[dict[str, Any]] = []
+    if not section_ok and not section_blockers:
+        consistency_blockers.append(
             blocker(
                 "kagemusha_readiness_section_inconsistent",
                 f"{label} is not ready but did not report blockers",
                 section=section_key,
             )
-        ]
-    if section.get("ok") is True and section_blockers:
-        return [
+        )
+    if section_ok and section_blockers:
+        consistency_blockers.append(
             blocker(
                 "kagemusha_readiness_section_inconsistent",
                 f"{label} reported blockers while marked ready",
                 section=section_key,
             )
-        ]
-    return []
+        )
+    return [*field_shape_blockers, *entry_shape_blockers, *consistency_blockers]
+
+
+def _normalized_readiness_section(
+    section_key: str,
+    section: Any,
+) -> dict[str, Any]:
+    section_blockers = _section_readiness_blockers(section_key, section)
+    if type(section) is not dict:
+        return {"ok": False, "blockers": section_blockers}
+
+    normalized: dict[str, Any] = {
+        "ok": section.get("ok") if isinstance(section.get("ok"), bool) else False,
+    }
+    seen_fields = {"ok", "blockers"}
+    for key, value in section.items():
+        if type(key) is not str:
+            continue
+        if key in ("ok", "blockers"):
+            continue
+        safe_key = _display_evidence_field(key)
+        if safe_key in seen_fields:
+            continue
+        safe_value, _ = _readiness_json_safe_value(value)
+        if safe_key != key:
+            safe_value = EVIDENCE_UNSUPPORTED_VALUE_REDACTION
+        normalized[safe_key] = safe_value
+        seen_fields.add(safe_key)
+    raw_blockers = section.get("blockers")
+    if type(raw_blockers) is list:
+        normalized_blockers: list[dict[str, Any]] = []
+        for item in raw_blockers:
+            if _is_readiness_blocker_entry(item) and (
+                _readiness_blocker_entry_has_safe_identity(item)
+            ):
+                normalized_item, _ = _normalized_readiness_blocker_entry(item)
+                normalized_blockers.append(normalized_item)
+        normalized["blockers"] = normalized_blockers
+        normalized["blockers"].extend(section_blockers)
+    else:
+        normalized["blockers"] = section_blockers
+
+    if section_blockers:
+        normalized["ok"] = False
+    return normalized
+
+
+def _normalized_top_level_readiness_blockers(
+    blockers: Any,
+) -> list[dict[str, Any]]:
+    section = _normalized_readiness_section(
+        "top_level",
+        {"ok": False, "blockers": blockers},
+    )
+    return section["blockers"]
+
+
+def _blocked_summary(blockers: Any) -> dict[str, Any]:
+    return {
+        "schema": SUMMARY_SCHEMA,
+        "generated_at": utc_now(),
+        "status": "blocked",
+        "ready": False,
+        "blockers": _normalized_top_level_readiness_blockers(blockers),
+    }
 
 
 def _secret_looking_path_blocker(
@@ -6068,7 +6419,7 @@ def build_summary(
         min_signed_at=min_signed_at,
         max_signed_at=max_signed_at,
     )
-    sections = {
+    raw_sections = {
         "abi6_reserved_lineage": abi6,
         "abi7_recursive_compact": abi7,
         "lineage_key_release_tooling": lineage,
@@ -6077,12 +6428,13 @@ def build_summary(
         "localnet_lifecycle_evidence": localnet_lifecycle,
         "android_device_lab": android,
     }
+    sections = {
+        section_key: _normalized_readiness_section(section_key, section)
+        for section_key, section in raw_sections.items()
+    }
     all_blockers: list[dict[str, Any]] = []
-    for section_key, section in sections.items():
-        section_blockers = section.get("blockers")
-        if isinstance(section_blockers, list):
-            all_blockers.extend(section_blockers)
-        all_blockers.extend(_section_readiness_blockers(section_key, section))
+    for section in sections.values():
+        all_blockers.extend(section["blockers"])
     return {
         "schema": SUMMARY_SCHEMA,
         "generated_at": utc_now(),
@@ -6441,7 +6793,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             sort_keys=True,
             allow_nan=False,
         ) + "\n"
-    except ValueError:
+    except (TypeError, ValueError):
         return [
             blocker(
                 SUMMARY_OUT_PATH_INVALID_CODE,
@@ -6762,13 +7114,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
     if path_blockers:
-        summary = {
-            "schema": SUMMARY_SCHEMA,
-            "generated_at": utc_now(),
-            "status": "blocked",
-            "ready": False,
-            "blockers": path_blockers,
-        }
+        summary = _blocked_summary(path_blockers)
     else:
         assert repo_root is not None
         device_lab_roots: list[Path] = []
@@ -6930,13 +7276,7 @@ def main(argv: list[str] | None = None) -> int:
                 blockers.append(max_compact_key_evidence_at_blocker)
             if max_localnet_lifecycle_evidence_at_blocker is not None:
                 blockers.append(max_localnet_lifecycle_evidence_at_blocker)
-            summary = {
-                "schema": SUMMARY_SCHEMA,
-                "generated_at": utc_now(),
-                "status": "blocked",
-                "ready": False,
-                "blockers": blockers,
-            }
+            summary = _blocked_summary(blockers)
         else:
             summary = build_summary(
                 repo_root=repo_root,
@@ -6964,7 +7304,9 @@ def main(argv: list[str] | None = None) -> int:
         if write_blockers:
             summary["ready"] = False
             summary["status"] = "blocked"
-            summary["blockers"].extend(write_blockers)
+            summary["blockers"].extend(
+                _normalized_top_level_readiness_blockers(write_blockers)
+            )
         else:
             print("[kagemusha-readiness] wrote summary")
 

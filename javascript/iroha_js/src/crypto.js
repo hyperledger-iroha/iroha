@@ -3460,13 +3460,18 @@ function kagemushaNormalizeRedeemRequest(request) {
     "lineageVerifierRecord",
     "lineage_verifier_record",
   ]);
-  const lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs(
-    kagemushaObjectValue(request, ["lineageVerifierRecords", "lineage_verifier_records"]),
+  const lineageVerifierRecordsValue = kagemushaObjectValue(request, [
     "lineageVerifierRecords",
-  );
+    "lineage_verifier_records",
+  ]);
+  const lineageVerifierRecordsSupplied =
+    lineageVerifierRecordsValue !== undefined &&
+    lineageVerifierRecordsValue !== null &&
+    (!Array.isArray(lineageVerifierRecordsValue) ||
+      lineageVerifierRecordsValue.length > 0);
   const redeemLineageVerifierRecordSupplied =
     (lineageVerifierRecordValue !== undefined && lineageVerifierRecordValue !== null) ||
-    lineageVerifierRecords.length > 0;
+    lineageVerifierRecordsSupplied;
   const changeOutput =
     changeOutputValue === undefined || changeOutputValue === null
       ? null
@@ -3484,6 +3489,7 @@ function kagemushaNormalizeRedeemRequest(request) {
     bundleSummary.proofCircuitId,
   );
   let lineageVerifierRecord = null;
+  let lineageVerifierRecords = Object.freeze([]);
   if (finalIsLineage) {
     if (!redeemLineageVerifierRecordSupplied) {
       throw kagemushaFieldCodecError(
@@ -3497,6 +3503,10 @@ function kagemushaNormalizeRedeemRequest(request) {
         "lineageVerifierRecord",
       );
     }
+    lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs(
+      lineageVerifierRecordsValue,
+      "lineageVerifierRecords",
+    );
   }
   const lineageWitness =
     lineageWitnessValue === undefined || lineageWitnessValue === null
@@ -3548,6 +3558,12 @@ function kagemushaNormalizeRedeemRequest(request) {
     lineageVerifierRecord = kagemushaNormalizeVerifierRecordRef(
       lineageVerifierRecordValue,
       "lineageVerifierRecord",
+    );
+  }
+  if (!finalIsLineage && witnessHasReservedPrevious) {
+    lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs(
+      lineageVerifierRecordsValue,
+      "lineageVerifierRecords",
     );
   }
   return Object.freeze({

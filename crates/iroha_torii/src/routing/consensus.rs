@@ -2402,8 +2402,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
+        json_entry("retained_bytes", snap.tx_queue_retained_bytes),
+        json_entry("max_retained_bytes", snap.tx_queue_max_retained_bytes),
         json_entry("saturated", snap.tx_queue_saturated),
         json_entry("saturated_by_count", snap.tx_queue_saturated_by_count),
+        json_entry("saturated_by_bytes", snap.tx_queue_saturated_by_bytes),
         json_entry("saturated_by_age", snap.tx_queue_saturated_by_age),
         json_entry("oldest_queued_age_ms", snap.tx_queue_oldest_queued_age_ms),
     ]);
@@ -4787,8 +4790,11 @@ mod status_tests {
         let snap = sumeragi::StatusSnapshot {
             tx_queue_depth: 4,
             tx_queue_capacity: 20_000,
+            tx_queue_retained_bytes: 1_024,
+            tx_queue_max_retained_bytes: 65_536,
             tx_queue_saturated: false,
             tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
             tx_queue_saturated_by_age: true,
             tx_queue_oldest_queued_age_ms: 7_500,
             ..Default::default()
@@ -4805,11 +4811,23 @@ mod status_tests {
             Some(20_000)
         );
         assert_eq!(
+            tx_queue.get("retained_bytes").and_then(Value::as_u64),
+            Some(1_024)
+        );
+        assert_eq!(
+            tx_queue.get("max_retained_bytes").and_then(Value::as_u64),
+            Some(65_536)
+        );
+        assert_eq!(
             tx_queue.get("saturated").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
             tx_queue.get("saturated_by_count").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_bytes").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(

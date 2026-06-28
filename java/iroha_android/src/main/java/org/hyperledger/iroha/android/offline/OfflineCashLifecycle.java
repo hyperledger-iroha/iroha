@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -154,20 +155,32 @@ public final class OfflineCashLifecycle {
 
     public void requireUsableForOfflineExchange(
         final long nowMs, final Integer requiredNativeBridgeAbiVersion) {
+      final long checkedNowMs = nonnegativeSnapshotTimestamp(nowMs, "nowMs");
       if (!offlinePaymentsEnabled) {
         throw new ConfigurationSnapshotException(
             "offline_payments_disabled",
             "Offline cash is disabled in the cached configuration snapshot.");
       }
-      if (!isCanonicalSnapshotText(issuerPublicKeyBase64)) {
+      requireCanonicalSnapshotText(chainId, "chainId");
+      requireCanonicalSnapshotText(assetDefinitionId, "assetDefinitionId");
+      requireOptionalCanonicalSnapshotText(artifactSetId, "artifactSetId");
+      requireOptionalCanonicalSnapshotText(circuitId, "circuitId");
+      if (!isValidOfflineIssuerPublicKeyBase64(issuerPublicKeyBase64)) {
         throw new ConfigurationSnapshotException(
             "missing_issuer_public_key",
             "Offline cash requires a cached issuer public key before offline exchange.");
       }
-      if (expiresAtMs != null && expiresAtMs <= nowMs) {
+      final long checkedCreatedAtMs = nonnegativeSnapshotTimestamp(createdAtMs, "createdAtMs");
+      final Long checkedExpiresAtMs = optionalNonnegativeSnapshotTimestamp(expiresAtMs, "expiresAtMs");
+      if (checkedExpiresAtMs != null && checkedExpiresAtMs <= checkedCreatedAtMs) {
+        throw new ConfigurationSnapshotException(
+            "malformed_snapshot",
+            "Offline cash configuration snapshot field expiresAtMs must be after createdAtMs.");
+      }
+      if (checkedExpiresAtMs != null && checkedExpiresAtMs <= checkedNowMs) {
         throw new ConfigurationSnapshotException(
             "expired",
-            "Offline cash configuration snapshot expired at " + expiresAtMs + ".");
+            "Offline cash configuration snapshot expired at " + checkedExpiresAtMs + ".");
       }
       final Integer checkedNativeBridgeAbiVersion =
           positiveNativeBridgeAbiVersion(nativeBridgeAbiVersion, "nativeBridgeAbiVersion");
@@ -196,6 +209,43 @@ public final class OfflineCashLifecycle {
     return value;
   }
 
+  private static long nonnegativeSnapshotTimestamp(final long value, final String fieldName) {
+    if (value < 0L) {
+      throw new ConfigurationSnapshotException(
+          "malformed_snapshot",
+          "Offline cash configuration snapshot field "
+              + fieldName
+              + " must be a nonnegative integer timestamp.");
+    }
+    return value;
+  }
+
+  private static Long optionalNonnegativeSnapshotTimestamp(
+      final Long value, final String fieldName) {
+    if (value == null) {
+      return null;
+    }
+    return Long.valueOf(nonnegativeSnapshotTimestamp(value.longValue(), fieldName));
+  }
+
+  private static void requireCanonicalSnapshotText(final String value, final String fieldName) {
+    if (!isCanonicalSnapshotText(value)) {
+      throw new ConfigurationSnapshotException(
+          "malformed_snapshot",
+          "Offline cash configuration snapshot field "
+              + fieldName
+              + " must be a non-empty printable ASCII string with no whitespace.");
+    }
+  }
+
+  private static void requireOptionalCanonicalSnapshotText(
+      final String value, final String fieldName) {
+    if (value == null) {
+      return;
+    }
+    requireCanonicalSnapshotText(value, fieldName);
+  }
+
   private static boolean isCanonicalSnapshotText(final String value) {
     if (value == null || value.isEmpty()) {
       return false;
@@ -208,6 +258,36 @@ public final class OfflineCashLifecycle {
     }
     return true;
   }
+
+  private static boolean isValidOfflineIssuerPublicKeyBase64(final String value) {
+    if (!isCanonicalSnapshotText(value) || value.indexOf('=') >= 0) {
+      return false;
+    }
+    final String normalized = value.replace('-', '+').replace('_', '/');
+    if (normalized.length() % 4 == 1) {
+      return false;
+    }
+    for (int i = 0; i < normalized.length(); i++) {
+      if (BASE64_ALPHABET.indexOf(normalized.charAt(i)) < 0) {
+        return false;
+      }
+    }
+    final int paddingLength = (4 - (normalized.length() % 4)) % 4;
+    final String padding =
+        paddingLength == 0 ? "" : paddingLength == 1 ? "=" : paddingLength == 2 ? "==" : "===";
+    final String padded = normalized + padding;
+    final byte[] raw;
+    try {
+      raw = Base64.getDecoder().decode(padded);
+    } catch (final IllegalArgumentException error) {
+      return false;
+    }
+    return raw.length == 32
+        && Base64.getEncoder().withoutPadding().encodeToString(raw).equals(normalized);
+  }
+
+  private static final String BASE64_ALPHABET =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
   public static final class ConfigurationSnapshotException extends IllegalStateException {
     private final String code;

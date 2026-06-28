@@ -96,6 +96,12 @@ EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
 REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
+    "iso-audit-notary": (
+        "anchor_path",
+        "anchor_sha256",
+        "index_path",
+        "index_sha256",
+    ),
     "iso-rail-gateway": ("source_path", "payload_sha256", "rail_message_id"),
 }
 STAGE_RECEIPT_KINDS = {
@@ -725,6 +731,37 @@ class EvidenceError(RuntimeError):
     """Raised when archived ISO operator evidence is unsafe or malformed."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise EvidenceError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise EvidenceError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise EvidenceError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise EvidenceError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise EvidenceError("args must be an argparse.Namespace")
+    return args
+
+
 def sha256_hex(data: bytes) -> str:
     """Return a lowercase SHA-256 hex digest."""
 
@@ -742,7 +779,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -786,6 +826,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise EvidenceError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise EvidenceError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise EvidenceError(f"cannot inspect {label}: I/O error") from None
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise EvidenceError(f"{label} must not be a symlink")
@@ -816,9 +861,14 @@ def _read_regular_file(
             raise EvidenceError(f"{label} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise EvidenceError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise EvidenceError(f"cannot open {label} for reading: I/O error") from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
@@ -913,7 +963,7 @@ def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -935,7 +985,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -988,7 +1038,7 @@ def _preflight_required_cli_values(
     flags: set[str],
     value_name: str,
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -1026,7 +1076,7 @@ def _preflight_required_cli_values(
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -1091,7 +1141,7 @@ def _preflight_numeric_cli_values(
     integer_flags: set[str],
     number_flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     flags = integer_flags | number_flags
     index = 0
     while index < len(raw_args):
@@ -1140,9 +1190,19 @@ def _same_existing_file(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise EvidenceError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise EvidenceError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_summary_output_input_alias(
@@ -1162,9 +1222,9 @@ def _reject_summary_output_receipt_dir_overlap(
 ) -> None:
     if summary_out is None:
         return
-    summary_path = summary_out.resolve()
+    summary_path = _path_resolve(summary_out, "summary_out")
     for offset, receipt_dir in enumerate(receipt_dirs):
-        receipt_root = receipt_dir.resolve()
+        receipt_root = _path_resolve(receipt_dir, f"--receipt-dir[{offset}]")
         if summary_path == receipt_root or receipt_root in summary_path.parents:
             raise EvidenceError(
                 f"summary_out must not be written under --receipt-dir[{offset}]"
@@ -1189,14 +1249,45 @@ def _ensure_text_output_target(
             path.parent.mkdir(parents=True, exist_ok=True)
         except FileExistsError as error:
             raise EvidenceError(f"{label} must be a directory") from error
-    if path.parent.exists() or path.parent.is_symlink():
-        parent_mode = path.parent.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise EvidenceError(f"cannot create {label} parent: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise EvidenceError(f"cannot create {label} parent: I/O error") from None
+    def inspected_exists(target: Path, role: str) -> bool:
+        try:
+            return target.exists() or target.is_symlink()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise EvidenceError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise EvidenceError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    def inspected_lstat(target: Path, role: str) -> os.stat_result:
+        try:
+            return target.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise EvidenceError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise EvidenceError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    if inspected_exists(path.parent, "parent"):
+        parent_mode = inspected_lstat(path.parent, "parent").st_mode
         if stat.S_ISLNK(parent_mode):
             raise EvidenceError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(parent_mode):
             raise EvidenceError(f"{label} must be a directory")
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    if inspected_exists(path, "leaf"):
+        metadata = inspected_lstat(path, "leaf")
         if stat.S_ISLNK(metadata.st_mode):
             raise EvidenceError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -1238,26 +1329,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise EvidenceError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise EvidenceError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise EvidenceError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise EvidenceError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise EvidenceError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise EvidenceError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _reject_symlinked_existing_ancestors(
@@ -1273,6 +1386,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label or str(current)
+            raise EvidenceError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label or str(current)
+            raise EvidenceError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -1310,11 +1436,11 @@ def _load_json(path: Path, *, display_label: str | None = None) -> Any:
 
 
 def _pipe_chunk_bytes(chunk: Any) -> bytes:
-    if isinstance(chunk, bytes):
+    if type(chunk) is bytes:
         return chunk
-    if isinstance(chunk, bytearray):
+    if type(chunk) is bytearray:
         return bytes(chunk)
-    if isinstance(chunk, memoryview):
+    if type(chunk) is memoryview:
         try:
             return chunk.cast("B").tobytes()
         except (TypeError, ValueError):
@@ -1362,7 +1488,7 @@ def _run_command_bounded(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         raise EvidenceError("receipt verifier could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
     read_failed = False
@@ -1371,12 +1497,12 @@ def _run_command_bounded(
         nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             read_failed = True
         finally:
             try:
                 pipe.close()
-            except OSError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 read_failed = True
 
     assert process.stdout is not None
@@ -1394,17 +1520,38 @@ def _run_command_bounded(
     stdout_thread.start()
     stderr_thread.start()
     timed_out = False
+    wait_failed = False
     try:
         returncode = process.wait(timeout=timeout_secs)
     except subprocess.TimeoutExpired:
         timed_out = True
-        process.kill()
-        process.wait()
+        try:
+            process.kill()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            process.wait()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
         returncode = 124
-    stdout_thread.join()
-    stderr_thread.join()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        wait_failed = True
+        try:
+            process.kill()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        returncode = 124
+    try:
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            read_failed = True
+    except (RuntimeError, TypeError, ValueError):
+        read_failed = True
     if read_failed:
         raise EvidenceError("receipt verifier output could not be read") from None
+    if wait_failed or isinstance(returncode, bool) or not isinstance(returncode, int):
+        raise EvidenceError("receipt verifier did not finish cleanly") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (
@@ -1456,9 +1603,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise EvidenceError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise EvidenceError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise EvidenceError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -1466,6 +1616,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise EvidenceError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise EvidenceError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -1476,14 +1628,22 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise EvidenceError(f"{label} must be a JSON object")
     return value
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise EvidenceError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise EvidenceError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise EvidenceError(f"{label} contains unknown keys")
+    return present
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -1565,7 +1725,7 @@ def _reject_overlong_trust_source_text(value: str, label: str) -> None:
 
 
 def _require_list(value: Any, label: str) -> list[Any]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise EvidenceError(f"{label} must be a JSON array")
     if len(value) > MAX_JSON_LIST_ITEMS:
         raise EvidenceError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
@@ -1574,14 +1734,18 @@ def _require_list(value: Any, label: str) -> list[Any]:
 
 def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise EvidenceError(f"{label}.{key} must be a non-empty string")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise EvidenceError(f"{field_label} must be a non-empty string")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise EvidenceError(f"{field_label} must be a non-empty string")
     if len(raw) > MAX_CLEAN_STRING_CHARS:
-        raise EvidenceError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
+        raise EvidenceError(f"{field_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if _contains_control_character(raw):
-        raise EvidenceError(f"{label}.{key} must not contain control characters")
+        raise EvidenceError(f"{field_label} must not contain control characters")
     if raw != raw.strip():
-        raise EvidenceError(f"{label}.{key} must not have surrounding whitespace")
+        raise EvidenceError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -1594,7 +1758,7 @@ def _required_context_string(value: dict[str, Any], key: str, label: str) -> str
 
 def _required_positive_int_field(value: dict[str, Any], key: str, label: str) -> int:
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+    if type(raw) is not int or raw <= 0:
         raise EvidenceError(f"{label}.{key} must be a positive integer")
     return raw
 
@@ -1636,7 +1800,10 @@ def _nullable_rail_message_id(value: dict[str, Any], key: str, label: str) -> st
     raw = value[key]
     if raw is None:
         return None
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
+        raise EvidenceError(f"{label}.{key} must be null or a non-empty string")
+    raw = _plain_text(raw, f"{label}.{key}")
+    if not raw.strip():
         raise EvidenceError(f"{label}.{key} must be null or a non-empty string")
     if _contains_control_character(raw):
         raise EvidenceError(f"{label}.{key} must not contain control characters")
@@ -1674,7 +1841,14 @@ def _reject_forbidden_receipt_metadata(
     entry_label: str,
     receipt_kind: str,
 ) -> None:
-    for key in sorted(forbidden_keys & set(receipt_entry)):
+    present_forbidden: list[str] = []
+    for raw_key in receipt_entry:
+        if not isinstance(raw_key, str):
+            raise EvidenceError(f"{entry_label} contains forbidden metadata")
+        key = _plain_text(raw_key, f"{entry_label} field")
+        if key in forbidden_keys:
+            present_forbidden.append(key)
+    for key in sorted(present_forbidden):
         raise EvidenceError(f"{entry_label}.{key} is not valid for {receipt_kind}")
 
 
@@ -1837,6 +2011,7 @@ def _required_cli_string(value: str | None, label: str) -> str:
         raise EvidenceError(f"provide {label}")
     if not isinstance(value, str):
         raise EvidenceError(f"{label} must be a string")
+    value = _plain_text(value, label)
     if not value.strip():
         raise EvidenceError(f"provide {label}")
     if any(
@@ -1856,6 +2031,7 @@ def _optional_cli_profile_id(value: str | None, label: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise EvidenceError(f"{label} must be a string")
+    value = _plain_text(value, label)
     if not value.strip():
         raise EvidenceError(f"{label} requires a profile id value")
     if any(
@@ -1879,13 +2055,13 @@ def _optional_cli_profile_id(value: str | None, label: str) -> str | None:
 def _required_positive_cli_int(value: int | None, label: str) -> int:
     if value is None:
         raise EvidenceError(f"provide {label}")
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if type(value) is not int or value <= 0:
         raise EvidenceError(f"{label} must be a positive integer")
     return value
 
 
 def _required_positive_finite_cli_number(value: Any, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise EvidenceError(f"{label} must be a positive finite number")
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -1896,7 +2072,7 @@ def _required_positive_finite_cli_number(value: Any, label: str) -> float:
 def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     seen: dict[str, int] = {}
     for offset, path in enumerate(paths):
-        key = str(path)
+        key = str(_path_resolve(path, f"{label}[{offset}]"))
         if key in seen:
             raise EvidenceError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
@@ -1948,15 +2124,16 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise EvidenceError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if isinstance(value, Path):
         return Path(value)
-    except TypeError as error:
-        raise EvidenceError(f"{label} must be a path") from error
+    raise EvidenceError(f"{label} must be a path")
 
 
 def _required_nonnegative_int(value: dict[str, Any], key: str, label: str) -> int:
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+    if type(raw) is not int or raw < 0:
         raise EvidenceError(f"{label}.{key} must be a non-negative integer")
     return raw
 
@@ -2021,16 +2198,20 @@ def _required_clean_string_list(
     items = _require_list(value.get(key), f"{label}.{key}")
     result: list[str] = []
     for offset, item in enumerate(items):
-        if not isinstance(item, str) or not item.strip():
-            raise EvidenceError(f"{label}.{key}[{offset}] must be a non-empty string")
+        item_label = f"{label}.{key}[{offset}]"
+        if not isinstance(item, str):
+            raise EvidenceError(f"{item_label} must be a non-empty string")
+        item = _plain_text(item, item_label)
+        if not item.strip():
+            raise EvidenceError(f"{item_label} must be a non-empty string")
         if max_chars is not None and len(item) > max_chars:
             raise EvidenceError(
-                f"{label}.{key}[{offset}] must be no longer than {max_chars} characters"
+                f"{item_label} must be no longer than {max_chars} characters"
             )
         if _contains_control_character(item):
-            raise EvidenceError(f"{label}.{key}[{offset}] must not contain control characters")
+            raise EvidenceError(f"{item_label} must not contain control characters")
         if item != item.strip():
-            raise EvidenceError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
+            raise EvidenceError(f"{item_label} must not have surrounding whitespace")
         result.append(item)
     return result
 
@@ -2282,7 +2463,12 @@ def _required_der_summary_entries(
         _reject_unknown_keys(entry, TRUST_DER_SUMMARY_KEYS, entry_label)
         if "label" in entry:
             raw_label = entry.get("label")
-            if not isinstance(raw_label, str) or not raw_label.strip():
+            if not isinstance(raw_label, str):
+                raise EvidenceError(
+                    f"{entry_label}.label must be a non-empty string when provided"
+                )
+            raw_label = _plain_text(raw_label, f"{entry_label}.label")
+            if not raw_label.strip():
                 raise EvidenceError(
                     f"{entry_label}.label must be a non-empty string when provided"
                 )
@@ -2389,6 +2575,7 @@ def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> N
 
 
 def _validate_receipt_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if _receipt_path_is_repository_fixture(raw):
         raise EvidenceError(
@@ -2400,6 +2587,7 @@ def _validate_receipt_path(raw: str, label: str) -> str:
 
 
 def _validate_config_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise EvidenceError(f"{label} must point to a .json file")
@@ -2411,6 +2599,7 @@ def _validate_config_path(raw: str, label: str) -> str:
 
 
 def _validate_trust_bundle_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise EvidenceError(f"{label} must point to a .json file")
@@ -2422,6 +2611,7 @@ def _validate_trust_bundle_path(raw: str, label: str) -> str:
 
 
 def _validate_xml_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".xml"):
         raise EvidenceError(f"{label} must point to a .xml file")
@@ -2429,6 +2619,7 @@ def _validate_xml_path(raw: str, label: str) -> str:
 
 
 def _validate_notary_anchor_path(raw: str, label: str, index_sha256: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     parts = raw.split("/")
     leaf = parts[-1] if parts else ""
@@ -2453,7 +2644,7 @@ def _validate_notary_store_dir(
             raise EvidenceError(f"{entry_label}.store_dir must be recorded")
         return None
     raw = receipt_entry["store_dir"]
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
         raise EvidenceError(f"{entry_label}.store_dir must be a non-empty path")
     return _validate_artifact_path(raw, f"{entry_label}.store_dir")
 
@@ -2479,7 +2670,7 @@ def _validate_notary_index_path(
             raise EvidenceError(f"{entry_label}.index_path must be recorded")
         return None
     raw = receipt_entry["index_path"]
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
         raise EvidenceError(f"{entry_label}.index_path must be a non-empty path")
     index_path = _validate_artifact_path(raw, f"{entry_label}.index_path")
     if _receipt_path_is_repository_fixture(index_path):
@@ -2494,6 +2685,7 @@ def _validate_notary_index_path(
 
 
 def _validate_artifact_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     if not raw.strip():
         raise EvidenceError(f"{label} must be a non-empty path")
     _reject_path_smuggling(raw, label)
@@ -2525,6 +2717,7 @@ def _receipt_path_is_repository_fixture(raw: str) -> bool:
 
 
 def _reject_path_smuggling(raw: str, label: str) -> None:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_LOCAL_PATH_CHARS:
         raise EvidenceError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if _contains_control_character(raw):
@@ -2581,11 +2774,7 @@ def _verify_receipt_verifier_summary(
     _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
     _check_no_secret_material(receipt_obj, label)
     version = receipt_obj.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != RECEIPT_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != RECEIPT_SUMMARY_VERSION:
         raise EvidenceError(
             f"{label}.version must be receipt verifier summary version "
             f"{RECEIPT_SUMMARY_VERSION}"
@@ -2623,27 +2812,33 @@ def _verify_receipt_verifier_summary(
     )
     if not receipt_kind:
         raise EvidenceError(f"{label}.receipt_kind must contain strings")
+    receipt_kind_clean: list[str] = []
     seen_receipt_kinds: dict[str, int] = {}
     for offset, item in enumerate(receipt_kind):
-        if not isinstance(item, str) or not item.strip():
+        item_label = f"{label}.receipt_kind[{offset}]"
+        if not isinstance(item, str):
+            raise EvidenceError(f"{label}.receipt_kind must contain strings")
+        item = _plain_text(item, item_label)
+        if not item.strip():
             raise EvidenceError(f"{label}.receipt_kind must contain strings")
         if _contains_control_character(item):
             raise EvidenceError(
-                f"{label}.receipt_kind[{offset}] must not contain control characters"
+                f"{item_label} must not contain control characters"
             )
         if item != item.strip():
             raise EvidenceError(
-                f"{label}.receipt_kind[{offset}] must not have surrounding whitespace"
+                f"{item_label} must not have surrounding whitespace"
             )
-        _reject_non_ascii_context(item, f"{label}.receipt_kind[{offset}]")
-        _reject_secret_looking_identifier(item, f"{label}.receipt_kind[{offset}]")
+        _reject_non_ascii_context(item, item_label)
+        _reject_secret_looking_identifier(item, item_label)
         if item in seen_receipt_kinds:
             raise EvidenceError(
-                f"{label}.receipt_kind[{offset}] duplicates "
+                f"{item_label} duplicates "
                 f"{label}.receipt_kind[{seen_receipt_kinds[item]}]"
             )
         seen_receipt_kinds[item] = offset
-    receipt_kind_set = set(receipt_kind)
+        receipt_kind_clean.append(item)
+    receipt_kind_set = set(receipt_kind_clean)
     if allow_partial_receipt_kinds:
         if not (receipt_kind_set & REQUIRED_RECEIPT_KINDS):
             raise EvidenceError(f"{label} has no rail/notary receipt kinds")
@@ -2654,7 +2849,7 @@ def _verify_receipt_verifier_summary(
     unsupported = sorted(receipt_kind_set - REQUIRED_RECEIPT_KINDS)
     if unsupported:
         raise EvidenceError(f"{label} contains unsupported receipt kinds")
-    if receipt_kind != sorted(receipt_kind_set):
+    if receipt_kind_clean != sorted(receipt_kind_set):
         raise EvidenceError(f"{label}.receipt_kind must be sorted in canonical order")
 
     receipt_entries_raw = _require_list(receipt_obj.get("receipts"), f"{label}.receipts")
@@ -2712,8 +2907,7 @@ def _verify_receipt_verifier_summary(
         if "status_code" not in receipt_entry or (
             status_code is not None
             and (
-                isinstance(status_code, bool)
-                or not isinstance(status_code, int)
+                type(status_code) is not int
                 or status_code < 100
                 or status_code > 599
             )
@@ -2721,7 +2915,7 @@ def _verify_receipt_verifier_summary(
             raise EvidenceError(
                 f"{entry_label}.status_code must be an HTTP status integer or null"
             )
-        status_success = isinstance(status_code, int) and 200 <= status_code <= 299
+        status_success = type(status_code) is int and 200 <= status_code <= 299
         if ok != status_success:
             raise EvidenceError(f"{entry_label}.ok does not match status_code success state")
         if not ok and not allow_failed:
@@ -2848,17 +3042,24 @@ def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) 
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, dict):
+        if type(value) is not dict:
+            raise EvidenceError(f"{label} contains non-plain JSON object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise EvidenceError(
                 f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
             )
         for key, child in value.items():
-            if _is_secret_looking_key(key):
+            if not isinstance(key, str):
+                raise EvidenceError(f"{label} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{label} field")
+            if _is_secret_looking_key(key_text):
                 raise EvidenceError(f"{label} contains forbidden secret-looking field")
-            if _is_control_bearing_key(key):
+            if _is_control_bearing_key(key_text):
                 raise EvidenceError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
+            _check_no_secret_material(child, f"{label}.{key_text}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise EvidenceError(f"{label} contains non-plain JSON array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise EvidenceError(
                 f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -2866,6 +3067,7 @@ def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) 
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
+        value = _plain_text(value, label)
         if _contains_unsafe_preview_control(value):
             raise EvidenceError(f"{label} contains unsafe control characters")
         _reject_secret_string(value, label)
@@ -2875,6 +3077,18 @@ def _command_has_script(command: list[str], script_name: str) -> bool:
     return len(command) > 1 and Path(command[1]).name == script_name
 
 
+def _require_command_strings(command: list[Any], label: str) -> list[str]:
+    normalized: list[str] = []
+    for offset, item in enumerate(command):
+        if not isinstance(item, str):
+            raise EvidenceError(f"{label}.command must contain strings")
+        item = _plain_text(item, f"{label}.command[{offset}]")
+        if not item:
+            raise EvidenceError(f"{label}.command must contain non-empty strings")
+        normalized.append(item)
+    return normalized
+
+
 def _command_has_flag(command: list[str], flag: str) -> bool:
     return any(item == flag or item.startswith(flag + "=") for item in command)
 
@@ -2882,6 +3096,23 @@ def _command_has_flag(command: list[str], flag: str) -> bool:
 def _command_flag_count(command: list[str], flag: str) -> int:
     prefix = flag + "="
     return sum(1 for item in command if item == flag or item.startswith(prefix))
+
+
+def _stage_command_mode_summary(stage_name: str, command: list[str]) -> dict[str, Any]:
+    return {
+        "name": stage_name,
+        "rail_uses_message": (
+            stage_name == "rail" and _command_has_flag(command, "--message")
+        ),
+        "rail_submitted_message_count": 0,
+        "notary_uses_all": (
+            stage_name == "notary" and _command_has_flag(command, "--all")
+        ),
+        "notary_endpoint_count": _command_flag_count(command, "--endpoint")
+        if stage_name == "notary"
+        else 0,
+        "notary_published_anchor_count": 0,
+    }
 
 
 def _command_separate_value_offsets(
@@ -3136,8 +3367,6 @@ def _check_command_policy(
 ) -> None:
     if not command:
         raise EvidenceError(f"{label}.command must not be empty")
-    if not all(isinstance(item, str) and item for item in command):
-        raise EvidenceError(f"{label}.command must contain non-empty strings")
     for offset, item in enumerate(command):
         if _contains_control_character(item):
             raise EvidenceError(
@@ -3301,7 +3530,11 @@ def _verify_receipt_stdout(
     if _required_bool(stage, "stdout_truncated", label):
         raise EvidenceError(f"{label}.stdout_preview is truncated")
     stdout = stage.get("stdout_preview")
-    if not isinstance(stdout, str) or not stdout.strip():
+    stdout_label = f"{label}.stdout_preview"
+    if not isinstance(stdout, str):
+        raise EvidenceError(f"{stdout_label} must contain receipt verifier JSON")
+    stdout = _plain_text(stdout, stdout_label)
+    if not stdout.strip():
         raise EvidenceError(f"{label}.stdout_preview must contain receipt verifier JSON")
     try:
         receipt_summary = json.loads(
@@ -3446,6 +3679,7 @@ def _required_stage_preview(stage: dict[str, Any], key: str, label: str) -> str:
     preview_label = f"{label}.{key}"
     if not isinstance(preview, str):
         raise EvidenceError(f"{preview_label} must be a string")
+    preview = _plain_text(preview, preview_label)
     if _contains_unsafe_preview_control(preview):
         raise EvidenceError(f"{preview_label} contains unsafe control characters")
     if _contains_secret_material(preview) or _contains_secret_identifier_material(preview):
@@ -3490,7 +3724,7 @@ def _stage_stdout_receipts(
     seen: set[str] = set()
     for offset, raw in enumerate(receipt_values):
         receipt_label = f"{label}.stdout_preview.receipts[{offset}]"
-        if not isinstance(raw, str) or not raw.strip():
+        if not isinstance(raw, str):
             raise EvidenceError(f"{receipt_label} must be a non-empty receipt path")
         receipt_path = _validate_receipt_path(raw, receipt_label)
         if _receipt_parent_dir(receipt_path) != receipt_dir:
@@ -3508,7 +3742,7 @@ def _check_stage_adapter_stdout(
     label: str,
     receipt_dir: str,
     command: list[str],
-) -> list[str]:
+) -> dict[str, Any]:
     summary = _stage_stdout_object(stage, label)
     summary_label = f"{label}.stdout_preview"
     _reject_unknown_keys(
@@ -3534,7 +3768,10 @@ def _check_stage_adapter_stdout(
             raise EvidenceError(
                 f"{summary_label}.submitted_messages must be one when command uses --message"
             )
-        return receipts
+        return {
+            "receipts": receipts,
+            "rail_submitted_message_count": submitted_messages,
+        }
     published_anchors = _required_positive_int_field(
         summary,
         "published_anchors",
@@ -3557,7 +3794,10 @@ def _check_stage_adapter_stdout(
         raise EvidenceError(
             f"{summary_label}.published_anchors must be one unless command uses --all"
         )
-    return receipts
+    return {
+        "receipts": receipts,
+        "notary_published_anchor_count": published_anchors,
+    }
 
 
 def _stage_summary(
@@ -3594,8 +3834,7 @@ def _stage_summary(
     if stderr_preview.strip():
         raise EvidenceError(f"{label}.stderr_preview must be empty for successful stage")
     command = _require_list(stage.get("command"), f"{label}.command")
-    if not all(isinstance(item, str) for item in command):
-        raise EvidenceError(f"{label}.command must contain strings")
+    command = _require_command_strings(command, label)
     _check_command_policy(
         command,
         label,
@@ -3613,7 +3852,10 @@ def _stage_summary(
     validated_receipt_dir = None
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
-        if not isinstance(receipt_dir, str) or not receipt_dir.strip():
+        if not isinstance(receipt_dir, str):
+            raise EvidenceError(f"{label}.receipt_dir must be recorded")
+        receipt_dir = _plain_text(receipt_dir, f"{label}.receipt_dir")
+        if not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
         validated_receipt_dir = _validate_artifact_path(
@@ -3631,6 +3873,7 @@ def _stage_summary(
             "_dry_run": command_uses_dry_run,
             "_receipt_dirs": receipt_dirs,
             "_receipt_files": receipt_files,
+            "_command_modes": _stage_command_mode_summary(name, command),
             "started_at": started_at_raw,
             "finished_at": finished_at_raw,
         }
@@ -3667,6 +3910,7 @@ def _stage_summary(
         if command_uses_insecure_http
         else None,
         "_uses_failed_receipt_policy": False,
+        "_command_modes": _stage_command_mode_summary(name, command),
         "_command": command,
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
@@ -3685,8 +3929,7 @@ def _planned_stage_summary(
     if dry_run and not args.allow_dry_run:
         raise EvidenceError(f"{label} planned a dry-run stage")
     command = _require_list(stage.get("command"), f"{label}.command")
-    if not all(isinstance(item, str) for item in command):
-        raise EvidenceError(f"{label}.command must contain strings")
+    command = _require_command_strings(command, label)
     _check_command_policy(
         command,
         label,
@@ -3705,7 +3948,10 @@ def _planned_stage_summary(
     receipt_dir = None
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
-        if not isinstance(receipt_dir, str) or not receipt_dir.strip():
+        if not isinstance(receipt_dir, str):
+            raise EvidenceError(f"{label}.receipt_dir must be recorded")
+        receipt_dir = _plain_text(receipt_dir, f"{label}.receipt_dir")
+        if not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
     _check_stage_command_flags(name, command, label)
@@ -3734,6 +3980,7 @@ def _planned_stage_summary(
             label,
         ),
         "_uses_failed_receipt_policy": False,
+        "_command_modes": _stage_command_mode_summary(name, command),
     }
 
 
@@ -3946,6 +4193,50 @@ def _check_rail_receipt_policy_binding(
         )
 
 
+def _check_notary_receipt_anchor_policy_binding(
+    path: str,
+    stage_results: list[dict[str, Any]],
+    receipt_summary: dict[str, Any] | None,
+) -> None:
+    notary_stage = next(
+        (
+            stage
+            for stage in stage_results
+            if stage["name"] == "notary" and not stage.get("_dry_run")
+        ),
+        None,
+    )
+    if notary_stage is None or receipt_summary is None:
+        return
+
+    notary_uses_all = _command_has_flag(notary_stage["_command"], "--all")
+    notary_receipts = [
+        receipt
+        for receipt in receipt_summary["receipts"]
+        if receipt["receipt_kind"] == "iso-audit-notary"
+    ]
+    if not notary_receipts:
+        return
+    has_latest_anchor = any(
+        receipt["anchor_path"].split("/")[-1] == LATEST_ANCHOR_FILE
+        for receipt in notary_receipts
+    )
+    has_digest_addressed_anchor = any(
+        receipt["anchor_path"].split("/")[-1] != LATEST_ANCHOR_FILE
+        for receipt in notary_receipts
+    )
+    if notary_uses_all and has_latest_anchor:
+        raise EvidenceError(
+            f"{path}.receipt_summary records latest notary anchor but notary "
+            "command used --all"
+        )
+    if not notary_uses_all and has_digest_addressed_anchor:
+        raise EvidenceError(
+            f"{path}.receipt_summary records digest-addressed notary anchor "
+            "but notary command omitted --all"
+        )
+
+
 def verify_canary_summary(
     path: Path,
     args: argparse.Namespace,
@@ -3964,11 +4255,7 @@ def verify_canary_summary(
     _reject_unknown_keys(summary, CANARY_SUMMARY_KEYS, label)
     _check_no_secret_material(summary, label)
     version = summary.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != CANARY_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != CANARY_SUMMARY_VERSION:
         raise EvidenceError(f"{label}.version must be {CANARY_SUMMARY_VERSION}")
 
     provider = _required_context_string(summary, "provider", label)
@@ -4088,13 +4375,24 @@ def verify_canary_summary(
         if stage_result["name"] in {"rail", "notary"} and not stage_result.get("_dry_run"):
             receipt_dir = stage_result.get("receipt_dir")
             if receipt_dir is not None:
-                stage_stdout_receipts[stage_result["name"]] = _check_stage_adapter_stdout(
+                adapter_stdout = _check_stage_adapter_stdout(
                     stage_result["name"],
                     stage,
                     f"{label}.stages[{offset}]",
                     receipt_dir,
                     stage_result["_command"],
                 )
+                stage_stdout_receipts[stage_result["name"]] = adapter_stdout[
+                    "receipts"
+                ]
+                if stage_result["name"] == "notary":
+                    stage_result["_command_modes"][
+                        "notary_published_anchor_count"
+                    ] = adapter_stdout["notary_published_anchor_count"]
+                if stage_result["name"] == "rail":
+                    stage_result["_command_modes"][
+                        "rail_submitted_message_count"
+                    ] = adapter_stdout["rail_submitted_message_count"]
         elif stage_result["name"] == "verify" and "receipt_summary" in stage_result:
             _check_receipt_stdout_selector_binding(
                 stage_result["_receipt_dirs"],
@@ -4132,6 +4430,7 @@ def verify_canary_summary(
         receipt_summary,
     )
     _check_rail_receipt_policy_binding(label, stage_results, receipt_summary)
+    _check_notary_receipt_anchor_policy_binding(label, stage_results, receipt_summary)
     policy_stage_results = planned_stage_results if plan_only else stage_results
 
     return {
@@ -4147,6 +4446,9 @@ def verify_canary_summary(
         "stage_names": stage_names,
         "stage_dry_run": [
             bool(stage.get("_dry_run")) for stage in policy_stage_results
+        ],
+        "stage_command_modes": [
+            stage["_command_modes"] for stage in policy_stage_results
         ],
         "stage_windows": [
             {
@@ -4455,6 +4757,7 @@ def _reject_placeholder_trust_source_url(url: str, label: str) -> None:
 def _parse_timestamp(value: Any, label: str) -> dt.datetime:
     if not isinstance(value, str):
         raise EvidenceError(f"{label} must be recorded")
+    value = _plain_text(value, label)
     if len(value) > MAX_TIMESTAMP_CHARS:
         raise EvidenceError(
             f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
@@ -4596,7 +4899,10 @@ def _check_trust_bundle(
         _reject_secret_looking_identifier(authority, f"{label}.source.authority")
         _reject_secret_looking_identifier(version, f"{label}.source.version")
         url = source_obj.get("url")
-        if not isinstance(url, str) or not url.strip():
+        if not isinstance(url, str):
+            raise EvidenceError(f"{label}.source.url must be recorded")
+        url = _plain_text(url, f"{label}.source.url")
+        if not url.strip():
             raise EvidenceError(f"{label}.source.url must be recorded")
         if _contains_control_character(url):
             raise EvidenceError(f"{label}.source.url must not contain control characters")
@@ -4954,11 +5260,7 @@ def verify_trust_summary(
     _reject_unknown_keys(summary, TRUST_SUMMARY_KEYS, label)
     _check_no_secret_material(summary, label)
     version = summary.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != TRUST_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != TRUST_SUMMARY_VERSION:
         raise EvidenceError(f"{label}.version must be {TRUST_SUMMARY_VERSION}")
     verified_at_raw, verified_at = _required_timestamp(summary, "verified_at", label)
     _reject_stale_timestamp(
@@ -5343,8 +5645,41 @@ def _receipt_summaries_have_source_file_gap(
     return any(not summary["require_source_files"] for summary in receipt_summaries)
 
 
+def _plain_public_json_value(value: Any) -> Any:
+    if type(value) is dict:
+        output: dict[str, Any] = {}
+        for key, child in value.items():
+            if type(key) is not str:
+                return "unsupported"
+            output[key] = _plain_public_json_value(child)
+        return output
+    if type(value) is list:
+        return [_plain_public_json_value(item) for item in value]
+    if (
+        value is None
+        or type(value) is str
+        or type(value) is bool
+        or type(value) is int
+    ):
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else "unsupported"
+    return "unsupported"
+
+
+def _public_json_object_without_private_fields(summary: Any) -> dict[str, Any]:
+    if type(summary) is not dict:
+        return {}
+    output: dict[str, Any] = {}
+    for key, value in summary.items():
+        if type(key) is not str or key.startswith("_"):
+            continue
+        output[key] = _plain_public_json_value(value)
+    return output
+
+
 def _public_canary_summary(canary: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in canary.items() if not key.startswith("_")}
+    return _public_json_object_without_private_fields(canary)
 
 
 def _compact_summary_order_key(summary: dict[str, Any]) -> tuple[str, str]:
@@ -5614,7 +5949,7 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
 def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+    if isinstance(value, (str, bytes)) or type(value) not in (list, tuple):
         raise EvidenceError(f"{label} must be a repeatable path list")
     if len(value) > MAX_EVIDENCE_INPUT_PATHS:
         raise EvidenceError(f"{label} accepts at most {MAX_EVIDENCE_INPUT_PATHS} paths")
@@ -5622,14 +5957,17 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):
             raise EvidenceError(f"{label}[{offset}] must be a path")
-        try:
+        if isinstance(entry, str):
+            paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
+        elif isinstance(entry, Path):
             paths.append(Path(entry))
-        except TypeError as error:
-            raise EvidenceError(f"{label}[{offset}] must be a path") from error
+        else:
+            raise EvidenceError(f"{label}[{offset}] must be a path")
     return paths
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
     if args.summary_out is not None:
         _reject_output_path_smuggling(args.summary_out, "summary_out")
@@ -5688,8 +6026,8 @@ def run(args: argparse.Namespace) -> int:
         "--receipt-verifier-timeout-secs",
     )
 
-    _reject_duplicate_paths([path.resolve() for path in canary_paths], "--canary-summary")
-    _reject_duplicate_paths([path.resolve() for path in trust_paths], "--trust-summary")
+    _reject_duplicate_paths(canary_paths, "--canary-summary")
+    _reject_duplicate_paths(trust_paths, "--trust-summary")
     _reject_summary_output_input_alias(
         args.summary_out,
         tuple(
@@ -5883,6 +6221,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Verify archived ISO 20022 operator canary and trust evidence.",
         allow_abbrev=False,
     )
@@ -6024,10 +6363,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--canary-summary",
                 "--environment",
@@ -6044,7 +6384,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--allow-canary-stage-receipts-only",
                 "--allow-default-profile",
@@ -6062,17 +6402,17 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_required_cli_values(
-            argv,
+            normalised_argv,
             {"--environment", "--provider"},
             "context",
         )
         _preflight_required_cli_values(
-            argv,
+            normalised_argv,
             {"--default-rail-profile"},
             "profile id",
         )
         _preflight_numeric_cli_values(
-            argv,
+            normalised_argv,
             integer_flags={
                 "--max-canary-age-days",
                 "--max-trust-age-days",
@@ -6081,7 +6421,7 @@ def main(argv: list[str] | None = None) -> int:
             number_flags={"--receipt-verifier-timeout-secs"},
         )
         _preflight_output_cli_paths(
-            argv,
+            normalised_argv,
             {
                 "--canary-summary",
                 "--receipt",
@@ -6090,7 +6430,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--trust-summary",
             },
         )
-        args = parser.parse_args(argv)
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except EvidenceError as error:
         print(f"error: {error}", file=sys.stderr)

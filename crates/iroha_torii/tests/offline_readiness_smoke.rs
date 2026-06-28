@@ -128,7 +128,7 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert!(
         body.contains("\"offline_kagemusha_abi7_circuit_id\":\"kagemusha-recursive-compact-v1\"")
     );
-    assert!(body.contains("\"offline_kagemusha_abi7_artifacts\":true"));
+    assert!(body.contains("\"offline_kagemusha_abi7_artifacts\":false"));
     assert!(body.contains("\"offline_kagemusha_recursive_compact_available\":true"));
     assert!(body.contains("\"offline_kagemusha_recursive_compact_mode\":\"recursive_compact_v1\""));
     assert!(
@@ -139,7 +139,7 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert!(body.contains(
         "\"offline_kagemusha_recursive_compact_circuit_id\":\"kagemusha-recursive-compact-v1\""
     ));
-    assert!(body.contains("\"offline_kagemusha_recursive_compact_artifacts_available\":true"));
+    assert!(body.contains("\"offline_kagemusha_recursive_compact_artifacts_available\":false"));
     for field in [
         "offline_note",
         "offline_bearer_cash_v1",

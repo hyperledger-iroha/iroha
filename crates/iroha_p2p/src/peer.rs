@@ -1437,6 +1437,52 @@ pub(crate) mod test_support {
     }
 }
 
+/// Per-peer outbound encrypted frame backlog limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutboundFrameQueueLimits {
+    /// Maximum high-priority encrypted frame bytes retained by one peer actor.
+    pub(crate) high_max_bytes: usize,
+    /// Maximum low-priority encrypted frame bytes retained by one peer actor.
+    pub(crate) low_max_bytes: usize,
+    /// Maximum high-priority encrypted frames retained by one peer actor.
+    pub(crate) high_max_frames: usize,
+    /// Maximum low-priority encrypted frames retained by one peer actor.
+    pub(crate) low_max_frames: usize,
+}
+
+impl OutboundFrameQueueLimits {
+    /// Build non-zero limits from configuration values.
+    #[must_use]
+    pub(crate) fn new(
+        high_max_bytes: usize,
+        low_max_bytes: usize,
+        high_max_frames: usize,
+        low_max_frames: usize,
+    ) -> Self {
+        Self {
+            high_max_bytes: high_max_bytes.max(1),
+            low_max_bytes: low_max_bytes.max(1),
+            high_max_frames: high_max_frames.max(1),
+            low_max_frames: low_max_frames.max(1),
+        }
+    }
+}
+
+impl Default for OutboundFrameQueueLimits {
+    fn default() -> Self {
+        Self::new(
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES
+                .get(),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES
+                .get(),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES
+                .get(),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES
+                .get(),
+        )
+    }
+}
+
 pub mod handles {
     //! Module with functions to start peer actor and handle to interact with it.
 
@@ -1463,6 +1509,7 @@ pub mod handles {
         crypto_caps: Option<crate::CryptoHandshakeCaps>,
         soranet_handshake: Arc<SoranetHandshakeConfig>,
         post_capacity: usize,
+        outbound_frame_queue_limits: OutboundFrameQueueLimits,
         quic_enabled: bool,
         tls_enabled: bool,
         tls_fallback_to_plain: bool,
@@ -1520,6 +1567,7 @@ pub mod handles {
             service_message_sender,
             idle_timeout,
             post_capacity,
+            outbound_frame_queue_limits,
             max_frame_bytes,
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
@@ -1546,6 +1594,7 @@ pub mod handles {
         soranet_handshake: Arc<SoranetHandshakeConfig>,
         local_scion_supported: bool,
         post_capacity: usize,
+        outbound_frame_queue_limits: OutboundFrameQueueLimits,
         relay_role: RelayRole,
         trust_gossip: bool,
         max_frame_bytes: usize,
@@ -1575,6 +1624,7 @@ pub mod handles {
             service_message_sender,
             idle_timeout,
             post_capacity,
+            outbound_frame_queue_limits,
             max_frame_bytes,
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
@@ -2613,6 +2663,7 @@ mod run {
             service_message_sender,
             idle_timeout,
             post_capacity,
+            outbound_frame_queue_limits,
             max_frame_bytes,
             quic_datagrams_enabled,
             quic_datagram_max_payload_bytes,
@@ -2741,9 +2792,19 @@ mod run {
             let mut read_err_sampler = LogSampler::new();
             let mut malformed_payload_sampler = LogSampler::new();
             let mut recv_backpressure_sampler = LogSampler::new();
-            let mut message_sender_hi = MessageSender::new(write, cryptographer.clone(), max_frame_bytes);
+            let mut message_sender_hi = MessageSender::with_limits(
+                write,
+                cryptographer.clone(),
+                max_frame_bytes,
+                outbound_frame_queue_limits,
+            );
             let mut message_sender_low =
-                write_low.map(|write| MessageSender::new(write, cryptographer.clone(), max_frame_bytes));
+                write_low.map(|write| MessageSender::with_limits(
+                    write,
+                    cryptographer.clone(),
+                    max_frame_bytes,
+                    outbound_frame_queue_limits,
+                ));
 
             #[cfg(feature = "quic")]
             let mut datagram_sender: Option<DatagramSender<E>> = None;
@@ -3485,6 +3546,7 @@ mod run {
         pub service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         pub idle_timeout: Duration,
         pub post_capacity: usize,
+        pub outbound_frame_queue_limits: OutboundFrameQueueLimits,
         #[allow(dead_code)]
         pub max_frame_bytes: usize,
         pub quic_datagrams_enabled: bool,
@@ -3856,6 +3918,12 @@ mod run {
         queue_high_other: VecDeque<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (low priority).
         queue_low: VecDeque<BytesMut>,
+        /// Retained encrypted-frame queue limits.
+        queue_limits: OutboundFrameQueueLimits,
+        queued_high_bytes: usize,
+        queued_low_bytes: usize,
+        queued_high_frames: usize,
+        queued_low_frames: usize,
         /// In-flight coalesced bytes currently being written to the socket.
         batch: BytesMut,
         batch_offset: usize,
@@ -3914,10 +3982,25 @@ mod run {
         const MAX_PLAINTEXT_BYTES_HI: usize = 64 * 1024;
         const MAX_PLAINTEXT_BYTES_LO: usize = 256 * 1024;
 
+        #[cfg(test)]
         fn new(
             write: Box<dyn AsyncWrite + Send + Unpin>,
             cryptographer: Cryptographer<E>,
             max_frame_bytes: usize,
+        ) -> Self {
+            Self::with_limits(
+                write,
+                cryptographer,
+                max_frame_bytes,
+                OutboundFrameQueueLimits::default(),
+            )
+        }
+
+        fn with_limits(
+            write: Box<dyn AsyncWrite + Send + Unpin>,
+            cryptographer: Cryptographer<E>,
+            max_frame_bytes: usize,
+            queue_limits: OutboundFrameQueueLimits,
         ) -> Self {
             let prealloc = max_frame_bytes.min(DEFAULT_MESSAGE_PREALLOC_CAP);
             let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
@@ -3939,6 +4022,11 @@ mod run {
                 queue_high_consensus_chunk: VecDeque::new(),
                 queue_high_other: VecDeque::new(),
                 queue_low: VecDeque::new(),
+                queue_limits,
+                queued_high_bytes: 0,
+                queued_low_bytes: 0,
+                queued_high_frames: 0,
+                queued_low_frames: 0,
                 batch: BytesMut::with_capacity(batch_capacity),
                 batch_offset: 0,
                 max_frame_bytes,
@@ -4133,29 +4221,91 @@ mod run {
             }
         }
 
+        fn queue_stats(&self, priority: Priority) -> (&'static str, usize, usize, usize, usize) {
+            match priority {
+                Priority::High => (
+                    "high",
+                    self.queued_high_bytes,
+                    self.queue_limits.high_max_bytes,
+                    self.queued_high_frames,
+                    self.queue_limits.high_max_frames,
+                ),
+                Priority::Low => (
+                    "low",
+                    self.queued_low_bytes,
+                    self.queue_limits.low_max_bytes,
+                    self.queued_low_frames,
+                    self.queue_limits.low_max_frames,
+                ),
+            }
+        }
+
+        fn check_queue_limit(&self, priority: Priority, frame_len: usize) -> Result<(), Error> {
+            let (label, queued_bytes, max_bytes, queued_frames, max_frames) =
+                self.queue_stats(priority);
+            if queued_bytes.saturating_add(frame_len) > max_bytes
+                || queued_frames.saturating_add(1) > max_frames
+            {
+                return Err(Error::OutboundFrameQueueFull {
+                    priority: label,
+                    queued_bytes,
+                    max_bytes,
+                    queued_frames,
+                    max_frames,
+                });
+            }
+            Ok(())
+        }
+
+        fn account_enqueued(&mut self, priority: Priority, frame_len: usize) {
+            match priority {
+                Priority::High => {
+                    self.queued_high_bytes = self.queued_high_bytes.saturating_add(frame_len);
+                    self.queued_high_frames = self.queued_high_frames.saturating_add(1);
+                }
+                Priority::Low => {
+                    self.queued_low_bytes = self.queued_low_bytes.saturating_add(frame_len);
+                    self.queued_low_frames = self.queued_low_frames.saturating_add(1);
+                }
+            }
+        }
+
+        fn account_dequeued(&mut self, priority: Priority, frame_len: usize) {
+            match priority {
+                Priority::High => {
+                    self.queued_high_bytes = self.queued_high_bytes.saturating_sub(frame_len);
+                    self.queued_high_frames = self.queued_high_frames.saturating_sub(1);
+                }
+                Priority::Low => {
+                    self.queued_low_bytes = self.queued_low_bytes.saturating_sub(frame_len);
+                    self.queued_low_frames = self.queued_low_frames.saturating_sub(1);
+                }
+            }
+        }
+
         fn enqueue_encrypted(
             &mut self,
             plaintext: &[u8],
             priority: Priority,
             high_class: Option<HighBatchClass>,
         ) -> Result<(), Error> {
-            let encrypted = self
-                .cryptographer
+            self.cryptographer
                 .encrypt_into(plaintext, &mut self.encrypted)?;
 
-            let size = encrypted.len();
+            let size = self.encrypted.len();
             if size > self.max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
+            let needed = size.saturating_add(Self::U32_SIZE);
+            self.check_queue_limit(priority, needed)?;
             let mut frame = self.frame_pool.pop().unwrap_or_default();
             frame.clear();
-            let needed = size.saturating_add(Self::U32_SIZE);
             if frame.capacity() < needed {
                 frame.reserve(needed.saturating_sub(frame.len()));
             }
             #[allow(clippy::cast_possible_truncation)]
             frame.put_u32(size as u32);
-            frame.put_slice(encrypted);
+            frame.put_slice(&self.encrypted);
             match priority {
                 Priority::High => match high_class.unwrap_or(HighBatchClass::Other) {
                     HighBatchClass::Control => self.queue_high_control.push_back(frame),
@@ -4170,6 +4320,7 @@ mod run {
                 },
                 Priority::Low => self.queue_low.push_back(frame),
             }
+            self.account_enqueued(priority, needed);
             Ok(())
         }
 
@@ -4259,13 +4410,25 @@ mod run {
         }
 
         fn pop_high_frame(&mut self, class: HighBatchClass) -> Option<BytesMut> {
-            match class {
+            let frame = match class {
                 HighBatchClass::Control => self.queue_high_control.pop_front(),
                 HighBatchClass::Consensus => self.queue_high_consensus.pop_front(),
                 HighBatchClass::ConsensusPayload => self.queue_high_consensus_payload.pop_front(),
                 HighBatchClass::ConsensusChunk => self.queue_high_consensus_chunk.pop_front(),
                 HighBatchClass::Other => self.queue_high_other.pop_front(),
+            };
+            if let Some(frame) = frame.as_ref() {
+                self.account_dequeued(Priority::High, frame.len());
             }
+            frame
+        }
+
+        fn pop_low_frame(&mut self) -> Option<BytesMut> {
+            let frame = self.queue_low.pop_front();
+            if let Some(frame) = frame.as_ref() {
+                self.account_dequeued(Priority::Low, frame.len());
+            }
+            frame
         }
 
         fn note_high_batch_sent(&mut self, class: HighBatchClass) {
@@ -4348,7 +4511,7 @@ mod run {
                 let Some(mut frame) = (if let Some(class) = next_high {
                     self.pop_high_frame(class)
                 } else {
-                    self.queue_low.pop_front()
+                    self.pop_low_frame()
                 }) else {
                     break;
                 };
@@ -4653,6 +4816,37 @@ mod run {
             let stats = stats.lock().expect("stats lock");
             assert!(stats.writes > 0, "expected at least one write");
             assert!(stats.flushes > 0, "expected at least one flush");
+        }
+
+        #[test]
+        fn message_sender_rejects_high_frame_queue_overflow() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[19u8; 32])
+                    .expect("valid key length");
+            let limits = OutboundFrameQueueLimits::new(1_048_576, 1_048_576, 1, 16);
+            let mut sender =
+                MessageSender::with_limits(Box::new(writer), cryptographer, 1024, limits);
+
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect("first high-priority frame fits");
+            let err = sender
+                .prepare_message(&Message::Data(RoutedMsg::Consensus(2)), Priority::High)
+                .expect_err("second high-priority frame must hit frame-count cap");
+
+            assert!(matches!(
+                err,
+                Error::OutboundFrameQueueFull {
+                    priority: "high",
+                    queued_frames: 1,
+                    max_frames: 1,
+                    ..
+                }
+            ));
+            assert_eq!(sender.queued_high_frames, 1);
+            assert!(sender.queued_high_bytes > 0);
         }
 
         #[tokio::test(flavor = "current_thread")]

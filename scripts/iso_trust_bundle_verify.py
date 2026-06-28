@@ -27,6 +27,7 @@ import errno
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -265,6 +266,37 @@ class TrustBundleError(RuntimeError):
     """Raised when an ISO trust bundle is malformed or unsafe."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise TrustBundleError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise TrustBundleError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise TrustBundleError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise TrustBundleError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise TrustBundleError("args must be an argparse.Namespace")
+    return args
+
+
 @dataclass(frozen=True)
 class DerElement:
     """One parsed DER TLV element."""
@@ -295,7 +327,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _has_unsafe_control(detail):
@@ -339,6 +374,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise TrustBundleError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise TrustBundleError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise TrustBundleError(f"cannot inspect {label}: I/O error") from None
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise TrustBundleError(f"{label} must not be a symlink")
@@ -369,9 +409,14 @@ def _read_regular_file(
             raise TrustBundleError(f"{label} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise TrustBundleError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise TrustBundleError(f"cannot open {label} for reading: I/O error") from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
@@ -441,7 +486,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -463,7 +508,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -500,7 +545,7 @@ def _preflight_positive_int_cli_values(
     argv: list[str] | None,
     flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -532,7 +577,7 @@ def _preflight_positive_int_cli_values(
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -592,9 +637,19 @@ def _same_existing_file(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise TrustBundleError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise TrustBundleError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_output_input_alias(
@@ -644,14 +699,47 @@ def _ensure_text_output_target(
             path.parent.mkdir(parents=True, exist_ok=True)
         except FileExistsError as error:
             raise TrustBundleError(f"{label} must be a directory") from error
-    if path.parent.exists() or path.parent.is_symlink():
-        parent_mode = path.parent.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise TrustBundleError(
+                f"cannot create {label} parent: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise TrustBundleError(f"cannot create {label} parent: I/O error") from None
+    def inspected_exists(target: Path, role: str) -> bool:
+        try:
+            return target.exists() or target.is_symlink()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise TrustBundleError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise TrustBundleError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    def inspected_lstat(target: Path, role: str) -> os.stat_result:
+        try:
+            return target.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise TrustBundleError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise TrustBundleError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    if inspected_exists(path.parent, "parent"):
+        parent_mode = inspected_lstat(path.parent, "parent").st_mode
         if stat.S_ISLNK(parent_mode):
             raise TrustBundleError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(parent_mode):
             raise TrustBundleError(f"{label} must be a directory")
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    if inspected_exists(path, "leaf"):
+        metadata = inspected_lstat(path, "leaf")
         if stat.S_ISLNK(metadata.st_mode):
             raise TrustBundleError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -693,26 +781,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise TrustBundleError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise TrustBundleError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise TrustBundleError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise TrustBundleError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise TrustBundleError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise TrustBundleError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _reject_symlinked_existing_ancestors(
@@ -728,6 +838,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label or str(current)
+            raise TrustBundleError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label or str(current)
+            raise TrustBundleError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -806,9 +929,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise TrustBundleError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise TrustBundleError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise TrustBundleError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -816,6 +942,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise TrustBundleError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise TrustBundleError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -826,14 +954,22 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise TrustBundleError(f"{label} must be a JSON object")
     return value
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise TrustBundleError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise TrustBundleError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise TrustBundleError(f"{label} contains unknown keys")
+    return present
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -936,17 +1072,24 @@ def _check_no_secret_material(value: Any, path: str = "$", *, _depth: int = 0) -
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, dict):
+        if type(value) is not dict:
+            raise TrustBundleError(f"{path} contains non-plain JSON object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise TrustBundleError(
                 f"{path} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
             )
         for key, child in value.items():
-            if _is_secret_looking_key(key):
+            if not isinstance(key, str):
+                raise TrustBundleError(f"{path} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{path} field")
+            if _is_secret_looking_key(key_text):
                 raise TrustBundleError(f"{path} contains forbidden secret-looking field")
-            if _is_control_bearing_key(key):
+            if _is_control_bearing_key(key_text):
                 raise TrustBundleError(f"{path} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{path}.{key}", _depth=_depth + 1)
+            _check_no_secret_material(child, f"{path}.{key_text}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise TrustBundleError(f"{path} contains non-plain JSON array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise TrustBundleError(
                 f"{path} must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -954,6 +1097,7 @@ def _check_no_secret_material(value: Any, path: str = "$", *, _depth: int = 0) -
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{path}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
+        value = _plain_text(value, path)
         if _contains_unsafe_json_control(value):
             raise TrustBundleError(f"{path} contains unsafe control characters")
         if _contains_secret_material(value):
@@ -1028,13 +1172,17 @@ def _required_string(
     max_chars: int | None = MAX_CLEAN_STRING_CHARS,
 ) -> str:
     raw = bundle.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise TrustBundleError(f"{label}.{key} must be a non-empty string")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise TrustBundleError(f"{field_label} must be a non-empty string")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise TrustBundleError(f"{field_label} must be a non-empty string")
     if max_chars is not None and len(raw) > max_chars:
-        raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
-    _reject_unsafe_control(raw, f"{label}.{key}")
+        raise TrustBundleError(f"{field_label} must be no longer than {max_chars} characters")
+    _reject_unsafe_control(raw, field_label)
     if raw != raw.strip():
-        raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
+        raise TrustBundleError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -1070,13 +1218,17 @@ def _optional_string(
     if key not in bundle:
         return None
     raw = bundle.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise TrustBundleError(f"{label}.{key} must be a non-empty string when provided")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise TrustBundleError(f"{field_label} must be a non-empty string when provided")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise TrustBundleError(f"{field_label} must be a non-empty string when provided")
     if max_chars is not None and len(raw) > max_chars:
-        raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
-    _reject_unsafe_control(raw, f"{label}.{key}")
+        raise TrustBundleError(f"{field_label} must be no longer than {max_chars} characters")
+    _reject_unsafe_control(raw, field_label)
     if raw != raw.strip():
-        raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
+        raise TrustBundleError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -1085,9 +1237,10 @@ def _optional_positive_cli_int(value: Any, label: str) -> int | None:
         return None
     if isinstance(value, bool):
         raise TrustBundleError(f"{label} must be a positive integer")
-    if isinstance(value, int):
+    if type(value) is int:
         parsed = value
     elif isinstance(value, str):
+        value = _plain_text(value, label)
         if any(ord(ch) > 0x7E for ch in value):
             raise TrustBundleError(f"{label} must use printable ASCII")
         if value != value.strip() or not value.isdecimal():
@@ -1111,16 +1264,17 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise TrustBundleError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if isinstance(value, Path):
         return Path(value)
-    except TypeError as error:
-        raise TrustBundleError(f"{label} must be a path") from error
+    raise TrustBundleError(f"{label} must be a path")
 
 
 def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+    if isinstance(value, (str, bytes)) or type(value) not in (list, tuple):
         raise TrustBundleError(f"{label} must be a repeatable path list")
     if len(value) > MAX_BUNDLE_INPUT_PATHS:
         raise TrustBundleError(f"{label} accepts at most {MAX_BUNDLE_INPUT_PATHS} paths")
@@ -1128,10 +1282,12 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):
             raise TrustBundleError(f"{label}[{offset}] must be a path")
-        try:
+        if isinstance(entry, str):
+            paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
+        elif isinstance(entry, Path):
             paths.append(Path(entry))
-        except TypeError as error:
-            raise TrustBundleError(f"{label}[{offset}] must be a path") from error
+        else:
+            raise TrustBundleError(f"{label}[{offset}] must be a path")
     return paths
 
 
@@ -1177,7 +1333,7 @@ def _required_list_field(
     if key not in bundle:
         raise TrustBundleError(f"{label}.{key} must be recorded as an array of {description}")
     value = bundle[key]
-    if not isinstance(value, list):
+    if type(value) is not list:
         return value
     if len(value) > MAX_JSON_LIST_ITEMS:
         raise TrustBundleError(
@@ -1188,18 +1344,20 @@ def _required_list_field(
 
 def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
     raw = _required_list_field(bundle, key, label, "SHA-256 strings")
-    if not isinstance(raw, list):
+    if type(raw) is not list:
         raise TrustBundleError(f"{label}.{key} must be an array of SHA-256 strings")
     result: list[str] = []
     seen: set[str] = set()
     for offset, item in enumerate(raw):
+        item_label = f"{label}.{key}[{offset}]"
         if not isinstance(item, str):
-            raise TrustBundleError(f"{label}.{key}[{offset}] must be a SHA-256 string")
+            raise TrustBundleError(f"{item_label} must be a SHA-256 string")
+        item = _plain_text(item, item_label)
         if item != item.strip():
-            raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
-        digest = _validate_sha256(item, f"{label}.{key}[{offset}]")
+            raise TrustBundleError(f"{item_label} must not have surrounding whitespace")
+        digest = _validate_sha256(item, item_label)
         if digest in seen:
-            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates SHA-256")
+            raise TrustBundleError(f"{item_label} duplicates SHA-256")
         seen.add(digest)
         result.append(digest)
     return sorted(result)
@@ -1207,25 +1365,27 @@ def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
 
 def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
     raw = _required_list_field(bundle, key, label, "dotted numeric OIDs")
-    if not isinstance(raw, list):
+    if type(raw) is not list:
         raise TrustBundleError(f"{label}.{key} must be an array of dotted numeric OIDs")
     result: list[str] = []
     seen: set[str] = set()
     for offset, item in enumerate(raw):
+        item_label = f"{label}.{key}[{offset}]"
         if not isinstance(item, str):
-            raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
+            raise TrustBundleError(f"{item_label} must be a dotted numeric OID")
+        item = _plain_text(item, item_label)
         if len(item) > MAX_CLEAN_STRING_CHARS:
             raise TrustBundleError(
-                f"{label}.{key}[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+                f"{item_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
             )
         if item != item.strip():
-            raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
+            raise TrustBundleError(f"{item_label} must not have surrounding whitespace")
         value = item
-        _reject_secret_looking_identifier(value, f"{label}.{key}[{offset}]")
+        _reject_secret_looking_identifier(value, item_label)
         if not _valid_oid(value):
-            raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
+            raise TrustBundleError(f"{item_label} must be a dotted numeric OID")
         if value in seen:
-            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates OID")
+            raise TrustBundleError(f"{item_label} duplicates OID")
         seen.add(value)
         result.append(value)
     return sorted(result)
@@ -1440,7 +1600,7 @@ def _der_objects(
     allow_synthetic_der: bool,
 ) -> tuple[list[dict[str, Any]], list[str], bool]:
     raw = _required_list_field(bundle, key, label, "DER objects")
-    if not isinstance(raw, list):
+    if type(raw) is not list:
         raise TrustBundleError(f"{label}.{key} must be an array of DER objects")
     if len(raw) > MAX_DER_BLOBS:
         raise TrustBundleError(f"{label}.{key} must not contain more than {MAX_DER_BLOBS} entries")
@@ -1548,7 +1708,10 @@ def _validate_retrieved_at(value: str, label: str) -> None:
     _parse_timestamp(value, label)
 
 
-def _parse_timestamp(value: str, label: str) -> dt.datetime:
+def _parse_timestamp(value: Any, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise TrustBundleError(f"{label} must be recorded")
+    value = _plain_text(value, label)
     if len(value) > MAX_TIMESTAMP_CHARS:
         raise TrustBundleError(
             f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
@@ -1782,12 +1945,41 @@ def _reject_unused_local_overrides(
         )
 
 
+def _plain_public_json_value(value: Any) -> Any:
+    if type(value) is dict:
+        output: dict[str, Any] = {}
+        for key, child in value.items():
+            if type(key) is not str:
+                return "unsupported"
+            output[key] = _plain_public_json_value(child)
+        return output
+    if type(value) is list:
+        return [_plain_public_json_value(item) for item in value]
+    if (
+        value is None
+        or type(value) is str
+        or type(value) is bool
+        or type(value) is int
+    ):
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else "unsupported"
+    return "unsupported"
+
+
+def _public_json_object_without_private_fields(summary: Any) -> dict[str, Any]:
+    if type(summary) is not dict:
+        return {}
+    output: dict[str, Any] = {}
+    for key, value in summary.items():
+        if type(key) is not str or key.startswith("_"):
+            continue
+        output[key] = _plain_public_json_value(value)
+    return output
+
+
 def _public_bundle_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in summary.items()
-        if not key.startswith("_")
-    }
+    return _public_json_object_without_private_fields(summary)
 
 
 def _bundle_summary_order_key(summary: dict[str, Any]) -> tuple[str, str, str]:
@@ -1959,7 +2151,7 @@ def _reject_overlap(left: list[str], right: list[str], label: str) -> None:
 def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     seen: dict[str, int] = {}
     for offset, path in enumerate(paths):
-        key = str(path)
+        key = str(_path_resolve(path, f"{label}[{offset}]"))
         if key in seen:
             raise TrustBundleError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
@@ -1996,11 +2188,7 @@ def verify_bundle(
     _reject_unknown_keys(bundle, TOP_LEVEL_KEYS, label)
     _check_no_secret_material(bundle, label)
     bundle_version = bundle.get("version")
-    if (
-        isinstance(bundle_version, bool)
-        or not isinstance(bundle_version, int)
-        or bundle_version != BUNDLE_VERSION
-    ):
+    if type(bundle_version) is not int or bundle_version != BUNDLE_VERSION:
         raise TrustBundleError(f"{label}.version must be {BUNDLE_VERSION}")
 
     profile_id = _required_profile_id(bundle, "profile_id", label)
@@ -2179,6 +2367,7 @@ def verify_bundle(
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
     args.emit_profile_json = _optional_cli_path(
         getattr(args, "emit_profile_json", None),
@@ -2228,7 +2417,7 @@ def run(args: argparse.Namespace) -> int:
             display_label="emit_profile_json",
             create_parent=False,
         )
-    _reject_duplicate_paths([path.resolve() for path in bundle_paths], "--bundle")
+    _reject_duplicate_paths(bundle_paths, "--bundle")
     summaries = []
     for offset, path in enumerate(bundle_paths):
         summaries.append(
@@ -2288,6 +2477,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Verify ISO 20022 XMLDSig/XAdES operator trust bundle JSON.",
         allow_abbrev=False,
     )
@@ -2334,10 +2524,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--bundle",
                 "--emit-profile-json",
@@ -2346,19 +2537,19 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--allow-insecure-source-url",
                 "--allow-record-only",
                 "--allow-synthetic-der",
             },
         )
-        _preflight_positive_int_cli_values(argv, {"--max-source-age-days"})
+        _preflight_positive_int_cli_values(normalised_argv, {"--max-source-age-days"})
         _preflight_output_cli_paths(
-            argv,
+            normalised_argv,
             {"--bundle", "--emit-profile-json", "--summary-out"},
         )
-        args = parser.parse_args(argv)
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except TrustBundleError as error:
         print(f"error: {error}", file=sys.stderr)

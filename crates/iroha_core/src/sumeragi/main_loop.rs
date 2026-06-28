@@ -7,6 +7,7 @@
 use std::{
     borrow::Cow,
     cell::Cell,
+    cmp::Reverse,
     collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     convert::TryFrom,
     ffi::OsStr,
@@ -674,20 +675,26 @@ fn realign_qcs_after_failed_commit(
     (new_locked, new_highest)
 }
 
-fn requeue_block_transactions(
+fn requeue_block_transactions<I>(
     queue: &Queue,
     state: &State,
-    txs: Vec<TransactionEntrypoint>,
-) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>) {
+    txs: I,
+) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>)
+where
+    I: IntoIterator<Item = TransactionEntrypoint>,
+{
     requeue_block_transactions_skipping_known_committed(queue, state, txs, None)
 }
 
-fn requeue_block_transactions_skipping_known_committed(
+fn requeue_block_transactions_skipping_known_committed<I>(
     queue: &Queue,
     state: &State,
-    txs: Vec<TransactionEntrypoint>,
+    txs: I,
     known_committed_hashes: Option<&BTreeSet<HashOf<SignedTransaction>>>,
-) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>) {
+) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>)
+where
+    I: IntoIterator<Item = TransactionEntrypoint>,
+{
     let mut requeued = 0usize;
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
@@ -816,13 +823,12 @@ fn drop_pending_block_and_requeue_skipping_known_committed(
     known_committed_hashes: Option<&BTreeSet<HashOf<SignedTransaction>>>,
 ) -> Option<(usize, usize, usize, usize)> {
     let pending = pending_blocks.remove(&pending_hash)?;
-    let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
-    let tx_count = txs.len();
+    let tx_count = pending.block.external_entrypoint_count();
     let (requeued, failures, duplicate_failures, _) =
         requeue_block_transactions_skipping_known_committed(
             queue,
             state,
-            txs,
+            pending.block.external_entrypoints_cloned(),
             known_committed_hashes,
         );
     Some((tx_count, requeued, failures, duplicate_failures))
@@ -864,12 +870,8 @@ fn handle_commit_failure_with_qc_quorum(
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     latest_committed: Option<crate::sumeragi::consensus::QcHeaderRef>,
 ) -> QcCommitFailureOutcome {
-    pending.tx_batch = None;
-    let (requeued, failed_requeues, duplicate_requeues, _) = requeue_block_transactions(
-        queue,
-        state,
-        failed_block.external_entrypoints_cloned().collect(),
-    );
+    let (requeued, failed_requeues, duplicate_requeues, _) =
+        requeue_block_transactions(queue, state, failed_block.external_entrypoints_cloned());
     let (new_locked, new_highest) =
         realign_qcs_after_failed_commit(locked_qc, highest_qc, block_hash, latest_committed);
     pending.set_block(failed_block);
@@ -887,11 +889,10 @@ fn handle_commit_failure_with_qc_quorum(
     }
 }
 
-fn handle_prev_block_mismatch(
-    queue: &Queue,
-    state: &State,
-    txs: Vec<TransactionEntrypoint>,
-) -> PrevBlockMismatchOutcome {
+fn handle_prev_block_mismatch<I>(queue: &Queue, state: &State, txs: I) -> PrevBlockMismatchOutcome
+where
+    I: IntoIterator<Item = TransactionEntrypoint>,
+{
     let (requeued, failures, _duplicates, _) = requeue_block_transactions(queue, state, txs);
     PrevBlockMismatchOutcome { requeued, failures }
 }
@@ -6099,7 +6100,7 @@ impl Actor {
         pending: &PendingBlock,
     ) -> bool {
         let key = (block_hash, pending.height, pending.view);
-        let local_payload_matches = Hash::new(pending.payload_bytes()) == pending.payload_hash;
+        let local_payload_matches = pending.payload_hash_matches_block();
         local_payload_matches
             && (self
                 .subsystems
@@ -6125,7 +6126,7 @@ impl Actor {
         pending: &PendingBlock,
     ) -> bool {
         let key = (block_hash, pending.height, pending.view);
-        let local_payload_matches = Hash::new(pending.payload_bytes()) == pending.payload_hash;
+        let local_payload_matches = pending.payload_hash_matches_block();
         if !local_payload_matches {
             return false;
         }
@@ -6192,6 +6193,163 @@ impl Actor {
         }
 
         ready_count >= Self::rbc_protocol_deliver_quorum(&topology)
+    }
+
+    fn pending_block_has_rbc_progress_without_payload(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        let key = (block_hash, pending.height, pending.view);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                !session.is_invalid()
+                    && session
+                        .payload_hash()
+                        .is_some_and(|hash| hash == pending.payload_hash)
+                    && (session.received_chunks() > 0
+                        || !session.ready_signatures.is_empty()
+                        || rbc_session_has_complete_delivery(session))
+            })
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .status_handle
+                .get(&key)
+                .is_some_and(|summary| {
+                    !summary.invalid
+                        && summary.payload_hash == Some(pending.payload_hash)
+                        && (summary.received_chunks > 0
+                            || summary.ready_count > 0
+                            || summary.delivered)
+                })
+    }
+
+    fn pending_block_body_retention_rank(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> PendingBlockRetentionRank {
+        let frontier_height = u64::try_from(tip_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let frontier_distance = pending.height.abs_diff(frontier_height);
+        let valid = pending.validation_status != ValidationStatus::Invalid;
+        let not_aborted = !pending.aborted;
+        let not_retired = !pending.is_retired_same_height();
+        let active_tip_extending = !pending.is_consensus_inactive()
+            && pending_extends_tip(
+                pending.height,
+                pending.block.header().prev_block_hash(),
+                tip_height,
+                tip_hash,
+            );
+        let commit_certificate = pending.commit_qc_observed()
+            || self.pending_block_has_commit_qc(block_hash, pending.height, pending.view);
+        let cached_qc = self.pending_block_has_qc(block_hash, pending.height, pending.view);
+        let local_commit_vote = pending.local_commit_vote_emitted();
+        let votes = self.pending_block_has_votes(block_hash, pending.height, pending.view);
+        let rbc_progress = self.pending_block_has_rbc_progress_without_payload(block_hash, pending);
+
+        PendingBlockRetentionRank {
+            valid,
+            not_aborted,
+            not_retired,
+            commit_certificate,
+            cached_qc,
+            local_commit_vote,
+            votes,
+            rbc_progress,
+            active_tip_extending,
+            kura_persisted: pending.kura_persisted,
+            frontier_distance: Reverse(frontier_distance),
+            height: pending.height,
+            view: pending.view,
+            inserted_at: pending.inserted_at,
+            block_hash,
+        }
+    }
+
+    fn enforce_pending_block_cap(
+        &mut self,
+        protected_hash: HashOf<BlockHeader>,
+        source: &'static str,
+    ) -> bool {
+        let cap = self.recovery_pending_block_cap();
+        if self.pending.pending_blocks.len() <= cap {
+            return self.pending.pending_blocks.contains_key(&protected_hash);
+        }
+
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let mut candidates = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter(|(hash, _)| **hash != protected_hash)
+            .map(|(hash, pending)| {
+                (
+                    self.pending_block_body_retention_rank(*hash, pending, tip_height, tip_hash),
+                    *hash,
+                    pending.height,
+                    pending.view,
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(rank, _, _, _)| *rank);
+
+        for (_, victim_hash, height, view) in candidates {
+            if self.pending.pending_blocks.len() <= cap {
+                break;
+            }
+            let Some((tx_count, requeued, failures, duplicate_failures)) =
+                self.drop_pending_block_for_memory_cap(victim_hash, height, view)
+            else {
+                debug!(
+                    height,
+                    view,
+                    block = %victim_hash,
+                    cap,
+                    pending_blocks = self.pending.pending_blocks.len(),
+                    source,
+                    "skipping pending block cap victim that could not be dropped"
+                );
+                continue;
+            };
+            super::status::inc_pending_queue_evictions_total(1);
+            debug!(
+                height,
+                view,
+                block = %victim_hash,
+                cap,
+                pending_blocks = self.pending.pending_blocks.len(),
+                tx_count,
+                requeued,
+                failures,
+                duplicate_failures,
+                source,
+                "evicted pending block body to enforce recovery pending-block cap"
+            );
+        }
+
+        if self.pending.pending_blocks.len() > cap {
+            warn!(
+                cap,
+                pending_blocks = self.pending.pending_blocks.len(),
+                protected = %protected_hash,
+                source,
+                "pending block body cap remains exceeded after deterministic eviction pass"
+            );
+        }
+
+        self.pending.pending_blocks.contains_key(&protected_hash)
     }
 
     fn pending_block_validation_priority_reason(
@@ -10045,14 +10203,12 @@ impl Actor {
         payload_hash: Hash,
         chunk_max_bytes: usize,
     ) -> bool {
-        let mut probe = session.clone();
-        let outcome = self::rbc::apply_hydrated_payload(
-            &mut probe,
+        self::rbc::local_payload_satisfies_session_chunk_metadata(
+            session,
             payload_bytes,
             payload_hash,
             chunk_max_bytes,
-        );
-        outcome.all_chunks_present && probe.complete_payload_matches(&payload_hash)
+        )
     }
 
     fn rbc_session_metadata_matches_progress_slot(
@@ -10818,10 +10974,12 @@ fn qc_vote_key_from_qc(qc: &crate::sumeragi::consensus::Qc) -> QcVoteKey {
 }
 
 const KNOWN_BLOCK_QC_WORK_PER_TICK: usize = 2;
+const KNOWN_BLOCK_QC_WORK_CAP: usize = 256;
 const QUARANTINED_BLOCK_SYNC_QC_PER_TICK: usize = 4;
 const QUARANTINED_BLOCK_SYNC_QC_CAP: usize = 256;
 const QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS: u32 = 4;
 const DEFERRED_MISSING_PAYLOAD_QC_PER_TICK: usize = 4;
+const DEFERRED_ROSTER_QC_CAP: usize = 256;
 const DEFERRED_MISSING_PAYLOAD_QC_CAP: usize = 256;
 const DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS: u32 = 4;
 const EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN: Duration = Duration::from_secs(5);
@@ -10842,6 +11000,51 @@ const RECOVERY_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 64;
 const RECOVERY_QUEUE_BACKLOG_DEPTH_DIVISOR: u64 = 2;
 const ROUND_LIVENESS_STAGNATION_WINDOWS_TO_ISOLATE: u32 = 3;
 const ROUND_LIVENESS_GAP_TO_ISOLATE: u64 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedQcInsertDecision {
+    Insert,
+    DropIncoming,
+    Evict(QcVoteKey),
+}
+
+fn qc_key_retention_rank(
+    key: QcVoteKey,
+) -> (
+    u64,
+    u64,
+    u64,
+    crate::sumeragi::consensus::Phase,
+    HashOf<BlockHeader>,
+    Hash,
+    u64,
+) {
+    (key.2, key.3, key.4, key.0, key.1, key.5, key.6)
+}
+
+fn bounded_qc_insert_decision<V>(
+    entries: &BTreeMap<QcVoteKey, V>,
+    incoming: QcVoteKey,
+    cap: usize,
+) -> BoundedQcInsertDecision {
+    let cap = cap.max(1);
+    if entries.len() < cap {
+        return BoundedQcInsertDecision::Insert;
+    }
+    let Some(eviction) = entries
+        .keys()
+        .copied()
+        .chain(std::iter::once(incoming))
+        .min_by_key(|key| qc_key_retention_rank(*key))
+    else {
+        return BoundedQcInsertDecision::Insert;
+    };
+    if eviction == incoming {
+        BoundedQcInsertDecision::DropIncoming
+    } else {
+        BoundedQcInsertDecision::Evict(eviction)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RosterRecoveryState {
@@ -11515,9 +11718,29 @@ struct DeterministicRecoveryProfile {
     max_forced_proposal_attempts_per_view: u32,
     rotate_after_reacquire_exhausted: bool,
     missing_request_stale_height_margin: u64,
+    pending_block_cap: usize,
     pending_block_sync_cap: usize,
     pending_proposal_cap: usize,
     missing_fetch_aggressive_after_attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PendingBlockRetentionRank {
+    valid: bool,
+    not_aborted: bool,
+    not_retired: bool,
+    commit_certificate: bool,
+    cached_qc: bool,
+    local_commit_vote: bool,
+    votes: bool,
+    rbc_progress: bool,
+    active_tip_extending: bool,
+    kura_persisted: bool,
+    frontier_distance: Reverse<u64>,
+    height: u64,
+    view: u64,
+    inserted_at: Instant,
+    block_hash: HashOf<BlockHeader>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -13015,6 +13238,28 @@ enum RbcRepairAttempt {
 struct OutboundRbcChunk {
     message: Arc<BlockMessage>,
     encoded: Arc<Vec<u8>>,
+}
+
+impl OutboundRbcChunk {
+    fn retained_bytes(&self) -> usize {
+        let message_bytes = match self.message.as_ref() {
+            BlockMessage::RbcChunk(chunk) => chunk.bytes.len(),
+            BlockMessage::RbcChunkCompact(chunk) => chunk.bytes.len(),
+            _ => 0,
+        };
+        message_bytes.saturating_add(self.encoded.len())
+    }
+}
+
+impl RbcOutboundChunks {
+    fn retained_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .skip(self.cursor.min(self.chunks.len()))
+            .fold(0usize, |acc, chunk| {
+                acc.saturating_add(chunk.retained_bytes())
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -17013,7 +17258,7 @@ impl Actor {
             return Vec::new();
         };
         let mut roster: Vec<PeerId> = Vec::new();
-        for tx in genesis.0.transactions_vec().iter() {
+        for tx in genesis.0.external_transactions() {
             let Executable::Instructions(isi) = tx.instructions() else {
                 continue;
             };
@@ -17428,10 +17673,11 @@ impl Actor {
             if matches!(pending.validation_status, ValidationStatus::Invalid) {
                 return None;
             }
+            let payload_bytes = pending.payload_bytes_cow();
             return Some(use_payload(
                 pending.height,
                 pending.view,
-                pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 pending.payload_hash,
             ));
         }
@@ -17444,10 +17690,11 @@ impl Actor {
             ) {
                 return None;
             }
+            let payload_bytes = inflight.pending.payload_bytes_cow();
             return Some(use_payload(
                 inflight.pending.height,
                 inflight.pending.view,
-                inflight.pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 inflight.pending.payload_hash,
             ));
         }
@@ -17484,10 +17731,11 @@ impl Actor {
             {
                 return None;
             }
+            let payload_bytes = pending.payload_bytes_cow();
             return Some(use_payload(
                 pending.height,
                 pending.view,
-                pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 pending.payload_hash,
             ));
         }
@@ -17502,10 +17750,11 @@ impl Actor {
             {
                 return None;
             }
+            let payload_bytes = inflight.pending.payload_bytes_cow();
             return Some(use_payload(
                 inflight.pending.height,
                 inflight.pending.view,
-                inflight.pending.payload_bytes(),
+                payload_bytes.as_ref(),
                 inflight.pending.payload_hash,
             ));
         }
@@ -26167,7 +26416,7 @@ impl Actor {
     ) -> Option<RbcInit> {
         let payload_bytes = self::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
-        self.rebuild_rbc_init_from_payload_bytes(block, key, &payload_bytes, payload_hash)
+        self.rebuild_rbc_init_from_canonical_payload_bytes(block, key, &payload_bytes, payload_hash)
     }
 
     fn rebuild_rbc_init_from_payload_bytes(
@@ -26177,6 +26426,33 @@ impl Actor {
         payload_bytes: &[u8],
         payload_hash: Hash,
     ) -> Option<RbcInit> {
+        self.rebuild_rbc_init_from_payload_bytes_impl(block, key, payload_bytes, payload_hash, true)
+    }
+
+    fn rebuild_rbc_init_from_canonical_payload_bytes(
+        &self,
+        block: &SignedBlock,
+        key: super::rbc_store::SessionKey,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+    ) -> Option<RbcInit> {
+        self.rebuild_rbc_init_from_payload_bytes_impl(
+            block,
+            key,
+            payload_bytes,
+            payload_hash,
+            false,
+        )
+    }
+
+    fn rebuild_rbc_init_from_payload_bytes_impl(
+        &self,
+        block: &SignedBlock,
+        key: super::rbc_store::SessionKey,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+        verify_payload_bytes: bool,
+    ) -> Option<RbcInit> {
         let block_header = block.header();
         if block.hash() != key.0 || block_header.height().get() != key.1 {
             return None;
@@ -26184,11 +26460,13 @@ impl Actor {
         if block_header.view_change_index() != key.2 {
             return None;
         }
-        if Hash::new(payload_bytes) != payload_hash {
-            return None;
-        }
-        if self::proposals::block_payload_bytes(block) != payload_bytes {
-            return None;
+        if verify_payload_bytes {
+            if Hash::new(payload_bytes) != payload_hash {
+                return None;
+            }
+            if self::proposals::block_payload_bytes(block) != payload_bytes {
+                return None;
+            }
         }
         let mut roster = self.rbc_roster_for_session(key);
         if roster.is_empty()
@@ -26999,6 +27277,88 @@ impl Actor {
         rebroadcaster
     }
 
+    fn rbc_outbound_queue_bytes(&self) -> usize {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .outbound_chunks
+            .values()
+            .fold(0usize, |acc, entry| {
+                acc.saturating_add(entry.retained_bytes())
+            })
+    }
+
+    fn rbc_outbound_queue_eviction_candidate(
+        &self,
+        protected: Option<super::rbc_store::SessionKey>,
+    ) -> Option<super::rbc_store::SessionKey> {
+        if self.subsystems.da_rbc.rbc.outbound_chunks.len() <= 1 {
+            return None;
+        }
+        let mut candidates: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .outbound_chunks
+            .keys()
+            .copied()
+            .filter(|key| Some(*key) != protected)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        candidates.into_iter().next()
+    }
+
+    fn enforce_rbc_outbound_queue_cap(
+        &mut self,
+        protected: Option<super::rbc_store::SessionKey>,
+    ) -> bool {
+        let max_sessions = self.config.rbc.outbound_queue_max_sessions.max(1);
+        let max_bytes = self.config.rbc.outbound_queue_max_bytes.max(1);
+        let mut pruned = false;
+
+        loop {
+            let sessions = self.subsystems.da_rbc.rbc.outbound_chunks.len();
+            let bytes = self.rbc_outbound_queue_bytes();
+            if sessions <= max_sessions && bytes <= max_bytes {
+                break;
+            }
+            let Some(evicted_key) = self.rbc_outbound_queue_eviction_candidate(protected) else {
+                break;
+            };
+            let freed_bytes = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .remove(&evicted_key)
+                .map_or(0, |entry| entry.retained_bytes());
+            if self.subsystems.da_rbc.rbc.outbound_cursor == Some(evicted_key) {
+                self.subsystems.da_rbc.rbc.outbound_cursor = None;
+            }
+            pruned = true;
+            debug!(
+                height = evicted_key.1,
+                view = evicted_key.2,
+                block = %evicted_key.0,
+                freed_bytes,
+                queued_sessions = self.subsystems.da_rbc.rbc.outbound_chunks.len(),
+                queued_bytes = self.rbc_outbound_queue_bytes(),
+                max_sessions,
+                max_bytes,
+                "evicted RBC outbound chunk queue entry to enforce memory cap"
+            );
+        }
+
+        pruned
+    }
+
     fn dispatch_rbc_outbound_chunks(
         &mut self,
         key: super::rbc_store::SessionKey,
@@ -27104,6 +27464,7 @@ impl Actor {
                     record_target_metrics,
                 },
             );
+            self.enforce_rbc_outbound_queue_cap(Some(key));
             dispatch.stored = true;
         }
 
@@ -27136,9 +27497,14 @@ impl Actor {
                 let to_send = available.min(requested);
                 let end = entry.cursor.saturating_add(to_send);
                 let targets = entry.targets.clone();
-                let chunks_to_send = entry.chunks[entry.cursor..end].to_vec();
-                entry.cursor = end;
-                let exhausted = entry.cursor >= entry.chunks.len();
+                let cursor = entry.cursor.min(entry.chunks.len());
+                let end = end.min(entry.chunks.len());
+                let chunks_to_send: Vec<_> = entry.chunks.drain(cursor..end).collect();
+                if cursor != 0 {
+                    entry.chunks.drain(..cursor);
+                }
+                entry.cursor = 0;
+                let exhausted = entry.chunks.is_empty();
                 (
                     targets,
                     chunks_to_send,
@@ -27152,6 +27518,8 @@ impl Actor {
 
         if exhausted {
             self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
+        } else {
+            self.enforce_rbc_outbound_queue_cap(Some(key));
         }
         if chunks_to_send.is_empty() {
             return dispatch;
@@ -29326,6 +29694,7 @@ impl Actor {
                 .config
                 .recovery
                 .missing_request_stale_height_margin,
+            pending_block_cap: self.config.recovery.pending_block_cap.max(1),
             pending_block_sync_cap: self.config.recovery.pending_block_sync_cap.max(1),
             pending_proposal_cap: self.config.recovery.pending_proposal_cap.max(1),
             missing_fetch_aggressive_after_attempts: self
@@ -31886,6 +32255,10 @@ impl Actor {
     fn recovery_missing_request_stale_height_margin(&self) -> u64 {
         self.deterministic_recovery_profile()
             .missing_request_stale_height_margin
+    }
+
+    fn recovery_pending_block_cap(&self) -> usize {
+        self.deterministic_recovery_profile().pending_block_cap
     }
 
     fn recovery_pending_block_sync_cap(&self) -> usize {
@@ -46278,10 +46651,7 @@ impl RbcSession {
         let Some(payload_hash) = self.payload_hash else {
             return false;
         };
-        let Some(payload) = self.payload_bytes() else {
-            return false;
-        };
-        if Hash::new(&payload) != payload_hash {
+        if !self.payload_hash_matches_chunks(&payload_hash) {
             self.invalid = true;
             return false;
         }
@@ -46328,10 +46698,7 @@ impl RbcSession {
         let Some(payload_hash) = self.payload_hash else {
             return false;
         };
-        let Some(payload) = self.payload_bytes() else {
-            return false;
-        };
-        Hash::new(&payload) == payload_hash && self.complete_chunk_root_matches()
+        self.payload_hash_matches_chunks(&payload_hash) && self.complete_chunk_root_matches()
     }
 
     fn complete_chunk_root_matches(&self) -> bool {
@@ -46452,9 +46819,7 @@ impl RbcSession {
             && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
             && self.complete_chunk_root_matches()
-            && self
-                .payload_bytes()
-                .is_some_and(|payload| Hash::new(&payload) == *payload_hash)
+            && self.payload_hash_matches_chunks(payload_hash)
     }
 
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
@@ -46544,6 +46909,37 @@ impl RbcSession {
         }
         payload.truncate(payload_size);
         Some(payload)
+    }
+
+    fn payload_chunk_slices(&self) -> Option<Vec<&[u8]>> {
+        if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
+            return None;
+        }
+        if !self.layout.payload_size_known() {
+            let mut chunks = Vec::with_capacity(usize::try_from(self.total_chunks).ok()?);
+            for idx in 0..self.total_chunks {
+                chunks.push(self.chunk_bytes(idx)?);
+            }
+            return Some(chunks);
+        }
+
+        let payload_chunk_count = self.layout.payload_chunk_count()?;
+        let mut chunks = Vec::with_capacity(payload_chunk_count);
+        for payload_idx in 0..payload_chunk_count {
+            let encoded_idx = self.layout.encoded_index_for_payload_chunk(payload_idx)?;
+            chunks.push(self.chunk_bytes(u32::try_from(encoded_idx).ok()?)?);
+        }
+        Some(chunks)
+    }
+
+    fn payload_hash_from_chunks(&self) -> Option<Hash> {
+        self.payload_chunk_slices()
+            .map(|chunks| Hash::new_from_chunks(&chunks))
+    }
+
+    fn payload_hash_matches_chunks(&self, payload_hash: &Hash) -> bool {
+        self.payload_hash_from_chunks()
+            .is_some_and(|hash| hash == *payload_hash)
     }
 
     fn try_reconstruct_full_chunks(&mut self) -> bool {
@@ -47066,9 +47462,7 @@ impl RbcSession {
         let _ = session.try_reconstruct_full_chunks();
         if let Some(hash) = payload_hash
             && session.received_chunks == total_chunks
-            && session
-                .payload_bytes()
-                .is_some_and(|payload| Hash::new(&payload) != hash)
+            && !session.payload_hash_matches_chunks(&hash)
         {
             return Err(PersistedLoadError::PayloadHashMismatch);
         }
@@ -47327,10 +47721,7 @@ impl RbcSession {
         let Some(payload_hash) = self.payload_hash else {
             return true;
         };
-        let Some(payload) = self.payload_bytes() else {
-            return true;
-        };
-        Hash::new(&payload) != payload_hash
+        !self.payload_hash_matches_chunks(&payload_hash)
     }
 }
 

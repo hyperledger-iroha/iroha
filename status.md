@@ -1,16 +1,3156 @@
 # Status
 
-Last updated: 2026-06-27
+Last updated: 2026-06-28
+
+## 2026-06-28 - JavaScript SNS Domain Route Selector Exactness
+
+- Fixed JavaScript/Node source and package-dist SNS domain route selectors so
+  padded `label.suffix` inputs fail before route construction instead of being
+  trimmed down to the label path segment.
+- Updated source and package-dist regressions proving padded SNS selectors fail
+  before fetch, while exact route selectors still drive freeze/unfreeze paths
+  and request-body fields keep their existing payload normalization.
+- Extended the JS SDK focused runner plus the SDK parity guard, payload
+  workflow, and JavaScript meta-test with
+  `--negative-control-js-sns-domain-selector-exactness`; the existing JS
+  event/filter runner negative control now also mutates the SNS source and
+  package-dist focused selectors.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/toriiClient.js`
+  - `node --check javascript/iroha_js/dist/toriiClient.js`
+  - `node --check javascript/iroha_js/test/toriiClient.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `node --test --test-name-pattern "SNS domain route helpers reject padded selectors before dispatch|freezeSnsRegistration posts normalized payload and parses record|unfreezeSnsRegistration posts governance hook payload|package dist SNS domain route helpers reject padded selectors before dispatch" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sns-domain-selector-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-event-filter-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml IrohaSwift/Sources/IrohaSwift/ToriiClient.swift IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh docs/source/offline_kagemusha.md javascript/iroha_js/src/toriiClient.js javascript/iroha_js/dist/toriiClient.js javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - conflict-marker scan on the touched files returned no matches
+  - `git diff --name-only -- csharp Cargo.lock` returned no paths
+
+## 2026-06-28 - Swift Account Asset Scope Selector Exactness
+
+- Fixed Swift `getAssets(accountId:asset:scope:)` so a provided `scope`
+  selector is validated as an exact non-empty query value instead of being
+  silently trimmed or omitted.
+- Added Swift regressions proving exact `scope=global` is preserved in the
+  query string and padded scope input fails before network dispatch.
+- Extended the Swift SDK focused runner plus the SDK parity guard, payload
+  workflow, and JavaScript meta-test with
+  `--negative-control-swift-account-asset-scope-selector-exactness`. The same
+  pass also repaired the stale Swift Torii filter negative control so it
+  matches the current UAID-inclusive runner filter.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `swift test --filter 'ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork'` from `IrohaSwift/`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-account-asset-scope-selector-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-offline-readiness-test-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml IrohaSwift/Sources/IrohaSwift/ToriiClient.swift IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh docs/source/offline_kagemusha.md javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - conflict-marker scan on the touched files returned no matches
+  - `git diff --name-only -- csharp Cargo.lock` returned no paths
+
+## 2026-06-28 - Non-C# UAID Path Literal Exactness
+
+- Fixed JavaScript/Node source and package-dist, Swift, and Python UAID literal
+  canonicalizers so exact raw hex and exact `UAID:` case variants still
+  canonicalize, but padded literals or padded `uaid:` hex portions fail before
+  Torii route construction.
+- Updated focused JS, package-dist, Swift, and Python no-dispatch regressions,
+  plus the JS/Python/Swift SDK runner filters.
+- Pinned the source/test/script markers through the SDK parity guard, payload
+  workflow, and JavaScript meta-test with
+  `--negative-control-non-csharp-uaid-path-literal-exactness`.
+- Validation passed:
+  - `node --test --test-name-pattern "getUaidPortfolio accepts mixed-case UAID prefixes|getUaidPortfolio rejects padded UAID path literals before dispatch|package dist UAID path helpers reject padded literals before dispatch" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/package_dist.test.js`
+  - `PYTHONPATH=python/iroha_torii_client /opt/homebrew/bin/python3.11 -m pytest -q python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_parses_payload python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch --tb=short`
+  - `swift test --filter 'ToriiClientTests/testGetUaidPortfolioNormalizesLiteral|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork|ToriiClientTests/testRegisterAccountCanonicalizesUaidAndIdentityCommitment'` from `IrohaSwift/`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-uaid-path-literal-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-torii-selector-test-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - JVM UAID Path Literal Exactness
+
+- Fixed Kotlin/JVM and Android Java `UaidLiteral` canonicalization so UAID
+  route literals are exact: uppercase prefixes/hex are still canonicalized, but
+  leading/trailing whitespace around the literal or inside the `uaid:` hex
+  portion now fails before request construction.
+- Updated Kotlin/JVM and Android Java transport regressions to prove padded
+  UAID path literals fail before a second request is dispatched. The Java test
+  that previously accepted `"  UAID:<hex> "` now uses exact uppercase input.
+- Pinned the literal source/test markers through the SDK parity guard, payload
+  workflow, and JavaScript meta-test with
+  `--negative-control-jvm-uaid-path-literal-exactness`.
+- Validation passed:
+  - `./gradlew --no-daemon --max-workers=1 :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain` from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew --no-daemon --max-workers=1 :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android/`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-uaid-path-literal-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-asset-selector-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - JVM Offline List Selector Exactness
+
+- Fixed Kotlin/JVM and Android Java `OfflineListParams` so optional offline
+  transfer-list `asset_id` filters are either exact non-empty strings or fail
+  before query serialization. Padded or blank values are no longer trimmed into
+  a different selector or silently omitted.
+- Added focused Kotlin/JVM and Android Java regressions for preserved exact
+  asset selectors plus leading/trailing/blank selector failures. The Android
+  harness allow-list and `AccountLiteralHardCutTests` main entry point now make
+  the existing focused harness filter actually execute this class.
+- Pinned the source/test markers through the SDK parity guard, payload workflow,
+  and JavaScript meta-test with
+  `--negative-control-jvm-offline-list-asset-selector-exactness`.
+- Validation passed:
+  - `./gradlew --no-daemon --max-workers=1 :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain` from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests ./gradlew --no-daemon --max-workers=1 :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android/`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-asset-selector-exactness`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-uaid-portfolio-query-selector-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - JVM UAID Portfolio Selector Exactness
+
+- Fixed Kotlin/JVM `UaidPortfolioQuery` so provided `assetId` values must be
+  exact and non-empty before query construction. Padded or empty asset filters
+  now fail before `HttpClientTransport` dispatch.
+- Fixed Android Java `UaidPortfolioQuery` so `asset` and `scope` selectors are
+  stored and emitted exactly rather than trimmed. Padded selectors now fail at
+  builder time, before any Torii request can be built or sent.
+- Added focused Kotlin/JVM and Android Java regressions for positive query
+  encoding plus leading/trailing whitespace failures, and pinned the source/test
+  markers through the SDK parity guard, payload workflow, and JavaScript
+  meta-test with `--negative-control-jvm-uaid-portfolio-query-selector-exactness`.
+- Validation passed:
+  - `./gradlew --no-daemon --max-workers=1 :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --console=plain` from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests,org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests ./gradlew --no-daemon --max-workers=1 :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android/`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-uaid-portfolio-query-selector-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - Python Torii Selector Exactness and Readiness Guard
+
+- Fixed Python `ToriiClient` contract-call selectors so padded
+  `contract_address` and `contract_alias` fail before request dispatch instead
+  of being trimmed into valid selectors.
+- Fixed Python UAID portfolio filtering so padded `asset_id` values fail before
+  dispatch. Added focused no-dispatch regressions for both surfaces and wired
+  them into the Python SDK runner plus the SDK parity negative controls.
+- Restored Torii Offline and Offline V2 readiness to advertise Kagemusha ABI-7
+  availability directly from `settlement.offline.kagemusha_enabled` while
+  keeping mobile artifact booleans false because Core API serves and gates the
+  artifact archives.
+- Validation passed:
+  - `PYTHONPATH=python python3.11 -m pytest -q python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_encodes_asset_id_filter python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_ambiguous_selector`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs offline_readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs offline_v2_readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture`
+  - `rustfmt --check crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+  - `python3.11 -m py_compile python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+  - `bash -n ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-torii-selector-test-filter-script`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs docs/source/offline_kagemusha.md roadmap.md`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - Swift and JavaScript Torii Query Selector Exactness
+
+- Fixed Swift `ToriiClient` query builders so canonical selector query values
+  reject surrounding whitespace before URL query construction instead of
+  silently trimming account, authority, asset-definition/id, participant,
+  contract address/alias, owned-by, and related filters.
+- Fixed JavaScript source and package-dist Torii contract query helpers so
+  `contractAddress`, `contractAlias`, `participant`, and `assetId` selectors
+  use exact non-empty validation before fetch dispatch.
+- Added focused Swift, JavaScript source, and package-dist regressions, and
+  wired them into the Swift/JavaScript SDK runners plus parity negative
+  controls so the selectors cannot drop out of the non-C# lanes.
+- Validation passed:
+  - `swift test --package-path IrohaSwift --filter 'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace'`
+  - `node --test --test-name-pattern "contract query helpers reject padded selector filters" javascript/iroha_js/test/toriiClient.test.js`
+  - `node --test --test-name-pattern "package dist Torii contract query helpers reject padded selector filters" javascript/iroha_js/test/package_dist.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-offline-readiness-test-filter-script`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-event-filter-filter-script`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - Kagemusha Swift Parse Surface and JS Redeem Selection
+
+- Added `AccountAddress.swift` and `AssetDefinitionAddress.swift` to the Swift
+  SDK parse runner, parity guard, JS meta-test, and parse-surface negative
+  control so address-codec syntax drift is covered by the macOS Swift lane.
+- Fixed JavaScript source and package-dist recursive-spend redeem request
+  normalization so plural `lineageVerifierRecords` are only parsed after the
+  bundle/witness shape allows lineage verifier records. Semantic bundles with
+  dangling plural records now fail on `lineageVerifierRecord` field selection
+  instead of malformed record-archive parsing.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed request codecs reject malformed inputs" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend redeem rejects missing lineage material before native dispatch" javascript/iroha_js/test/package_dist.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-surface-script`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-lineage-preflight`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+- C# source and `Cargo.lock` remain untouched.
+
+## 2026-06-28 - Kagemusha Readiness Alias Merge
+
+- Fixed the non-C# Torii readiness clients so the short
+  `offline_kagemusha_abi7*` fields and verbose
+  `offline_kagemusha_recursive_compact_*` fields are treated as aliases for the
+  same Kagemusha ABI-7 signal. JavaScript source/package-dist, Python, and
+  Swift now accept either complete alias family by itself, fill the normalized
+  snapshot with both families, and reject mismatched enablement, mode, bridge
+  ABI, circuit id, or artifact values when both families are present.
+- Tightened JavaScript readiness parsing for this surface to require exact JSON
+  booleans and unpadded non-empty strings, matching Python and Swift. Python now
+  normalizes readiness string-shape failures to `RuntimeError` so client parse
+  failures keep a consistent exception contract.
+- Extended the existing focused readiness tests in JS, Python, and Swift with
+  alias-only, conflict, exact boolean, exact string, and signed-32-bit ABI
+  regressions. The SDK parity guard now pins those parser/test markers across
+  JS source/dist, Python, and Swift so the parser cannot regress to requiring
+  both alias families.
+- Restored the Torii Offline and Offline V2 readiness artifact-false contract:
+  ABI-7 availability is derived directly from
+  `settlement.offline.kagemusha_enabled`, the removed
+  `kagemusha_force_legacy` gate remains absent, and mobile artifact archives
+  stay reported as unavailable because Core API serves and gates them.
+- Validation passed:
+  - `node --check javascript/iroha_js/src/toriiClient.js && node --check javascript/iroha_js/dist/toriiClient.js && node --check javascript/iroha_js/test/toriiClient.test.js`
+  - `node --test --test-name-pattern "getOfflineReadiness" javascript/iroha_js/test/toriiClient.test.js`
+  - `PYTHONPATH=python python3.11 -m pytest -q python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_legacy_only_payload`
+  - `swift test --filter ToriiClientTests/testGetOfflineReadiness` from `IrohaSwift/`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `rustfmt --check crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `git diff --check -- javascript/iroha_js/src/toriiClient.js javascript/iroha_js/dist/toriiClient.js javascript/iroha_js/test/toriiClient.test.js python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py IrohaSwift/Sources/IrohaSwift/ToriiClient.swift IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift ci/check_kagemusha_recursive_spend_sdk_parity.sh crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+- C# source remains untouched; the matching C# artifact-false and alias-family
+  certification stays on the Windows-machine TODO path.
+
+## 2026-06-28 - Localnet Transaction Queue Retained-Byte Guard
+
+- Added `queue.max_retained_bytes` to user, actual, and client configuration,
+  with a default of 128 MiB. Transaction queue admission and requeue now charge
+  each retained transaction by canonical payload length plus a 128 KiB retained
+  heap estimate, then reject/backpressure once the byte budget is exhausted
+  instead of relying on transaction count alone.
+- Queue pressure snapshots, Sumeragi status, Torii status JSON, and telemetry
+  now report retained queue bytes, the configured retained-byte limit, and byte
+  saturation. The existing saturated flag now treats count or byte saturation as
+  hard backpressure, while age saturation remains latency pressure.
+- Torii transaction ingress now sheds single and batch submissions before
+  signature admission, route resolution, or batch decode when the queue is
+  already count/byte saturated or when the incoming batch's minimum retained
+  byte charge cannot fit. Full-queue rejection logs on Torii, queue admission,
+  and gossip ingress are debug-level to avoid memory-amplifying warning floods
+  during intentional backpressure.
+- Updated `scripts/tx_load.py` to request the correct Torii content types,
+  parse nested Sumeragi queue-byte status fields, and wait while the node
+  reports queue saturation. `scripts/run_localnet_memory_guard.py` now derives
+  the shifted API port from the generated localnet client config before driving
+  load, runs the child load driver unbuffered, and uses guarded defaults of
+  1,000 transactions per batch with 64-way CLI parallelism.
+- The pre-cap guarded repro on the 100,000 transaction localnet crossed the
+  8 GiB total RSS guard (`8,785,068,032` bytes total, `2,439,512,064` bytes
+  peak peer), confirming that count-only queue gating was insufficient under
+  burst load. The first 512 MiB retained-byte cap pass with a 32 KiB
+  per-transaction charge still crossed the guard at `8,686,190,592` bytes total
+  and `2,326,151,168` bytes peak peer, so the per-transaction retained-heap
+  estimate was raised to 128 KiB. A second 512 MiB pass with the 128 KiB charge
+  still crossed the guard at `8,629,911,552` bytes total and `2,324,463,616`
+  bytes peak peer while the queue byte cap was actively rejecting new ingress.
+  The 256 MiB default cap then crossed the guard at `8,616,493,056` bytes total
+  and `2,361,802,752` bytes peak peer; after demoting full-queue rejection logs
+  it still crossed at `8,627,994,624` bytes total and `2,456,403,968` bytes
+  peak peer, pointing to pre-admission burst churn rather than retained queue
+  bytes or log volume alone. The Torii early-shed guard reduced the failure to
+  a narrow threshold miss at `8,595,636,224` bytes total and `2,487,386,112`
+  bytes peak peer, so the default retained-byte budget is now 128 MiB to leave
+  real headroom under the 8 GiB localnet guard.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core retained_byte_cost_floor_scales_with_incoming_count -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core retained_byte_budget_rejects_before_count_capacity_and_releases_on_remove -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo check -p iroha_core`
+  - `CARGO_BUILD_JOBS=1 cargo check -p iroha_torii`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib transaction_ingress_precheck_rejects_incoming_batch_over_retained_byte_budget -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_config queue_defaults_allow_two_times_legacy_soak_capacity -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_config config_update_with_handshake_roundtrip -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_telemetry status_json_roundtrip -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_telemetry serialize_status_json -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --lib status_snapshot_json_includes_tx_queue_pressure_reasons -- --nocapture`
+  - `python3 -m py_compile scripts/tx_load.py scripts/run_localnet_memory_guard.py`
+  - `pytest -q scripts/tests/tx_load_test.py scripts/tests/run_localnet_memory_guard_test.py`
+
+## 2026-06-28 - Kagemusha JS/Python/Mobile Copy Isolation and Kotlin Redeem Immutability
+
+- Added JavaScript source and package-dist regression coverage for decoded
+  recursive-spend bundle summaries and verifier-record refs. The tests now mutate returned
+  `initialRoot`, `finalRoot`, top-up anchor arrays, current-note commitments,
+  spend nullifiers, and caller-owned/accessor-returned verifier-record
+  `recordBytes`, then re-read the summary/ref to prove the trusted decoded
+  accumulator and verifier-record material remains isolated behind
+  defensive-copy getters.
+- Added `check_js_recursive_spend_bundle_summary_copy_isolation(...)` to the
+  SDK parity guard and wired
+  `--negative-control-js-bundle-summary-copy-isolation` into the Kagemusha
+  payload workflow plus the JavaScript parity meta-test. The negative control
+  mutates JS source, dist, and test markers independently, restores every
+  snapshot, and prints exact diagnostics for each rejected bundle-summary or
+  verifier-record buffer drift.
+- Added Python recursive-spend bundle summary regression coverage for mutable
+  `bytearray`, `memoryview`, and list inputs. The frozen summary and current-note
+  descriptor now copy caller-owned byte material into immutable bytes/tuples,
+  reject mutation attempts, and report a clean `ValueError("current_note")` for
+  malformed public constructor input.
+- Added `--negative-control-python-bundle-summary-copy-isolation` to the SDK
+  parity guard, workflow, and JavaScript parity meta-test. The negative control
+  mutates Python source/test markers independently, restores every snapshot, and
+  requires exact diagnostics for the tuple/copy/type-guard coverage.
+- Added Swift, Kotlin/JVM, and Android Java bundle summary copy-isolation
+  coverage. The tests mutate decoded root/current-note/top-up anchor accessors
+  and caller-owned constructor inputs, then assert the stored summaries and
+  spendable-note descriptors stay unchanged.
+- Added `--negative-control-mobile-bundle-summary-copy-isolation` to the SDK
+  parity guard, workflow, and JavaScript parity meta-test. The negative control
+  mutates Swift, Kotlin/JVM, and Android Java source/test markers independently
+  and requires exact diagnostics for each defensive-copy surface.
+- Fixed the Kotlin/JVM typed redeem request so `lineageVerifierRecords` is a
+  copied `Collections.unmodifiableList(...)`, matching the Android Java mirror
+  and preventing Java callers or Kotlin casts from mutating a constructed
+  request. Added regression coverage that clears the caller-owned input list and
+  attempts to clear the exposed request list, plus a workflow-wired
+  `--negative-control-kotlin-redeem-lineage-record-list-immutability` guard.
+- Added matching Swift and Android Java redeem `lineageVerifierRecords`
+  ownership coverage, plus Swift/Kotlin/JVM/Android Java verifier-record archive
+  byte copy/value-semantics checks. Workflow-wired negative controls now mutate
+  the Swift, Android Java, and JVM source/test markers independently and require
+  exact diagnostics for each rejected drift.
+- Fixed the Torii Offline and Offline V2 readiness handlers to derive ABI-7
+  metadata directly from `settlement.offline.kagemusha_enabled` while keeping
+  mobile artifact archive availability false, because Core API serves and gates
+  those archives. Updated the Rust readiness smoke expectations to assert the
+  artifact-false contract.
+- C# source remains untouched; this pass only covered non-C# work.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `PYTHONPATH=python/iroha_python/src /opt/homebrew/bin/python3.11 -m pytest -q python/iroha_python/tests/kagemusha_test.py -k test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures --tb=short`
+  - `node --test --test-name-pattern "Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "package dist Kagemusha recursive spend bundle decodes canonical accumulator assets" javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-bundle-summary-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-bundle-summary-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-redeem-lineage-record-list-immutability`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-redeem-lineage-record-list-value-semantics`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-redeem-lineage-record-list-immutability`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-verifier-record-byte-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-redeem-lineage-selection`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract`
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendRequestCodecsTests/testDecodeBundleExtractsLineageSummariesFromFixtureArchives`
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendRequestCodecsTests/testTypedEncodersWriteExpectedRequestSchemasAndLayouts`
+  - `./gradlew --no-daemon --max-workers=1 :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain` from `kotlin/`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew --no-daemon --max-workers=1 :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android/`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bundle-summary-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs offline_readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture` and the matching `offline_v2_readiness_is_mounted_and_legacy_routes_are_absent` smoke both passed in the isolated Cargo target before the final Torii readiness reapply; final post-reapply evidence is the read-only parity/rustfmt/marker checks above.
+  - `rustfmt --check crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+  - `git diff --check -- javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/package_dist.test.js ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js .github/workflows/pr_kagemusha_payload_bench.yml crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` over the touched files returned no conflict markers.
+  - `git diff --name-only -- csharp Cargo.lock` and `git diff --cached --name-only -- csharp Cargo.lock` returned no paths.
+
+## 2026-06-27 Proposal Assembly Batch Retention Reduction
+
+- Removed the eager `original_for_requeue` backup from Sumeragi proposal
+  assembly, so a selected transaction batch is no longer fully cloned just to
+  support the error path. Assembly failures now drain the live selected
+  transaction/routing-plan batch for requeue.
+- RBC planning for a freshly assembled proposal now borrows the selected
+  transaction batch and size vector directly instead of retaining
+  `transactions_for_plan` and `tx_sizes_for_plan` clones after block
+  construction.
+- Lane-interleaved proposal selection now reorders transaction/routing/size
+  vectors by moving values instead of cloning each vector into a temporary
+  backup.
+- Locally built `SignedBlock`s now store external transactions only in the
+  canonical `external_entrypoints` payload field and leave the skipped legacy
+  `transactions` cache empty, avoiding a second retained transaction vector in
+  pending/proposed block bodies. `NewBlock` conversion now moves accepted
+  transaction entrypoints into that canonical payload vector instead of cloning
+  each entrypoint while finalizing the signed block.
+- Canonical proposal payload encoding now builds `BlockPayload` with an empty
+  skipped legacy transaction cache instead of cloning `block.transactions_vec()`
+  before hashing/RBC planning.
+- BlockCreated RBC paths that already hydrate or seed from the attached payload
+  inline no longer enqueue a second full `payload_bytes` clone into the async
+  seed worker. Duplicate BlockCreated handling now leaves the seed-work channel
+  empty while still retrying READY/DELIVER progress from the local payload.
+- Pending block bodies no longer retain a long-lived encoded payload cache on
+  BlockCreated, certified block fetch, QC local-payload rehydrate, or frontier
+  block-sync materialization paths. Progress checks now compute encoded payload
+  bytes as short-lived temporaries unless a test explicitly seeds the cache.
+- Pending-block RBC async seeding now moves the temporary encoded payload into
+  the seed work item and takes it back only when queueing fails, avoiding a
+  transient full-payload clone during enqueue.
+- Transaction queue gossip no longer keeps a queue-side
+  `tx_gossip_payloads` map of canonical entrypoint bytes. Gossip batching,
+  queue-plan journaling, and replay now reuse the accepted transaction's
+  existing entrypoint byte cache instead of retaining a second `Arc<Vec<u8>>`
+  per queued transaction.
+- Failed-block and pending-block requeue helpers now accept transaction
+  entrypoint iterators and stream `external_entrypoints_cloned()` directly from
+  the block, avoiding a temporary full-block `Vec` of cloned entrypoints during
+  commit failure, validation rejection, previous-block mismatch, pending-block
+  cap eviction, and stale-pending recovery paths.
+- Queue plan journal replay now streams append-log frames directly into the
+  live-record map instead of first retaining every decoded frame in a temporary
+  vector. New queue journal records also leave the legacy `gossip_payload`
+  compatibility field empty, relying on the canonical entrypoint already in the
+  record instead of cloning duplicate gossip bytes per pending transaction.
+  Startup journal installation now counts replayable records by tracking live
+  `(tx_hash, plan_digest)` keys, avoiding a full record materialization pass just
+  to report the replay count. Under-threshold compaction checks now use the same
+  live-key count and skip all journal scanning when there are no tombstones,
+  avoiding another full-record replay on ordinary remove flushes that do not
+  actually compact. Startup replay admission now prepares a live-key/frame-index
+  snapshot under the journal mutex, releases that mutex, and streams live records
+  from disk during admission instead of retaining a `Vec` of all full pending
+  transaction records.
+- Transaction gossip resend buckets now deduplicate repeated transaction hashes
+  within a resend slot, preventing persistent backpressure or repeated
+  best-effort broadcasts from retaining multiple retry entries for the same
+  queued transaction in the same tick bucket.
+- Transaction gossip peer-recent suppression now deduplicates same-tick
+  peer/hash expiry records and drops stale ring entries after a newer expiry
+  replaces the same peer/hash pair, preventing overwritten suppression entries
+  from cycling through the expiry ring indefinitely.
+- The thread-local gossip transaction decode cache is now byte-bounded in
+  addition to count-bounded. Cached framed entrypoint payloads are capped at 8
+  MiB total per thread, and a single payload larger than the byte budget is not
+  retained in the cache.
+- Owned inbound transaction gossip admission now materializes valid candidates
+  directly into the batch-precheck vector instead of first retaining a second
+  vector of encoded gossip transactions.
+- RBC local authoritative payload progress checks now compare payload hash,
+  chunk layout, chunk count, digest vector, and chunk root metadata directly
+  instead of cloning the full `RbcSession` and hydrating the clone. The probe
+  uses a metadata-only encoder, so progress checks also avoid retaining a full
+  `Vec<Vec<u8>>` of chunk payloads when they only need digest/root comparison.
+  This avoids repeatedly duplicating any already retained RBC chunk buffers
+  during DA progress checks.
+- Complete RBC session payload-match checks and complete cached-chunk
+  INIT/BlockCreated mismatch checks now hash borrowed payload chunk slices with
+  `Hash::new_from_chunks` instead of calling `payload_bytes()` and allocating a
+  contiguous full-payload buffer only to compare the payload hash. This covers
+  complete/delivered session checks, persisted-session hash validation, and
+  mismatch detection when a session receives authoritative payload metadata
+  after already collecting all chunks.
+- Frontier BlockCreated manifest construction no longer re-encodes the full
+  canonical block payload immediately after computing that same payload locally.
+  Caller-supplied payload hints are still re-encoded once to reject
+  noncanonical bytes before RBC manifest rebuild.
+- RBC INIT rebuild now has a separate path for internally computed canonical
+  block payload bytes, avoiding a second full payload hash and canonical
+  re-encode when the caller just derived those bytes from the block. Carried
+  payload bytes from external paths continue to be hash-checked and compared
+  against canonical block encoding before INIT metadata is rebuilt.
+- Local RBC plan installation now moves the prepared `RbcSession` into the live
+  session map instead of cloning it before broadcast, so a proposal no longer
+  retains both the plan copy and installed session copy of all RBC chunk
+  buffers.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core drain_aligned_batch_moves_pairs_without_backup_clone -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core reorder_vec_by_indices_moves_non_clone_values -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_core`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core proposal_batch_formal_gate_matrix -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core into_signed_block_preserves_external_transactions_without_legacy_cache -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core accepted_transaction_into_entrypoint_consumes_wrapped_entrypoint -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core into_signed_block_preserves_external_transactions_without_legacy_cache -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core preserve_order_builder_keeps_submission_sequence -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests block_payload_bytes_matches_canonicalization_formal_gate -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests heartbeat_block_for_state -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_block_created_hydrates_inline_without_seed_queue_clone -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_block_created_hydrates_existing_rbc_session -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_seed_result_merges_seed_session -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests exact_frontier_block_created_retains_delivered_rbc_session_until_commit -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests exact_frontier_block_created_flushes_ready_stashed_before_body -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core pending_block_payload_bytes_cow_does_not_populate_cache -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests block_created_accepts_payload_after_proposal_mismatch -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests duplicate_block_created_hydrates_inline_without_seed_queue_clone -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core queue_reuses_gossip_payload_without_side_cache -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core without_side -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core queue_plan_journal_replays_matching_plan_after_restart -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core queue_generated_gossip_payload_uses_framed_entrypoint_wire -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests prev_block_mismatch_requeues_payload -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests drop_pending_block_and_requeue -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests requeue_block_transactions_preserves_payloads_on_commit_failure -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests requeue_block_transactions_skips_known_committed_hashes_before_push -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core new_journal_records_do_not_duplicate_gossip_payload_bytes -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core journal_live_record_count_tracks_replay_len -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core journal_replays -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core journal_ -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core gossip_deferred_slot_deduplicates_repeated_hashes -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core peer_recent_suppression -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core gossip_transaction_decode_cache_is_byte_bounded -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core gossip_transaction_decode_cache -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core gossip_ed25519_batch_precheck -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core gossip_ -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core encode_rbc_payload_metadata -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core local_payload_satisfies_session_chunk_metadata -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_crypto hash_new_from_chunks_matches_concatenated_bytes -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_complete_payload_hash_matches_rs16_payload_chunks_without_joining -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_session_complete_payload_hash_matches_rs16_payload_chunks_without_joining -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests handle_rbc_init_rejects_missing_hash_session_when_complete_chunks_mismatch_payload_hash -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests block_created_rejects_missing_hash_rbc_session_with_complete_wrong_chunks -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_even_with_roster_hint -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_outbound_queue_cap_evicts_old_rebroadcast_entries -- --nocapture`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --features sumeragi-main-loop-tests authoritative_exact_frontier_slot_keeps_rbc_plan_install_and_broadcast_until_delivery -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_core`
+  - `CARGO_BUILD_JOBS=1 cargo check -p iroha_core`
+  - `cargo fmt --all -- --check`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/hash.rs crates/iroha_core/src/block.rs crates/iroha_core/src/gossiper.rs crates/iroha_core/src/queue.rs crates/iroha_core/src/queue/journal.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/pending_block.rs crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/rbc.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `git diff --check`
+- Not run: the guarded 100,000 transaction localnet memory repro. The required
+  release binaries (`target/release/iroha`, `target/release/irohad`, and
+  `target/release/kagami`) were missing, and the host was already running
+  unrelated multi-GB build/proof jobs, so starting a high-volume localnet run
+  would not produce a clean or safe memory report.
+
+## 2026-06-27 P2P Deferred Send Queue Memory Guard
+
+- Added `network.deferred_send_max_bytes_per_peer` with a default of 32 MiB,
+  bounding encoded deferred outbound relay frames retained per peer while a
+  peer session is missing.
+- `DeferredPeerFrameQueue` now records each frame's encoded wire length and
+  evicts oldest deferred frames when either the per-peer frame-count cap or
+  byte cap would be exceeded. A single oversized newest frame is still retained
+  after older entries are evicted so one legitimate large repair frame cannot
+  block all reconnect progress.
+- Threaded the new cap through network config parsing, P2P startup, and direct
+  test config fixtures in `iroha_p2p`, `iroha_core`, and `iroha_torii`.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_p2p deferred_queue_byte_cap_drops_oldest_but_keeps_oversized_newest -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_p2p deferred_queue_ -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_config network_deferred_send_byte_cap_defaults_and_clamps_zero -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_p2p`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_config`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_core`
+- Not run: the guarded 100,000 transaction localnet memory repro.
+
+## 2026-06-27 RBC Outbound Queue Memory Guard
+
+- Added `sumeragi.advanced.rbc.outbound_queue_max_sessions` and
+  `sumeragi.advanced.rbc.outbound_queue_max_bytes` with defaults of 16
+  sessions and 128 MiB for retained RBC chunk rebroadcast queues.
+- RBC outbound rebroadcast queuing now evicts older retained sessions when the
+  configured session or byte cap is exceeded, while preserving the just-queued
+  session and always retaining at least one oversized session instead of
+  dropping all repair progress.
+- Flushing RBC outbound chunks now physically drains sent chunk entries from
+  the retained queue instead of only advancing a cursor, so already-sent chunk
+  payload bytes and pre-encoded frame bytes are released before the full
+  session finishes.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests rbc_outbound_queue_cap_evicts_old_rebroadcast_entries -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests flush_rbc_outbound_chunks_respects_per_tick_budget_for_deferred_queue -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_config sumeragi_rbc_outbound_queue_caps -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_config`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_core`
+- Validation blocked:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_torii --tests --no-run`
+    currently fails in unrelated Torii test code because
+    `crates/iroha_torii/src/soracloud.rs` initializes
+    `SoraServiceStateEntryV1` without `fhe_public_key_digest`.
+- Not run: the guarded 100,000 transaction localnet memory repro.
+
+## 2026-06-27 Pending Block Body Memory Guard
+
+- Removed the unused `PendingBlock::tx_batch` retention path so pending blocks
+  no longer keep a second owned copy of accepted transactions that no runtime
+  path reads.
+- Added `sumeragi.recovery.pending_block_cap` with a default of 512 full
+  pending block bodies. New full-body materialization paths now enforce the cap
+  after BlockCreated ingress, certified block fetch responses, QC local-payload
+  rehydration, and frontier block-sync recovery.
+- Cap eviction uses deterministic retention rank, preserves the just-ingested
+  body, prefers bodies with commit/QC/vote/RBC-progress evidence, and drops the
+  lowest-ranked body through the existing stale-pending cleanup path so
+  transactions are requeued and validation/RBC/QC side state is cleared.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests pending_block_cap_evicts_lowest_ranked_body -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_config sumeragi_pending_block_cap -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_config`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_core`
+  - `cargo fmt --all -- --check`
+- Validation blocked:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_torii --tests --no-run` currently
+    fails in unrelated Torii test code because
+    `crates/iroha_torii/src/soracloud.rs` initializes
+    `SoraServiceStateEntryV1` without `fhe_public_key_digest`.
+- Not run: the guarded 100,000 transaction localnet memory repro.
+
+## 2026-06-27 ISO Operator Filesystem Error Hardening
+
+- Hardened the ISO operator Python tools so reader `lstat()` preflights,
+  rail/notary/verifier input-directory checks, receipt-directory inspection,
+  receipt source-file existence/symlink checks, output parent creation, and
+  output parent/leaf metadata checks report role-scoped diagnostics with
+  sanitized OS detail.
+- Alias-comparison helpers now treat `Path.stat()` `OSError`, runtime, type, and
+  value failures as "not the same existing path" instead of escaping raw
+  exception text.
+- Rail/notary/receipt corridor checks now also wrap `Path.resolve()` failures
+  for rail sidecar source peers, direct receipt duplicate detection, rail
+  message/receipt-directory overlap checks, and notary anchor/source overlap
+  checks, returning role-scoped `I/O error` diagnostics without echoing local
+  paths or exception text.
+- The same path-resolution guard now covers XSD manifest-root/schema/fixture
+  containment, trust-bundle summary input deduplication, canary
+  output/artifact/config/verify receipt corridors, operator-evidence summary
+  and receipt-directory overlap, and final-readiness XSD/evidence/pending-probe
+  summary input deduplication.
+- Pending official-XSD source probes now treat hostile `Content-Type` string
+  normalization failures as omitted metadata instead of failing an otherwise
+  reachable probe or archiving exception text.
+- A fresh live bounded pending-XSD probe against the eight recorded official ISO
+  download URLs still returned `timeout` for every URL with `0` downloaded
+  bytes, so the redistributable official securities/collateral schema blocker
+  remains external.
+- Final-readiness replay now converts hostile archived pending-probe
+  `content_type` and `error_kind` text normalization failures into label-only
+  `ReadinessError`s without retaining exception text.
+- Added adversarial pytest coverage for reader/input-directory/receipt-dir
+  `lstat()` failures, receipt source `exists()`/`is_symlink()` failures, output
+  parent creation failures, and alias stat failures across the XSD, trust,
+  canary, evidence, readiness, rail gateway, audit notary, and receipt verifier
+  scripts, resolve-failure coverage across XSD, trust, canary, evidence,
+  readiness, rail gateway, audit notary, and direct receipt verifier path
+  corridors, hostile pending-probe `Content-Type` coverage, and final-readiness
+  hostile archived pending-probe text coverage.
+- Validation passed:
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "source_path_exists_failures_do_not_echo_detail or source_path_symlink_inspection_failures_do_not_echo_detail" --tb=short`
+    (`4 passed, 266 deselected in 0.34s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "text_output_parent_creation_failures_do_not_echo_detail or text_output_target_inspection_failures_do_not_echo_detail" --tb=short`
+    (`12 passed, 1241 deselected in 0.74s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py -k "text_output_parent_creation_failures_do_not_echo_detail or lstat_failures_do_not_echo_detail or input_directory_inspection_failures_do_not_echo_detail or stat_failures_return_false" --tb=short`
+    (`23 passed, 1356 deselected in 0.82s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py -k "text_output_parent_creation_failures_do_not_echo_detail or lstat_failures_do_not_echo_detail or input_directory_inspection_failures_do_not_echo_detail or stat_failures_return_false or source_path_exists_failures_do_not_echo_detail or source_path_symlink_inspection_failures_do_not_echo_detail" --tb=short`
+    (`27 passed, 1356 deselected in 0.37s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1418 passed in 885.48s (0:14:45)`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1422 passed in 886.30s (0:14:46)`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "path_resolve_failures_do_not_echo_detail or source_path_resolve_failures_do_not_echo_detail" --tb=short`
+    (`3 passed, 421 deselected in 0.39s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1425 passed in 883.89s (0:14:43)`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "path_resolve_failures_do_not_echo_detail or source_path_resolve_failures_do_not_echo_detail" --tb=short`
+    (`8 passed, 1383 deselected in 0.40s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1430 passed in 882.73s (0:14:42)`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k "hostile_content_type or unsafe_content_type or header_access" --tb=short`
+    (`3 passed, 37 deselected in 0.03s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short`
+    (`40 passed in 0.05s`)
+  - `PYTHONPATH=scripts /opt/homebrew/bin/python3.11 scripts/iso_pending_xsd_source_probe.py --timeout-secs 10 --max-bytes 4096`
+    (`ok=false`, `successful_probe_count=0`, `probe_count=8`, all probes
+    `status=timeout`, `downloaded_bytes=0`,
+    `summary_sha256=39c0f5544de16bc89a8e5ebe2e937410960d9100b54bed32cb2dfce1ed079b44`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1431 passed in 881.23s (0:14:41)`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k "pending_xsd_probe_replay_hostile_text" --tb=short`
+    (`1 passed, 277 deselected in 0.21s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k "pending_xsd_probe" --tb=short`
+    (`11 passed, 267 deselected in 35.02s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1432 passed in 882.32s (0:14:42)`)
+
+## 2026-06-27 Consensus QC Work Queue Memory Guard
+
+- Bounded Sumeragi's known-block QC work queue and roster-deferred QC queue at
+  256 entries each, using deterministic QC retention rank so newer
+  height/view/epoch work evicts older entries while stale incoming work is
+  dropped under backpressure.
+- Kept deferred roster metadata paired with deferred QCs during cap eviction so
+  the side map cannot retain orphaned entries.
+- Restored the feature-gated Sumeragi main-loop test fixtures for the current
+  P2P outbound frame queue config fields.
+- Validation passed:
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests bounded_qc_insert_decision -- --nocapture`
+  - `CARGO_BUILD_JOBS=2 cargo test -p iroha_core --features sumeragi-main-loop-tests known_block_qc_enqueue_formal_gate_matrix -- --nocapture`
+  - `cargo fmt --check --package iroha_core`
+  - `CARGO_BUILD_JOBS=2 cargo check -p iroha_core`
+
+## 2026-06-27 Queue Routing Ledger Memory Guard
+
+- Bounded the process-global transaction routing ledger by the configured
+  queue capacity, so routing decisions/plans that survive normal queue cleanup
+  cannot grow without limit when block-event cleanup is missed or delayed.
+- Routed queue insertion, requeue, and routing-refresh paths through the
+  bounded ledger helper while preserving paired decision/plan cleanup order.
+- Updated stale `iroha_core` test config literals for the new P2P outbound
+  frame queue limits and current SCCP route manifest fields so the focused core
+  tests compile against the current config model.
+- Validation passed:
+  - `cargo test -p iroha_core routing_ledger -- --nocapture`
+  - `cargo check -p iroha_core`
+  - `cargo fmt --check --package iroha_core`
+
+## 2026-06-27 P2P Localnet Memory Guard
+
+- Added per-peer encrypted outbound frame backlog caps to the P2P peer sender:
+  defaults retain at most 128 MiB / 8192 high-priority frames and 64 MiB /
+  4096 low-priority frames per peer before the stalled connection is failed
+  instead of retaining unbounded `BytesMut` queues.
+- Threaded the new limits through `iroha_config` user/actual network
+  configuration and all TCP/TLS/QUIC/test peer spawn paths.
+- Added `scripts/run_localnet_memory_guard.py`, a 4+ peer localnet load runner
+  with an 8 GiB default aggregate RSS guard that validates `peer*.pid` ownership
+  via `ps` command matching against `--config <out-dir>/peerN.toml` and stops
+  via the generated `stop.sh`.
+- Updated `scripts/run_10k_localnet.sh` to pass queue soft/hard/wait controls to
+  `tx_load.py` by default.
+- Validation passed:
+  - `cargo check -p iroha_p2p`
+  - `cargo test -p iroha_p2p message_sender_rejects_high_frame_queue_overflow -- --nocapture`
+  - `pytest scripts/tests/run_localnet_memory_guard_test.py scripts/tests/run_10k_localnet_test.py`
+  - `bash -n scripts/run_10k_localnet.sh`
+  - `python3 -m py_compile scripts/run_localnet_memory_guard.py`
+
+## 2026-06-27 Non-C# Pallas Metadata Option Guard Hardening
+
+- Strengthened the SDK parity non-C# Pallas metadata option-shape negative
+  control so decoder shape, field-scoped/tag diagnostics, trailing-byte,
+  unknown-tag, declared-length, and fixed-array vector markers are mutated and
+  verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-metadata-option-shape`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Package-Dist Raw Lineage Key Guard Hardening
+
+- Strengthened the SDK parity JavaScript package-dist raw lineage-key vector
+  negative control so each malformed test message and request-object marker is
+  mutated and verified independently.
+- Tightened the init proving-only scanner to anchor on the `currentNote` object
+  shape, fixing a blind spot where inserting an unexpected verifier key could
+  still satisfy a permissive substring match.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, snapshot restoration, and the anchored scanner marker.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-raw-lineage-key-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM/Android Hop Evidence Guard Hardening
+
+- Strengthened the SDK parity JVM/Android hop-evidence shape negative control
+  so each Kotlin/JVM and Android Java shape, root-transition, continuity, and
+  chain/asset binding marker is mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-hop-evidence-shape`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM Note Amount Guard Hardening
+
+- Strengthened the SDK parity JVM note amount negative control so each Python,
+  Kotlin/JVM, and Android Java amount-vector and digest-diagnostic marker is
+  mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-note-amount-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Verify-Result Redeem Alias Guard Hardening
+
+- Strengthened the SDK parity verify-result redeem alias negative control so
+  each JavaScript, Python, Swift, Kotlin/JVM, and Android Java source/test alias
+  marker is mutated and verified independently.
+- Preserved the test-surface `replace_all` behavior while restoring each target
+  snapshot after every injected drift, and updated the JavaScript parity
+  meta-test to require per-alias exact diagnostics and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-verify-result-redeem-aliases`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Redeem Change-Output Reserved Collision Guard Hardening
+
+- Strengthened the SDK parity redeem change-output reserved-collision negative
+  control so each JavaScript source/dist/declaration, package-dist, Python,
+  Swift, Kotlin/JVM, and Android Java guard/test marker is mutated and verified
+  independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-change-output-reserved-collisions`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Top-Up Anchor Nullifier Guard Hardening
+
+- Strengthened the SDK parity top-up anchor nullifier invariant negative
+  control so each case label, diagnostic, precedence marker, and implementation
+  marker is mutated and verified independently across the non-C# SDK surfaces.
+- Preserved replace-all mutation for repeated case labels and diagnostics,
+  fixing the split-control blind spot where a duplicate Python over-limit
+  count-prefix label could remain after a replace-first mutation.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, snapshot restoration, and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-topup-anchor-nullifier-invariants`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Redeem Lineage-Witness Shape Guard Hardening
+
+- Strengthened the SDK parity redeem lineage-witness shape negative control so
+  each JavaScript, Python, Swift, Kotlin/JVM, and Android Java source/test
+  marker is mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-redeem-lineage-witness-shape`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Init Lineage-Key Auto-Preflight Guard Hardening
+
+- Strengthened the SDK parity init lineage-key auto-preflight negative control
+  so each Kotlin/JVM, Android Java, and Python helper/test marker is mutated and
+  verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-init-lineage-key-auto-preflight`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Append Lineage-Key Material Selection Guard Hardening
+
+- Strengthened the SDK parity append lineage-key material selection negative
+  control so each Swift, Kotlin/JVM, and Android Java constructor, test, and
+  auto-helper marker is mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-append-lineage-key-material-selection`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Append Output-Selection Preflight Guard Hardening
+
+- Strengthened the SDK parity append output-selection preflight negative
+  control so each JavaScript, Python, Swift, Kotlin/JVM, and Android Java
+  constructor/test marker is mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-append-output-selection-preflight`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Append Previous-Proof Opening Selection Guard Hardening
+
+- Strengthened the SDK parity append previous-proof opening selection negative
+  control so each JavaScript, package-dist, Python, Swift, Kotlin/JVM, and
+  Android Java constructor/test marker is mutated and verified independently.
+- Split the bounded Kotlin/JVM and Android Java malformed previous-proof Pallas
+  archive table mutations into the same per-surface loop, so one retained
+  Pallas diagnostic can no longer mask another stale table row.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics,
+  snapshot restoration, and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-append-previous-proof-opening-selection`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Append Previous-Lineage Record Preflight Guard Hardening
+
+- Strengthened the SDK parity append previous-lineage-record preflight negative
+  control so each JavaScript, Python, Swift, Kotlin/JVM, and Android Java
+  constructor/helper/test marker is mutated and verified independently.
+- Kept the helper-level Kotlin/JVM and Android Java auto previous-openings
+  preflight markers in the same per-mutation loop, so missing lineage-record
+  validation cannot be masked by retained proof-opening generation coverage.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics,
+  snapshot restoration, and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-append-previous-lineage-record-preflight`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Append Previous-Lineage Record Parse-Preflight Guard Hardening
+
+- Strengthened the SDK parity append previous-lineage-record parse-preflight
+  negative control so each JavaScript source/dist, JavaScript test/package-dist,
+  and Python source/test marker is mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require the package-dist diagnostic plus
+  per-mutation exact diagnostics and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-append-previous-lineage-record-parse-preflight`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Append Previous-Lineage Record Selection Guard Hardening
+
+- Strengthened the SDK parity append previous-lineage-record selection negative
+  control so each JavaScript source/dist, JavaScript test/package-dist, Python,
+  Swift, Kotlin/JVM, and Android Java source/test marker is mutated and
+  verified independently.
+- Preserved the replace-all mutation for repeated Kotlin/JVM and Android Java
+  source diagnostics while still restoring that target before moving to the
+  next surface, and kept the Swift append-bundle test marker pinned to the
+  full regression block.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, snapshot restoration, and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-append-previous-lineage-record-selection`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Offline Note V2 Instruction Guard Hardening
+
+- Strengthened the SDK parity Offline Note V2 negative controls so JVM decoder
+  placeholder removal, JVM instruction wrapper, JVM instruction decoder,
+  canonical instruction wire-name, and Swift instruction decoder mutations are
+  checked independently per SDK surface or Swift API marker.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics,
+  snapshot restoration, and diagnostic printing for the converted controls.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-wrapper`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-decoder`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-note-v2-canonical-instruction-wire-names`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-instruction-decoder`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Rust Recursive Compact Unavailable Classifier Guard Hardening
+
+- Strengthened the SDK parity Rust recursive compact unavailable classifier
+  negative control so the C bridge, Node host, and Python PyO3 host classifier
+  markers are mutated and verified independently.
+- Restored each host source snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-host exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-rust-recursive-compact-unavailable-classifier`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 SDK Recursive Compact Unavailable Helper Guard Hardening
+
+- Strengthened the SDK parity recursive compact unavailable helper negative
+  control so the JavaScript and Python helper definitions are mutated and
+  verified independently.
+- Restored each SDK source snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-helper exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-recursive-compact-unavailable-helper`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Recursive Compact Projection Surface Guard Hardening
+
+- Strengthened the SDK parity recursive spend compact projection surface
+  negative control so JavaScript, Python, Swift, Kotlin/JVM, and Android Java
+  projection availability markers are mutated and verified independently.
+- Restored each SDK source snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-SDK exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JavaScript Compact Projection Invalid Archive Guard Hardening
+
+- Strengthened the SDK parity JavaScript source compact projection invalid
+  archive negative control so the oversized archive and missing-archive vectors
+  are mutated and verified independently.
+- Kept both expected diagnostics for each vector and restored the source test
+  snapshot after every injected drift.
+- Updated the JavaScript parity meta-test to require per-vector diagnostics,
+  snapshot restoration, and diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-source-compact-projection-invalid-archives`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Python Compact Projection Hardening Guard Tightening
+
+- Tightened the SDK parity Python compact projection hardening negative control
+  so probe, copy, bundle-invalid-archive, and verifier-invalid-archive cases
+  still run with isolated text snapshots but now reject wrong diagnostics
+  explicitly instead of reporting them as undetected drift.
+- Added an explicit no-diagnostics guard and updated the JavaScript parity
+  meta-test to require the wrong-reason path and final detection gate.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-compact-projection-hardening`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM Compact Projection Block-Height Vector Guard Hardening
+
+- Strengthened the SDK parity JVM/Android compact projection block-height vector
+  negative control so each Kotlin/JVM and Android Java invalid vector is
+  mutated and verified independently.
+- Restored each test source snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-vector exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-compact-projection-block-height-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM Compact Projection Archive-Preflight Guard Hardening
+
+- Strengthened the SDK parity JVM/Android compact projection archive-preflight
+  negative control so each Kotlin/JVM and Android Java oversized bundle/verifier
+  archive row is mutated and verified independently.
+- Restored each test source snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-row exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-compact-projection-archive-preflight`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Pallas Builder Native-Output Guard Hardening
+
+- Strengthened the SDK parity non-C# Pallas builder native-output negative
+  control so JavaScript and Python native-output validation markers are mutated
+  and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-native-output-guards`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Pallas Builder Input Guard Hardening
+
+- Strengthened the SDK parity non-C# Pallas builder input negative control so
+  Swift, JavaScript, and Python bridge-input guard tests plus exact
+  previous-proof count markers are mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-builder-input-guards`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Record Bundle Fold-Step Count Guard Hardening
+
+- Strengthened the SDK parity non-C# record-bundle fold-step count-prefix
+  negative control so JavaScript, Python, Swift, Kotlin, and Android decoder
+  prechecks plus raw fold-step count-prefix vectors are mutated and verified
+  independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-record-bundle-fold-step-count-prechecks`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Lineage Witness Count-Prefix Guard Hardening
+
+- Strengthened the SDK parity non-C# lineage-witness count-prefix negative
+  control so JavaScript, Python, Swift, Kotlin, and Android decoder prechecks
+  plus raw count-prefix vectors are mutated and verified independently.
+- Restored each target snapshot after every injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-lineage-witness-count-prefix-prechecks`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Offline Kagemusha Localnet Evidence Doc Guard Hardening
+
+- Strengthened the offline Kagemusha localnet lifecycle evidence documentation
+  negative control so the release-evidence CLI flag and semantic evidence
+  paragraph are mutated and verified independently.
+- Restored the documentation snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-localnet-lifecycle-release-evidence`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Offline Kagemusha Accumulator Doc Guard Hardening
+
+- Strengthened the offline Kagemusha accumulator documentation negative control
+  so the native-owned accumulator paragraph and proof-state/material-alias
+  paragraph are mutated and verified independently.
+- Restored the documentation snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require per-mutation exact diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 SDK README Native Material Alias Guard Hardening
+
+- Strengthened the SDK parity README native material alias negative control so
+  each non-C# SDK README alias/request-field boundary is mutated and verified
+  independently.
+- Kept the centralized marker set strict by requiring every native-material
+  alias marker plus the SDK-specific request-field marker for each mutated
+  README.
+- Restored the README snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require per-README diagnostics and diagnostic
+  printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-native-material-aliases`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 SDK README Proof-Chain Accumulator Guard Hardening
+
+- Strengthened the SDK parity README proof-chain accumulator negative control so
+  each non-C# SDK README proof-chain accumulator boundary is mutated and
+  verified independently.
+- Restored the README snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require exact per-README diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 SDK README Boundary Guard Hardening
+
+- Strengthened the SDK parity README boundary negative control so each non-C#
+  SDK README previous-proof archive boundary and plural lineage-verifier-record
+  statement is mutated and verified independently.
+- Restored the README snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require exact per-README diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-boundary`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Halo2 VK Hash Guard Hardening
+
+- Strengthened the SDK parity mobile Halo2 verifier-key hash negative control
+  so Swift, Android, and Kotlin canonical VK hash markers are mutated and
+  verified independently.
+- Restored the target snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require exact per-target diagnostics and
+  diagnostic printing.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-halo2-vk-hash`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 SDK Helper Surface Guard Hardening
+
+- Strengthened the SDK parity helper-surface negative control so JavaScript
+  exports, JavaScript append selector call sites, Python exports/imports,
+  Python helper definition/call sites, helper tests, and Swift/JVM helper
+  bounds are mutated and verified independently.
+- Fixed a masking bug where the JavaScript and Python append selector call-site
+  checks could still match the exported helper definition after the call site
+  drifted.
+- Updated the JavaScript parity meta-test to require target-aware exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the helper-surface control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-helper-surface`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Lineage Readonly Declaration Guard Hardening
+
+- Strengthened the SDK parity JavaScript lineage readonly declaration negative
+  control so verifier-key and proving-key readonly declarations are mutated and
+  verified independently.
+- Restored the declaration snapshot after each injected drift and updated the
+  JavaScript parity meta-test to require exact diagnostics, per-mutation
+  printing, and no unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-readonly-declarations`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 SDK Archive Input-Copy Guard Hardening
+
+- Strengthened the SDK parity archive input-copy negative control so each
+  JavaScript, Python, Swift, Kotlin, and Android archive-copy or size-guard
+  marker is mutated and verified in its own checker pass.
+- Restored the mutated file snapshot after each injected drift, so one retained
+  native archive ownership or preflight marker cannot mask another SDK path.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the archive input-copy control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-archive-input-copy`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Swift Pallas Transcript Label Guard Hardening
+
+- Strengthened the SDK parity Swift Pallas transcript-label byte-limit negative
+  control so Swift UTF-8 byte-count code plus archive and previous-proof
+  non-ASCII vectors are mutated and verified independently.
+- Added nth-occurrence mutation targeting for duplicate Swift vector markers so
+  archive and previous-proof diagnostics cannot mask each other.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, source snapshot restoration between cases, duplicate occurrence
+  targeting, and no unconditional pass path for the Swift transcript-label
+  control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-pallas-transcript-label-byte-limit`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS/Python Pallas Transcript Label Guard Hardening
+
+- Strengthened the SDK parity JS/Python Pallas transcript-label byte-limit
+  negative control so JavaScript, JavaScript dist, and Python UTF-8 byte-count
+  code plus JavaScript, package-dist, and Python non-ASCII vectors are mutated
+  and verified independently.
+- Added nth-occurrence mutation targeting for duplicate Python vector markers so
+  init and previous-proof diagnostics cannot mask each other.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, source snapshot restoration between cases, duplicate occurrence
+  targeting, and no unconditional pass path for the JS/Python transcript-label
+  control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-pallas-transcript-label-byte-limit`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM/Android Pallas Transcript Label Guard Hardening
+
+- Strengthened the SDK parity JVM/Android Pallas transcript-label byte-limit
+  negative control so Kotlin and Android UTF-8 byte-count code plus archive and
+  previous-proof non-ASCII vectors are mutated and verified independently.
+- Added nth-occurrence mutation targeting for duplicate Kotlin/Android vector
+  markers so archive and previous-proof diagnostics cannot mask each other.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, source snapshot restoration between cases, duplicate occurrence
+  targeting, and no unconditional pass path for the JVM/Android transcript-label
+  control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-pallas-transcript-label-byte-limit`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Accumulator Asset UUID-Boundary Guard Hardening
+
+- Strengthened the SDK parity non-C# accumulator asset UUID-boundary negative
+  control so the Swift UUIDv4 encoder guard and non-C# fallback asset vectors
+  are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-vector exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the non-C# accumulator asset UUID-boundary control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-asset-uuid-boundary-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Accumulator Asset-Address Guard Hardening
+
+- Strengthened the SDK parity non-C# accumulator asset-address vector negative
+  control so Swift, Kotlin, Android, JavaScript source/package-dist, and Python
+  init and append asset vectors are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-vector exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the non-C# accumulator asset-address control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-asset-address-vectors`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Pallas Sequence-Count Guard Hardening
+
+- Strengthened the SDK parity non-C# Pallas sequence-count precheck negative
+  control so JavaScript, Python, Swift, Kotlin, and Android decoder prechecks
+  plus raw count-prefix vectors are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the non-C# Pallas sequence-count control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-pallas-sequence-count-prechecks`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JavaScript Confidential V2 Exactness Guard Hardening
+
+- Strengthened the SDK parity JavaScript confidential v2 derivation exactness
+  negative control so source, package-dist, fixed32, amount, and proof-builder
+  exactness markers are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-mutation exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the JavaScript confidential v2 exactness control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-confidential-v2-derivation-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS/Python Native Output Header Guard Hardening
+
+- Strengthened the SDK parity JS/Python native output-header negative control
+  so JavaScript and Python malformed native-output header tests are mutated and
+  verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  regex-pattern diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path for the JS/Python native output-header control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-python-native-output-headers`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Swift Native Input Header Guard Hardening
+
+- Strengthened the SDK parity Swift native input-header negative control so
+  recursive-spend, compact-token, recursive-aggregation, and recursive compact
+  input-header tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  regex-pattern diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path for the Swift native input-header control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-input-headers`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Swift Native Output Header Guard Hardening
+
+- Strengthened the SDK parity Swift native output-header negative control so
+  recursive-spend, compact-token, recursive-aggregation, and recursive compact
+  output-header tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  regex-pattern diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path for the Swift native output-header control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-native-output-headers`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JavaScript Connect Guard Hardening
+
+- Strengthened the SDK parity JavaScript Connect runner negative control so
+  session, error, retry, queue journal, diagnostics, browser, preview, and
+  journal-record tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the JavaScript Connect runner control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-connect-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JavaScript Torii Guard Hardening
+
+- Strengthened the SDK parity JavaScript Torii runner negative control so
+  canonical auth, subscription action, Connect WebSocket, ISO alias, and
+  offline-readiness ABI tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the JavaScript Torii runner control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-torii-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Torii RPC/Subscription/WebSocket Guard Hardening
+
+- Strengthened the SDK parity mobile Torii RPC/subscription/WebSocket negative
+  control so transport security, RPC header, client-config, subscription, SSE,
+  WebSocket client/subscription, and mock-server tests are mutated and verified
+  independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the mobile Torii RPC/subscription/WebSocket control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile SCCP Guard Hardening
+
+- Strengthened the SDK parity mobile SCCP runner negative control so each
+  Kotlin and Android EVM, TRON, TON, Solana, and source-proof hash surface is
+  mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the mobile SCCP runner control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-sccp-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Transport/Inspector/Attestation Guard Hardening
+
+- Strengthened the SDK parity mobile transport/inspector/attestation negative
+  control so Kotlin transport, Android transport, pending-queue inspector, and
+  attestation verifier tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the mobile transport/inspector/attestation control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transport-inspector-attestation-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Connect Guard Hardening
+
+- Strengthened the SDK parity mobile Connect runner negative control so Kotlin
+  crypto, envelope, sequence, wallet-request, and Android envelope, queue,
+  retry, error-classifier, and wallet-request tests are mutated and verified
+  independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the mobile Connect runner control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-connect-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Account Address Guard Hardening
+
+- Strengthened the SDK parity mobile account-address canonical negative control
+  so Python, JavaScript source/package-dist, Swift, Kotlin, and Android
+  canonicalization surfaces are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the mobile account-address control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-account-address-canonical-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Kotlin Norito Framing Guard Hardening
+
+- Strengthened the SDK parity Kotlin Norito framing negative control so header
+  layout-flag tests and columnar golden/adversarial tests are mutated and
+  verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the Kotlin Norito framing control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-norito-framing-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Transaction/Norito Guard Hardening
+
+- Strengthened the SDK parity mobile transaction/Norito negative control so
+  Kotlin codec, Kotlin fixture, Android Norito adapter, transaction payload,
+  signed-hasher, and offline signing envelope tests are mutated and verified
+  independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the mobile transaction/Norito control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-transaction-norito-runner-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Android Offline Transfer Guard Hardening
+
+- Strengthened the SDK parity Android offline transfer persistence negative
+  control so QR stream recovery, journal duplicate rejection, and HTTP pending
+  queue replay/telemetry tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the Android offline transfer control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-offline-transfer-persistence-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Offline Cash Issuer-Key Guard Hardening
+
+- Strengthened the SDK parity offline cash issuer-key exactness negative
+  control so Python, JavaScript source/package-dist, Swift, Kotlin, and Android
+  source/test surfaces are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  identity/time/issuer-key/ABI diagnostics, source snapshot restoration between
+  cases, and no unconditional pass path for the issuer-key control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Offline Readiness Artifact Guard Hardening
+
+- Strengthened the SDK parity offline readiness artifact contract negative
+  control so Torii, JavaScript, Python, Swift, Kotlin, and Android readiness
+  artifact surfaces are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  artifact diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path for the artifact contract control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Kotlin Offline Cash Settlement Guard Hardening
+
+- Strengthened the SDK parity Kotlin offline cash settlement negative control
+  so the redeem commitment codec test and Rust settlement proof fixture parity
+  test are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutation, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for the Kotlin settlement control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Offline Readiness Guard Hardening
+
+- Strengthened the SDK parity mobile offline readiness negative control so
+  Kotlin parser/client tests, Android parser/client tests, the Torii readiness
+  handler, and Torii smoke tests are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-surface mutation,
+  exact readiness diagnostic mapping, source snapshot restoration between
+  cases, and no unconditional pass path for the offline readiness control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Confidential Witness Codec Guard Hardening
+
+- Strengthened the SDK parity mobile confidential witness codec negative
+  control so Kotlin and Android Java source APIs, bridge validation helpers,
+  test names, and diagnostic strings are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require the per-marker helper,
+  exact diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path for the confidential witness codec control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-witness-codecs`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Confidential Note Guard Hardening
+
+- Strengthened the SDK parity mobile confidential note coverage negative control
+  so Kotlin and Android Java encrypted-payload tests and note-contract tests
+  are mutated and verified independently.
+- Updated the JavaScript parity meta-test to require per-target mutations,
+  exact diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path for the confidential note control.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-confidential-note-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile ZK Guard Hardening
+
+- Strengthened the SDK parity mobile ZK Merkle provider adversarial and Torii
+  parser shape negative controls so Kotlin and Android Java markers are mutated
+  and verified independently.
+- Updated the JavaScript parity meta-test to require per-SDK mutations, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path for those mobile ZK controls.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-merkle-provider-adversarial-coverage`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-zk-torii-parser-shape-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Public Privacy Catalog Guard Helper Expansion
+
+- Routed the public privacy reviewer-identity, artifact-label, duplicate-row,
+  and deterministic test-artifact negative controls through the isolated
+  catalog drift helper, including replace-all source mutations where repeated
+  helper calls must be removed from a single file.
+- Updated the JavaScript parity meta-test to require helper routing,
+  replace-all marker coverage, exact diagnostics, source restoration, and no
+  unconditional pass path for those controls.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-reviewer-identity-evidence`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-artifact-label-evidence`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-duplicate-row-evidence`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-deterministic-test-artifact`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Public Privacy Malformed Evidence Guard Hardening
+
+- Strengthened the SDK parity public privacy zero-hash, repeated-hash,
+  zero-signature, and repeated-signature evidence negative controls with a
+  shared isolated catalog-mutation helper that restores each source snapshot
+  before the next JS/Python marker is tested.
+- Added JavaScript parity meta-test coverage requiring the helper to use exact
+  diagnostics, source restoration, collected per-marker diagnostics, and no
+  unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-hash-evidence`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-hash-evidence`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-zero-signature-evidence`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-repeated-signature-evidence`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Public Privacy Evidence Guard Hardening
+
+- Strengthened the SDK parity public privacy localnet lifecycle catalog and SDK
+  export/review-scope negative controls so JavaScript source/dist,
+  declarations, package-dist tests, Python catalog/tests, and native Python
+  evidence markers are mutated and verified independently.
+- Added JavaScript parity meta-test coverage requiring per-target mutations,
+  exact diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-localnet-lifecycle-catalog`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-public-privacy-sdk-export-review-scope-evidence`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Privacy Audit Guard Hardening
+
+- Strengthened the SDK parity mobile privacy audit-hash uniqueness and
+  localnet lifecycle audit negative controls so Swift, Kotlin, and Android Java
+  source/test markers are mutated and verified independently.
+- Added JavaScript parity meta-test coverage requiring per-target mutations,
+  exact diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-audit-hash-uniqueness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-localnet-lifecycle-audit`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Privacy Production-Gate Guard Hardening
+
+- Strengthened the SDK parity mobile privacy production-gate exactness
+  negative control so Swift, Kotlin, and Android Java native capability-row
+  exactness predicates are mutated and verified independently.
+- Added JavaScript parity meta-test coverage requiring per-SDK mutations, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-privacy-production-gate-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Mobile Native Output Header Guard Hardening
+
+- Strengthened the SDK parity mobile recursive-spend native-output header
+  negative control so Kotlin and Android Java malformed Norito field-bitset
+  checks are mutated and verified independently.
+- Added JavaScript parity meta-test coverage requiring per-SDK mutations, exact
+  diagnostics, source snapshot restoration between cases, and no unconditional
+  pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-recursive-spend-native-output-headers`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM Recursive Compact Shape Classifier Guard Hardening
+
+- Strengthened the SDK parity JVM recursive compact shape-classifier negative
+  control so Kotlin and Android Java row-shape and verifier-key mismatch
+  diagnostics are mutated and checked independently.
+- Added JavaScript parity meta-test coverage requiring per-SDK/per-marker
+  mutations, exact diagnostics, source snapshot restoration between cases, and
+  no unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-recursive-compact-shape-classifier`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Kagemusha Probe Rejection Shape Guard Hardening
+
+- Strengthened the SDK parity Kagemusha probe rejection-shape negative control
+  so JavaScript source, JavaScript dist, and Python classifier predicates are
+  mutated and checked independently while leaving the Windows-only C# follow-up
+  untouched.
+- Added JavaScript parity meta-test coverage requiring per-file mutations, exact
+  diagnostics, source snapshot restoration between cases, C# exclusion, and no
+  unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-probe-rejection-shape`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Package-Dist Record-Backed/Pallas Guard Hardening
+
+- Strengthened the SDK parity JavaScript package-dist record-backed/Pallas
+  builder negative control so dispatch, fail-closed argument labels, malformed
+  native-output diagnostics, missing-archive rows, and the oversized
+  invalid-archive block are mutated and checked independently.
+- Added JavaScript parity meta-test coverage requiring exact per-marker
+  diagnostics, scoped fail-closed block mutations, source snapshot restoration
+  between cases, and no unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-record-backed-pallas-builders`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Package-Dist Compact Projection Guard Hardening
+
+- Strengthened the SDK parity JavaScript package-dist compact projection
+  negative control so dispatch, fail-closed, oversized archive, at-height invalid
+  archive, and missing-archive markers are mutated and checked independently.
+- Added JavaScript parity meta-test coverage requiring exact per-marker
+  diagnostics, scoped fail-closed block mutations, source snapshot restoration
+  between cases, and no unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-compact-projection`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Package-Dist Partial ABI-6 Guard Hardening
+
+- Strengthened the SDK parity JavaScript package-dist recursive spend partial
+  ABI-6 negative control so availability, broken/permissive probes, unsafe
+  native outputs, invalid and missing request archives, and native semantic
+  rejection markers are mutated and checked independently.
+- Added JavaScript parity meta-test coverage requiring exact per-marker
+  diagnostics, count-based mutation checks, source snapshot restoration between
+  cases, and no unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-recursive-spend-partial-abi6`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Kagemusha ABI Probe Bounds Guard Hardening
+
+- Strengthened the SDK parity Kagemusha ABI probe bounds negative control so it
+  independently mutates JavaScript source, JavaScript dist, and Python bound
+  checks while leaving the Windows-only C# follow-up untouched.
+- Added JavaScript parity meta-test coverage requiring per-file mutations, exact
+  diagnostics, source snapshot restoration between cases, C# exclusion, and no
+  unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Native Bridge ZK1 I10P Parser Guard Hardening
+
+- Strengthened the SDK parity native bridge ZK1 I10P parser exactness negative
+  control so it independently mutates the test name, trailing/truncated payload
+  diagnostics, zero/overflow shape labels, and projection rejection assertion.
+- Added JavaScript parity meta-test coverage requiring every parser marker to be
+  mutated independently, exact diagnostics, source snapshot restoration between
+  cases, and no unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-zk1-i10p-parser-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Native Bridge Invalid-Proof Isolation Guard Hardening
+
+- Strengthened the SDK parity native C bridge recursive compact invalid-proof
+  isolation negative control so it independently mutates the default adversarial
+  test's backend-heavy helper insertion and the ignored backend-test marker.
+- Added JavaScript parity meta-test coverage requiring per-invariant mutations,
+  exact diagnostics, source snapshot restoration between cases, and no
+  unconditional pass path.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-recursive-compact-invalid-proof-isolation`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Native Bridge Zero-Envelope Pallas Guard Hardening
+
+- Strengthened the SDK parity native C bridge zero-envelope Pallas negative
+  control so it independently mutates the bridge test function, helper, request
+  encodes, init/append route labels, and lineage witness no-output assertions.
+- Added JavaScript parity meta-test coverage requiring per-marker mutations,
+  exact missing-marker diagnostics, and source snapshot restoration between
+  cases.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline V2 Kagemusha Redeem-Smoke Guard Hardening
+
+- Added a workflow-backed routed Torii Offline V2 Kagemusha redeem-smoke
+  negative control that independently mutates the smoke target's accept,
+  archive, echo-field, legacy, auxiliary, mismatch, and compact-token rejection
+  markers.
+- Added JavaScript parity meta-test coverage requiring the smoke negative
+  control to validate each text snapshot, require exact Torii redeem ingress
+  diagnostics, and be present in the payload workflow.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline V2 Kagemusha OpenAPI Guard Hardening
+
+- Strengthened the routed Torii Offline V2 Kagemusha OpenAPI negative control
+  so it independently mutates the generated Torii description, OpenAPI
+  assertion coverage, and both portal JSON snapshots.
+- Added JavaScript parity meta-test coverage requiring every OpenAPI contract
+  mutation to validate its text snapshot and exact Torii redeem ingress
+  diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline V2 Kagemusha Legacy-Field Guard Hardening
+
+- Strengthened the routed Torii Offline V2 Kagemusha legacy-field negative
+  control so it independently mutates the helper, call site, legacy-field
+  diagnostic, error code, and legacy Offline Note V2 field list.
+- Added JavaScript parity meta-test coverage requiring every legacy-field
+  mutation to validate its text snapshot and exact Torii redeem ingress
+  diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-legacy-fields`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline V2 Kagemusha Auxiliary-Field Guard Hardening
+
+- Strengthened the routed Torii Offline V2 Kagemusha auxiliary-field negative
+  control so it independently mutates the helper, call site, ignored-field
+  diagnostic, error code, and malformed auxiliary-value test vectors.
+- Added JavaScript parity meta-test coverage requiring every auxiliary-field
+  mutation to validate its text snapshot and exact Torii redeem ingress
+  diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-auxiliary-fields`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline V2 Kagemusha Diagnostic Guard Hardening
+
+- Strengthened the routed Torii Offline V2 Kagemusha archive-field shape
+  negative control so it independently mutates canonical base64,
+  surrounding-whitespace, and canonical `Numeric` diagnostic strings.
+- Added JavaScript parity meta-test coverage requiring every diagnostic mutation
+  to validate its text snapshot and exact Torii redeem ingress diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-archive-field-shape`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline V2 Kagemusha Exact-Field Guard Hardening
+
+- Strengthened the routed Torii Offline V2 Kagemusha redeem exact-field negative
+  control so it independently mutates canonical archive whitespace rejection,
+  optional echo-string blank/whitespace rejection, and canonical `Numeric`
+  amount text rejection.
+- Added JavaScript parity meta-test coverage requiring every exact-field
+  mutation to validate its text snapshot and exact Torii redeem ingress
+  diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-exact-fields`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Recursive Compact Constructor Guard Hardening
+
+- Strengthened the routed data-model recursive compact constructor negative
+  control so it independently mutates zero digest projection rejection,
+  unsupported proof/verifier backends, backend mismatch, empty proof bytes,
+  unsupported circuit IDs, stale proof hashes, transcript splices, and hop-count
+  splices.
+- Added JavaScript parity meta-test coverage requiring every constructor marker
+  mutation to validate its text snapshot and exact `Reserved-lineage
+  adversarial coverage` diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-recursive-compact-constructor-binding`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Stale Previous Proof Fixture Guard Hardening
+
+- Strengthened the routed data-model stale previous-proof fixture negative
+  control so it independently mutates the stale previous-proof payload fixture,
+  folded public-input hash splice expectation, folded-hash field diagnostic, and
+  stale public-input hash label.
+- Tightened the JavaScript parity meta-test slice to this specific branch and
+  pinned per-case exact `Reserved-lineage adversarial coverage` diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-stale-hash-fixture`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Previous Proof Field Binding Guard Hardening
+
+- Strengthened the routed data-model previous-proof field-binding negative
+  control so it independently removes every expected previous proof public-input
+  field binding and verifies the exact resulting field-list diagnostic.
+- Added independent coverage mutations for the previous-proof field comparator,
+  field-scoped diagnostic, public-input hash comparator, and hash diagnostic
+  markers, with matching JavaScript parity meta-test coverage.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Spend Proof Artifact Circuit Gate Guard Hardening
+
+- Strengthened the routed data-model spend proof artifact circuit-gate negative
+  control so it scopes mutations to
+  `validate_kagemusha_recursive_spend_proof_public_input_binding` and
+  independently mutates proof-chain, transition-profile, Semantic aggregation,
+  and Lineage circuit gates.
+- Extended the JavaScript parity meta-test so this negative control must keep
+  validating each scoped mutated text snapshot and must require exact ordered
+  preverification diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-spend-proof-artifact-circuit-gates`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Generic Proof Spend-State Guard Hardening
+
+- Strengthened the routed data-model generic proof spend-state negative control
+  so it independently mutates every generic proof spend-state public-input
+  binding: proof-chain, transition-profile, append-boundary, append-opening,
+  and recursive verifier scalar projection.
+- Extended the JavaScript parity meta-test so this negative control must keep
+  validating each mutated text snapshot and must require exact field-scoped
+  `missing Rust generic proof spend-state rejection` diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-generic-proof-scalar-projection`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Proof Public Input Circuit Binding Guard Hardening
+
+- Strengthened the routed data-model proof public-input circuit-binding
+  negative control so it independently mutates semantic append-boundary and
+  append-opening preflight zeroing plus Lineage scalar-projection and
+  append-boundary routing guards.
+- Extended the JavaScript parity meta-test so this negative control must keep
+  validating each mutated text snapshot and may use explicit expected diagnostic
+  markers for split ordered Rust access checks.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Transition Profile Resulting Accumulator Guard Hardening
+
+- Strengthened the routed data-model resulting-accumulator negative control so
+  it independently mutates construction assignments, transition-profile binding
+  digest recomputation, validation comparators, and forged accumulator/public
+  input hash adversarial markers.
+- Extended the JavaScript parity meta-test so this negative control must keep
+  validating each mutated text snapshot and must require exact
+  `Reserved-lineage adversarial coverage` diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-resulting-accumulator`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Transition Profile Current-Hop Set Guard Hardening
+
+- Strengthened the routed data-model current-hop set negative control so it
+  independently mutates the unique input/output helper, the transition-profile
+  call site, and exact duplicate-input, input/output-overlap, and
+  duplicate-output adversarial assertions.
+- Extended the JavaScript parity meta-test so this negative control must keep
+  validating each mutated text snapshot and must require exact
+  `Reserved-lineage adversarial coverage` diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Transition Profile Previous Anchor Guard Hardening
+
+- Strengthened the routed data-model previous top-up anchor negative control so
+  it independently mutates the transition-profile field, previous-accumulator
+  carryover mapping, validation call, output-reuse guard, append-output
+  adversarial test marker, and current-note collision adversarial test marker.
+- Extended the JavaScript parity meta-test so this negative control must keep
+  validating each mutated text snapshot and must require exact
+  `Reserved-lineage adversarial coverage` diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-previous-topup-anchors`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Kagemusha Runner Input Marker Policy Coverage
+
+- Extended the active non-C# Kagemusha marker content-scan inventory so it now
+  covers the workflow-backed runner/package inputs from the root Cargo
+  manifest, JavaScript native build/copy scripts and verifier helpers, Python
+  Norito metadata/source modules, and Java Norito source classes.
+- Added a routed policy negative control, workflow command, and JavaScript
+  meta-test assertions so removing one of those runner inputs from the active
+  content scan fails with the exact missing-runner-input diagnostic.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-runner-input-content-scan-inventory`
+  - `node --test --test-name-pattern "recursive Kagemusha active marker scan covers workflow-backed non-C# test surfaces|recursive Kagemusha policy workflow and doc negative controls require exact diagnostics" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-policy-negative-controls-workflow`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Native Build Runner Input Inventory
+
+- Added `javascript/iroha_js/scripts/build-native.mjs`,
+  `javascript/iroha_js/scripts/copy-native.mjs`, and the repository root
+  `Cargo.toml` to the Kagemusha payload workflow path inventory and SDK parity
+  source list, matching the focused JS SDK runner's native build/copy
+  preflight.
+- The roadmap now records those native artifact preparation inputs alongside
+  the native binding verifier helper requirement.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-27 Norito Package Runner Input Inventory
+
+- Added the tracked `python/norito_py` package metadata and source modules to
+  the Kagemusha payload workflow path inventory and SDK parity source list,
+  matching the focused Python SDK runner's local package install step.
+- Added the `java/norito_java/src/main/java` source classes to the same
+  inventory, matching the focused JVM SDK runner's direct Android `javac`
+  harness source path.
+- The roadmap now records both package-root runner input requirements.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-27 Android Gradle Harness Workflow Inventory
+
+- Added `java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java`
+  to the Kagemusha payload workflow path inventory and SDK parity source list,
+  closing the gap where the focused JVM runner selected
+  `org.hyperledger.iroha.android.GradleHarnessTests` but changes to the Gradle
+  bridge did not trigger the JVM/Android SDK lane.
+- The roadmap now records that the harness bridge file must stay in the
+  workflow inventory.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-android-harness-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-27 JS Native Verifier Workflow Inventory
+
+- Added `javascript/iroha_js/src/native.js` and `javascript/iroha_js/dist/native.js`
+  to the Kagemusha payload workflow path inventory and SDK parity source list,
+  closing the gap where the focused JS SDK runner imported the source verifier
+  before tests but changes to that verifier did not trigger the SDK lane.
+- The roadmap now records that the native binding verifier helpers must stay in
+  the workflow path inventory.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-27 Nexus SDK Workflow Path Inventory
+
+- Added Nexus runner-covered source/test paths to the Kagemusha payload workflow
+  path inventory and the SDK parity expected path set for Swift, JavaScript,
+  Python, Kotlin/JVM, and Android Java.
+- Added the Swift Nexus source/test files to the Swift parse-surface guard so
+  the main SDK parity pass requires the same files that the parse runner
+  already compiles, and extended the Swift parse-surface negative control so
+  it removes both Nexus parse targets independently.
+- This makes changes to Nexus app-client wallet signature surfaces trigger the
+  focused SDK jobs that already exercise those regressions.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-surface-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM SDK Nexus Runner Guard Coverage
+
+- Extended the SDK parity JVM runner guard so it now requires the Kotlin/JVM
+  and Android Java `NexusAppClientTest` selectors that were already present in
+  the focused JVM SDK runner.
+- Added a routed JVM SDK Nexus filter negative control, workflow inventory
+  entry, and JavaScript parity meta-test coverage so each Nexus selector is
+  removed and detected independently.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-nexus-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Python SDK Focused Runner Guard Coverage
+
+- Extended the SDK parity Python runner guard so it now requires
+  `tests/test_nexus_app.py` alongside the other focused Python pytest files.
+- Strengthened `--negative-control-python-sdk-test-filter-script` so it removes
+  every focused pytest file selector independently and verifies the exact
+  missing-file diagnostic for each one.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS SDK Package Declaration Runner Coverage
+
+- Extended the consolidated JavaScript recursive Kagemusha SDK runner so it now
+  directly selects package-dist recursive compact declaration coverage and
+  native-owned accumulator declaration coverage.
+- Added a routed SDK parity negative control, workflow inventory entries, and
+  JavaScript meta-test coverage so each declaration selector is removed and
+  detected independently.
+- Validation passed:
+  - `node --test --test-name-pattern "package declarations expose recursive compact key-package signatures|package declarations keep accumulator digests native-owned" javascript/iroha_js/test/package_dist.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-package-declaration-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS SDK Confidential Exactness Runner Coverage
+
+- Extended the consolidated JavaScript recursive Kagemusha SDK runner so it now
+  explicitly selects the private Kaigi padded-identifier regressions plus the
+  source and package-dist confidential v2 derivation/proof-builder exactness
+  regressions.
+- Added a routed SDK parity negative control and JavaScript meta-test coverage
+  so each selector is removed and detected independently.
+- Validation passed:
+  - `node --test --test-name-pattern "package dist private Kaigi transaction builders reject padded identifiers before native dispatch|package dist confidential proof builders reject padded amount literals before native dispatch|package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch|confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch|confidential proof builders reject padded chain IDs and hex fields before native dispatch|private Kaigi transaction builders reject padded identifiers before native dispatch" javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/transactionBuilder.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-confidential-exactness-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS Release Matrix Timeout Process Safety
+
+- Replaced the JavaScript SDK release-matrix timeout escalation from
+  `SIGKILL` to `SIGTERM` so timed-out release probes request normal child
+  termination instead of hard-kill escalation.
+- Added a static regression test in `release_matrix.test.mjs` so
+  `release-matrix.mjs` cannot reintroduce `SIGKILL` in its timeout path.
+- Validation passed:
+  - `node --test javascript/iroha_js/test/release_matrix.test.mjs`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Swift Redeem Planner Runner Coverage
+
+- Extended the consolidated Swift recursive Kagemusha SDK runner so it now
+  executes `swift test --filter OfflineNoteRedeemPlannerTests` after parsing
+  the tracked Swift surface and running the Torii offline-readiness tests.
+- This turns the Offline Note redeem planner draft/finalize coverage from
+  parse-only evidence into runtime evidence: draft placeholder proofs are
+  rejected, final proofs must bind to the expected public-input hashes, padded
+  scope identifiers fail closed, and partial/exact redeem plans round-trip
+  through the native Norito bridge.
+- Added a routed SDK parity negative control, workflow command, and JavaScript
+  meta-test coverage so removing the redeem-planner runtime selector is
+  detected explicitly.
+- Validation passed:
+  - `swift test --filter OfflineNoteRedeemPlannerTests` from `IrohaSwift` (6 tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh` (parse pass plus 2 Torii offline-readiness tests and 6 redeem-planner tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-redeem-planner-test-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Offline Readiness Artifact Contract
+
+- Aligned the JavaScript, Python, Swift, Kotlin/JVM, and Android Java Torii
+  Offline/Offline V2 readiness tests with the current Torii contract:
+  recursive-compact ABI-7 runtime readiness is available, while mobile artifact
+  archive availability is reported as `false` because Core API serves/gates
+  those archives.
+- Updated the optional JavaScript Torii integration assertion to expect the
+  same artifact-false response from live Torii.
+- Fixed Swift `hasKagemushaRecursiveCompactMetadata` so canonical ABI-7
+  metadata remains true when artifact archive availability is false but both
+  alias families agree.
+- Added a cross-SDK SDK-parity artifact-contract check, a routed negative
+  control, workflow wiring, and JavaScript meta-test coverage so drift back to
+  artifact-true fixtures is rejected across non-C# SDKs and Torii smoke tests.
+- Validation passed:
+  - `node --test --test-name-pattern "getOfflineReadiness" javascript/iroha_js/test/toriiClient.test.js`
+  - `python3.11 -m pytest -q python/iroha_torii_client/tests/test_client.py -k offline_readiness`
+  - `swift test --filter ToriiClientTests/testGetOfflineReadiness` from `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientReadinessTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `kotlin`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests,org.hyperledger.iroha.android.offline.OfflineJsonParserTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `java/iroha_android`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Swift SDK Offline Readiness Runner Coverage
+
+- Upgraded the consolidated Swift recursive Kagemusha SDK runner so it still
+  parses the tracked Swift SDK source/test surface and now also executes
+  `swift test --filter ToriiClientTests/testGetOfflineReadiness`.
+- Added a documented `KAGEMUSHA_RECURSIVE_SPEND_SWIFT_BIN` override for the
+  runtime Swift tool and kept the existing `swiftc` override for parse-only
+  evidence.
+- Added a routed SDK parity negative control, workflow command, and JavaScript
+  meta-test coverage so removal of the Swift offline-readiness runtime selector
+  is detected explicitly.
+- Validation passed:
+  - `swift test --filter ToriiClientTests/testGetOfflineReadiness` from `IrohaSwift` (2 tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh` (parse pass plus 2 Torii offline-readiness tests passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-offline-readiness-test-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_swift_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md` (no matches)
+  - `git diff --name-only -- csharp Cargo.lock` (no output)
+  - `git diff --cached --name-only -- csharp Cargo.lock` (no output)
+  - `git status --short -- csharp Cargo.lock` (no output)
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Python SDK Offline Readiness Runner Coverage
+
+- Added the Torii Offline readiness ABI exactness tests to the consolidated
+  Python recursive Kagemusha SDK runner:
+  `test_get_offline_readiness_parses_payload`,
+  `test_get_offline_readiness_rejects_noncanonical_abi_versions`, and
+  `test_get_offline_readiness_rejects_legacy_only_payload`.
+- Added a routed SDK parity negative control that removes each Python
+  offline-readiness selector independently, plus JavaScript meta-test coverage
+  and workflow wiring for the new negative-control mode.
+- Updated the Kagemusha Python SDK roadmap note so the focused Python runner
+  explicitly includes Torii offline-readiness ABI exactness alongside the other
+  Torii exactness surfaces.
+- Validation passed:
+  - `python3.11 -m pytest -q python/iroha_torii_client/tests/test_client.py -k offline_readiness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-offline-readiness-test-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh` (1097 SDK/Torii tests passed; ledger-helper focused group 5 passed)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_python_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md` (no matches)
+  - `git diff --name-only -- csharp Cargo.lock` (no output)
+  - `git diff --cached --name-only -- csharp Cargo.lock` (no output)
+  - `git status --short -- csharp Cargo.lock` (no output)
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JS SDK Offline Readiness Runner Coverage
+
+- Added the three Torii Offline readiness ABI exactness tests to the
+  consolidated JavaScript recursive Kagemusha SDK runner selector:
+  canonical readiness payloads, noncanonical ABI rejection, and legacy-only
+  readiness rejection.
+- Pinned those selector strings in the SDK parity guard and the JavaScript
+  meta-test so future focused-runner drift is caught before readiness parsing
+  regressions can be skipped.
+- Restored the Torii Offline and Offline V2 readiness handlers to derive
+  ABI-7 availability directly from `settlement.offline.kagemusha_enabled`;
+  `kagemusha_force_legacy` remains absent, and Torii continues to advertise
+  artifact availability as false.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh` (178 selected tests passed; 0 failed; readiness ABI tests selected)
+  - `node --test --test-name-pattern "getOfflineReadiness" javascript/iroha_js/test/toriiClient.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js crates/iroha_torii/src/lib.rs roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ci/check_kagemusha_recursive_spend_js_sdk.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js crates/iroha_torii/src/lib.rs roadmap.md status.md` (no matches)
+  - `git diff --name-only -- csharp Cargo.lock` (no output)
+  - `git diff --cached --name-only -- csharp Cargo.lock` (no output)
+  - `git status --short -- csharp Cargo.lock` (no output)
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline Readiness ABI Exactness
+
+- Fixed JavaScript source/dist, Python, and Swift Torii Offline readiness
+  parsing so both ABI-7 bridge version fields accept only exact positive
+  signed-32-bit integers or canonical positive decimal strings.
+- The parsers now reject `0`, negative values, fractional values, booleans
+  where applicable, surrounding whitespace, leading-zero strings, and values
+  above `Int32.max` instead of accepting noncanonical integer-like input.
+- Updated Swift `ToriiOfflineReadiness` for the current Kagemusha ABI-7 response
+  body, including the recursive-compact metadata fields, while treating retired
+  Offline Note readiness fields as absent-compatible defaults.
+- Added focused JavaScript, Python, and Swift regressions for both
+  `offline_kagemusha_abi7_bridge_abi_version` and
+  `offline_kagemusha_recursive_compact_required_native_bridge_abi_version`.
+- Pinned the source/dist helper markers and regression-test markers in the SDK
+  parity guard, extended the JavaScript Torii runner negative control/meta-test,
+  and added Swift source/test guard markers for ABI-7 readiness decoding.
+- Extended the active non-C# Kagemusha TODO content-scan inventory and its
+  JavaScript meta-test mirror to cover the Swift Torii readiness source/test
+  files touched by this work.
+- Validation passed:
+  - `node --test --test-name-pattern "getOfflineReadiness" javascript/iroha_js/test/toriiClient.test.js`
+  - `python3.11 -m pytest python/iroha_torii_client/tests/test_client.py -k offline_readiness`
+  - `swift test --filter ToriiClientTests/testGetOfflineReadiness` from `IrohaSwift`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-torii-runner-coverage`
+  - `node --test --test-name-pattern "JavaScript Torii runner" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory`
+  - `node --test --test-name-pattern "active marker scan" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --input-type=module -e 'import assert from "node:assert/strict"; import { ToriiClient } from "./javascript/iroha_js/dist/toriiClient.js"; const payload={offline_telemetry:true,offline_kagemusha_abi7:true,offline_kagemusha_abi7_mode:"recursive_compact_v1",offline_kagemusha_abi7_bridge_abi_version:2147483648,offline_kagemusha_abi7_circuit_id:"kagemusha-recursive-compact-v1",offline_kagemusha_abi7_artifacts:true,offline_kagemusha_recursive_compact_available:true,offline_kagemusha_recursive_compact_mode:"recursive_compact_v1",offline_kagemusha_recursive_compact_required_native_bridge_abi_version:7,offline_kagemusha_recursive_compact_circuit_id:"kagemusha-recursive-compact-v1",offline_kagemusha_recursive_compact_artifacts_available:true}; const client=new ToriiClient("https://localhost:8080",{fetchImpl:async()=>new Response(JSON.stringify(payload),{status:200,headers:{"content-type":"application/json"}})}); await assert.rejects(()=>client.getOfflineReadiness(),/offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range/);'`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Torii Offline Readiness Legacy Knob Removal
+
+- Fixed the Torii Offline and Offline V2 readiness handlers so ABI-7
+  Kagemusha readiness derives directly from `settlement.offline.kagemusha_enabled`.
+  The removed `kagemusha_force_legacy` field is no longer referenced.
+- Added `crates/iroha_torii/src/lib.rs` plus the Torii Offline/Offline V2
+  readiness smoke files to the Kagemusha SDK parity inventory and payload
+  workflow paths, with guard coverage that rejects reintroducing the removed
+  legacy readiness knob.
+- Tightened the Offline V2 readiness smoke so it also asserts
+  `offline_kagemusha_enabled` and `offline_kagemusha_force_legacy` are absent
+  from the readiness body, matching the V1 smoke coverage.
+- Extended the mobile offline readiness negative control and JavaScript
+  meta-test so injected Torii handler and smoke-test legacy drift must be
+  detected alongside SDK client/parser readiness drift.
+- Validation passed:
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `node --test --test-name-pattern "mobile offline readiness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-torii-readiness cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs --features app_api readiness_is_mounted -- --nocapture`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Android Device-Lab Command Gate Case-Folding
+
+- Fixed the Kagemusha Android device-lab capture wrapper, signed-slot
+  assembler, and raw puller so disruptive executable names, command tokens, and
+  token sequences are compared after `casefold()` normalization.
+- Added mixed-case regression vectors for process executable paths, ADB
+  disruptive tokens, and ADB disruptive token sequences across the shared
+  command-gate unit tests.
+- Pinned the case-folding source markers and mixed-case vectors in the
+  production-readiness guard, added a workflow-routed negative control, and
+  updated the JavaScript parity meta-test inventory.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_android_command_gates_reject_package_state_mutations scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_android_command_gates_reject_package_state_mutations`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-command-gate-casefold`
+  - `node --test --test-name-pattern "Kagemusha production readiness" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM/Android Native Availability Runtime Fail-Closed
+
+- Fixed Kotlin/JVM and Android Java `NativeOfflineNoteProver` availability
+  detection so loader-side `IllegalArgumentException` no longer masquerades as
+  a successful native symbol probe.
+- Hardened native-note, compact-token, and recursive-aggregation availability
+  helpers to fail closed on unexpected runtime loader/probe failures while
+  preserving the expected probe-side `IllegalArgumentException` success signal.
+- Added focused Kotlin and Android Java regression vectors for bad library
+  names, runtime loader failures, and runtime probe failures.
+- Added native-note source files to the SDK parity inventory and payload
+  workflow path filters, and pinned the runtime fail-closed source/test markers
+  in the SDK parity guard.
+- Added a dedicated JVM/Android native availability runtime fail-closed parity
+  negative control and wired it into the payload workflow plus JS meta-test, so
+  removal of the runtime guards or adversarial vectors is detected explicitly.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `kotlin`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `java/iroha_android`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-native-availability-runtime-fail-closed`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 JVM/Android Native ABI Boundary Exactness
+
+- Hardened Kotlin/JVM and Android Java recursive spend native availability
+  detection so non-positive `requiredNativeBridgeAbiVersion` fails closed before
+  any native bridge load/probe callbacks run.
+- Added focused negative coverage for required ABI `0`/`-1` and reported native
+  ABI `0`/`-1` in both SDK test harnesses.
+- Aligned the Kotlin shared ABI-6 fixture hash assertions with the current
+  fixture digests already used by the Android Java harness.
+- Pinned the new source/test markers in the SDK parity guard, added a dedicated
+  JVM/Android native ABI boundary negative control, and wired that control into
+  the payload workflow and JS meta-test.
+- Validation passed:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `kotlin`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `java/iroha_android`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-native-abi-boundary`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Swift Offline Cash Native ABI Exactness
+
+- Fixed Swift offline-cash configuration snapshot validation so cached
+  `nativeBridgeAbiVersion == 0` and caller-supplied
+  `requiredNativeBridgeAbiVersion == 0` fail as `malformedSnapshot` before the
+  unsupported-ABI comparison.
+- Added Swift lifecycle regression coverage for both zero-ABI cases and pinned
+  the markers in the recursive Kagemusha SDK parity guard plus its offline-cash
+  exactness negative control.
+- Validation passed:
+  - `swift test --filter OfflineCashLifecycleTests` from `IrohaSwift`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift ci/check_kagemusha_recursive_spend_sdk_parity.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --name-only -- csharp Cargo.lock`
+- No existing processes were stopped, signaled, or inspected during this pass.
+
+## 2026-06-27 Non-C# Offline Cash Issuer Key Exactness
+
+- Hardened offline-cash configuration snapshot issuer-key gates across Python,
+  JavaScript source/dist, Swift, Kotlin/JVM, and Android Java so
+  `issuerPublicKeyBase64` must decode to an exact 32-byte Ed25519 public key.
+- The lifecycle snapshot checks now reject padded base64, surrounding
+  whitespace, invalid base64 text, and 31/33-byte decoded keys before cached
+  offline-cash configuration can reach wallet exchange code. Swift reuses the
+  existing `OfflineIssuerPublicKey` parser; the other non-C# SDKs now enforce
+  the same unpadded base64/base64url shape and canonical re-encoding check.
+- Added a positive URL-safe issuer-key vector so lifecycle tests prove both
+  standard base64 and base64url encodings are accepted when they decode to the
+  exact 32-byte key shape.
+- Updated source, package-dist, Swift, Kotlin, Android Java, SDK parity, and
+  negative-control coverage so issuer-key exactness is required alongside the
+  existing identity, timestamp, feature-flag, and ABI gates.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/offline_cash.py python/iroha_python/tests/offline_cash_test.py`
+  - `pytest -q python/iroha_python/tests/offline_cash_test.py`
+  - `node --check javascript/iroha_js/src/offlineCashLifecycle.js`
+  - `node --check javascript/iroha_js/dist/offlineCashLifecycle.js`
+  - `node --check javascript/iroha_js/test/offlineCashLifecycle.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "offline cash configuration snapshot requires cached identity, time, issuer key, and ABI" javascript/iroha_js/test/offlineCashLifecycle.test.js`
+  - `node --test --test-name-pattern "package dist offline cash lifecycle rejects malformed identity, time, issuer key, and ABI gates" javascript/iroha_js/test/package_dist.test.js`
+  - `swift test --filter OfflineCashLifecycleTests` from `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `kotlin`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `java/iroha_android`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-offline-cash-filter-script`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- No existing processes were stopped, signaled, or inspected during this
+  validation pass.
+
+## 2026-06-27 Non-C# Offline Cash Snapshot Timestamp Hardening
+
+- Hardened offline-cash configuration snapshot usability across Python,
+  JavaScript source/dist, Swift, Kotlin/JVM, and Android Java so timestamp
+  metadata fails closed before wallet code can use a cached snapshot.
+- Dynamic SDKs now reject non-integer, boolean, negative, and unsafe timestamp
+  values with `malformed_snapshot`; Kotlin/JVM and Android Java reject negative
+  `Long` timestamps; Swift enforces the `expiresAtMs > createdAtMs` ordering
+  invariant on top of its unsigned timestamp types.
+- Expiry now uses checked timestamp values only after shape and ordering
+  validation, so `expires <= created` is reported as malformed rather than as
+  a stale snapshot.
+- Python now matches JavaScript's fail-closed dynamic feature flag behavior:
+  only an exact boolean `true`/`True` enables offline exchange, while truthy
+  string or numeric values remain disabled.
+- Expanded source, package-dist, Swift, Kotlin, Android Java, SDK-runner, and
+  parity negative-control markers so non-C# timestamp and feature-flag
+  exactness coverage is required by the recursive Kagemusha SDK parity guard.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/offline_cash.py python/iroha_python/tests/offline_cash_test.py`
+  - `pytest -q python/iroha_python/tests/offline_cash_test.py`
+  - `node --check javascript/iroha_js/src/offlineCashLifecycle.js`
+  - `node --check javascript/iroha_js/dist/offlineCashLifecycle.js`
+  - `node --check javascript/iroha_js/test/offlineCashLifecycle.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "offline cash configuration snapshot requires cached identity, time, issuer key, and ABI" javascript/iroha_js/test/offlineCashLifecycle.test.js`
+  - `node --test --test-name-pattern "package dist offline cash lifecycle rejects malformed identity, time, and ABI gates" javascript/iroha_js/test/package_dist.test.js`
+  - `swift test --filter OfflineCashLifecycleTests` from `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `kotlin`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `java/iroha_android`
+  - `bash -n ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-offline-cash-filter-script`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- No existing processes were stopped, signaled, or inspected during this
+  validation pass.
+
+## 2026-06-27 Non-C# Offline Cash Snapshot Identity Hardening
+
+- Hardened non-C# offline-cash configuration snapshot usability checks across
+  Python, JavaScript source/dist, Swift, Kotlin/JVM, and Android Java so cached
+  snapshots fail closed unless required `chainId`/`assetDefinitionId` fields
+  are non-empty printable ASCII strings with no whitespace.
+- Optional snapshot identity fields `artifactSetId` and `circuitId` now use the
+  same canonical text gate when present, preventing cached malformed Kagemusha
+  artifact or circuit selectors from reaching wallet code.
+- Preserved the existing `missing_issuer_public_key`, expiry, and native ABI
+  diagnostics while adding field-specific `malformed_snapshot` checks for
+  malformed identity text.
+- Updated the JS focused runner, JavaScript parity meta-test, and SDK parity
+  inventory so the offline-cash test selector now pins cached identity,
+  issuer-key, and ABI coverage. The JS offline-cash selector negative control
+  also passes with the renamed marker.
+- Validation passed:
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/offline_cash.py python/iroha_python/tests/offline_cash_test.py`
+  - `pytest -q python/iroha_python/tests/offline_cash_test.py`
+  - `node --check javascript/iroha_js/src/offlineCashLifecycle.js`
+  - `node --check javascript/iroha_js/dist/offlineCashLifecycle.js`
+  - `node --check javascript/iroha_js/test/offlineCashLifecycle.test.js`
+  - `node --test --test-name-pattern "offline cash configuration snapshot requires cached identity, issuer key, and ABI" javascript/iroha_js/test/offlineCashLifecycle.test.js`
+  - `node --test --test-name-pattern "package dist offline cash lifecycle rejects malformed ABI gates" javascript/iroha_js/test/package_dist.test.js`
+  - `swift test --filter OfflineCashLifecycleTests` from `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineCashLifecycleTest --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `kotlin`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineCashLifecycleTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1 -Dorg.gradle.jvmargs=-Xmx4096m` from `java/iroha_android`
+  - `bash -n ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-offline-cash-filter-script`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `git diff --check -- ...` over the touched offline-cash, readiness,
+    parity, and status files
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` over the same touched files
+    (no matches)
+  - `git diff --name-only -- csharp Cargo.lock` (empty)
+- No existing processes were stopped, signaled, or inspected during this
+  validation pass.
+
+## 2026-06-27 Readiness Secret Marker Collision Guard
+
+- Extended the shared Android device-lab `SECRET_RE` so assignment-style
+  secret markers such as `secret=`, `password=`, `api_key=`, and `api-key=`
+  are treated as secret-looking material alongside existing token, bearer, and
+  private-key markers.
+- Added device-lab unit coverage for the expanded secret-marker vocabulary,
+  including a safe `secretariat` negative control to avoid broad substring
+  matching.
+- Added production-readiness adversarial coverage for a valid section blocker
+  carrying two unsafe extra-field names that normalize to the same redacted
+  key. The test proves the blocker survives only with redacted metadata, emits
+  a `kagemusha_readiness_section_blocker_json_shape` blocker, writes strict
+  JSON, and does not leak either unsafe key or value.
+- Pinned the new readiness collision regression in the recursive Kagemusha
+  policy guard and its readiness-section negative-control inventory.
+- Validation passed:
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_secret_detector_rejects_common_assignment_markers`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_colliding_sanitized_section_blocker_extra_fields`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-readiness-section-consistency`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (1302 tests)
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_recursive_spend_policy.sh`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_recursive_spend_policy.sh`
+    (no matches)
+- No existing processes were stopped, signaled, or inspected during this
+  validation pass.
+
+## 2026-06-27 Readiness Blocker Entry Normalization
+
+- Hardened `scripts/kagemusha_production_readiness.py` so every readiness
+  section is normalized before summary output; non-object sections and
+  non-boolean `ok` values now become object-shaped failing sections with
+  explicit shape blockers.
+- Section `blockers` lists now only contribute normalized blocker objects with
+  non-empty string `code` and `message` fields to the top-level summary and
+  section-local output.
+- Malformed blocker entries now produce
+  `kagemusha_readiness_section_blocker_shape` blockers with section, index,
+  and field context instead of leaking raw values into the summary or risking
+  a CLI print-time crash.
+- Valid blocker entries now have their extra fields normalized to strict JSON
+  before summary output; unsupported objects, non-finite numbers, non-string
+  keys, secret-looking strings, and control-character strings are redacted or
+  dropped with a
+  `kagemusha_readiness_section_blocker_json_shape` blocker instead of making
+  `--summary-out` crash or leak unsafe material.
+- Section-level extra fields now go through the same strict-JSON normalization
+  before summary output. Unsafe field values, non-string field keys,
+  secret-looking field names, and control-character field names now produce
+  `kagemusha_readiness_section_json_shape` blockers instead of being copied
+  raw into the release summary.
+- Section-field normalization now classifies non-string field keys before
+  comparing them with reserved names, so hostile non-string keys cannot crash
+  the rollup through custom equality methods before the JSON-shape blocker is
+  emitted.
+- Strict readiness JSON normalization now only accepts exact JSON primitive
+  types for strings, booleans, integers, floats, and mapping keys. Subclassed
+  primitives fail closed instead of being allowed to run custom equality,
+  trimming, or other attacker-controlled behavior during blocker identity
+  checks.
+- Nested readiness JSON normalization now has an explicit depth bound and
+  cycle detector for list/dict values, so cyclic or over-depth checker output
+  is redacted and reported as a shape blocker instead of crashing the rollup.
+- Tuple values now fail closed as unsupported readiness JSON instead of being
+  accepted as array-like Python values, keeping the readiness boundary pinned
+  to exact JSON shapes.
+- Readiness sections and blocker entries now require exact `dict` JSON object
+  shapes before any field access. Arbitrary `Mapping` subclasses fail closed as
+  shape blockers, so custom `get()`, iteration, or item-access methods cannot
+  crash the rollup.
+- Section `blockers` fields now require exact `list` JSON array shapes before
+  iteration or truthiness checks. Arbitrary `list` subclasses fail closed as
+  blocker-array shape errors, so custom iteration, length, or truthiness
+  methods cannot crash the rollup.
+- Values attached to secret-looking or control-character field names are now
+  replaced with the unsupported-value redaction marker as well, so a redacted
+  key cannot still carry attacker-controlled payload text into the public
+  summary.
+- Blocker entries with secret-looking or control-character `code` or `message`
+  values are no longer preserved as redacted real blockers. They are dropped
+  from the normalized blocker list and represented by field-scoped
+  `kagemusha_readiness_section_blocker_json_shape` blockers instead.
+- Blocker `code` and `message` values must now be non-empty trimmed strings;
+  blank, whitespace-only, or padded blocker identities are dropped and reported
+  as `kagemusha_readiness_section_blocker_shape` blockers.
+- Blocker `code` and `message` lookup now iterates exact string keys instead
+  of using `dict.get`, so hostile non-string keys with colliding hashes cannot
+  execute custom equality during blocker identity checks.
+- Early top-level blocked summaries and post-write summary blockers now pass
+  through the same strict blocker normalizer via a `top_level` readiness
+  section wrapper, so unsafe signer-loader or write-error text cannot bypass
+  section normalization and reach stderr or `--summary-out` raw.
+- Top-level blocker normalization now passes the raw blocker collection through
+  the exact-list section `blockers` check instead of materializing arbitrary
+  iterables, so hostile iterators cannot run before the shape blocker is
+  emitted.
+- Added adversarial coverage for raw string blocker entries, empty blocker
+  codes, empty blocker messages, and a valid blocker in the same malformed
+  section list.
+- Added adversarial coverage for a valid blocker carrying a local `Path`,
+  `NaN`, nested non-string-key metadata, secret-looking keys, and control
+  characters, plus direct `write_summary(...)` coverage for TypeError-producing
+  non-serializable summaries.
+- Added adversarial coverage for cyclic and over-depth section/blocker extra
+  values, proving they produce strict-JSON shape blockers, remain writable via
+  `--summary-out`, and do not leak deep leaf sentinels.
+- Added adversarial coverage for tuple section/blocker extra values, proving
+  they produce strict-JSON shape blockers, remain writable via `--summary-out`,
+  and do not leak tuple leaf sentinels.
+- Added adversarial coverage for a section carrying a local `Path`, `NaN`,
+  nested non-string-key metadata, secret-looking field names, control-character
+  field names, and a non-string section key outside its blocker list.
+- Added adversarial coverage for a hostile non-string section key whose
+  equality method raises, proving the rollup emits a
+  `kagemusha_readiness_section_json_shape` blocker without evaluating the
+  hostile key or leaking its value.
+- Added adversarial coverage for hostile `Mapping` subclasses returned as a
+  readiness section or blocker entry, proving access/iteration methods are not
+  invoked and the rollup reports section/blocker shape blockers instead.
+- Added adversarial coverage for hostile `list` subclasses returned as a
+  section `blockers` value, proving iteration, length, and truthiness methods
+  are not invoked and the rollup reports a blocker-array shape error instead.
+- Added unique leak-sentinel assertions for unsafe blocker-extra and
+  section-extra field-name values so the policy guard pins that they do not
+  render in summaries.
+- Added adversarial coverage for unsafe blocker identities: secret-looking and
+  control-character `code`/`message` values now prove their original blocker
+  entries are dropped and their payload text does not render in summaries.
+- Added adversarial coverage for blank, whitespace-only, and padded blocker
+  `code`/`message` values so trimmed-string identity checks cannot regress.
+- Added adversarial coverage for hostile `str` subclasses in blocker
+  `code`/`message` identities, proving custom equality and `strip()` methods
+  are not executed and subclass payload text does not render in summaries.
+- Added adversarial coverage for hostile non-string blocker keys with a hash
+  collision against `code`, proving custom equality is not executed and the
+  key payload does not render in summaries.
+- Added adversarial coverage for an early signer-loader failure that combines
+  one safe diagnostic with a secret-looking/control-character diagnostic,
+  proving the safe blocker survives while the unsafe diagnostic is replaced by
+  a top-level strict-JSON shape blocker and does not render.
+- Added adversarial coverage for hostile top-level blocker iterables, proving
+  they are rejected as non-array blockers without invoking iteration and remain
+  writable via `--summary-out`.
+- Extended the recursive Kagemusha policy guard to pin section normalization,
+  the blocker-entry validator, strict-JSON blocker identity/extra-field and
+  section-field normalization, top-level early-blocker normalization, trimmed
+  blocker identity checks, exact JSON primitive checks, hostile string and
+  non-string key regression coverage, cycle/depth handling, exact JSON object
+  checks for sections/blockers, exact JSON array checks for section blockers,
+  shape blocker codes, new adversarial tests, and negative-control mutation
+  coverage.
+- Updated the JavaScript FFI contract parity meta-test to require the exact
+  section-normalization policy diagnostic.
+- The live readiness rollup still exits blocked only on external release
+  evidence: missing Reserved-lineage proof evidence, missing recursive compact
+  key evidence, missing trusted Android signer, and missing Android
+  standard/D2D device-lab matrix evidence.
+- Validation passed:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_list_subclass_section_blockers_without_access`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_tuple_section_json_values`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_tuple_section_json_values scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_blocked_summary_blocks_top_level_blocker_iterable_without_access`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_hostile_non_string_blocker_key_without_equality scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_hostile_non_string_section_key_without_equality scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_blocked_summary_blocks_top_level_blocker_iterable_without_access`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_mapping_subclass_section_without_access scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_mapping_subclass_blocker_without_access`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_normalizes_recursive_section_json_values`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_hostile_string_subclass_blocker_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_hostile_non_string_section_key_without_equality`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_inconsistent_section_without_reported_blockers scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_ready_section_with_reported_blockers scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_non_object_section scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_non_boolean_section_ok scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_malformed_section_blockers scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_filters_malformed_section_blocker_entries`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_normalizes_non_json_section_blocker_extras scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_drops_section_blockers_with_unsafe_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_rejects_blank_or_padded_section_blocker_identity scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_normalizes_non_json_section_extra_fields scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_non_serializable_json_before_write`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-readiness-section-consistency`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (1301 tests)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --summary-out target/kagemusha-readiness-summary-current.json`
+    (expected exit 1 with only the external evidence blockers above)
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_policy.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ci/check_kagemusha_recursive_spend_policy.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+    (no matches)
+  - `git diff --name-only -- csharp Cargo.lock` (empty)
+- No existing processes were stopped, signaled, or inspected during this
+  validation pass.
 
 ## 2026-06-27 Readiness Section Guard Pinning
 
 - Extended the recursive Kagemusha policy guard so the production-readiness
   section-consistency invariant and its adversarial tests are pinned by the
   normal policy lane.
-- Added a workflow-routed negative control that mutates both the readiness
-  rollup call and the malformed-section test marker, then requires the exact
-  production-readiness section-consistency diagnostic before accepting the
-  negative-control pass.
+- Added a workflow-routed negative control that mutates the readiness rollup
+  call, malformed-section test marker, ready-with-blockers test marker,
+  non-object-section test marker, and non-boolean-`ok` test marker, then
+  requires the exact production-readiness section-consistency diagnostic before
+  accepting the negative-control pass.
+- Added adversarial unit coverage for the contradictory section shape where a
+  checker reports `ok: true` while still returning blockers, so the top-level
+  summary now records a section-consistency blocker instead of silently
+  trusting the section's ready flag.
+- Added fail-closed handling and adversarial coverage for checkers returning a
+  non-object section or a non-boolean `ok` field, so malformed internal checker
+  output becomes an explicit readiness blocker instead of an ambiguous rollup.
 - Mirrored the new policy negative-control mode in the JavaScript parity
   meta-test so workflow inventory and exact diagnostics cannot drift silently.
 - The live readiness rollup still exits blocked only on external release
@@ -21,9 +3161,12 @@ Last updated: 2026-06-27
   - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
   - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
   - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_inconsistent_section_without_reported_blockers scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_ready_section_with_reported_blockers scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_non_object_section scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_non_boolean_section_ok scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_build_summary_blocks_malformed_section_blockers`
   - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-readiness-section-consistency`
   - `node --test --test-name-pattern "recursive Kagemusha policy workflow and doc negative controls require exact diagnostics|recursive Kagemusha active marker scan covers workflow-backed non-C# test surfaces" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
   - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (1285 tests)
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
   - `python3 scripts/kagemusha_production_readiness.py --repo-root . --summary-out target/kagemusha-readiness-summary-current.json`
@@ -211,6 +3354,21 @@ Last updated: 2026-06-27
   - `git diff --check`
   - `git diff --name-only -- csharp Cargo.lock` (empty)
 
+## 2026-06-26 ISO Pending-XSD Redirect Evidence Hardening
+
+- Hardened the pending XSD source probe so XSD-looking redirect-class or other
+  non-2xx responses no longer count as direct official download reachability
+  and no longer retain sample metadata; only direct 2xx XSD-looking samples can
+  emit `reachable`, while non-XSD 1xx/2xx/3xx samples remain `unexpected`.
+- Hardened final production-readiness replay so forged `reachable` rows with
+  3xx `http_status` values are rejected, with adversarial 302/XSD-looking
+  tests proving hidden redirect bodies are not archived into sample digests.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py scripts/iso_production_readiness.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short` (`24 passed in 0.06s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k pending_xsd_probe --tb=short` (`10 passed, 259 deselected in 34.39s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1328 passed in 886.08s`)
+
 ## 2026-06-26 ISO Canary Stdout and Receipt Selector Replay
 
 - Hardened operator-evidence replay for executed ISO canaries so rail and
@@ -222,6 +3380,8 @@ Last updated: 2026-06-27
   `endpoint_count` is now bound to the executed command's repeated `--endpoint`
   flags before the receipt-verifier replay can trust the stage output, and
   `published_anchors` must stay at one unless the notary command used `--all`.
+  Notary receipt summaries must also use `latest.notary.json` without `--all`
+  and digest-addressed `anchors/<index>.notary.json` with `--all`.
 - Hardened verify-stage receipt-verifier stdout replay so every archived
   receipt path must be covered by the verify command's `--receipt-dir` or
   `--receipt` selectors, and every explicit `--receipt` selector must appear in
@@ -230,22 +3390,35 @@ Last updated: 2026-06-27
   receipt-verifier summary paths for the same receipt kind, so producer-stage
   stdout cannot prove one receipt set while verifier stdout replays another
   receipt set under the same stage directory.
+- Extended compact canary evidence with sanitized `stage_command_modes`
+  (`rail_uses_message`, `rail_submitted_message_count`, `notary_uses_all`,
+  `notary_endpoint_count`, and `notary_published_anchor_count`) and
+  taught `scripts/iso_production_readiness.py` to replay those modes against
+  compact receipt summaries, so forged final evidence cannot turn one explicit
+  rail `--message` into multiple rail receipts, misstate general rail
+  submitted-message fanout, swap latest-vs-all notary anchor modes, or misstate
+  notary endpoint/published-anchor fanout without a readiness blocker.
 - Added adversarial evidence tests for forged printable child logs, nonzero
   adapter failures, receipt path escape, missing adapter fields, dry-run stdout
   shapes, count mismatches, forged rail multi-message claims for explicit
   `--message`, forged notary endpoint counts, forged multi-anchor publication
-  claims without `--all`, selector-escape receipt paths, and omitted explicit
-  receipt selectors, plus
-  adapter/verifier receipt path-set drift, without
-  echoing attacker-controlled stdout or paths.
+  claims without `--all`, swapped latest/all-anchor receipt modes,
+  selector-escape receipt paths, and omitted explicit receipt selectors, plus
+  adapter/verifier receipt path-set drift and compact command-mode/receipt
+  drift, without echoing attacker-controlled stdout or paths.
 - Validation passed:
-  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
   - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k adapter_stage_stdout --tb=short`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k "valid_canary_and_trust_summaries_pass" --tb=short` (`1 passed, 274 deselected in 1.47s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k "compact_stage_command_modes or canary_stage_receipt_kinds_must_match_stage_names" --tb=short` (`3 passed, 266 deselected in 6.67s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k receipt_entries_must_preserve_kind_metadata --tb=short` (`1 passed, 268 deselected in 10.00s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k "compact_stage_command_modes or archive_receipts_must_bind_canary_receipt_kinds or archive_receipts_must_bind_canary_receipt_metadata or receipt_entries_must_preserve_kind_metadata or receipt_source_material_cannot_be_reused_within_summary or compact_summary_digests_cannot_reuse_nested_roles_across_evidence_summaries or compact_summary_paths_cannot_reuse_json_material_paths_across_evidence_summaries or trust_bundle_path_cannot_be_reused_across_evidence_summaries" --tb=short` (`9 passed`)
   - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k "adapter_stage_stdout or failed_skipped_truncated_and_weak_verify_stages_are_rejected or canary_child_commands_require_runner_command_shape or canary_stage_receipt_dirs_must_be_unique"`
   - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k "receipt_verifier_stdout_paths_must_match_verify_stage_selectors or compact_summary_paths_cannot_reuse_canary_receipt_paths or direct_receipt_archive_must_bind_canary_receipt_filenames or canary_receipts_cannot_be_reused_across_summaries or canary_source_material_cannot_be_reused_across_relabelled_summaries or executed_stage_receipt_kinds_must_match_receipt_summary"`
   - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k "direct_receipt_archive_must_bind_canary_receipt_kinds or dry_run_producer_stage_accepts or legacy_colr007_canary_summary_requires_explicit_local_override or adapter_stage_stdout_receipts_must_match_verifier_stdout"`
-  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py` (`274 passed in 132.54s`)
-  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py` (`1324 passed in 877.23s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py` (`275 passed in 133.38s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py --tb=short` (`269 passed in 559.97s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1328 passed in 904.71s`)
 
 ## 2026-06-26 JVM/Android Kagemusha Transaction Identifier Exactness
 
@@ -2483,6 +5656,17 @@ Last updated: 2026-06-27
   `stage_dry_run=true`, and compact trust `profile_json_emitted=false` /
   `profile_json_emittable=false` states are also normalized to `"unsupported"`
   in final readiness output.
+- Hardened final readiness normalized receipt output so malformed or unsupported
+  compact notary receipt metadata (`anchor_sha256`, `index_sha256`,
+  `anchor_path`, `store_dir`, `index_path`, and `record_count`) serializes as
+  `"unsupported"` after the existing receipt metadata blockers fire, matching
+  the prior rail metadata redaction behavior.
+- Hardened operator evidence verification and final readiness within-summary
+  receipt source-material replay so compact notary `anchor_path`,
+  `anchor_sha256`, `index_path`, and `index_sha256` values cannot be copied
+  into relabelled canary/archive receipt entries with fresh receipt paths or
+  receipt digests. Repeated notary `store_dir` values remain allowed for
+  legitimate multi-anchor publication.
 - Hardened final readiness output for XSD strictness proof flags:
   `require_schema_backed_fixtures=false`, `require_fixture_for_schema=false`,
   `require_profile_schema_backed_versions=false`, and
@@ -2553,24 +5737,42 @@ Last updated: 2026-06-27
 - Hardened pending XSD source probe summary emission so unsafe remote
   `Content-Type` metadata is omitted before evidence digesting and HTTP status
   metadata is recorded only for real integer 100-599 statuses.
+- Hardened final pending XSD probe replay so forged archived `content_type`
+  values that the producer would have omitted, including whitespace-padded or
+  secret-looking header material, are rejected before the probe row can satisfy
+  readiness.
 - Hardened pending XSD source probe network-failure evidence so summaries emit
   stable `NetworkError` roles instead of raw Python exception class names, and
   final readiness rejects legacy network-error role names.
 - Hardened pending XSD source probe success evidence so helper summaries emit
-  `reachable` only for real 2xx/3xx responses with positive bounded samples
+  `reachable` only for real 2xx responses with positive bounded samples
   that start with a namespace-bound XML Schema root opening tag;
   XML-declaration-only samples, embedded schema-looking text, and unbound
   `xs:schema` / `xsd:schema` prefixes no longer satisfy `looks_like_xsd`,
-  final readiness rejects forged `reachable` rows with `looks_like_xsd=false`,
-  and non-XSD 1xx/2xx/3xx samples remain `unexpected` evidence.
+  final readiness rejects forged `reachable` rows with `looks_like_xsd=false`
+  or redirect-class `http_status` values, redirect-class XSD-looking samples
+  fail closed as `NetworkError` without archived response samples, and non-XSD
+  1xx/2xx/3xx samples remain `unexpected` evidence.
 - Hardened pending XSD source probe malformed-status and zero-byte-success
   evidence so helper summaries normalize them to `network_error` with
   `NetworkError` and no archived response sample bytes, keeping emitted probe
   rows in the same shape final readiness can replay.
-- Hardened pending XSD source probe response reads so malformed non-byte read
-  output and HTTP stream read failures also normalize to `network_error`
-  without archiving partial bytes, decoded text, exception strings, or hidden
-  operator material.
+- Hardened pending XSD source probe response reads and transport context
+  handling so malformed non-byte read output, HTTP/runtime read failures, and
+  opener or response-context failures normalize to `network_error` without
+  archiving partial bytes, decoded text, exception strings, or hidden operator
+  material.
+- Hardened pending XSD source probe response status/header metadata access so
+  broken custom response accessors normalize to `NetworkError` or omitted
+  `content_type` metadata without archiving accessor exception text.
+- Hardened pending XSD source probe opener/read handling so runtime/type/value
+  failures normalize to `NetworkError` without archiving exception text.
+- Hardened pending XSD source probe response cleanup so context-manager exit
+  failures, close-only response `close()` failures, and hostile `close`
+  accessor failures are ignored after the bounded sample is classified, and
+  HTTP-error objects are closed best-effort before their bounded error row is
+  archived, while non-callable context hooks normalize to `NetworkError`
+  without archiving hook values.
 - Hardened pending XSD source probe byte-cap handling so bytes-like response
   bodies are sliced to the configured bounded window by byte length before
   digesting or classification even when a custom response over-returns or
@@ -2587,6 +5789,9 @@ Last updated: 2026-06-27
 - Tightened the rail/notary invalid-status regressions so the no-echo proof
   checks the fixed receipt error field instead of scanning dynamic hashes or
   localhost ports that can legitimately contain the same digits.
+- Added rail/notary adversarial receipt coverage for response `status` and
+  HTTP-error `code` accessors that raise secret-bearing exceptions, proving the
+  receipt remains an invalid-status failure without echoing accessor text.
 - Hardened live rail gateway and audit notary URL/transport-error receipt
   sanitization so local-path-shaped error text is redacted before persistence,
   and hardened receipt verification so forged archived receipt `error` strings
@@ -2609,22 +5814,41 @@ Last updated: 2026-06-27
   verification so non-ASCII or local-path-shaped verifier stderr is redacted
   before failed or successful direct-verifier diagnostics, matching existing
   secret/control redaction.
+- Hardened XSD `xmllint`, canary child-stage, and direct receipt-verifier
+  launcher wrappers so runtime/type/value process-launch failures become
+  label-only startup errors instead of surfacing attacker-controlled exception
+  text or local command paths.
 - Hardened XSD `xmllint`, canary child-stage, and direct receipt-verifier pipe
   capture so stdout/stderr chunks must be bytes-like values,
   `bytearray`/`memoryview` chunks are copied and capped by byte length before
   preview decoding, and non-byte chunks fail as label-only output-read errors
   without echoing the chunk value.
+- Hardened XSD `xmllint`, canary child-stage, and direct receipt-verifier pipe
+  reader wrappers so runtime/type/value failures from pipe reads or closes
+  plus post-wait thread `join()`/`is_alive()` bookkeeping become the existing
+  label-only output-read failure instead of escaping a reader thread or
+  retaining exception text.
+- Hardened XSD `xmllint`, canary child-stage, and direct receipt-verifier wait
+  handling so runtime/type/value wait failures, cleanup kill failures, and
+  malformed return codes become label-only child-finish errors without
+  surfacing exception text or bogus return-code values.
 - Hardened trust-bundle source, operator-evidence, archived receipt, and final
   production-readiness compact timestamps so parseable timezone-aware values
   must use canonical `YYYY-MM-DDTHH:MM:SS[.ffffff](Z|+HH:MM|-HH:MM)` evidence
   shape, rejecting space separators, lowercase separators, comma fractions, and
   compact offsets plus the unknown-offset `-00:00` spelling while keeping
   malformed and missing-timezone diagnostics field-specific and value-redacted.
-- Hardened ISO input readers and summary/receipt writers so raw OS `strerror`
-  text is sanitized before diagnostics: ordinary short ASCII errors are
-  preserved, while path-like, secret-looking, control-bearing, non-ASCII, or
-  oversized detail collapses to `I/O error` without echoing attacker-controlled
-  path or secret material.
+- Hardened ISO input readers, ancestor inspection preflights, and
+  summary/receipt writers so raw OS `strerror` text and hostile `strerror`
+  accessor failures, including ancestor `lstat()` failures, output parent/leaf
+  metadata inspection failures, rail/notary receipt-directory inspection and
+  creation failures, input runtime/type/value handle failures, descriptor-close
+  cleanup runtime/type/value failures plus temporary write/fsync/replace
+  runtime/type/value failures and cleanup unlink/close runtime/type/value
+  failures, are sanitized before diagnostics:
+  ordinary short ASCII errors are preserved, while path-like, secret-looking,
+  control-bearing, non-ASCII, oversized, or unreadable detail collapses to
+  `I/O error` without echoing attacker-controlled path or secret material.
 - Hardened ISO JSON/XML parser diagnostics so trust bundles, XSD manifests and
   profile catalogs, rail/notary source files, canary runbooks, receipt files,
   evidence summaries, and readiness summaries report category-only parse
@@ -2662,6 +5886,131 @@ Last updated: 2026-06-27
   tests require those archived values to stay out of stdout/stderr while the
   corresponding blockers remain present.
 - Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "receipt_source_material_cannot_be_reused or receipt_source_material_fields_cannot_be_relabelled" --tb=short`
+    (`6` tests passed, `539` deselected in `10.80s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k direct_receipt_archive_must_not_include_unreferenced_receipts --tb=short`
+    (`1` test passed, `275` deselected in `1.61s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k receipt_source_material_cannot_be_reused --tb=short`
+    (`2` tests passed, `267` deselected in `5.12s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1328` tests passed in `898.33s` / `0:14:58`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k pending_xsd_probe_sample_digest_shape_is_rechecked --tb=short`
+    (`1` test passed, `268` deselected in `10.07s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1328` tests passed in `893.00s` / `0:14:53`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1329` tests passed in `893.34s` / `0:14:53`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py pytests/scripts/iso_pending_xsd_source_probe_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k "read_failure or network_error_kind or opener_runtime_failure or context_enter_failure or accessor_failure or headers_fail or header_access_fails or headers_attribute_fails" --tb=short`
+    (`10` tests passed, `22` deselected in `0.05s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short`
+    (`32` tests passed in `0.06s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1337` tests passed in `896.00s` / `0:14:55`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "status_accessor_failure or error_code_accessor_failure or malformed_torii_status_returns_failed_receipt_without_echo or malformed_remote_status_returns_failed_receipt_without_echo" --tb=short`
+    (`6` tests passed, `285` deselected in `0.13s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1341` tests passed in `920.85s` / `0:15:20`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_canary_test.py -k "output_read_failure or runtime_pipe_read_failure or runtime_pipe_close_failure or pipe_reader_rejects_non_byte_chunks or pipe_reader_clamps_bytes_like_chunks" --tb=short`
+    (`5` tests passed, `107` deselected in `0.19s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1343` tests passed in `898.63s` / `0:14:58`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py -k "runtime_pipe_read_failure or runtime_pipe_close_failure or output_read_failure or pipe_reader_rejects_non_byte_chunks or pipe_reader_clamps_bytes_like_chunks" --tb=short`
+    (`10` tests passed, `413` deselected in `0.31s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1347` tests passed in `902.24s` / `0:15:02`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py -k "runtime_startup_failure or startup_failure_is_controlled_without_echo" --tb=short`
+    (`6` tests passed, `532` deselected in `0.32s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1350` tests passed in `895.18s` / `0:14:55`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_receipt_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k os_error_detail_redacts_unsafe_strerror --tb=short`
+    (`8` tests passed, `1310` deselected in `0.69s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1350` tests passed in `892.90s` / `0:14:52`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k text_output_write_and_replace_failures_do_not_echo_os_detail --tb=short`
+    (`7` tests passed, `1212` deselected in `0.61s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1357` tests passed in `891.16s` / `0:14:51`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_operator_receipt_verify.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail or read_helpers_fdopen_and_close_failures_do_not_echo_os_detail" --tb=short`
+    (`8` tests passed, `1325` deselected in `0.64s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1365` tests passed in `895.03s` / `0:14:55`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py -k runtime_wait_failure --tb=short`
+    (`3` tests passed, `544` deselected in `0.32s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1368` tests passed in `894.57s` / `0:14:54`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py pytests/scripts/iso_pending_xsd_source_probe_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k 'context_exit_failure or response_close_failure or noncallable_context_enter' --tb=short`
+    (`3` tests passed, `32` deselected in `0.05s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short`
+    (`35` tests passed in `0.07s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1371` tests passed in `909.03s` / `0:15:09`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py pytests/scripts/iso_pending_xsd_source_probe_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k 'type_error or close_accessor_failure' --tb=short`
+    (`3` tests passed, `35` deselected in `0.05s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short`
+    (`38` tests passed in `0.06s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1374` tests passed in `890.24s` / `0:14:50`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py pytests/scripts/iso_pending_xsd_source_probe_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k http_error_close_failure --tb=short`
+    (`1` test passed, `38` deselected in `0.05s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short`
+    (`39` tests passed in `0.06s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1375` tests passed in `886.36s` / `0:14:46`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py -k runtime_thread_join_failure --tb=short`
+    (`3` tests passed, `547` deselected in `0.26s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1378` tests passed in `893.60s` / `0:14:53`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_operator_receipt_verify.py scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py -k 'read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail or read_helpers_fdopen_and_close_failures_do_not_echo_os_detail' --tb=short`
+    (`8` tests passed, `1331` deselected in `0.97s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1378` tests passed in `891.24s` / `0:14:51`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k text_output_write_and_replace_failures_do_not_echo_os_detail --tb=short`
+    (`7` tests passed, `1225` deselected in `0.73s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1378` tests passed in `900.79s` / `0:15:00`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py -k symlink_ancestor_inspection_failures_do_not_echo_detail --tb=short`
+    (`8` tests passed, `1339` deselected in `0.64s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1386` tests passed in `916.78s` / `0:15:16`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_operator_receipt_verify.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail or read_helpers_fdopen_and_close_failures_do_not_echo_os_detail" --tb=short`
+    (`8` tests passed, `1339` deselected in `0.67s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1386` tests passed in `896.19s` / `0:14:56`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k text_output_target_inspection_failures_do_not_echo_detail --tb=short`
+    (`7` tests passed, `1239` deselected in `0.19s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1393` tests passed in `883.07s` / `0:14:43`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k output_directory_inspection_failures_do_not_echo_detail --tb=short`
+    (`2` tests passed, `299` deselected in `0.14s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short`
+    (`1395` tests passed in `877.89s` / `0:14:37`)
+  - `git diff --check`
+    (no output)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/iso_pending_xsd_source_probe.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_production_readiness.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+  - `git diff -- Cargo.lock`
+    (no output)
   - `python3 -m py_compile scripts/iso_pending_xsd_source_probe.py pytests/scripts/iso_pending_xsd_source_probe_test.py`
   - `PYTHONPATH=. pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k 'content_type or http_status or http_error_status'`
     (`3` tests passed, `10` deselected in `0.07s`)
@@ -10503,7 +13852,608 @@ Last updated: 2026-06-27
   and the isolated current binary; its startup log again confirms
   `windows=64 window_bits=4`, with child PID 7379 running the init keygen, and
   it reached the 44,701-second heartbeat. No existing process was stopped,
-  signaled, or overwritten.
+  signaled, or overwritten. Later passive filesystem checks found the visible
+  repository-root `target/` directory missing while retry17 wrapper PID `7378`
+  and child PID `7379` were still live; `lsof` showed both processes still had
+  descriptors open to the staged runner path, so no directory recreation,
+  cleanup, or process interruption was attempted while the run remains live.
+  A later `lsof` check at `2026-06-26T21:22:42Z` still showed wrapper PID
+  `7378` and child PID `7379` live with the staged log descriptor open at
+  12,186 bytes, while the visible `target/` path remained absent. A later
+  passive `lsof` check at `2026-06-26T21:27:30Z` still showed both PIDs live
+  and the staged log descriptor at 12,265 bytes. A later passive check at
+  `2026-06-26T21:32:09Z` still showed both PIDs live and the staged log
+  descriptor at 12,344 bytes. A later passive check at
+  `2026-06-26T21:37:02Z` still showed both PIDs live and the staged log
+  descriptor at 12,423 bytes. A later passive check at
+  `2026-06-26T21:42:21Z` still showed both PIDs live and the staged log
+  descriptor at 12,502 bytes. A later passive check at
+  `2026-06-26T21:47:27Z` still showed both PIDs live and the staged log
+  descriptor at 12,581 bytes. A later passive check at
+  `2026-06-26T21:52:09Z` still showed both PIDs live and the staged log
+  descriptor at 12,660 bytes. A later passive check at
+  `2026-06-26T21:56:58Z` still showed both PIDs live and the staged log
+  descriptor at 12,739 bytes. A later passive check at
+  `2026-06-26T22:04:44Z` still showed both PIDs live, child PID `7379`
+  consuming CPU in init keygen, and the staged log descriptor at 12,818 bytes;
+  the visible `target/` namespace had reappeared with only the current
+  readiness summary, but retry17's staged directory was still not reachable by
+  path, so the run remains non-finalizable unless it exits with reachable
+  artifacts. A later passive check at `2026-06-26T22:13:27Z` still showed
+  both PIDs live, child PID `7379` consuming CPU in init keygen, and the
+  staged log descriptor at 12,976 bytes; `target/` still contained only
+  `kagemusha-readiness-summary-current.json`, so retry17's staged directory
+  remained unreachable by path. A later passive check at
+  `2026-06-26T22:18:10Z` still showed both PIDs live, child PID `7379`
+  consuming CPU in init keygen, and the staged log descriptor at 13,055 bytes;
+  `target/` still contained only `kagemusha-readiness-summary-current.json`.
+  A later passive check at `2026-06-26T22:22:57Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 13,134 bytes; `target/` still contained only
+  `kagemusha-readiness-summary-current.json`. A later passive check at
+  `2026-06-26T22:28:46Z` still showed both PIDs live, child PID `7379`
+  consuming CPU in init keygen, and the staged log descriptor at 13,213 bytes;
+  `target/` still contained only `kagemusha-readiness-summary-current.json`.
+  A later passive check at `2026-06-26T22:33:32Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 13,292 bytes; `target/` still contained only
+  `kagemusha-readiness-summary-current.json`. A later passive check at
+  `2026-06-26T22:38:34Z` still showed both PIDs live, child PID `7379`
+  consuming CPU in init keygen, and the staged log descriptor at 13,371 bytes;
+  `target/` still contained only `kagemusha-readiness-summary-current.json`.
+  A later passive check at `2026-06-26T22:43:17Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 13,450 bytes; `target/` still contained only
+  `kagemusha-readiness-summary-current.json`. A later passive check at
+  `2026-06-26T22:49:20Z` still showed both PIDs live, child PID `7379`
+  consuming CPU in init keygen, and the staged log descriptor at 13,529 bytes;
+  `target/` still contained only `kagemusha-readiness-summary-current.json`.
+  A later passive check at `2026-06-26T22:58:32Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 13,687 bytes; the visible `target/` tree contained the current readiness
+  summary and the regenerated Android lab signing keys, while retry17's staged
+  directory remained unreachable by path. A later passive check at
+  `2026-06-26T23:02:19Z` still showed both PIDs live, child PID `7379`
+  consuming CPU in init keygen, and the staged log descriptor at 13,766 bytes;
+  retry17's staged directory remained unreachable by path. A later passive
+  check at `2026-06-26T23:07:11Z` still showed both PIDs live, child PID
+  `7379` consuming CPU in init keygen, and the staged log descriptor at
+  13,845 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:12:00Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 13,924 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:17:00Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,003 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:21:58Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,082 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:26:56Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,161 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:31:47Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,240 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:36:48Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,319 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:41:46Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,398 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:46:47Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,477 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:52:02Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,556 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-26T23:57:02Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,635 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:01:57Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,714 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:07:09Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,793 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:12:10Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,872 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:17:07Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 14,951 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:22:03Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,030 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:27:09Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,109 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:32:10Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,188 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:37:18Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,267 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:42:19Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,346 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:47:28Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,425 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:52:38Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,504 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T00:59:51Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,583 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:05:02Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,662 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:10:09Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,741 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:15:29Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,820 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:20:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 15,978 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:26:15Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,057 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:31:34Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,136 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:36:53Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,215 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:42:22Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,294 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:47:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,373 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:53:10Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,452 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T01:58:29Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,531 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:03:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,610 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:09:03Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,689 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:11:53Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,768 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:20:00Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 16,847 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:27:58Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,005 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:34:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,084 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:42:46Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,242 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T02:50:40Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,321 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:00:03Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,479 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:07:02Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,637 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:14:14Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,716 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:22:17Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,874 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:30:27Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 17,953 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:38:26Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,111 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:46:26Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,269 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T03:55:51Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,427 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:03:53Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,506 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:12:14Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,664 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:20:19Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,743 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:28:26Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 18,901 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:36:38Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,059 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:44:53Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,138 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T04:53:16Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,296 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:01:23Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,454 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:09:55Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,533 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:18:25Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,691 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:26:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,849 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:35:05Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 19,928 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:44:01Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,086 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T05:52:57Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,244 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T06:01:46Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,402 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T06:10:28Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,481 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T06:19:17Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,639 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T06:28:08Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,797 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T06:37:12Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 20,955 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T06:45:52Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 21,113 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T07:12:10Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 21,508 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T07:27:30Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 21,745 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T07:48:03Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 22,061 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T08:02:24Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 22,298 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T08:16:13Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 22,535 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T08:31:04Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 22,772 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T08:45:32Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 22,930 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T08:56:05Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 23,167 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T09:17:57Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 23,483 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T09:30:45Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 23,720 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T09:40:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 23,878 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T09:51:01Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,036 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T10:01:07Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,194 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T10:11:40Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,352 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T10:22:09Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,510 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T10:32:49Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,668 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T10:37:26Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,747 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T10:49:02Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 24,905 bytes; retry17's staged directory remained unreachable by path. A
+  later passive check at `2026-06-27T11:07:22Z` still showed both PIDs live,
+  child PID `7379` consuming CPU in init keygen, and the staged log descriptor
+  at 25,221 bytes; retry17's staged directory remained unreachable by path. A
+  post-interruption passive process check at `2026-06-27T11:29:31Z` no longer
+  found retry17 wrapper PID `7378` or child PID `7379`, and the repository-root
+  `target/` directory was again absent, so retry17 remains non-finalizable and
+  is not release evidence. To avoid repeating the disappearing `target/`
+  staging failure, the next release-binary build and staged evidence roots were
+  moved under visible untracked `dist/` paths. A fresh current `iroha` release
+  build is running under session `34082` with
+  `CARGO_TARGET_DIR=dist/kagemusha-current-iroha-build-20260627T113111Z`,
+  `CARGO_INCREMENTAL=0`, and `cargo build --locked --release --bin iroha -j 1`.
+  A passive process check at `2026-06-27T11:32:10Z` showed that build active
+  while an external `/Users/mtakemiya/dev/pk-deploy/...` rustc job was also
+  active; no proof or compact keygen job was started while cargo/rustc work was
+  present. A later passive process check at `2026-06-27T11:48:15Z` still
+  showed the fresh build active under cargo PID `10606` with rustc child PID
+  `27903`, external cargo/rustc jobs still active, and no
+  `dist/kagemusha-current-iroha-build-20260627T113111Z/release/iroha` binary
+  published yet. A later passive process check at `2026-06-27T12:18:22Z`
+  still showed the same fresh build active under cargo PID `10606`, with rustc
+  CPU active and no published `iroha` binary yet; proof and compact keygen
+  launch remained deferred. The fresh build completed at
+  `2026-06-27T12:27:34Z` after 55m12s. The resulting binary is
+  `dist/kagemusha-current-iroha-build-20260627T113111Z/release/iroha`,
+  reports `iroha 2.0.0-rc.2.0`, is 87,227,440 bytes, and has SHA-256
+  `8e1285e6fd8bd8c1a6f815aa0d662485509278f4f7101dbbc4c95cc4ed105b53`.
+  A passive process check still showed an external cargo/rustc job active, so
+  proof and compact keygen launch remained deferred. A later passive process
+  check at `2026-06-27T12:32:09Z` showed no active `cargo` or `rustc`
+  processes, while two unrelated `/Users/mtakemiya/dev/pk-deploy/.../iroha`
+  jobs were still CPU-active and left untouched. A fresh Reserved-lineage proof
+  attempt was then started under low-priority single-threaded session `4652`
+  against the `dist/` release binary, with staged artifacts under
+  `dist/kagemusha-lineage-proof-staged-live-20260627T113111Z-current64x4-session/artifacts/kagemusha`;
+  compact key evidence remains deferred until this lineage proof exits and is
+  finalized. Although the inherited directory name includes `current64x4`, the
+  current code and readiness gate expect the
+  `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` profile, and
+  the proof log confirms `windows=255 window_bits=1`. At
+  `2026-06-27T12:39:31Z`, the staged runner emitted its 300-second heartbeat
+  while still generating the init Reserved-lineage verifier key. A later
+  passive check at `2026-06-27T12:43:14Z` showed the same run at its
+  600-second heartbeat; an unrelated `cargo test -p iroha_core
+  bounded_qc_insert_decision` process tree was active in the repo `target/`
+  directory, so no additional compact-key or build work was launched. The
+  lineage run reached its 900-second heartbeat at `2026-06-27T12:48:06Z`,
+  still inside init verifier-key generation, and then its 1,200-second
+  heartbeat at `2026-06-27T12:53:41Z` with the same CPU-active init keygen
+  child. The run reached its 1,500-second heartbeat at
+  `2026-06-27T12:58:39Z`; init keygen was still CPU-active, and compact-key
+  evidence remained deferred. The run reached its 1,800-second heartbeat at
+  `2026-06-27T13:02:59Z`, and its 2,100-second heartbeat at
+  `2026-06-27T13:08:04Z`, still inside init verifier-key generation. The same
+  init keygen reached its 2,400-second heartbeat at `2026-06-27T13:13:29Z`
+  and its 2,700-second heartbeat at `2026-06-27T13:18:51Z`, followed by its
+  3,000-second heartbeat at `2026-06-27T13:23:42Z`, its 3,300-second
+  heartbeat at `2026-06-27T13:28:45Z`, and its 3,600-second heartbeat at
+  `2026-06-27T13:33:40Z`. The init keygen remained active through its
+  3,900-second heartbeat at `2026-06-27T13:38:45Z` and its 4,200-second
+  heartbeat at `2026-06-27T13:43:17Z`, then reached its 4,500-second heartbeat
+  at `2026-06-27T13:48:50Z` and its 4,800-second heartbeat at
+  `2026-06-27T13:53:47Z`. The init keygen reached its 5,100-second heartbeat
+  at `2026-06-27T13:58:37Z` and its 5,400-second heartbeat at
+  `2026-06-27T14:03:39Z`, followed by its 5,700-second heartbeat at
+  `2026-06-27T14:08:47Z`, its 6,000-second heartbeat at
+  `2026-06-27T14:13:25Z`, and its 6,300-second heartbeat at
+  `2026-06-27T14:18:33Z`. The init keygen remained active through its
+  6,600-second heartbeat at `2026-06-27T14:23:17Z` and its 6,900-second
+  heartbeat at `2026-06-27T14:28:20Z`, then reached its 7,200-second
+  heartbeat at `2026-06-27T14:33:30Z` and its 7,500-second heartbeat at
+  `2026-06-27T14:38:13Z`. The init keygen reached its 7,800-second heartbeat
+  at `2026-06-27T14:43:01Z`, its 8,100-second heartbeat at
+  `2026-06-27T14:48:10Z`, and its 8,400-second heartbeat at
+  `2026-06-27T14:53:23Z`, followed by its 8,700-second heartbeat at
+  `2026-06-27T14:58:12Z` and its 9,000-second heartbeat at
+  `2026-06-27T15:04:19Z`, followed by its 9,300-second heartbeat at
+  `2026-06-27T15:08:00Z`, its 9,600-second heartbeat at
+  `2026-06-27T15:13:30Z`, and its 9,900-second heartbeat at
+  `2026-06-27T15:18:40Z`, followed by its 10,200-second heartbeat at
+  `2026-06-27T15:23:40Z` and its 10,500-second heartbeat at
+  `2026-06-27T15:28:41Z`. It then reached its 10,800-second heartbeat at
+  `2026-06-27T15:33:42Z` and its 11,100-second heartbeat at
+  `2026-06-27T15:38:49Z`, followed by its 11,400-second heartbeat at
+  `2026-06-27T15:44:11Z` and its 11,700-second heartbeat at
+  `2026-06-27T15:49:31Z`, then its 12,000-second heartbeat at
+  `2026-06-27T15:54:34Z` and its 12,300-second heartbeat at
+  `2026-06-27T15:59:41Z`, followed by its 12,600-second heartbeat at
+  `2026-06-27T16:04:59Z` and its 12,900-second heartbeat at
+  `2026-06-27T16:10:19Z`, then its 13,200-second heartbeat at
+  `2026-06-27T16:13:09Z` and its 13,500-second heartbeat at
+  `2026-06-27T16:18:24Z`, followed by its 13,800-second heartbeat at
+  `2026-06-27T16:23:50Z` and its 14,100-second heartbeat at
+  `2026-06-27T16:28:57Z`, then its 14,400-second heartbeat at
+  `2026-06-27T16:34:02Z` and its 14,700-second heartbeat at
+  `2026-06-27T16:39:15Z`, followed by its 15,000-second heartbeat at
+  `2026-06-27T16:44:34Z` and its 15,300-second heartbeat at
+  `2026-06-27T16:50:00Z`, then its 15,600-second heartbeat at
+  `2026-06-27T16:55:43Z` and its 15,900-second heartbeat at
+  `2026-06-27T16:58:30Z`, followed by its 16,200-second heartbeat at
+  `2026-06-27T17:03:45Z` and its 16,500-second heartbeat at
+  `2026-06-27T17:09:05Z`, then its 16,800-second heartbeat at
+  `2026-06-27T17:14:25Z` and its 17,100-second heartbeat at
+  `2026-06-27T17:19:45Z`, followed by its 17,400-second heartbeat at
+  `2026-06-27T17:24:57Z`, its 17,700-second heartbeat at
+  `2026-06-27T17:30:34Z`, and its 18,000-second heartbeat at
+  `2026-06-27T17:34:22Z`, followed by its 18,300-second heartbeat at
+  `2026-06-27T17:40:28Z` and its 18,600-second heartbeat at
+  `2026-06-27T17:43:40Z`, then its 18,900-second heartbeat at
+  `2026-06-27T17:50:06Z` and its 19,200-second heartbeat at
+  `2026-06-27T17:55:52Z`, followed by its 19,500-second heartbeat at
+  `2026-06-27T17:59:19Z` and its 19,800-second heartbeat at
+  `2026-06-27T18:05:11Z`, then its 20,100-second heartbeat at
+  `2026-06-27T18:08:30Z` and its 20,400-second heartbeat at
+  `2026-06-27T18:14:54Z`, followed by its 20,700-second heartbeat at
+  `2026-06-27T18:18:14Z` and its 21,000-second heartbeat at
+  `2026-06-27T18:24:05Z`, followed by its 21,300-second heartbeat at
+  `2026-06-27T18:29:49Z` and its 21,600-second heartbeat at
+  `2026-06-27T18:35:59Z`, then its 21,900-second heartbeat at
+  `2026-06-27T18:39:25Z` and its 22,200-second heartbeat at
+  `2026-06-27T18:45:15Z`, followed by its 22,500-second heartbeat at
+  `2026-06-27T18:48:48Z` and its 22,800-second heartbeat at
+  `2026-06-27T18:54:36Z`, then its 23,100-second heartbeat at
+  `2026-06-27T18:57:59Z` and its 23,400-second heartbeat at
+  `2026-06-27T19:04:01Z`, followed by its 23,700-second heartbeat at
+  `2026-06-27T19:10:03Z` and its 24,000-second heartbeat at
+  `2026-06-27T19:16:37Z`, then its 24,300-second heartbeat at
+  `2026-06-27T19:20:05Z` and its 24,600-second heartbeat at
+  `2026-06-27T19:26:06Z`, followed by its 24,900-second heartbeat at
+  `2026-06-27T19:29:34Z` and its 25,200-second heartbeat at
+  `2026-06-27T19:34:55Z`, followed by its 25,500-second heartbeat at
+  `2026-06-27T19:41:58Z`, its 25,800-second heartbeat at
+  `2026-06-27T19:47:43Z`, its 26,100-second heartbeat at
+  `2026-06-27T19:51:22Z`, its 26,400-second heartbeat at
+  `2026-06-27T19:55:24Z`, its 26,700-second heartbeat at
+  `2026-06-27T19:59:30Z`, its 27,000-second heartbeat at
+  `2026-06-27T20:04:26Z`, its 27,300-second heartbeat at
+  `2026-06-27T20:08:12Z`, its 27,600-second heartbeat at
+  `2026-06-27T20:13:06Z`, its 27,900-second heartbeat at
+  `2026-06-27T20:20:19Z`, its 28,200-second heartbeat at
+  `2026-06-27T20:24:10Z`, its 28,500-second heartbeat at
+  `2026-06-27T20:28:03Z`, its 28,800-second heartbeat at
+  `2026-06-27T20:35:15Z`, its 29,100-second heartbeat at
+  `2026-06-27T20:39:08Z`, its 29,400-second heartbeat at
+  `2026-06-27T20:46:23Z`, its 29,700-second heartbeat at
+  `2026-06-27T20:50:14Z`, its 30,000-second heartbeat at
+  `2026-06-27T20:54:07Z`, its 30,300-second heartbeat at
+  `2026-06-27T20:58:00Z`, its 30,600-second heartbeat at
+  `2026-06-27T21:05:26Z`, its 30,900-second heartbeat at
+  `2026-06-27T21:09:27Z`, its 31,200-second heartbeat at
+  `2026-06-27T21:13:28Z`, its 31,500-second heartbeat at
+  `2026-06-27T21:21:30Z`, its 31,800-second heartbeat at
+  `2026-06-27T21:25:46Z`, its 32,100-second heartbeat at
+  `2026-06-27T21:29:47Z`, its 32,400-second heartbeat at
+  `2026-06-27T21:33:47Z`, its 32,700-second heartbeat at
+  `2026-06-27T21:41:00Z`, its 33,000-second heartbeat at
+  `2026-06-27T21:45:15Z`, its 33,300-second heartbeat at
+  `2026-06-27T21:49:17Z`, its 33,600-second heartbeat at
+  `2026-06-27T21:53:30Z`, its 33,900-second heartbeat at
+  `2026-06-27T22:01:15Z`, its 34,200-second heartbeat at
+  `2026-06-27T22:05:35Z`, its 34,500-second heartbeat at
+  `2026-06-27T22:09:56Z`, its 34,800-second heartbeat at
+  `2026-06-27T22:14:18Z`, its 35,100-second heartbeat at
+  `2026-06-27T22:18:24Z`, its 35,400-second heartbeat at
+  `2026-06-27T22:23:10Z`, its 35,700-second heartbeat at
+  `2026-06-27T22:31:38Z`, its 36,000-second heartbeat at
+  `2026-06-27T22:35:56Z`, its 36,300-second heartbeat at
+  `2026-06-27T22:40:12Z`, its 36,600-second heartbeat at
+  `2026-06-27T22:44:39Z`, its 36,900-second heartbeat at
+  `2026-06-27T22:49:06Z`, its 37,200-second heartbeat at
+  `2026-06-27T22:53:44Z`, its 37,500-second heartbeat at
+  `2026-06-27T22:58:07Z`, its 37,800-second heartbeat at
+  `2026-06-27T23:06:13Z`, its 38,100-second heartbeat at
+  `2026-06-27T23:10:25Z`, its 38,400-second heartbeat at
+  `2026-06-27T23:14:35Z`, its 38,700-second heartbeat at
+  `2026-06-27T23:18:48Z`, its 39,000-second heartbeat at
+  `2026-06-27T23:23:25Z`, and its 39,300-second heartbeat at
+  `2026-06-27T23:31:31Z`. A later passive check at
+  `2026-06-27T23:41:16Z` observed the same init keygen alive through its
+  39,600-second and 39,900-second heartbeats. The run then reached its
+  40,200-second heartbeat at `2026-06-27T23:46:30Z` and its 40,500-second
+  heartbeat at `2026-06-27T23:50:47Z`, followed by its 40,800-second heartbeat
+  at `2026-06-27T23:55:41Z` and its 41,100-second heartbeat at
+  `2026-06-28T00:00:19Z`, then its 41,400-second heartbeat at
+  `2026-06-28T00:05:21Z` and its 41,700-second heartbeat at
+  `2026-06-28T00:09:41Z`, followed by its 42,000-second heartbeat at
+  `2026-06-28T00:14:10Z` and its 42,300-second heartbeat at
+  `2026-06-28T00:18:40Z`, then its 42,600-second heartbeat at
+  `2026-06-28T00:23:50Z` and its 42,900-second heartbeat at
+  `2026-06-28T00:28:32Z`, followed by its 43,200-second heartbeat at
+  `2026-06-28T00:33:02Z` and its 43,500-second heartbeat at
+  `2026-06-28T00:41:16Z`, then its 43,800-second heartbeat at
+  `2026-06-28T00:45:47Z` and its 44,100-second heartbeat at
+  `2026-06-28T00:50:16Z`, followed by its 44,400-second heartbeat at
+  `2026-06-28T00:54:51Z` and its 44,700-second heartbeat at
+  `2026-06-28T00:59:30Z`, then its 45,000-second heartbeat at
+  `2026-06-28T01:03:56Z` and its 45,300-second heartbeat at
+  `2026-06-28T01:08:21Z`, followed by its 45,600-second heartbeat at
+  `2026-06-28T01:16:37Z` and its 45,900-second heartbeat at
+  `2026-06-28T01:21:09Z`, then its 46,200-second heartbeat at
+  `2026-06-28T01:25:41Z` and its 46,500-second heartbeat at
+  `2026-06-28T01:30:13Z`, followed by its 46,800-second heartbeat at
+  `2026-06-28T01:36:11Z`, its 47,100-second heartbeat at
+  `2026-06-28T01:39:33Z`, and its 47,400-second heartbeat at
+  `2026-06-28T01:44:23Z`, followed by its 47,700-second heartbeat at
+  `2026-06-28T01:50:16Z` and its 48,000-second heartbeat at
+  `2026-06-28T01:55:08Z`, followed by its 48,300-second heartbeat at
+  `2026-06-28T02:00:03Z` and its 48,600-second heartbeat at
+  `2026-06-28T02:04:07Z`, followed by its 48,900-second heartbeat at
+  `2026-06-28T02:09:01Z` and its 49,200-second heartbeat at
+  `2026-06-28T02:13:57Z`, followed by its 49,500-second heartbeat at
+  `2026-06-28T02:18:54Z` and its 49,800-second heartbeat at
+  `2026-06-28T02:23:55Z`, followed by its 50,100-second heartbeat at
+  `2026-06-28T02:28:51Z` and its 50,400-second heartbeat at
+  `2026-06-28T02:33:52Z`, followed by its 50,700-second heartbeat at
+  `2026-06-28T02:38:54Z` and its 51,000-second heartbeat at
+  `2026-06-28T02:46:40Z`, followed by its 51,300-second heartbeat at
+  `2026-06-28T02:49:28Z` and its 51,600-second heartbeat at
+  `2026-06-28T02:54:34Z`, followed by its 51,900-second heartbeat at
+  `2026-06-28T02:59:36Z` and its 52,200-second heartbeat at
+  `2026-06-28T03:04:41Z`, followed by its 52,500-second heartbeat at
+  `2026-06-28T03:09:48Z` and its 52,800-second heartbeat at
+  `2026-06-28T03:14:57Z`, followed by its 53,100-second heartbeat at
+  `2026-06-28T03:18:09Z` and its 53,400-second heartbeat at
+  `2026-06-28T03:23:17Z`, followed by its 53,700-second heartbeat at
+  `2026-06-28T03:28:28Z` and its 54,000-second heartbeat at
+  `2026-06-28T03:33:50Z`, followed by its 54,300-second heartbeat at
+  `2026-06-28T03:40:25Z` and its 54,600-second heartbeat at
+  `2026-06-28T03:43:14Z`, followed by its 54,900-second heartbeat at
+  `2026-06-28T03:48:35Z` and its 55,200-second heartbeat at
+  `2026-06-28T03:54:02Z`, followed by its 55,500-second heartbeat at
+  `2026-06-28T03:59:31Z` and its 55,800-second heartbeat at
+  `2026-06-28T04:04:51Z`, followed by its 56,100-second heartbeat at
+  `2026-06-28T04:10:21Z` and its 56,400-second heartbeat at
+  `2026-06-28T04:13:21Z`, followed by its 56,700-second heartbeat at
+  `2026-06-28T04:18:51Z`, its 57,000-second heartbeat at
+  `2026-06-28T04:24:48Z`, and its 57,300-second heartbeat at
+  `2026-06-28T04:30:35Z`, followed by its 57,600-second heartbeat at
+  `2026-06-28T04:34:22Z` and its 57,900-second heartbeat at
+  `2026-06-28T04:39:52Z`, followed by its 58,200-second heartbeat at
+  `2026-06-28T04:43:30Z` and its 58,500-second heartbeat at
+  `2026-06-28T04:49:22Z`, followed by its 58,800-second heartbeat at
+  `2026-06-28T04:55:21Z` and its 59,100-second heartbeat at
+  `2026-06-28T04:58:18Z`, followed by its 59,400-second heartbeat at
+  `2026-06-28T05:04:04Z` and its 59,700-second heartbeat at
+  `2026-06-28T05:09:54Z`, followed by its 60,000-second heartbeat at
+  `2026-06-28T05:13:07Z` and its 60,300-second heartbeat at
+  `2026-06-28T05:19:16Z`, followed by its 60,600-second heartbeat at
+  `2026-06-28T05:25:38Z` and its 60,900-second heartbeat at
+  `2026-06-28T05:29:10Z`, followed by its 61,200-second heartbeat at
+  `2026-06-28T05:33:02Z` and its 61,500-second heartbeat at
+  `2026-06-28T05:38:48Z`, followed by its 61,800-second heartbeat at
+  `2026-06-28T05:44:01Z` and its 62,100-second heartbeat at
+  `2026-06-28T05:51:11Z`, followed by its 62,400-second heartbeat at
+  `2026-06-28T05:56:39Z` and its 62,700-second heartbeat at
+  `2026-06-28T06:00:49Z`, followed by its 63,000-second heartbeat at
+  `2026-06-28T06:06:42Z` and its 63,300-second heartbeat at
+  `2026-06-28T06:12:40Z`, followed by its 63,600-second heartbeat and
+  63,900-second heartbeat at `2026-06-28T06:18:46Z`, followed by its
+  64,200-second heartbeat at `2026-06-28T06:23:39Z` and its 64,500-second
+  heartbeat at `2026-06-28T06:28:39Z`, followed by its 64,800-second
+  heartbeat at `2026-06-28T06:33:40Z` and its 65,100-second heartbeat at
+  `2026-06-28T06:38:43Z`, followed by its 65,400-second heartbeat at
+  `2026-06-28T06:43:48Z` and its 65,700-second heartbeat at
+  `2026-06-28T06:48:58Z`, followed by its 66,000-second heartbeat at
+  `2026-06-28T06:53:57Z`, then its 66,300-second and 66,600-second
+  heartbeats at `2026-06-28T07:03:57Z`, followed by its 66,900-second
+  heartbeat at `2026-06-28T07:09:00Z` and its 67,200-second heartbeat at
+  `2026-06-28T07:14:03Z`, followed by its 67,500-second heartbeat at
+  `2026-06-28T07:19:01Z` and its 67,800-second heartbeat at
+  `2026-06-28T07:24:33Z`, followed by its 68,100-second heartbeat at
+  `2026-06-28T07:29:38Z` and its 68,400-second heartbeat at
+  `2026-06-28T07:34:57Z`, followed by its 68,700-second heartbeat at
+  `2026-06-28T07:39:48Z`.
 - Passive read-only polling also showed retry14 still appending stale
   `255x1` heartbeats through 43,500 seconds; retry14 remains non-release
   evidence and should not be finalized.
@@ -10654,7 +14604,575 @@ Last updated: 2026-06-27
   `target/kagemusha-android-device-lab-physical-auto-20260626T205219Z-session`
   with the same lab signing keys and no build/install/instrumentation unless
   exactly one safe ADB `device` row appears. Passive ADB polling at
-  `2026-06-26T21:12:04Z` still reports no attached device rows.
+  `2026-06-26T21:56:58Z` still reports no attached device rows. Passive ADB
+  polling at `2026-06-26T22:04:44Z` still reports no attached device rows, and
+  the wait wrapper remains live without running build/install/instrumentation.
+  Passive ADB polling at `2026-06-26T22:13:27Z` still reports no attached
+  device rows, and the same wait wrapper remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T22:18:10Z` still reports no attached device rows, and the same
+  wait wrapper remains live without running build/install/instrumentation.
+  Passive ADB polling at `2026-06-26T22:22:57Z` still reports no attached
+  device rows, and the same wait wrapper remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T22:28:46Z` still reports no attached device rows, and the same
+  wait wrapper remains live without running build/install/instrumentation.
+  Passive ADB polling at `2026-06-26T22:33:32Z` still reports no attached
+  device rows, and the same wait wrapper remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T22:38:34Z` still reports no attached device rows, and the same
+  wait wrapper remains live without running build/install/instrumentation.
+  Passive ADB polling at `2026-06-26T22:43:17Z` still reports no attached
+  device rows, and the same wait wrapper remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T22:49:20Z` still reports no attached device rows, and the same
+  wait wrapper remains live without running build/install/instrumentation. That
+  wait later expired cleanly after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices` and did not run
+  build/install/instrumentation or create capture artifacts. After the visible
+  `target/` tree no longer contained the previous generated Android lab
+  signing keys, a fresh generated Ed25519 lab keypair was written under
+  `target/kagemusha-android-lab-keys/` with 0700 directory and 0600 file
+  permissions; the new public-key DER SHA-256 is
+  `02f77eacb5fa14715f376665662be5c421a00c381a8604706c882072e3cf3794`. A
+  fresh live-session passive auto-serial wait is now active under
+  `target/kagemusha-android-device-lab-physical-auto-20260626T225519Z-session`
+  with those generated lab signing keys and no build/install/instrumentation
+  unless exactly one safe ADB `device` row appears. Passive ADB polling at
+  `2026-06-26T22:52:52Z` still reported no attached device rows before the
+  relaunch. Passive ADB polling at `2026-06-26T22:58:32Z` still reports no
+  attached device rows, and the new wait wrapper PID `90782` remains live
+  without running build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:02:19Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:07:11Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:12:00Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:17:00Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:21:58Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:26:56Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:31:47Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:36:48Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:41:46Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:46:47Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:52:02Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-26T23:57:02Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:01:57Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:07:09Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:12:10Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:17:07Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:22:03Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:27:09Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:32:10Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:37:18Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:42:19Z` still reports no attached device rows, and a passive
+  USB metadata filter still finds no Android/Samsung/Pixel/MTP/ADB/phone
+  match; the new wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:47:28Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T00:52:38Z` still reports no attached device rows, and the new
+  wait wrapper PID `90782` remains live without running
+  build/install/instrumentation. That wait later expired cleanly after 7,200
+  seconds with `ADB auto-serial resolution found no visible devices` and did
+  not run build/install/instrumentation or create capture artifacts. Passive
+  ADB polling at `2026-06-27T00:56:09Z` still reports no attached device rows.
+  A fresh live-session passive auto-serial wait is now active under
+  `target/kagemusha-android-device-lab-physical-auto-20260627T005609Z-session`
+  with the regenerated lab signing keys and no build/install/instrumentation
+  unless exactly one safe ADB `device` row appears. Passive ADB polling at
+  `2026-06-27T00:59:51Z` still reports no attached device rows, and the new
+  wait wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:05:02Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:10:09Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:15:29Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:20:49Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:26:15Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:31:34Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:36:53Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:42:22Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:47:49Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:53:10Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T01:58:29Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:03:49Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:09:03Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:11:53Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:20:00Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:27:58Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:34:49Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:42:46Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. Passive ADB polling at
+  `2026-06-27T02:50:40Z` still reports no attached device rows, and wait
+  wrapper PID `14995` remains live without running
+  build/install/instrumentation. The same physical auto-serial wait expired
+  naturally at `2026-06-27T02:57:08Z` after 7,200 seconds with
+  `no_visible_devices`; a follow-up `adb devices -l` still returned only the
+  header row, and PID `14995` was no longer present. A replacement passive
+  physical auto-serial wait was started at
+  `target/kagemusha-android-device-lab-physical-auto-20260627T025708Z-session`
+  under PID `8536` / session `21756`; it has not run build/install/
+  instrumentation and is waiting for ADB visibility. Passive ADB polling at
+  `2026-06-27T03:00:03Z` still reports no attached device rows, and wait
+  wrapper PID `8536` remains live without running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T03:07:02Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T03:14:14Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T03:22:17Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T03:30:27Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T03:38:26Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T03:46:26Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. A passive `system_profiler SPUSBDataType` search at
+  `2026-06-27T03:47Z` found no Android, Google, Samsung, Pixel, MTP, ADB, or
+  phone identifier in the USB inventory. Passive ADB polling at
+  `2026-06-27T03:55:51Z` still reports no attached device rows, and wait
+  wrapper PID `8536` remains live without running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:03:53Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:12:14Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:20:19Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:28:26Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:36:38Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:44:53Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T04:53:16Z` still reports
+  no attached device rows, and wait wrapper PID `8536` remains live without
+  running build/install/
+  instrumentation. The replacement physical auto-serial wait expired naturally
+  at `2026-06-27T04:57:41Z` after 7,200 seconds with `no_visible_devices`; a
+  follow-up `adb devices -l` still returned only the header row, and PID `8536`
+  was no longer present. A replacement passive physical auto-serial wait was
+  started at
+  `target/kagemusha-android-device-lab-physical-auto-20260627T045741Z-session`
+  under PID `3209` / session `59697`; it has not run build/install/
+  instrumentation and is waiting for ADB visibility. Passive ADB polling at
+  `2026-06-27T05:01:23Z` still reports no attached device rows, and wait
+  wrapper PID `3209` remains live without running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T05:09:55Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T05:18:25Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T05:26:49Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T05:35:05Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T05:44:01Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T05:52:57Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T06:01:46Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T06:10:28Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T06:19:17Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T06:28:08Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T06:37:12Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T06:45:52Z` still reports
+  no attached device rows, and wait wrapper PID `3209` remains live without
+  running build/install/
+  instrumentation. The physical auto-serial wait expired naturally at
+  `2026-06-27T06:59:24Z` after 7,200 seconds with `no_visible_devices`; a
+  follow-up `adb devices -l` still returned only the header row, and PID `3209`
+  was no longer present. A replacement passive physical auto-serial wait was
+  started at
+  `target/kagemusha-android-device-lab-physical-auto-20260627T065924Z-session`
+  under PID `15824` / session `63968`; it has not run build/install/
+  instrumentation and is waiting for ADB visibility. Passive ADB polling at
+  `2026-06-27T07:12:10Z` still reports no attached device rows, and wait
+  wrapper PID `15824` remains live without running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T07:27:30Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T07:48:03Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T08:02:24Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T08:16:13Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T08:31:04Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T08:45:32Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T08:56:05Z` still reports
+  no attached device rows, and wait wrapper PID `15824` remains live without
+  running build/install/
+  instrumentation. The physical auto-serial wait expired naturally at
+  `2026-06-27T09:05:34Z` after 7,200 seconds with `no_visible_devices`; a
+  follow-up `adb devices -l` still returned only the header row, and PID
+  `15824` was no longer present. A replacement passive physical auto-serial
+  wait was started at
+  `target/kagemusha-android-device-lab-physical-auto-20260627T090534Z-session`
+  under PID `86998` / session `31108`; it has not run build/install/
+  instrumentation and is waiting for ADB visibility. Passive ADB polling at
+  `2026-06-27T09:17:57Z` still reports no attached device rows, and wait
+  wrapper PID `86998` remains live without running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T09:30:45Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T09:40:49Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T09:51:01Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T10:01:07Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T10:11:40Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T10:22:09Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T10:32:49Z` still reports
+  no attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/
+  instrumentation. Passive ADB polling at `2026-06-27T10:37:26Z` still
+  reports no attached device rows, and wait wrapper PID `86998` remains live
+  without running build/install/instrumentation. A passive
+  `system_profiler SPUSBDataType` search at `2026-06-27T10:40:18Z` found no
+  Android, Google, Samsung, Pixel, MTP, ADB, or phone identifier in the USB
+  inventory. Passive ADB polling at `2026-06-27T10:49:02Z` still reports no
+  attached device rows, and wait wrapper PID `86998` remains live without
+  running build/install/instrumentation. The wait later expired naturally at
+  `2026-06-27T11:07:22Z` after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices`; a follow-up
+  `adb devices -l` at `2026-06-27T11:07:40Z` still returned only the header
+  row. A replacement passive physical auto-serial wait was started at
+  `target/kagemusha-android-device-lab-physical-auto-20260627T110740Z-session`
+  under PID `94109` / session `47284`; it has not run build/install/
+  instrumentation and is waiting for ADB visibility. After the user
+  interruption, session `47284` was no longer available and PID `94109` was no
+  longer visible; `adb devices -l` at `2026-06-27T11:29:31Z` still returned no
+  device rows and auto-started the ADB daemon. A replacement passive wait was
+  started under `dist/kagemusha-android-device-lab-physical-auto-20260627T113111Z-session`
+  with PID `10603` / session `4285`, using fresh lab keys under
+  `dist/kagemusha-android-lab-keys-20260627T113111Z` with public key DER
+  SHA-256 `2f5d08d21a8ea5363446faa142975dafbb710d3bceab36bfd3d3466d323e7c7e`;
+  it has not run build/install/instrumentation and is waiting for ADB
+  visibility. Passive ADB polling at `2026-06-27T11:48:15Z` still reported no
+  attached device rows. Passive ADB polling at `2026-06-27T12:13:34Z` still
+  reported no attached device rows and the `dist/` Android wait had created no
+  capture artifacts. Passive ADB polling at `2026-06-27T12:32:09Z` still
+  returned only the header row, while wait session `4285` remained live without
+  running build/install/instrumentation. Passive ADB and USB inventory polling
+  at `2026-06-27T12:36:05Z` still found no Android, Google, Pixel, Samsung,
+  MTP, ADB, or phone-style device entry, and `adb devices -l` remained
+  header-only at `2026-06-27T12:39:31Z`; wait session `4285` was still live
+  and quiet after a passive poll following the lineage 600-second heartbeat.
+  `adb devices -l` remained header-only at `2026-06-27T12:48:06Z` and
+  `2026-06-27T13:18:51Z`; it was still header-only at
+  `2026-06-27T13:28:45Z`. Wait session `4285` then expired naturally at
+  `2026-06-27T13:32:24Z` after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices`; a replacement passive
+  wait was started under session `22025` / PID `11978` with output paths rooted
+  at `dist/kagemusha-android-device-lab-physical-auto-20260627T133224Z-session`,
+  reusing the existing lab signing key. The replacement wait had not created
+  capture artifacts yet, and `adb devices -l` remained header-only. Passive
+  ADB polling still returned only the header row at `2026-06-27T13:38:45Z`
+  and `2026-06-27T13:43:17Z`, and again at `2026-06-27T13:58:37Z` and
+  `2026-06-27T14:08:47Z`; it remained header-only at
+  `2026-06-27T14:18:33Z`, `2026-06-27T14:23:17Z`, and
+  `2026-06-27T14:33:30Z`, and again at `2026-06-27T14:38:13Z` and
+  `2026-06-27T14:48:10Z`; it was still header-only at
+  `2026-06-27T14:53:23Z`, `2026-06-27T15:04:19Z`, and
+  `2026-06-27T15:08:00Z`, and remained header-only at
+  `2026-06-27T15:13:30Z`, `2026-06-27T15:18:40Z`, and
+  `2026-06-27T15:23:40Z`, and again at `2026-06-27T15:28:41Z`. Session
+  `22025` expired naturally at `2026-06-27T15:33:21Z` after 7,200 seconds
+  with `ADB auto-serial resolution found no visible devices` and no capture
+  artifacts; a follow-up `adb devices -l` still returned only the header row.
+  A replacement passive wait was started under session `91306` / PID `96328`
+  with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260627T153321Z-session`,
+  reusing the existing lab signing key; `adb devices -l` remained header-only
+  at `2026-06-27T15:38:49Z`, `2026-06-27T15:44:11Z`, and
+  `2026-06-27T15:49:31Z`, and again at `2026-06-27T15:54:34Z` and
+  `2026-06-27T15:59:41Z`, and remained header-only at
+  `2026-06-27T16:04:59Z`, `2026-06-27T16:10:19Z`, and
+  `2026-06-27T16:13:09Z`, and again at `2026-06-27T16:18:24Z` and
+  `2026-06-27T16:23:50Z`, and remained header-only at
+  `2026-06-27T16:28:57Z`, `2026-06-27T16:34:02Z`, and
+  `2026-06-27T16:39:15Z`, and again at `2026-06-27T16:44:34Z` and
+  `2026-06-27T16:50:00Z`, and remained header-only at
+  `2026-06-27T16:55:43Z`, `2026-06-27T16:58:30Z`, and
+  `2026-06-27T17:03:45Z`, and again at `2026-06-27T17:09:05Z` and
+  `2026-06-27T17:14:25Z`, and remained header-only at
+  `2026-06-27T17:19:45Z`, `2026-06-27T17:24:57Z`, and
+  `2026-06-27T17:30:34Z`. Session `91306` expired naturally at
+  `2026-06-27T17:33:46Z` after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices` and no capture
+  artifacts; a follow-up `adb devices -l` still returned only the header row.
+  A replacement passive wait was started under session `39870` / PID `6959`
+  with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260627T173346Z-session`,
+  reusing the existing lab signing key; `adb devices -l` remained header-only
+  at `2026-06-27T17:40:28Z`, `2026-06-27T17:43:40Z`, and
+  `2026-06-27T17:50:06Z`, and again at `2026-06-27T17:55:52Z` and
+  `2026-06-27T17:59:19Z`, and remained header-only at
+  `2026-06-27T18:05:11Z`, `2026-06-27T18:08:30Z`, and
+  `2026-06-27T18:14:54Z`, and again at `2026-06-27T18:18:14Z` and
+  `2026-06-27T18:24:05Z`, and remained header-only at
+  `2026-06-27T18:29:49Z`, `2026-06-27T18:35:59Z`, and
+  `2026-06-27T18:39:25Z`, and again at `2026-06-27T18:45:15Z` and
+  `2026-06-27T18:48:48Z`, and remained header-only at
+  `2026-06-27T18:54:36Z`, `2026-06-27T18:57:59Z`, and
+  `2026-06-27T19:04:01Z`, and again at `2026-06-27T19:10:03Z` and
+  `2026-06-27T19:16:37Z`, and remained header-only at
+  `2026-06-27T19:20:05Z`, `2026-06-27T19:26:06Z`, and
+  `2026-06-27T19:29:34Z`. Session `39870` expired naturally at
+  `2026-06-27T19:34:55Z` after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices` and no capture
+  artifacts; a follow-up `adb devices -l` still returned only the header row.
+  A replacement passive wait was started under session `19607` / PID `78870`
+  with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260627T193455Z-session`,
+  reusing the existing lab signing key; `adb devices -l` remained header-only
+  at `2026-06-27T19:41:58Z`, `2026-06-27T19:51:22Z`, and
+  `2026-06-27T19:55:24Z`, `2026-06-27T19:59:30Z`, and
+  `2026-06-27T20:04:26Z`, `2026-06-27T20:08:12Z`, and
+  `2026-06-27T20:13:06Z`, `2026-06-27T20:20:19Z`, and
+  `2026-06-27T20:24:10Z`, `2026-06-27T20:28:03Z`, and
+  `2026-06-27T20:35:15Z`, `2026-06-27T20:39:08Z`, and
+  `2026-06-27T20:46:23Z`, `2026-06-27T20:50:14Z`, and
+  `2026-06-27T20:54:07Z`, `2026-06-27T20:58:00Z`, and
+  `2026-06-27T21:05:26Z`, `2026-06-27T21:09:27Z`, and
+  `2026-06-27T21:13:28Z`, `2026-06-27T21:21:30Z`, and
+  `2026-06-27T21:25:46Z`, `2026-06-27T21:29:47Z`, and
+  `2026-06-27T21:33:47Z`. Session `19607` expired naturally after 7,200
+  seconds with `ADB auto-serial resolution found no visible devices` and no
+  capture; a follow-up `adb devices -l` at `2026-06-27T21:35:27Z` still
+  returned only the header row, and no expected `dist/` session directory was
+  present. A replacement passive wait was started under session `10045` / PID
+  `18164` with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260627T213527Z-session`,
+  reusing the existing lab signing key and still gated on exactly one safe ADB
+  `device` row. Passive ADB polling at `2026-06-27T21:41:00Z` remained
+  header-only, and remained header-only at `2026-06-27T21:45:15Z` and
+  `2026-06-27T21:49:17Z`, `2026-06-27T21:53:30Z`, and
+  `2026-06-27T22:01:15Z`, `2026-06-27T22:05:35Z`, and
+  `2026-06-27T22:09:56Z`, `2026-06-27T22:14:18Z`, and
+  `2026-06-27T22:18:24Z`, `2026-06-27T22:23:10Z`, and
+  `2026-06-27T22:31:38Z`, `2026-06-27T22:35:56Z`, and
+  `2026-06-27T22:40:12Z`, `2026-06-27T22:44:39Z`, and
+  `2026-06-27T22:49:06Z`, `2026-06-27T22:53:44Z`, and
+  `2026-06-27T22:58:07Z`, `2026-06-27T23:06:13Z`, and
+  `2026-06-27T23:10:25Z`, `2026-06-27T23:14:35Z`, and
+  `2026-06-27T23:18:48Z`, `2026-06-27T23:23:25Z`, and
+  `2026-06-27T23:31:31Z`; replacement wait PID `18164` remained live without
+  running build/install/instrumentation. Session `10045` later expired
+  naturally after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices` and no capture; a
+  follow-up `adb devices -l` at `2026-06-27T23:35:57Z` still returned only the
+  header row, and no expected `dist/` session directory was present. A
+  replacement passive wait was started under session `51389` / PID `79419`
+  with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260627T233557Z-session`,
+  reusing the existing lab signing key and still gated on exactly one safe ADB
+  `device` row. Passive ADB polling at `2026-06-27T23:41:16Z` remained
+  header-only, and remained header-only at `2026-06-27T23:46:30Z`,
+  `2026-06-27T23:50:47Z`, `2026-06-27T23:55:41Z`, and
+  `2026-06-28T00:00:19Z`, `2026-06-28T00:05:21Z`, and
+  `2026-06-28T00:09:41Z`, `2026-06-28T00:14:10Z`, and
+  `2026-06-28T00:18:40Z`, `2026-06-28T00:23:50Z`, and
+  `2026-06-28T00:28:32Z`, `2026-06-28T00:33:02Z`, and
+  `2026-06-28T00:41:16Z`, `2026-06-28T00:45:47Z`, and
+  `2026-06-28T00:50:16Z`, `2026-06-28T00:54:51Z`, and
+  `2026-06-28T00:59:30Z`, `2026-06-28T01:03:56Z`, and
+  `2026-06-28T01:08:21Z`, `2026-06-28T01:16:37Z`, and
+  `2026-06-28T01:21:09Z`, `2026-06-28T01:25:41Z`, and
+  `2026-06-28T01:30:13Z`; replacement wait PID `79419` remained live without
+  running build/install/instrumentation. Session `51389` later expired
+  naturally after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices` and no capture; a
+  follow-up `adb devices -l` at `2026-06-28T01:36:11Z` still returned only the
+  header row, and no expected `dist/` session directory was present. A
+  replacement passive wait was started under session `98326` / PID `90068`
+  with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260628T013631Z-session`,
+  reusing the existing lab signing key and still gated on exactly one safe ADB
+  `device` row. Passive ADB polling at `2026-06-28T01:37:58Z` remained
+  header-only, and remained header-only at `2026-06-28T01:39:33Z` and
+  `2026-06-28T01:44:23Z`, `2026-06-28T01:50:16Z`, and
+  `2026-06-28T01:55:08Z`, `2026-06-28T02:00:03Z`, and
+  `2026-06-28T02:04:07Z`, `2026-06-28T02:09:01Z`, and
+  `2026-06-28T02:13:57Z`, `2026-06-28T02:18:54Z`, and
+  `2026-06-28T02:23:55Z`, `2026-06-28T02:28:51Z`, and
+  `2026-06-28T02:33:52Z`, `2026-06-28T02:38:54Z`, and
+  `2026-06-28T02:46:40Z`, `2026-06-28T02:49:28Z`, and
+  `2026-06-28T02:54:34Z`, `2026-06-28T02:59:36Z`, and
+  `2026-06-28T03:04:41Z`, `2026-06-28T03:09:48Z`, and
+  `2026-06-28T03:14:57Z`, `2026-06-28T03:18:09Z`, and
+  `2026-06-28T03:23:17Z`, `2026-06-28T03:28:28Z`, and
+  `2026-06-28T03:33:50Z`. Session `98326` later expired naturally after
+  7,200 seconds with `ADB auto-serial resolution found no visible devices` and
+  no capture; a follow-up `adb devices -l` at `2026-06-28T03:37:48Z` still
+  returned only the header row, and no expected `dist/` session directory was
+  present. A replacement passive wait was started under session `21399` / PID
+  `23552` with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260628T033748Z-session`,
+  reusing the existing lab signing key and still gated on exactly one safe ADB
+  `device` row. Passive ADB polling at `2026-06-28T03:37:48Z` remained
+  header-only, and remained header-only at `2026-06-28T03:40:25Z` and
+  `2026-06-28T03:43:14Z`, `2026-06-28T03:48:35Z`, and
+  `2026-06-28T03:54:02Z`, `2026-06-28T03:59:31Z`, and
+  `2026-06-28T04:04:51Z`, `2026-06-28T04:10:21Z`, and
+  `2026-06-28T04:13:21Z`, `2026-06-28T04:18:51Z`, and
+  `2026-06-28T04:24:48Z`, `2026-06-28T04:30:35Z`, and
+  `2026-06-28T04:34:22Z`, `2026-06-28T04:39:52Z`, and
+  `2026-06-28T04:43:30Z`, `2026-06-28T04:49:22Z`, and
+  `2026-06-28T04:55:21Z`, `2026-06-28T04:58:18Z`, and
+  `2026-06-28T05:04:04Z`, `2026-06-28T05:09:54Z`, and
+  `2026-06-28T05:13:07Z`, `2026-06-28T05:19:16Z`, and
+  `2026-06-28T05:25:38Z`, `2026-06-28T05:29:10Z`, and
+  `2026-06-28T05:33:02Z`, and `2026-06-28T05:38:48Z`. Session `21399`
+  then expired naturally after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices`; no capture directory
+  was created. A replacement passive wait was started under session `48673` /
+  PID `6905` with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260628T053848Z-session`,
+  reusing the existing lab signing key and still gated on exactly one safe ADB
+  `device` row. Passive ADB polling for the replacement wait remained
+  header-only at `2026-06-28T05:44:01Z`, `2026-06-28T05:51:11Z`, and
+  `2026-06-28T05:56:39Z`, `2026-06-28T06:00:49Z`, and
+  `2026-06-28T06:06:42Z`, `2026-06-28T06:12:40Z`, and
+  `2026-06-28T06:18:46Z`, `2026-06-28T06:23:39Z`, and
+  `2026-06-28T06:28:39Z`, `2026-06-28T06:33:40Z`, and
+  `2026-06-28T06:38:43Z`, `2026-06-28T06:43:48Z`, and
+  `2026-06-28T06:48:58Z`, `2026-06-28T06:53:57Z`, and
+  `2026-06-28T07:03:57Z`, `2026-06-28T07:09:00Z`, and
+  `2026-06-28T07:14:03Z`, `2026-06-28T07:19:01Z`, and
+  `2026-06-28T07:24:33Z`, `2026-06-28T07:29:38Z`, and
+  `2026-06-28T07:34:57Z`, and `2026-06-28T07:39:48Z`. Session `48673`
+  then expired naturally after 7,200 seconds with
+  `ADB auto-serial resolution found no visible devices`; no capture directory
+  was created. A replacement passive wait was started under session `62431` /
+  PID `27605` with output paths rooted at
+  `dist/kagemusha-android-device-lab-physical-auto-20260628T073948Z-session`,
+  reusing the existing lab signing key and still gated on exactly one safe ADB
+  `device` row. A
+  passive USB inventory filter at `2026-06-28T05:51:26Z` still found no
+  Android, ADB, MTP, Pixel, Google, Samsung, or other common Android vendor
+  match. A passive USB tree
+  inspection at `2026-06-27T19:51:22Z` showed only the display hub, keyboard
+  hub, Apple keyboard, and Razer mouse; no Android/ADB/MTP-class device was
+  visible to macOS. A later passive USB inventory filter at
+  `2026-06-28T02:01:35Z` found no Android, ADB, MTP, Pixel, Google, or
+  Samsung USB match.
 
 ## 2026-06-25 Kagemusha Non-C# Guard Patch
 
@@ -243303,3 +247821,551 @@ evidence outstanding.
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-bundle-current-note-vectors`
   - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-27 - Kagemusha SDK Parity Negative-Control Isolation
+
+- Converted the remaining broad recursive-spend SDK parity negative controls to
+  per-mutation detection for the non-C# workstream, restoring each target
+  snapshot between checks and printing exact diagnostics for lineage key-copy,
+  accumulator deny-list/material, bundle proof/current-note, verify-result,
+  lineage-witness, redeem lineage, cross-SDK helper, preferred-mode, and
+  recursive compact verifier/key-package drift.
+- Tightened duplicate-prone parity markers so individual drift cannot be hidden
+  by another occurrence: package-dist proof-public-input hash-size vectors are
+  now required, Python redeem lineage `verifier_key_id` markers are exact, the
+  first missing-witness and missing-record Python blocks are unique, and the
+  Rust recursive compact C/JNI Pallas helper mutations target their intended
+  occurrence.
+- C# source and `Cargo.lock` were left untouched; existing C# parity markers are
+  still validated by the script while Windows-side C# certification remains in
+  roadmap TODOs.
+- Focused validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - All converted SDK parity negative-control modes from lineage key-copy
+    through recursive compact key-package arity were run successfully.
+
+## 2026-06-27 - Kagemusha Non-C# SDK Guard Completion
+
+- Fixed Kotlin/JVM and Android Java Offline Note V2 register-device-attestation
+  instruction encoding to match the Rust canonical
+  `RegisterOfflineDeviceAttestation` one-field ISI envelope. The decoders try
+  the canonical instruction first and retain the previous generic wrapper as a
+  compatibility fallback.
+- Tightened the Android transaction-builder lifecycle fixture to use canonical
+  32-byte issuer public-key base64 in positive and non-issuer negative cases,
+  so cached issuer-key validation is exercised rather than hidden by
+  placeholder text.
+- Revalidated the active non-C# SDK lanes:
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`1097 passed` plus
+    `5 passed, 125 deselected`)
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `env -u JAVA_HOME bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `env -u JAVA_HOME bash -lc 'cd kotlin && ./gradlew --no-daemon --max-workers=1 -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test'`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.tx.TransactionBuilderTests ./gradlew --no-daemon --max-workers=1 -q :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` from `java/iroha_android`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_payload_bench.sh --self-test`
+- C# source and `Cargo.lock` remain untouched for this non-C# pass; Windows C#
+  certification remains tracked in `roadmap.md`.
+
+## 2026-06-27 - ISO Archived Text Normalization Hardening
+
+- Hardened ISO pending-probe, live rail/notary adapter, receipt-verifier,
+  canary, trust-bundle, XSD-fixture, operator-evidence, and final-readiness
+  replay string helpers so accepted archived/config/CLI text values and list
+  entries are coerced to exact `str` objects before later receipt-kind, compact
+  stage-name, stage-preview, context, digest/OID, sidecar, endpoint, and
+  recursive secret-material checks. Recursive JSON object-key scans in the same
+  replay paths now reject non-string keys and normalize hostile `str` subclass
+  keys before secret/control-field checks. Unknown-key validators now use the
+  same normalized key pass, rejecting non-string field keys and returning
+  normalized present-key sets to receipt/notary exact-key helpers before
+  missing-key checks. Forbidden receipt-metadata replay also iterates normalized
+  receipt-entry keys instead of direct dict-set intersections before rail/notary
+  compatibility diagnostics or readiness blockers are emitted. Recursive
+  surrogate and secret-material scanners now reject non-plain JSON list/dict
+  subclasses before container method calls, and surrogate scanners normalize
+  hostile `str` subclasses before iterating characters. Unknown-key validators
+  likewise reject non-plain dict subclasses before iterating field names.
+  Hostile Python
+  `str` subclasses with
+  raising `__str__`, `strip`, or iterator methods now either normalize to plain
+  strings or fail with label-only diagnostics that do not chain or echo hostile
+  exception text. Hostile pending-probe `Content-Type` metadata still stays
+  omitted rather than normalized into archived evidence.
+- Added adversarial coverage for pending-probe CLI selectors and limit text,
+  audit-notary clean strings, endpoint lists, and surrogate scans, rail gateway
+  CLI strings, recursive secret scans, and sidecar field replay, receipt clean
+  strings, optional sidecar strings, path-list conversion, and recursive secret
+  scans, canary required/optional strings and endpoint lists, trust
+  required/optional strings plus SHA-256/OID lists and recursive secret scans,
+  XSD required/optional strings plus optional string lists and recursive secret
+  scans, evidence required strings, clean string lists, recursive secret scans,
+  stage previews, readiness required/CLI strings, compact canary stage-name
+  replay, and secret-looking/control-bearing object keys plus non-string JSON
+  keys across trust, XSD, rail, receipt, evidence, and readiness secret scans.
+  Unknown-key and exact-key helper paths are also pinned across live adapter,
+  receipt, canary, trust, XSD, evidence, and readiness validators. Forbidden
+  receipt-metadata key replay is pinned in evidence exceptions and readiness
+  blockers. Hostile list/dict subclass coverage now proves surrogate and
+  secret-material scans fail before hostile container methods can run; unknown
+  key coverage proves hostile dict subclass iteration is not invoked.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py`
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_trust_bundle_verify.py scripts/iso_rail_gateway_adapter.py scripts/iso_xsd_fixture_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 40 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_audit_notary_adapter_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 159 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_receipt_verify_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 113 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 152 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_canary_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 123 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 122 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 156 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k "hostile_str_subclasses" --tb=short` (`1 passed, 289 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k "hostile_str_subclasses" --tb=short` (`2 passed, 278 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "hostile_str_subclasses" --tb=short` (`9 passed, 1392 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "hostile_str_subclasses" --tb=short` (`3 passed, 567 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_canary_test.py --tb=short` (`124 passed in 6.31s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py --tb=short` (`123 passed in 7.84s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_xsd_fixture_verify_test.py --tb=short` (`157 passed in 12.29s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py --tb=short` (`41 passed in 0.06s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_audit_notary_adapter_test.py --tb=short` (`160 passed in 61.81s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_receipt_verify_test.py --tb=short` (`114 passed in 38.13s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py --tb=short` (`153 passed in 63.46s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py --tb=short` (`290 passed in 132.08s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py --tb=short` (`280 passed in 565.37s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1401 passed in 888.75s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`570 passed in 703.16s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1442 passed in 899.25s`)
+
+## 2026-06-28 - ISO Exact Shape Helper Hardening
+
+- Hardened shared ISO object/array and list-valued field helpers so direct
+  replay helpers reject non-plain `dict`/`list` subclasses before semantic
+  validation. This extends the recursive container-subclass guard to
+  trust-bundle, XSD-fixture, receipt, notary, canary, evidence, and readiness
+  shape helpers. Rail sidecars plus notary/receipt persisted records, audit
+  indexes, anchors, source sidecars, and top-level receipt JSON now also reject
+  non-plain object subclasses at their loaded-object shape checks. Notary and
+  receipt status-derivation helpers now require exact plain
+  `change_reason_codes` lists before classifying pending records as
+  accepted-with-change, so hostile list truthiness is not evaluated during
+  replay.
+- Hardened trust-bundle public summaries, operator-evidence public canary
+  summaries, and final-readiness public summary rendering so XSD strict flags,
+  pending-probe response metadata, receipt summaries, receipt lists, receipt
+  entries, and the response-metadata helpers require exact plain JSON
+  containers before `.get`, `.items`, iteration, membership, assignment, or
+  deep-copy methods can run while unsupported public fields are scrubbed. The
+  same public-summary copier now redacts non-finite numeric values before JSON
+  rendering, preserving `allow_nan=false` output guarantees even for
+  direct/internal helper calls.
+- Hardened rail-gateway and audit-notary HTTP status predicates so direct
+  helper calls reject Python boolean values before receipt metadata can be
+  classified and digest-stamped.
+- Hardened rail-gateway and audit-notary response-body bounding so direct helper
+  calls accept only exact built-in `bytes`, `bytearray`, or `memoryview`
+  containers before slicing or length checks.
+- Hardened pending XSD probe body handling plus bounded canary,
+  receipt-verifier, and xmllint pipe readers so hostile `bytes`/`bytearray`
+  subclasses are rejected before sample hashing, output truncation, or retention
+  length checks.
+- Hardened repeatable direct selector inputs for pending message IDs, notary
+  endpoints, trust bundles, receipt selectors, evidence summaries, and readiness
+  summaries so hostile list subclasses are rejected before length checks or
+  iteration.
+- Hardened direct scalar and repeatable path arguments so arbitrary path-like
+  objects are rejected before `__fspath__` can run during validation; accepted
+  values are sanitized strings or real `pathlib.Path` instances.
+- Hardened the rail gateway direct `message` selector so hostile path-like
+  objects, bytes, and list subclasses are rejected before inbox discovery.
+- Hardened operator-evidence canary command validation so child command entries
+  are normalized to plain strings before flag, path, URL, and redaction scans.
+- Hardened all ISO operator/probe/verifier direct `main(argv=...)` entry calls
+  so only exact plain argument lists are accepted, and hostile string
+  subclasses are copied to plain strings before raw CLI preflights or
+  `argparse` can inspect them. The `argv=None` path now also rejects non-plain
+  ambient `sys.argv` containers before slicing, and parser construction uses
+  explicit program names instead of reading ambient `sys.argv[0]`.
+- Hardened all ISO operator/probe/verifier direct `run(args)` entry calls so
+  only exact `argparse.Namespace` values are accepted before any `getattr` or
+  `setattr` can run on caller-provided objects.
+- Hardened CLI-facing and JSON-summary numeric scalar helpers so direct
+  `run(args)`, probe helper, and replay helper calls accept only exact built-in
+  `int`/`float` values or sanitized numeric strings before conversion,
+  comparison, freshness-budget, timeout, byte-limit, count, day, or status-code
+  checks. Hostile numeric subclasses with overridden conversion or comparison
+  hooks are rejected with label-only diagnostics.
+- Hardened operator-evidence and production-readiness direct text validators so
+  nullable rail message ids, CLI provider/environment/profile values, receipt
+  and notary artifact paths, timestamp parsing, XSD schema and fixture paths,
+  reviewed-gap reasons, pending-source catalogue/download URLs, pending-probe
+  text fields, and blocked-source restriction markers copy hostile `str`
+  subclasses to plain strings before `.strip()`, iteration, regex, URL, path,
+  or digest-replay checks.
+- Hardened trust-bundle source timestamp parsing so direct archived
+  `source.retrieved_at` helper calls reject non-string values and copy hostile
+  `str` subclasses to plain strings before timestamp length, control-character,
+  canonical-shape, timezone, or freshness checks.
+- Added adversarial coverage using hostile container subclasses whose
+  `__iter__`, `__len__`, `__getitem__`, or `items()` methods would leak hidden
+  text if invoked.
+- Added adversarial coverage using hostile scalar subclasses whose `__int__`,
+  `__float__`, `__le__`, or `__gt__` methods would leak hidden text if invoked.
+- Validation passed:
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "hostile_str_subclasses" --tb=short` (`8 passed, 1240 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py -k "hostile_str_subclasses" --tb=short` (`3 passed, 424 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py -k "hostile_str_subclasses" --tb=short` (`2 passed, 272 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_production_readiness_test.py -k "public_receipt_redaction or hostile_str_subclasses" --tb=short` (`3 passed, 278 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "public_canary_summary or public_receipt_redaction or hostile_str_subclasses" --tb=short` (`5 passed, 567 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "public_bundle_summary or public_canary_summary or public_receipt_redaction or hostile_str_subclasses" --tb=short` (`7 passed, 689 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "public_bundle_summary or public_canary_summary or public_receipt_redaction" --tb=short` (`3 passed, 693 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "http_status_code_bounds_are_exact" --tb=short` (`2 passed, 311 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py -k "bounded_response_body or bytes_like_values" --tb=short` (`6 passed, 309 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py -k "hostile_bytes_subclasses or bytes_like_chunks_by_byte_length or bounded_download_sample" --tb=short` (`8 passed, 609 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py scripts/iso_audit_notary_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "message_id_selector_must_be_repeatable_string_list or endpoints_must_be_repeatable_string_list or bundle_must_be_repeatable_path_list or receipt_selectors_must_be_repeatable_path_lists or repeatable_paths_must_be_lists or repeatable_summary_paths_must_be_lists" --tb=short` (`6 passed, 1008 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_xsd_fixture_verify.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "scalar_paths_must_be_paths or bundle_must_be_repeatable_path_list or receipt_selectors_must_be_repeatable_path_lists or repeatable_paths_must_be_lists or repeatable_summary_paths_must_be_lists" --tb=short` (`11 passed, 1398 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_rail_gateway_adapter_test.py -k "message_must_be_safe_path or scalar_paths_must_be_paths or explicit_message or message_path" --tb=short` (`7 passed, 148 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py -k "command_entries_normalize_hostile_str_subclasses or canary_child_command_paths_reject_non_ascii_without_echo or canary_child_commands_require_runner_command_shape" --tb=short` (`3 passed, 290 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_canary_test.py -k "direct_main_argv or cli_argument_terminator or boolean_cli_flags or numeric_cli_flags or raw_cli" --tb=short` (`9 passed, 117 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_canary_test.py --tb=short` (`126 passed in 6.60s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "direct_main_argv" --tb=short` (`9 passed, 1453 deselected`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_pending_xsd_source_probe.py scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_cli_argv_normalization_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py --tb=short` (`2 passed in 0.12s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "sys_argv_inputs or direct_main_argv or run_args_require" --tb=short` (`11 passed, 1453 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1464 passed in 904.44s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py -k "hostile_str_subclasses or unicode_format_controls or pending_xsd_probe_replay_hostile_text" --tb=short` (`9 passed, 567 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`576 passed in 741.88s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1464 passed in 956.35s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py -k "hostile_str_subclasses or timestamp_helper" --tb=short` (`3 passed, 122 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py --tb=short` (`125 passed in 8.07s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1464 passed in 935.55s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_operator_canary.py scripts/iso_xsd_fixture_verify.py scripts/iso_pending_xsd_source_probe.py scripts/iso_trust_bundle_verify.py pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_trust_bundle_verify_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py -k "source_freshness_budget or hostile_scalars" --tb=short` (`5 passed, 121 deselected`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py --tb=short` (`3 passed in 0.32s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_trust_bundle_verify_test.py --tb=short` (`126 passed in 19.33s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1466 passed in 1010.24s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_operator_receipt_verify.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_cli_argv_normalization_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py --tb=short` (`3 passed in 0.13s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1466 passed in 912.92s`)
+  - `/opt/homebrew/bin/python3.11 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_production_readiness.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_cli_argv_normalization_test.py`
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py --tb=short` (`3 passed in 0.14s`)
+  - `PYTHONPATH=. /opt/homebrew/bin/pytest pytests/scripts/iso_cli_argv_normalization_test.py pytests/scripts/iso_pending_xsd_source_probe_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py --tb=short` (`1466 passed in 914.26s`)
+
+## 2026-06-27 - Kagemusha Non-C# Guard Recheck
+
+- Re-ran the direct Offline Note V2 negative controls after the Kotlin/JVM and
+  Android Java canonical register-device-attestation instruction fix; decoder
+  placeholder, instruction wrapper, instruction decoder, canonical wire-name,
+  and Swift decoder controls all rejected their injected drift with per-surface
+  diagnostics.
+- Re-ran the active non-C# TODO scanner negative controls; injected marker,
+  source-scan inventory, content-scan inventory, and runner-input inventory
+  drift all failed closed. C# remains deferred only through the Windows-machine
+  roadmap TODOs.
+- Re-ran every synthetic payload-benchmark negative control, covering
+  baseline, growth, missing hop, unexpected hop, conflicting size, malformed
+  benchmark name, and invalid hop-list cases for normal and Reserved-lineage
+  payload and transition-profile reducers.
+- Re-ran the static production-readiness compact/offline-doc launch-boundary
+  negative controls, including compact fail-closed gates, packaged verifier
+  dispatch, bridge unavailable mapping, one-hop docs, evidence filenames,
+  generator-log prose, release-bundle output, and verifier profile exactness.
+- Validation passed:
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-decoder-placeholder`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-wrapper`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-note-v2-instruction-decoder`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-note-v2-canonical-instruction-wire-names`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-decoder-placeholder`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-offline-note-v2-instruction-decoder`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-runner-input-content-scan-inventory`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_payload_bench.sh --self-test`
+  - all `ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-*` modes
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh ci/check_kagemusha_recursive_spend_payload_bench.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls|Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - focused `ci/check_kagemusha_production_readiness.sh --negative-control-*`
+    compact/offline-doc modes from `--negative-control-compact-open` through
+    `--negative-control-offline-doc-verifier-profile-exactness`
+
+## 2026-06-27 - Kagemusha Retired Offline Note Issuer/Submitter/Builder Guard
+
+- Added SDK parity coverage for the retired classic Offline Note issuer clients
+  and payment submitters in Swift, Kotlin/JVM, and Java Android. The guard now
+  pins each non-C# mobile issuer source to consume the pending load context and
+  fail issue through the retired Kagemusha-only boundary, pins each submitter
+  source to fail audit, redeem, and defund through the same boundary, and pins
+  the regression tests that verify these paths never reach SDK/Torii
+  submission.
+- Added direct Swift classic Offline Note transaction-builder coverage so the
+  `encode*OfflineNote`, `build*OfflineNote`, and `submit(*OfflineNote:)`
+  compatibility entrypoints remain retired before they can emit classic issue,
+  audit, redeem, or defund transactions. The negative control mutates each
+  signing-key encoder overload independently and requires exact source/test
+  diagnostics.
+- Added bridge C ABI retired Offline Note transaction-builder coverage across
+  the four standard exports and four metadata exports. The public C header now
+  declares the metadata retired entrypoints that the Rust bridge exports and
+  Swift already probes dynamically, while the parity guard pins each Rust
+  export to `ERR_OFFLINE_NOTE_PROVE`, the shared retired helper, the header
+  declarations, and the Rust no-output regression assertions.
+- Labeled the remaining Swift, Kotlin/JVM, and Android Java classic Offline
+  Note instruction/outcome wire-name helpers as historical compatibility
+  fixtures and added parity coverage so those fixture-only labels stay attached
+  while the constants remain available for archive/interop decoding.
+- Added mobile Offline Note wallet draft-proof replacement coverage across
+  Swift, Kotlin/JVM, and Android Java. The guard now pins the
+  `offline-note/draft-placeholder` proof as draft-only material and requires
+  audit/redeem flows to replace it with prover output, validate proof binding,
+  and verify the recursive proof before the result can be used.
+- Added Swift, Kotlin/JVM, and Android Java wallet runtime tests for recursive
+  verifier rejection. The tests force audit and redeem verifiers to return
+  false after the proof provider replaces the draft placeholder, then assert
+  the wallet fails closed before source notes are marked spent/redeem-pending
+  or defund submissions are recorded.
+- Added the newly touched non-C# Offline Note model files to the active
+  Kagemusha TODO content-scan policy inventory so future Kagemusha TODO markers
+  in those source files are still caught by the policy gate.
+- Updated the Offline Kagemusha documentation to distinguish retired
+  issue/audit/redeem chain payloads from the retired SDK/bridge defund
+  compatibility composite that now fails closed in the guarded builders.
+- Added `--negative-control-mobile-retired-offline-note-issuers` and
+  `--negative-control-mobile-retired-offline-note-submitters`, plus
+  `--negative-control-swift-retired-offline-note-transaction-builders` and
+  `--negative-control-bridge-retired-offline-note-transaction-builders` and
+  `--negative-control-mobile-classic-offline-note-fixture-labels`, then
+  `--negative-control-mobile-offline-note-draft-proof-replacement`, then
+  wired all six into the Kagemusha payload workflow plus the JavaScript
+  parity meta-test. The negative controls mutate each source and test surface
+  independently, restore every in-memory snapshot, and require exact
+  per-surface diagnostics.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-retired-offline-note-issuers`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-retired-offline-note-submitters`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-retired-offline-note-transaction-builders`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-retired-offline-note-transaction-builders`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-classic-offline-note-fixture-labels`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-draft-proof-replacement`
+  - `swift test --package-path IrohaSwift --filter OfflineNoteTests/testOfflineNoteWalletRejects`
+  - `./gradlew --no-daemon --max-workers=1 -q :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.walletRejectsAuditWhenRecursiveVerifierFails --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.walletRejectsRedeemWhenRecursiveVerifierFails` from `kotlin/`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew --no-daemon --max-workers=1 :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` from `java/iroha_android/`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-runner-input-content-scan-inventory`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `cargo test -p connect_norito_bridge offline_note_signed_transaction_ffis_are_retired --lib -- --test-threads=1`
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java crates/connect_norito_bridge/include/connect_norito_bridge.h docs/source/offline_kagemusha.md ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_policy.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" .github/workflows/pr_kagemusha_payload_bench.yml IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt crates/connect_norito_bridge/include/connect_norito_bridge.h docs/source/offline_kagemusha.md ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_policy.sh javascript/iroha_js/test/kagemushaFfiContractParity.test.js roadmap.md status.md` returned no conflict markers
+  - `git diff --name-only -- csharp Cargo.lock` and `git diff --cached --name-only -- csharp Cargo.lock` returned no paths
+
+## 2026-06-28 - Kagemusha Android Java Redeem Immutability Mirror
+
+- Added Android Java typed redeem request coverage for plural lineage verifier
+  records copied from caller-owned mutable lists into an unmodifiable stored
+  list. The regression clears the original list after construction, verifies
+  both copied records remain present, rejects mutation of the stored list, and
+  checks that the encoded plural verifier-record sequence still carries both
+  records.
+- Added `--negative-control-android-redeem-lineage-record-list-immutability`
+  to the SDK parity guard, payload workflow, and JavaScript meta-test. The
+  branch mutates the Java source wrapper, caller-list clear marker, and stored
+  list mutation marker independently and requires exact diagnostics for each.
+- Added Swift typed redeem request coverage for plural lineage verifier records
+  passed through caller-owned arrays. The regression clears the caller array
+  after construction, verifies the value-typed request still carries both
+  records, and checks that encoding still emits both plural verifier records.
+- Extended the Swift coverage to verifier-record `Data` ownership. The test now
+  mutates caller-owned record archive bytes after constructing
+  `KagemushaRecursiveSpendVerifierRecordRef`, then mutates a copy read back from
+  `recordBytes`, and verifies the stored value still matches the original
+  archive.
+- Added `--negative-control-swift-redeem-lineage-record-list-value-semantics`
+  to the SDK parity guard, payload workflow, and JavaScript meta-test. The
+  branch mutates the public `let` record/request surfaces plus the Swift
+  caller-byte and caller-array regression markers independently and requires
+  exact diagnostics for each.
+- Added Kotlin/JVM and Android Java verifier-record byte ownership regressions.
+  The tests mutate caller-owned `recordBytes` archives after construction, then
+  mutate bytes returned from the public accessors, and verify the stored
+  verifier-record archive remains unchanged.
+- Added `--negative-control-jvm-verifier-record-byte-copy-isolation` to the SDK
+  parity guard, payload workflow, and JavaScript meta-test. The branch mutates
+  Kotlin and Android source copy/accessor markers plus the new test mutation
+  markers independently and requires exact diagnostics for each.
+- Restored the Torii Offline and Offline V2 readiness contract in the current
+  tree: ABI-7 metadata follows `settlement.offline.kagemusha_enabled` directly,
+  while `offline_kagemusha_abi7_artifacts` and
+  `offline_kagemusha_recursive_compact_artifacts_available` remain `false`
+  because Core API serves and gates mobile artifact archives.
+- Updated the offline Kagemusha docs and guard to pin the non-C# plural redeem
+  lineage verifier-record request-state ownership boundary across Swift value
+  types, JavaScript frozen copied record refs, Python tuple freezing, and
+  JVM/Android unmodifiable copied lists plus JVM/Android verifier-record archive
+  byte copies.
+- Validation passed:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-redeem-lineage-record-list-value-semantics`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-redeem-lineage-record-list-immutability`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-verifier-record-byte-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-redeem-lineage-selection`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendRequestCodecsTests/testTypedEncodersWriteExpectedRequestSchemasAndLayouts`
+  - `./gradlew --no-daemon --max-workers=1 :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain` from `kotlin/`
+  - `rustfmt --check crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew --no-daemon --max-workers=1 :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android/`
+  - `cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs offline_readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture`
+  - `cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs offline_v2_readiness_is_mounted_and_legacy_routes_are_absent -- --nocapture`
+
+## 2026-06-28 - Kagemusha Swift Bundle Summary Constructor Mirror
+
+- Hardened Swift `KagemushaRecursiveSpendBundleSummary` direct construction so
+  manually built summaries now enforce the same trust boundary as decoded
+  bundles: bounded hop counts, supported previous-proof circuit ids, canonical
+  accumulator assets, portable chain ids, nonzero distinct roots, and sorted
+  non-reused top-up anchors.
+- Extended the Swift codec regression with direct-construction adversarial
+  cases for zero/over-limit hops, unsupported proof circuits, invalid asset
+  strings, zero/equal roots, empty/zero anchors, and current-note anchor reuse,
+  plus canonical Base58 asset acceptance.
+- Extended the mobile bundle-summary parity guard and JavaScript meta-test so
+  Swift source invariants and direct-construction markers are mutated and
+  reported independently beside the existing Kotlin/JVM and Android Java
+  checks.
+- Validation passed:
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendRequestCodecsTests/testDecodeBundleExtractsLineageSummariesFromFixtureArchives`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bundle-summary-copy-isolation`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-28 - Kagemusha Bundle Summary Constructor Invariants
+
+- Extended the direct bundle-summary constructor hardening to asset summaries:
+  Python, Kotlin/JVM, and Android Java now accept only the same forms the
+  decoder can emit, either canonical unprefixed Base58 UUIDv4 asset-definition
+  addresses or lowercase `hex:` plus exactly 16 bytes of fallback hex.
+- Added direct-construction adversarial coverage for empty assets, uppercase
+  or short `hex:` fallbacks, and padded Base58 asset ids, plus positive
+  constructor coverage for canonical Base58 asset ids.
+- Extended the Python and mobile bundle-summary copy-isolation parity
+  inventories and negative controls so asset canonicalization source markers
+  and direct-construction test markers are pinned with exact diagnostics.
+- Hardened Python, Kotlin/JVM, and Android Java recursive-spend bundle-summary
+  constructors so direct SDK construction now enforces the same trusted
+  accumulator invariants as decode: hop count must be in range, proof circuit
+  id must be supported, accumulator roots must be nonzero/different, and
+  top-up anchor nullifiers must be sorted, nonzero, bounded, and distinct from
+  current-note material.
+- Extended the existing Python and JVM/Android copy-isolation tests with direct
+  adversarial constructor cases for invalid hop counts, unsupported proof
+  circuits, zero/equal roots, empty top-up anchors, and current-note top-up
+  reuse.
+- Extended the existing Python and mobile bundle-summary copy-isolation
+  negative controls plus the JavaScript meta-test so the new constructor guard
+  markers and direct-construction regressions cannot drift silently.
+- Restored the Torii Offline and Offline V2 readiness artifact contract in the
+  current tree after it drifted again: ABI-7 readiness follows
+  `settlement.offline.kagemusha_enabled`, while
+  `offline_kagemusha_abi7_artifacts` and
+  `offline_kagemusha_recursive_compact_artifacts_available` remain `false`.
+- Validation passed:
+  - `python3.11 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `PYTHONPATH=python/iroha_python/src /opt/homebrew/bin/python3.11 -m pytest -q python/iroha_python/tests/kagemusha_test.py::test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures --tb=short`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew --no-daemon --max-workers=1 :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest --console=plain` from `kotlin/`
+  - Direct JDK 21 `javac`/`java -ea` run of `org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest` with sourcepath `java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-bundle-summary-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bundle-summary-copy-isolation`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-runner-input-content-scan-inventory`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `rustfmt --check crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+  - `cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs readiness -- --nocapture`
+  - Touched-file marker scan only reported C# Windows TODOs and expected literal guard strings
+  - `git diff --check --` on the touched files returned no whitespace errors
+  - conflict-marker scan on the touched files returned no matches
+  - `git diff --name-only -- csharp Cargo.lock` returned no paths
+
+## 2026-06-28 - Kagemusha Python Redeem Immutability and Torii Readiness Contract
+
+- Added Python typed redeem request coverage for plural lineage verifier records
+  copied from caller-owned mutable lists into immutable tuples. The regression
+  now clears the original list after construction, verifies the frozen tuple
+  still carries both records, rejects reassignment, and checks the encoded
+  verifier-record sequence length.
+- Added `--negative-control-python-redeem-lineage-record-tuple-immutability`
+  to the SDK parity guard, the payload workflow, and the JavaScript meta-test.
+  The branch mutates the Python source tuple assignment, caller-list clear, and
+  tuple assertion independently and requires the exact reported diagnostics.
+- Fixed the Torii Offline and Offline V2 readiness handlers to derive ABI-7
+  readiness directly from `settlement.offline.kagemusha_enabled` without the
+  removed `kagemusha_force_legacy` gate. The same handlers now explicitly keep
+  mobile artifact archive availability false because Core API serves and gates
+  those archives.
+- Updated the Torii readiness smoke tests to assert ABI-7 metadata remains
+  available while `offline_kagemusha_abi7_artifacts` and
+  `offline_kagemusha_recursive_compact_artifacts_available` stay false.
+- Validation passed:
+  - `rustfmt --check crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `PYTHONPATH=python/iroha_python/src /opt/homebrew/bin/python3.11 -m pytest -q python/iroha_python/tests/kagemusha_test.py -k test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures --tb=short`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-redeem-lineage-record-tuple-immutability`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-readiness-coverage`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs readiness_is_mounted -- --nocapture`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_sdk_parity.sh crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_sdk_parity.sh crates/iroha_torii/src/lib.rs crates/iroha_torii/tests/offline_readiness_smoke.rs crates/iroha_torii/tests/offline_v2_readiness_smoke.rs javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py roadmap.md status.md` returned no conflict markers
+  - `git diff --name-only -- csharp Cargo.lock` and `git diff --cached --name-only -- csharp Cargo.lock` returned no paths

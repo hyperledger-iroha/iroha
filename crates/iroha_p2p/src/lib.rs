@@ -126,6 +126,19 @@ pub enum Error {
     ConnectionResetByPeer,
     /// Incoming frame exceeds configured maximum size
     FrameTooLarge,
+    /// Outbound {priority} frame queue full ({queued_frames}/{max_frames} frames, {queued_bytes}/{max_bytes} bytes)
+    OutboundFrameQueueFull {
+        /// Queue priority label.
+        priority: &'static str,
+        /// Encrypted frame bytes already queued.
+        queued_bytes: usize,
+        /// Maximum encrypted frame bytes allowed.
+        max_bytes: usize,
+        /// Encrypted frames already queued.
+        queued_frames: usize,
+        /// Maximum encrypted frames allowed.
+        max_frames: usize,
+    },
     /// Decrypted frame carried a malformed inner payload
     MalformedPayloadFrame,
     /// Handshake preface header invalid

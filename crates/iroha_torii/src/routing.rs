@@ -18130,6 +18130,56 @@ pub(crate) fn push_accepted_transaction_for_ingress(
     push_accepted_transaction_for_ingress_with_routing_plan(queue, state, accepted_tx, None)
 }
 
+pub(crate) fn reject_ingress_if_queue_capacity_saturated(
+    queue: &Queue,
+    state: &CoreState,
+    incoming_tx_count: usize,
+) -> Result<()> {
+    if incoming_tx_count == 0 {
+        return Ok(());
+    }
+    let pressure = {
+        let block_time = state.sumeragi_effective_block_time();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    let count_room = pressure
+        .capacity
+        .get()
+        .saturating_sub(pressure.tracked_tx_count);
+    let incoming_retained_floor =
+        Queue::retained_byte_cost_floor_for_transactions(incoming_tx_count);
+    let saturated_by_count = pressure.saturated_by_count || incoming_tx_count > count_room;
+    let saturated_by_bytes = pressure.saturated_by_bytes
+        || pressure
+            .retained_bytes
+            .saturating_add(incoming_retained_floor)
+            > pressure.max_retained_bytes.get();
+
+    if !saturated_by_count && !saturated_by_bytes {
+        return Ok(());
+    }
+
+    iroha_logger::debug!(
+        incoming_tx_count,
+        queued = pressure.queued_tx_count,
+        tracked = pressure.tracked_tx_count,
+        capacity = pressure.capacity.get(),
+        retained_bytes = pressure.retained_bytes,
+        max_retained_bytes = pressure.max_retained_bytes.get(),
+        saturated_by_count,
+        saturated_by_bytes,
+        "rejecting transaction ingress before admission because queue capacity is saturated"
+    );
+
+    Err(Error::PushIntoQueue {
+        source: Box::new(queue::Error::Full),
+        backpressure: queue::BackpressureState::Saturated {
+            queued: pressure.queued_tx_count,
+            capacity: pressure.capacity,
+        },
+    })
+}
+
 pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -18160,10 +18210,17 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
 
     result
         .map_err(|queue::Failure { tx, err }| {
-            iroha_logger::warn!(
-                tx_hash=%tx.as_ref().hash(), ?err,
-                "Failed to push into queue"
-            );
+            if matches!(err, queue::Error::Full) {
+                iroha_logger::debug!(
+                    tx_hash = %tx.as_ref().hash(),
+                    "queue rejected transaction due to backpressure"
+                );
+            } else {
+                iroha_logger::warn!(
+                    tx_hash=%tx.as_ref().hash(), ?err,
+                    "Failed to push into queue"
+                );
+            }
 
             drop(tx);
             (err, queue.current_backpressure())
@@ -18256,6 +18313,7 @@ async fn handle_transaction_inner(
     _telemetry: &MaybeTelemetry,
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
+    reject_ingress_if_queue_capacity_saturated(queue.as_ref(), state.as_ref(), 1)?;
     let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
     iroha_logger::debug!(
         tx = %accepted_tx.hash(),
@@ -57133,8 +57191,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
+        json_entry("retained_bytes", snap.tx_queue_retained_bytes),
+        json_entry("max_retained_bytes", snap.tx_queue_max_retained_bytes),
         json_entry("saturated", snap.tx_queue_saturated),
         json_entry("saturated_by_count", snap.tx_queue_saturated_by_count),
+        json_entry("saturated_by_bytes", snap.tx_queue_saturated_by_bytes),
         json_entry("saturated_by_age", snap.tx_queue_saturated_by_age),
         json_entry("oldest_queued_age_ms", snap.tx_queue_oldest_queued_age_ms),
     ]);
@@ -58907,8 +58968,11 @@ mod status_tests {
         let snap = sumeragi::StatusSnapshot {
             tx_queue_depth: 4,
             tx_queue_capacity: 20_000,
+            tx_queue_retained_bytes: 1_024,
+            tx_queue_max_retained_bytes: 65_536,
             tx_queue_saturated: false,
             tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
             tx_queue_saturated_by_age: true,
             tx_queue_oldest_queued_age_ms: 7_500,
             ..Default::default()
@@ -58925,11 +58989,23 @@ mod status_tests {
             Some(20_000)
         );
         assert_eq!(
+            tx_queue.get("retained_bytes").and_then(Value::as_u64),
+            Some(1_024)
+        );
+        assert_eq!(
+            tx_queue.get("max_retained_bytes").and_then(Value::as_u64),
+            Some(65_536)
+        );
+        assert_eq!(
             tx_queue.get("saturated").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
             tx_queue.get("saturated_by_count").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_bytes").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
@@ -62735,7 +62811,11 @@ mod cursor_mode_tests {
 
 #[cfg(test)]
 mod transaction_ingress_overload_tests {
-    use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_core::{
         kura::Kura,
@@ -62765,6 +62845,41 @@ mod transaction_ingress_overload_tests {
 
     fn checked_transaction_ingress_keypair(seed: u8, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+    }
+
+    #[test]
+    fn transaction_ingress_precheck_rejects_incoming_batch_over_retained_byte_budget() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let mut queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(32).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(32).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        queue_cfg.max_retained_bytes =
+            NonZeroU64::new(Queue::retained_byte_cost_floor_for_transactions(1))
+                .expect("non-zero retained byte budget");
+        let queue = Queue::from_config(queue_cfg, events);
+
+        reject_ingress_if_queue_capacity_saturated(&queue, &state, 1)
+            .expect("one incoming tx should fit the empty byte budget");
+        let err = reject_ingress_if_queue_capacity_saturated(&queue, &state, 2)
+            .expect_err("incoming batch should be shed before admission");
+        match err {
+            Error::PushIntoQueue {
+                source,
+                backpressure,
+            } => {
+                assert!(matches!(source.as_ref(), iroha_core::queue::Error::Full));
+                assert!(backpressure.is_saturated());
+            }
+            other => panic!("expected queue backpressure error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -387,8 +387,39 @@ class AdapterError(RuntimeError):
     """Raised when an audit preimage or publication response is invalid."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise AdapterError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise AdapterError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise AdapterError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise AdapterError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise AdapterError("args must be an argparse.Namespace")
+    return args
+
+
 def _require_positive_cli_int(value: int, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if type(value) is not int or value <= 0:
         raise AdapterError(f"{label} must be a positive integer")
     return value
 
@@ -404,7 +435,7 @@ def _require_response_limit_bytes(value: int) -> int:
 
 
 def _require_positive_finite_cli_number(value: float, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise AdapterError(f"{label} must be a positive finite number")
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -423,10 +454,11 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise AdapterError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if isinstance(value, Path):
         return Path(value)
-    except TypeError as error:
-        raise AdapterError(f"{label} must be a path") from error
+    raise AdapterError(f"{label} must be a path")
 
 
 def _require_policy_booleans(args: argparse.Namespace) -> None:
@@ -442,7 +474,7 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
 def _required_cli_string_sequence(value: Any, label: str) -> list[str]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+    if isinstance(value, (str, bytes)) or type(value) not in (list, tuple):
         raise AdapterError(f"{label} must be a repeatable string list")
     if len(value) > MAX_ENDPOINT_INPUTS:
         raise AdapterError(f"{label} accepts at most {MAX_ENDPOINT_INPUTS} values")
@@ -450,6 +482,7 @@ def _required_cli_string_sequence(value: Any, label: str) -> list[str]:
     for offset, entry in enumerate(value):
         if not isinstance(entry, str):
             raise AdapterError(f"{label}[{offset}] must be a string")
+        entry = _plain_text(entry, f"{label}[{offset}]")
         values.append(entry)
     return values
 
@@ -501,6 +534,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{display_path} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {display_path}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {display_path}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise AdapterError(f"{display_path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
@@ -530,9 +568,16 @@ def _read_regular_file(
             raise AdapterError(f"{display_path} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise AdapterError(f"cannot open {display_path} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(
+            f"cannot open {display_path} for reading: I/O error"
+        ) from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _ensure_input_directory(
@@ -547,6 +592,11 @@ def _ensure_input_directory(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{display} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {display}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {display}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise AdapterError(f"{display} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
@@ -564,6 +614,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -663,7 +726,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -685,7 +748,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -704,7 +767,7 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -740,7 +803,7 @@ def _preflight_required_cli_values(
     flags: set[str],
     value_name: str,
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -818,7 +881,7 @@ def _preflight_numeric_cli_values(
     integer_flags: set[str],
     number_flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     flags = integer_flags | number_flags
     index = 0
     while index < len(raw_args):
@@ -866,8 +929,21 @@ def _ensure_output_directory(
         _reject_symlinked_existing_ancestors(path, display_label=label)
     except NotADirectoryError as error:
         raise AdapterError(f"{label} must be a directory") from error
-    if path.exists() or path.is_symlink():
-        mode = path.lstat().st_mode
+    try:
+        directory_exists = path.exists() or path.is_symlink()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
+    if directory_exists:
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(f"cannot inspect {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(f"cannot inspect {label}: I/O error") from None
         if stat.S_ISLNK(mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
@@ -877,8 +953,22 @@ def _ensure_output_directory(
         return
     if not create:
         return
-    path.mkdir(parents=True, exist_ok=True)
-    mode = path.lstat().st_mode
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as error:
+        raise AdapterError(f"{label} must be a directory") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot create {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot create {label}: I/O error") from None
+    try:
+        mode = path.lstat().st_mode
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
     if stat.S_ISLNK(mode):
         raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(mode):
@@ -887,8 +977,21 @@ def _ensure_output_directory(
 
 def _ensure_output_file_target(path: Path, *, display_label: str | None = None) -> None:
     label = display_label if display_label is not None else str(path)
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    try:
+        target_exists = path.exists() or path.is_symlink()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label} leaf: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label} leaf: I/O error") from None
+    if target_exists:
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(f"cannot inspect {label} leaf: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(f"cannot inspect {label} leaf: I/O error") from None
         if stat.S_ISLNK(metadata.st_mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -909,7 +1012,18 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
         raise AdapterError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot create {label} parent: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot create {label} parent: I/O error") from None
+    try:
+        parent_mode = path.parent.lstat().st_mode
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label} parent: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label} parent: I/O error") from None
     if stat.S_ISLNK(parent_mode):
         raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
@@ -945,26 +1059,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise AdapterError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise AdapterError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _absolute_path_without_resolving_leaf(path: Path) -> Path:
@@ -977,9 +1113,19 @@ def _same_existing_path(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_receipt_dir_input_alias(
@@ -996,8 +1142,8 @@ def _reject_receipt_dir_source_overlap(
     source_path: Path,
     source_label: str,
 ) -> None:
-    receipt_root = receipt_dir.resolve()
-    source_root = source_path.resolve()
+    receipt_root = _path_resolve(receipt_dir, "receipt_dir")
+    source_root = _path_resolve(source_path, source_label)
     if (
         receipt_root == source_root
         or source_root in receipt_root.parents
@@ -1012,8 +1158,8 @@ def _reject_path_overlap(
     right: Path,
     right_label: str,
 ) -> None:
-    left_root = left.resolve()
-    right_root = right.resolve()
+    left_root = _path_resolve(left, left_label)
+    right_root = _path_resolve(right, right_label)
     if (
         left_root == right_root
         or right_root in left_root.parents
@@ -1111,9 +1257,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise AdapterError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise AdapterError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise AdapterError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -1121,6 +1270,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise AdapterError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise AdapterError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -1130,20 +1281,28 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             _reject_json_surrogates(item, _depth=_depth + 1)
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise AdapterError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise AdapterError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise AdapterError(f"{label} contains unknown keys")
+    return present
 
 
 def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -> None:
-    _reject_unknown_keys(value, required, label)
-    missing = sorted(required - set(value))
+    present = _reject_unknown_keys(value, required, label)
+    missing = sorted(required - present)
     if missing:
         raise AdapterError(f"{label} is missing required keys: {', '.join(missing)}")
 
 
 def _require_json_array(value: Any, label: str) -> list[Any]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise AdapterError(f"{label} must be an array")
     if len(value) > MAX_JSON_LIST_ITEMS:
         raise AdapterError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
@@ -1257,7 +1416,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -1283,6 +1445,26 @@ def _safe_os_error_detail(error: OSError) -> str:
     if any(marker in lowered for marker in secret_markers):
         return "I/O error"
     return detail
+
+
+def _path_exists(path: Path, label: str) -> bool:
+    try:
+        return path.exists()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
+
+
+def _path_is_symlink(path: Path, label: str) -> bool:
+    try:
+        return path.is_symlink()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
 
 
 def sha256_hex(data: bytes) -> str:
@@ -1332,7 +1514,10 @@ def require_digest_matches(obj: dict[str, Any], digest_field: str, label: str) -
 
 
 def _require_clean_string(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
+        raise AdapterError(f"{label} must be a non-empty string")
+    value = _plain_text(value, label)
+    if not value.strip():
         raise AdapterError(f"{label} must be a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise AdapterError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
@@ -1407,7 +1592,7 @@ def _require_optional_nonsecret_clean_string(value: Any, label: str) -> str | No
 
 
 def _require_nonnegative_int(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if type(value) is not int or value < 0:
         raise AdapterError(f"{label} must be a non-negative integer")
     return value
 
@@ -1475,7 +1660,7 @@ def _derived_pacs002_code(record: dict[str, Any], label: str) -> str:
     if record.get("hold_reason_code") is not None:
         return "PDNG"
     change_reason_codes = record.get("change_reason_codes")
-    if isinstance(change_reason_codes, list) and change_reason_codes:
+    if type(change_reason_codes) is list and len(change_reason_codes) > 0:
         return "ACWC"
     if record.get("ledger_tx_queued"):
         return "ACSP"
@@ -1490,7 +1675,7 @@ def _verify_optional_clean_string_fields(
 
 
 def _verify_persisted_context(value: Any, label: str) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise AdapterError(f"{label} must be an object")
     _require_exact_keys(value, PERSISTED_CONTEXT_KEYS, label)
     _verify_optional_clean_string_fields(value, PERSISTED_CONTEXT_KEYS, label)
@@ -1499,7 +1684,7 @@ def _verify_persisted_context(value: Any, label: str) -> None:
 def _verify_persisted_metadata(
     value: Any, label: str, index_record: dict[str, Any]
 ) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise AdapterError(f"{label} must be an object")
     _require_exact_keys(value, PERSISTED_METADATA_KEYS, label)
     _verify_optional_clean_string_fields(
@@ -1529,7 +1714,7 @@ def _verify_persisted_metadata(
 
 
 def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise AdapterError(f"{label} must be an object")
     _require_exact_keys(value, PERSISTED_HISTORY_KEYS, label)
     status = _require_record_state(value.get("status"), f"{label}.status")
@@ -1554,15 +1739,11 @@ def _verify_persisted_record_source(
         max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES,
         display_label=label,
     )
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise AdapterError(f"{label} must contain a JSON object")
     _require_exact_keys(value, PERSISTED_RECORD_KEYS, label)
     version = value.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != PERSISTED_RECORD_VERSION
-    ):
+    if type(version) is not int or version != PERSISTED_RECORD_VERSION:
         raise AdapterError(f"{label} has unsupported persisted record version")
     source_digest = require_digest_matches(value, PERSISTED_RECORD_DIGEST_FIELD, label)
     if source_digest != index_record.get(PERSISTED_RECORD_DIGEST_FIELD):
@@ -1650,13 +1831,13 @@ def _verify_persisted_record_sources(
         if not allow_missing_record_sources and records:
             raise AdapterError(f"{label}.store_dir is required to verify audit records")
         return bool(records)
-    if not store_dir.exists():
+    if not _path_exists(store_dir, f"{label}.store_dir"):
         if not allow_missing_record_sources:
             raise AdapterError(f"{label}.store_dir does not exist")
         return bool(records)
     _ensure_input_directory(store_dir, f"{label}.store_dir", display_path=False)
     messages_dir = store_dir / RECORDS_DIR
-    if not messages_dir.exists():
+    if not _path_exists(messages_dir, f"{label}.store_dir/{RECORDS_DIR}"):
         if not allow_missing_record_sources:
             raise AdapterError(f"{label}.store_dir/{RECORDS_DIR} does not exist")
         return bool(records)
@@ -1667,10 +1848,11 @@ def _verify_persisted_record_sources(
     )
     missing_record_sources = False
     for offset, record in enumerate(records):
-        if not isinstance(record, dict):
+        if type(record) is not dict:
             raise AdapterError(f"{label}.records[{offset}] must be an object")
         record_path = messages_dir / record["filename"]
-        if not record_path.exists() and allow_missing_record_sources:
+        record_label = f"{label}.records[{offset}].source"
+        if not _path_exists(record_path, record_label) and allow_missing_record_sources:
             missing_record_sources = True
             continue
         _verify_persisted_record_source(
@@ -1682,7 +1864,7 @@ def _verify_persisted_record_sources(
 
 
 def _verify_audit_index_record(record: Any, label: str) -> None:
-    if not isinstance(record, dict):
+    if type(record) is not dict:
         raise AdapterError(f"{label} must be an object")
     _require_exact_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
     message_id = _require_nonsecret_clean_string(
@@ -1749,11 +1931,11 @@ def _reject_duplicate_audit_index_records(records: list[Any], label: str) -> Non
 def verify_audit_index(index: Any) -> dict[str, Any]:
     """Verify the exported audit index digest and basic record-count shape."""
 
-    if not isinstance(index, dict):
+    if type(index) is not dict:
         raise AdapterError("audit index must be a JSON object")
     _reject_unknown_keys(index, AUDIT_INDEX_KEYS, "audit index")
     version = index.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version != INDEX_VERSION:
+    if type(version) is not int or version != INDEX_VERSION:
         raise AdapterError(f"audit index version must be {INDEX_VERSION}")
     require_digest_matches(index, INDEX_DIGEST_FIELD, "audit index")
     record_count = index.get("record_count")
@@ -1789,11 +1971,11 @@ def verify_anchor_file(
             f"{anchor_label} must not point to checked-in ISO fixture artifacts"
         )
     anchor_value, raw = _load_json_bytes(anchor_path, display_label=anchor_label)
-    if not isinstance(anchor_value, dict):
+    if type(anchor_value) is not dict:
         raise AdapterError(f"{anchor_label} must contain a JSON object")
     _reject_unknown_keys(anchor_value, ANCHOR_KEYS, anchor_label)
     version = anchor_value.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version != ANCHOR_VERSION:
+    if type(version) is not int or version != ANCHOR_VERSION:
         raise AdapterError(f"{anchor_label} has unsupported anchor version")
     anchor_sha256 = require_digest_matches(anchor_value, ANCHOR_DIGEST_FIELD, anchor_label)
 
@@ -1836,7 +2018,9 @@ def verify_anchor_file(
 
     anchors_dir = export_dir / ANCHOR_DIR
     try:
-        relative_anchor = anchor_path.resolve().relative_to(anchors_dir.resolve())
+        relative_anchor = _path_resolve(anchor_path, anchor_label).relative_to(
+            _path_resolve(anchors_dir, f"{anchor_label} anchors directory")
+        )
     except ValueError:
         relative_anchor = None
     if relative_anchor is not None:
@@ -1847,14 +2031,20 @@ def verify_anchor_file(
             )
 
     latest = export_dir / LATEST_ANCHOR_FILE
-    if anchor_path.resolve() == latest.resolve():
+    if _path_resolve(anchor_path, anchor_label) == _path_resolve(
+        latest,
+        f"{anchor_label} latest anchor",
+    ):
         digest_anchor = anchors_dir / f"{index_sha256}.notary.json"
-        if not digest_anchor.exists():
+        digest_anchor_label = f"{anchor_label} digest-addressed peer"
+        if _path_is_symlink(digest_anchor, digest_anchor_label):
+            raise AdapterError(f"{digest_anchor_label} must not be a symlink")
+        if not _path_exists(digest_anchor, digest_anchor_label):
             raise AdapterError(f"{anchor_label} latest anchor has no digest-addressed peer")
         if _read_regular_file(
             digest_anchor,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
-            path_label=f"{anchor_label} digest-addressed peer",
+            path_label=digest_anchor_label,
         ) != raw:
             raise AdapterError(f"{anchor_label} latest anchor differs from digest-addressed peer")
 
@@ -2343,7 +2533,7 @@ def publish_anchor(
 
 
 def _is_http_status_code(status_code: int) -> bool:
-    return 100 <= status_code <= 599
+    return not isinstance(status_code, bool) and 100 <= status_code <= 599
 
 
 def _response_status_code(response: Any) -> int | None:
@@ -2361,7 +2551,7 @@ def _error_status_code(error: urllib.error.HTTPError) -> int | None:
 
 
 def _parse_http_status_code(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         return None
     if 0 <= value <= 999:
         return value
@@ -2406,11 +2596,11 @@ def _bounded_response_body(
     response_limit_bytes: int,
 ) -> tuple[bytes, bool] | None:
     capture_limit = response_limit_bytes + 1
-    if isinstance(body, bytes):
+    if type(body) is bytes:
         return body[:capture_limit], len(body) > response_limit_bytes
-    if isinstance(body, bytearray):
+    if type(body) is bytearray:
         return bytes(body[:capture_limit]), len(body) > response_limit_bytes
-    if isinstance(body, memoryview):
+    if type(body) is memoryview:
         try:
             byte_body = body.cast("B")
         except (TypeError, ValueError):
@@ -2536,6 +2726,7 @@ def receipt_output_path(receipt_dir: Path, anchor: VerifiedAnchor, endpoint: str
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     if getattr(args, "export_dir", None) is None:
         raise AdapterError("provide --export-dir")
     args.export_dir = _optional_cli_path(args.export_dir, "export_dir")
@@ -2654,6 +2845,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Verify and publish ISO 20022 audit_export_dir notary anchors.",
         allow_abbrev=False,
     )
@@ -2722,10 +2914,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--bearer-token-file",
                 "--endpoint",
@@ -2736,7 +2929,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--all",
                 "--allow-insecure-http",
@@ -2744,17 +2937,17 @@ def main(argv: list[str] | None = None) -> int:
                 "--dry-run",
             },
         )
-        _preflight_required_cli_values(argv, {"--endpoint"}, "URL")
+        _preflight_required_cli_values(normalised_argv, {"--endpoint"}, "URL")
         _preflight_numeric_cli_values(
-            argv,
+            normalised_argv,
             integer_flags={"--response-limit-bytes"},
             number_flags={"--timeout-secs"},
         )
         _preflight_output_cli_paths(
-            argv,
+            normalised_argv,
             {"--bearer-token-file", "--export-dir", "--receipt-dir"},
         )
-        args = parser.parse_args(argv)
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except AdapterError as error:
         print(f"error: {error}", file=sys.stderr)

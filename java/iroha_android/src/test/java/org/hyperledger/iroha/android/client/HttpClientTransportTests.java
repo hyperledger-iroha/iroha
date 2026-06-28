@@ -167,6 +167,8 @@ public final class HttpClientTransportTests {
     pipelineStatusRedactionFailureUsesSignalId();
     uaidPortfolioRequestParsesResponse();
     uaidPortfolioRequestSupportsQuery();
+    uaidPortfolioQueryRejectsPaddedSelectorsBeforeDispatch();
+    uaidPathLiteralRejectsPaddedInputBeforeDispatch();
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
@@ -1626,7 +1628,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioResponse response =
-        transport.getUaidPortfolio("  UAID:" + hex.toUpperCase() + " ").join();
+        transport.getUaidPortfolio("UAID:" + hex.toUpperCase()).join();
     assert response.uaid().equals("uaid:" + hex)
         : "UAID literal must be normalised";
     assert response.totals().accounts() == 2 : "Accounts total should parse";
@@ -1700,6 +1702,91 @@ public final class HttpClientTransportTests {
                 + assetDefinitionId
                 + "&scope=global")
         : "UAID portfolio query must include asset and scope filters";
+  }
+
+  private static void uaidPortfolioQueryRejectsPaddedSelectorsBeforeDispatch() {
+    final String hex =
+        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
+    final String assetDefinitionId = TestAssetDefinitionIds.TERTIARY;
+    final String json =
+        "{"
+            + "\"uaid\":\"uaid:"
+            + hex
+            + "\","
+            + "\"totals\":{\"accounts\":0,\"positions\":0},"
+            + "\"dataspaces\":[]"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    transport
+        .getUaidPortfolio(
+            "uaid:" + hex,
+            UaidPortfolioQuery.builder().setAsset(assetDefinitionId).setScope("global").build())
+        .join();
+    final TransportRequest before = executor.lastRequest();
+
+    expectIllegalArgument(
+        () ->
+            transport.getUaidPortfolio(
+                "uaid:" + hex,
+                UaidPortfolioQuery.builder().setAsset(" " + assetDefinitionId).build()),
+        "UAID portfolio asset selector must reject leading whitespace");
+    assert executor.lastRequest() == before
+        : "Padded asset selector must fail before sending an HTTP request";
+
+    expectIllegalArgument(
+        () ->
+            transport.getUaidPortfolio(
+                "uaid:" + hex,
+                UaidPortfolioQuery.builder().setAsset(assetDefinitionId + " ").build()),
+        "UAID portfolio asset selector must reject trailing whitespace");
+    assert executor.lastRequest() == before
+        : "Padded asset selector must fail before sending an HTTP request";
+
+    expectIllegalArgument(
+        () ->
+            transport.getUaidPortfolio(
+                "uaid:" + hex,
+                UaidPortfolioQuery.builder().setAsset(assetDefinitionId).setScope(" global").build()),
+        "UAID portfolio scope selector must reject leading whitespace");
+    assert executor.lastRequest() == before
+        : "Padded scope selector must fail before sending an HTTP request";
+  }
+
+  private static void uaidPathLiteralRejectsPaddedInputBeforeDispatch() {
+    final String hex =
+        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
+    final String json =
+        "{"
+            + "\"uaid\":\"uaid:"
+            + hex
+            + "\","
+            + "\"totals\":{\"accounts\":0,\"positions\":0},"
+            + "\"dataspaces\":[]"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    transport.getUaidPortfolio("UAID:" + hex.toUpperCase()).join();
+    final TransportRequest before = executor.lastRequest();
+    assert before != null : "UAID positive request must be captured";
+
+    for (final String uaid : new String[] {" uaid:" + hex, "uaid:" + hex + " ", "uaid: " + hex}) {
+      expectIllegalArgument(
+          () -> transport.getUaidPortfolio(uaid),
+          "UAID path literal must reject surrounding whitespace before dispatch");
+      assert executor.lastRequest() == before
+          : "Padded UAID path literal must fail before sending an HTTP request";
+    }
   }
 
   private static void uaidRequestsRespectBasePath() {

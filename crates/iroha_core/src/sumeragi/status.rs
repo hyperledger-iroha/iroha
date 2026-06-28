@@ -1172,8 +1172,11 @@ static COLLECTORS_TARGETED_LAST_COMMIT: AtomicU64 = AtomicU64::new(0);
 static REDUNDANT_SEND_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_DEPTH: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_CAPACITY: AtomicU64 = AtomicU64::new(0);
+static TX_QUEUE_RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
+static TX_QUEUE_MAX_RETAINED_BYTES: AtomicU64 = AtomicU64::new(0);
 static TX_QUEUE_SATURATED: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_COUNT: AtomicBool = AtomicBool::new(false);
+static TX_QUEUE_SATURATED_BY_BYTES: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_SATURATED_BY_AGE: AtomicBool = AtomicBool::new(false);
 static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
 static WORKER_QUEUE_VOTE_DEPTH: AtomicU64 = AtomicU64::new(0);
@@ -4055,10 +4058,16 @@ pub struct StatusSnapshot {
     pub tx_queue_depth: u64,
     /// Configured queue capacity on this peer.
     pub tx_queue_capacity: u64,
+    /// Estimated retained transaction queue bytes on this peer.
+    pub tx_queue_retained_bytes: u64,
+    /// Configured estimated retained transaction queue byte budget.
+    pub tx_queue_max_retained_bytes: u64,
     /// Whether the local transaction queue is capacity-saturated.
     pub tx_queue_saturated: bool,
     /// Whether the local transaction queue has reached capacity.
     pub tx_queue_saturated_by_count: bool,
+    /// Whether the local transaction queue has exhausted its retained-byte budget.
+    pub tx_queue_saturated_by_bytes: bool,
     /// Whether the oldest queued transaction exceeded the latency budget.
     pub tx_queue_saturated_by_age: bool,
     /// Age in milliseconds of the oldest queued transaction.
@@ -5080,8 +5089,11 @@ pub fn snapshot() -> StatusSnapshot {
         redundant_sends_total: REDUNDANT_SEND_TOTAL.load(Ordering::Relaxed),
         tx_queue_depth: tx_queue.depth,
         tx_queue_capacity: tx_queue.capacity,
+        tx_queue_retained_bytes: tx_queue.retained_bytes,
+        tx_queue_max_retained_bytes: tx_queue.max_retained_bytes,
         tx_queue_saturated: tx_queue.saturated,
         tx_queue_saturated_by_count: tx_queue.saturated_by_count,
+        tx_queue_saturated_by_bytes: tx_queue.saturated_by_bytes,
         tx_queue_saturated_by_age: tx_queue.saturated_by_age,
         tx_queue_oldest_queued_age_ms: tx_queue.oldest_queued_age_ms,
         worker_loop,
@@ -7626,10 +7638,16 @@ pub struct TxQueueBackpressureSnapshot {
     pub depth: u64,
     /// Configured transaction queue capacity.
     pub capacity: u64,
+    /// Estimated retained transaction queue bytes.
+    pub retained_bytes: u64,
+    /// Configured retained transaction queue byte budget.
+    pub max_retained_bytes: u64,
     /// Whether the queue reached capacity. This mirrors the public `saturated` field.
     pub saturated: bool,
     /// Whether the queue reached capacity.
     pub saturated_by_count: bool,
+    /// Whether the queue exhausted its retained-byte budget.
+    pub saturated_by_bytes: bool,
     /// Whether the oldest queued transaction exceeded the latency budget.
     pub saturated_by_age: bool,
     /// Age in milliseconds of the oldest queued transaction.
@@ -7639,10 +7657,15 @@ pub struct TxQueueBackpressureSnapshot {
 /// Record the latest transaction-queue pressure snapshot for operator queries.
 pub fn set_tx_queue_pressure(snapshot: QueuePressureSnapshot) {
     let saturated_by_count = snapshot.saturated_by_count;
+    let saturated_by_bytes = snapshot.saturated_by_bytes;
+    let saturated = saturated_by_count || saturated_by_bytes;
     TX_QUEUE_DEPTH.store(snapshot.queued_tx_count as u64, Ordering::Relaxed);
     TX_QUEUE_CAPACITY.store(snapshot.capacity.get() as u64, Ordering::Relaxed);
-    TX_QUEUE_SATURATED.store(saturated_by_count, Ordering::Relaxed);
+    TX_QUEUE_RETAINED_BYTES.store(snapshot.retained_bytes, Ordering::Relaxed);
+    TX_QUEUE_MAX_RETAINED_BYTES.store(snapshot.max_retained_bytes.get(), Ordering::Relaxed);
+    TX_QUEUE_SATURATED.store(saturated, Ordering::Relaxed);
     TX_QUEUE_SATURATED_BY_COUNT.store(saturated_by_count, Ordering::Relaxed);
+    TX_QUEUE_SATURATED_BY_BYTES.store(saturated_by_bytes, Ordering::Relaxed);
     TX_QUEUE_SATURATED_BY_AGE.store(snapshot.saturated_by_age, Ordering::Relaxed);
     TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(snapshot.oldest_queued_tx_age_ms, Ordering::Relaxed);
 }
@@ -7653,16 +7676,22 @@ pub fn set_tx_queue_backpressure(state: BackpressureState) {
         BackpressureState::Healthy { queued, capacity } => {
             TX_QUEUE_DEPTH.store(queued as u64, Ordering::Relaxed);
             TX_QUEUE_CAPACITY.store(capacity.get() as u64, Ordering::Relaxed);
+            TX_QUEUE_RETAINED_BYTES.store(0, Ordering::Relaxed);
+            TX_QUEUE_MAX_RETAINED_BYTES.store(0, Ordering::Relaxed);
             TX_QUEUE_SATURATED.store(false, Ordering::Relaxed);
             TX_QUEUE_SATURATED_BY_COUNT.store(false, Ordering::Relaxed);
+            TX_QUEUE_SATURATED_BY_BYTES.store(false, Ordering::Relaxed);
             TX_QUEUE_SATURATED_BY_AGE.store(false, Ordering::Relaxed);
             TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(0, Ordering::Relaxed);
         }
         BackpressureState::Saturated { queued, capacity } => {
             TX_QUEUE_DEPTH.store(queued as u64, Ordering::Relaxed);
             TX_QUEUE_CAPACITY.store(capacity.get() as u64, Ordering::Relaxed);
+            TX_QUEUE_RETAINED_BYTES.store(0, Ordering::Relaxed);
+            TX_QUEUE_MAX_RETAINED_BYTES.store(0, Ordering::Relaxed);
             TX_QUEUE_SATURATED.store(true, Ordering::Relaxed);
             TX_QUEUE_SATURATED_BY_COUNT.store(true, Ordering::Relaxed);
+            TX_QUEUE_SATURATED_BY_BYTES.store(false, Ordering::Relaxed);
             TX_QUEUE_SATURATED_BY_AGE.store(false, Ordering::Relaxed);
             TX_QUEUE_OLDEST_QUEUED_AGE_MS.store(0, Ordering::Relaxed);
         }
@@ -7674,8 +7703,11 @@ pub fn tx_queue_backpressure() -> TxQueueBackpressureSnapshot {
     TxQueueBackpressureSnapshot {
         depth: TX_QUEUE_DEPTH.load(Ordering::Relaxed),
         capacity: TX_QUEUE_CAPACITY.load(Ordering::Relaxed),
+        retained_bytes: TX_QUEUE_RETAINED_BYTES.load(Ordering::Relaxed),
+        max_retained_bytes: TX_QUEUE_MAX_RETAINED_BYTES.load(Ordering::Relaxed),
         saturated: TX_QUEUE_SATURATED.load(Ordering::Relaxed),
         saturated_by_count: TX_QUEUE_SATURATED_BY_COUNT.load(Ordering::Relaxed),
+        saturated_by_bytes: TX_QUEUE_SATURATED_BY_BYTES.load(Ordering::Relaxed),
         saturated_by_age: TX_QUEUE_SATURATED_BY_AGE.load(Ordering::Relaxed),
         oldest_queued_age_ms: TX_QUEUE_OLDEST_QUEUED_AGE_MS.load(Ordering::Relaxed),
     }
@@ -11946,15 +11978,21 @@ mod tests {
         let status = super::tx_queue_backpressure();
         assert_eq!(status.depth, 16);
         assert_eq!(status.capacity, 16);
+        assert_eq!(status.retained_bytes, 0);
+        assert_eq!(status.max_retained_bytes, 0);
         assert!(status.saturated);
         assert!(status.saturated_by_count);
+        assert!(!status.saturated_by_bytes);
         assert!(!status.saturated_by_age);
 
         let snap = super::snapshot();
         assert_eq!(snap.tx_queue_depth, 16);
         assert_eq!(snap.tx_queue_capacity, 16);
+        assert_eq!(snap.tx_queue_retained_bytes, 0);
+        assert_eq!(snap.tx_queue_max_retained_bytes, 0);
         assert!(snap.tx_queue_saturated);
         assert!(snap.tx_queue_saturated_by_count);
+        assert!(!snap.tx_queue_saturated_by_bytes);
         assert!(!snap.tx_queue_saturated_by_age);
 
         super::set_tx_queue_backpressure(BackpressureState::Healthy {
@@ -11971,25 +12009,34 @@ mod tests {
             tracked_tx_count: 4,
             queued_tx_count: 4,
             capacity,
+            retained_bytes: 4_096,
+            max_retained_bytes: NonZeroU64::new(65_536).expect("non-zero"),
             oldest_queued_tx_age_ms: 7_500,
             saturated_by_count: false,
+            saturated_by_bytes: false,
             saturated_by_age: true,
         });
 
         let status = super::tx_queue_backpressure();
         assert_eq!(status.depth, 4);
         assert_eq!(status.capacity, 16);
+        assert_eq!(status.retained_bytes, 4_096);
+        assert_eq!(status.max_retained_bytes, 65_536);
         assert!(
             !status.saturated,
             "public saturation should indicate capacity exhaustion"
         );
         assert!(!status.saturated_by_count);
+        assert!(!status.saturated_by_bytes);
         assert!(status.saturated_by_age);
         assert_eq!(status.oldest_queued_age_ms, 7_500);
 
         let snap = super::snapshot();
+        assert_eq!(snap.tx_queue_retained_bytes, 4_096);
+        assert_eq!(snap.tx_queue_max_retained_bytes, 65_536);
         assert!(!snap.tx_queue_saturated);
         assert!(!snap.tx_queue_saturated_by_count);
+        assert!(!snap.tx_queue_saturated_by_bytes);
         assert!(snap.tx_queue_saturated_by_age);
         assert_eq!(snap.tx_queue_oldest_queued_age_ms, 7_500);
 

@@ -101,6 +101,8 @@ public final class OfflineNoteTest {
     toriiIssuerClientBodySignsRefillAndRetiresNoteIssue();
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
+    walletRejectsAuditWhenRecursiveVerifierFails();
+    walletRejectsRedeemWhenRecursiveVerifierFails();
     offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
@@ -1185,6 +1187,24 @@ public final class OfflineNoteTest {
         "record-backed Offline Note prover fails closed when JNI is missing");
     assertTrue(
         !NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {
+              throw new IllegalArgumentException("bad library name");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "record-backed Offline Note prover fails closed on malformed library loading");
+    assertTrue(
+        !NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {
+              throw new IllegalStateException("bad native loader");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "record-backed Offline Note prover fails closed on runtime loader errors");
+    assertTrue(
+        !NativeOfflineNoteProver.detectNativeAvailability(
             () -> {},
             () -> {
               throw new UnsatisfiedLinkError("missing symbol");
@@ -1197,6 +1217,13 @@ public final class OfflineNoteTest {
               throw new SecurityException("native bridge denied");
             }),
         "record-backed Offline Note prover fails closed when symbol probing is denied");
+    assertTrue(
+        !NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalStateException("bad native probe");
+            }),
+        "record-backed Offline Note prover fails closed on runtime probe errors");
 
     assertThrows(
         () -> NativeOfflineNoteProver.proveRedeem(null, new byte[] {0x01}),
@@ -1333,6 +1360,22 @@ public final class OfflineNoteTest {
             },
             () -> true),
         "native availability rejects a library blocked by the security manager");
+    assertTrue(
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {
+              throw new IllegalStateException("bad native loader");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "native availability rejects runtime loader failures");
+    assertTrue(
+        !KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalStateException("bad native probe");
+            }),
+        "native availability rejects runtime probe failures");
   }
 
   private static void kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint() {
@@ -1382,6 +1425,22 @@ public final class OfflineNoteTest {
             },
             () -> true),
         "recursive aggregation availability rejects a library blocked by the security manager");
+    assertTrue(
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {
+              throw new IllegalStateException("bad native loader");
+            },
+            () -> {
+              throw new AssertionError("probe must not run");
+            }),
+        "recursive aggregation availability rejects runtime loader failures");
+    assertTrue(
+        !KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalStateException("bad native probe");
+            }),
+        "recursive aggregation availability rejects runtime probe failures");
   }
 
   private static void nativeHalo2ProverPerformanceWhenRequested() throws Exception {
@@ -3541,6 +3600,106 @@ public final class OfflineNoteTest {
         "defund audit trail token id");
   }
 
+  private static void walletRejectsAuditWhenRecursiveVerifierFails() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> chainRedeem = obj(chain, "redeem");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteStore senderStore = new InMemoryOfflineNoteStore();
+    senderStore.upsert(sourceWalletNote(fixture, senderCertificate));
+    final OfflineNoteWallet senderWallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountFromAssetId(string(chainIssue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            new RejectingProofVerifier(true, false),
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(
+                Arrays.asList(
+                    hexBytes(string(derivation, "token_nonce_hex")),
+                    hexBytes(string(derivation, "change_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> longValue(payment, "created_at_ms"),
+            new StaticOwnerCertificateSigner(senderCertificate));
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            new InMemoryOfflineNoteStore(),
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(
+                Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_001_200L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(
+            assetDefinitionFromAssetId(string(chainIssue, "asset_id")),
+            string(chainRedeem, "amount"));
+
+    assertIllegalArgumentContains(
+        () -> senderWallet.pay(receiveRequest),
+        "Offline Note recursive audit proof verification failed");
+    assertEquals(
+        OfflineNoteWalletNoteState.SPENDABLE.name(),
+        senderStore.findNote(hexBytes(string(derivation, "source_note_commitment"))).state().name(),
+        "source note state after rejected audit proof");
+    assertEquals(1L, senderStore.listNotes().size(), "note count after rejected audit proof");
+  }
+
+  private static void walletRejectsRedeemWhenRecursiveVerifierFails() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    final InMemoryOfflineNoteStore store = new InMemoryOfflineNoteStore();
+    store.upsert(note);
+    final RecordingTransactionSubmitter submitter = new RecordingTransactionSubmitter();
+    final OfflineNoteWallet wallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountFromAssetId(string(chainIssue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            store,
+            null,
+            submitter,
+            BindingProofProvider.INSTANCE,
+            new RejectingProofVerifier(false, true),
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id")),
+            () -> 1_700_000_001_300L,
+            new StaticOwnerCertificateSigner(senderCertificate));
+
+    assertIllegalArgumentContains(
+        () -> wallet.redeem(note),
+        "Offline Note recursive redeem proof verification failed");
+    assertEquals(0L, submitter.defunds.size(), "defund submit count after rejected redeem proof");
+    assertEquals(
+        OfflineNoteWalletNoteState.SPENDABLE.name(),
+        store.findNote(note.noteCommitment()).state().name(),
+        "note state after rejected redeem proof");
+  }
+
   private static void offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
@@ -5131,6 +5290,26 @@ public final class OfflineNoteTest {
     public boolean verifyRedeem(final OfflineNote.Redeem redemption) {
       return Arrays.equals(
           redemption.recursiveProof().publicInputsHash(), redemption.publicInputsHash());
+    }
+  }
+
+  private static final class RejectingProofVerifier implements OfflineNoteProofVerifier {
+    private final boolean rejectAudit;
+    private final boolean rejectRedeem;
+
+    private RejectingProofVerifier(final boolean rejectAudit, final boolean rejectRedeem) {
+      this.rejectAudit = rejectAudit;
+      this.rejectRedeem = rejectRedeem;
+    }
+
+    @Override
+    public boolean verifyAudit(final OfflineNote.AuditBundle audit) {
+      return !rejectAudit && BindingProofVerifier.INSTANCE.verifyAudit(audit);
+    }
+
+    @Override
+    public boolean verifyRedeem(final OfflineNote.Redeem redemption) {
+      return !rejectRedeem && BindingProofVerifier.INSTANCE.verifyRedeem(redemption);
     }
   }
 

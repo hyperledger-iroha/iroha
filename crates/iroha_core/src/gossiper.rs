@@ -440,7 +440,13 @@ impl TransactionGossiper {
             return;
         }
         let index = self.deferred_index();
-        self.gossip_deferred[index].extend(hashes);
+        let slot = &mut self.gossip_deferred[index];
+        let mut seen: HashSet<_> = slot.iter().copied().collect();
+        for hash in hashes {
+            if seen.insert(hash) {
+                slot.push(hash);
+            }
+        }
     }
 
     fn retry_public_broadcast_hashes(&mut self, hashes: Vec<HashOf<SignedTransaction>>) {
@@ -474,19 +480,21 @@ impl TransactionGossiper {
         for entry in expiring {
             let peer_id = entry.peer_id.clone();
             if let Some(peer_map) = self.peer_recently_sent.get_mut(&peer_id) {
-                let should_remove = peer_map.get(&entry.tx_hash).copied().is_some_and(|expiry| {
-                    expiry == entry.expires_tick && expiry <= self.gossip_tick
-                });
-                if should_remove {
-                    peer_map.remove(&entry.tx_hash);
-                } else {
-                    deferred.push(entry);
+                match peer_map.get(&entry.tx_hash).copied() {
+                    Some(expiry) if expiry == entry.expires_tick && expiry <= self.gossip_tick => {
+                        peer_map.remove(&entry.tx_hash);
+                    }
+                    Some(expiry) if expiry == entry.expires_tick => {
+                        deferred.push(entry);
+                    }
+                    Some(_) | None => {
+                        // A newer send replaced this peer/hash expiry, or the
+                        // hash was already removed. Drop the stale ring entry.
+                    }
                 }
                 if peer_map.is_empty() {
                     empty_peers.insert(peer_id);
                 }
-            } else {
-                deferred.push(entry);
             }
         }
         for peer in empty_peers {
@@ -579,12 +587,13 @@ impl TransactionGossiper {
         for peer_id in targets {
             let peer_map = self.peer_recently_sent.entry(peer_id.clone()).or_default();
             for tx_hash in tx_hashes {
-                peer_map.insert(tx_hash.clone(), expires_tick);
-                slot.push(PeerRecentSuppressionEntry {
-                    peer_id: peer_id.clone(),
-                    tx_hash: tx_hash.clone(),
-                    expires_tick,
-                });
+                if peer_map.insert(*tx_hash, expires_tick) != Some(expires_tick) {
+                    slot.push(PeerRecentSuppressionEntry {
+                        peer_id: peer_id.clone(),
+                        tx_hash: *tx_hash,
+                        expires_tick,
+                    });
+                }
             }
         }
     }
@@ -1485,14 +1494,19 @@ impl TransactionGossiper {
         let ed25519_batch_cap = self.state.pipeline.signature_batch_max_ed25519;
         let stateless_cache_cap = self.state.pipeline.stateless_cache_cap;
 
-        struct GossipAdmissionCandidate {
-            tx: GossipTransaction,
+        struct MaterializedGossipCandidate {
+            entrypoint: TransactionEntrypoint,
+            payload: Arc<Vec<u8>>,
+            entrypoint_hash: HashOf<TransactionEntrypoint>,
             route: GossipRoute,
             plan: RoutingPlan,
             tx_hash: HashOf<SignedTransaction>,
+            prepared: Option<PreparedTransactionMetadata>,
+            ed25519_prechecked: bool,
+            precheck_rejection: Option<AcceptTransactionFail>,
         }
 
-        let mut candidates = Vec::with_capacity(batch_txs);
+        let mut materialized = Vec::with_capacity(batch_txs);
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
@@ -1645,33 +1659,10 @@ impl TransactionGossiper {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            candidates.push(GossipAdmissionCandidate {
-                tx,
-                route,
-                plan,
-                tx_hash,
-            });
-        }
-
-        struct MaterializedGossipCandidate {
-            entrypoint: TransactionEntrypoint,
-            payload: Arc<Vec<u8>>,
-            entrypoint_hash: HashOf<TransactionEntrypoint>,
-            route: GossipRoute,
-            plan: RoutingPlan,
-            tx_hash: HashOf<SignedTransaction>,
-            prepared: Option<PreparedTransactionMetadata>,
-            ed25519_prechecked: bool,
-            precheck_rejection: Option<AcceptTransactionFail>,
-        }
-
-        let mut materialized = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let entrypoint_hash = candidate.tx.hash_as_entrypoint();
-            let (entrypoint, payload) = match candidate.tx.into_entrypoint_with_payload() {
+            let entrypoint_hash = tx.hash_as_entrypoint();
+            let (entrypoint, payload) = match tx.into_entrypoint_with_payload() {
                 Ok(decoded) => decoded,
                 Err(err) => {
-                    let tx_hash = candidate.tx_hash;
                     iroha_logger::warn!(
                         %tx_hash,
                         ?err,
@@ -1679,8 +1670,8 @@ impl TransactionGossiper {
                     );
                     self.record_drop_metric(
                         plane,
-                        candidate.route.dataspace_id,
-                        &[candidate.route.lane_id],
+                        route.dataspace_id,
+                        &[route.lane_id],
                         "entrypoint_decode",
                         false,
                         None,
@@ -1706,9 +1697,9 @@ impl TransactionGossiper {
                 entrypoint,
                 payload,
                 entrypoint_hash,
-                route: candidate.route,
-                plan: candidate.plan,
-                tx_hash: candidate.tx_hash,
+                route,
+                plan,
+                tx_hash,
                 prepared,
                 ed25519_prechecked: false,
                 precheck_rejection: None,
@@ -2009,11 +2000,18 @@ impl TransactionGossiper {
                             );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
-                            iroha_logger::error!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "Failed to enqueue transaction."
-                            )
+                            if matches!(err, crate::queue::Error::Full) {
+                                iroha_logger::debug!(
+                                    tx = %tx.hash(),
+                                    "queue rejected gossiped transaction due to backpressure"
+                                );
+                            } else {
+                                iroha_logger::error!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "Failed to enqueue transaction."
+                                );
+                            }
                         }
                     }
                 }
@@ -2451,11 +2449,18 @@ impl TransactionGossiper {
                             );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
-                            iroha_logger::error!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "Failed to enqueue transaction."
-                            )
+                            if matches!(err, crate::queue::Error::Full) {
+                                iroha_logger::debug!(
+                                    tx = %tx.hash(),
+                                    "queue rejected gossiped transaction due to backpressure"
+                                );
+                            } else {
+                                iroha_logger::error!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "Failed to enqueue transaction."
+                                );
+                            }
                         }
                     }
                 }
@@ -2703,6 +2708,7 @@ impl Clone for GossipTransaction {
 }
 
 const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
+const GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2742,12 +2748,25 @@ struct GossipTxDecodeCacheEntry {
 
 struct GossipTxDecodeCache {
     map: HashMap<GossipTxDecodeCacheKey, GossipTxDecodeCacheEntry>,
+    bytes: usize,
+    count_limit: usize,
+    byte_limit: usize,
 }
 
 impl GossipTxDecodeCache {
     fn new() -> Self {
+        Self::with_limits(
+            GOSSIP_TX_DECODE_CACHE_LIMIT,
+            GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT,
+        )
+    }
+
+    fn with_limits(count_limit: usize, byte_limit: usize) -> Self {
         Self {
             map: HashMap::new(),
+            bytes: 0,
+            count_limit,
+            byte_limit,
         }
     }
 
@@ -2756,10 +2775,24 @@ impl GossipTxDecodeCache {
     }
 
     fn insert(&mut self, key: GossipTxDecodeCacheKey, entry: GossipTxDecodeCacheEntry) {
-        if self.map.len() >= GOSSIP_TX_DECODE_CACHE_LIMIT {
+        let entry_len = entry.encoded.len();
+        if entry_len > self.byte_limit {
+            if let Some(previous) = self.map.remove(&key) {
+                self.bytes = self.bytes.saturating_sub(previous.encoded.len());
+            }
+            return;
+        }
+        if let Some(previous) = self.map.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous.encoded.len());
+        }
+        if self.map.len() >= self.count_limit
+            || self.bytes.saturating_add(entry_len) > self.byte_limit
+        {
             // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
             self.map.clear();
+            self.bytes = 0;
         }
+        self.bytes = self.bytes.saturating_add(entry_len);
         self.map.insert(key, entry);
     }
 }
@@ -3556,6 +3589,58 @@ mod tests {
     }
 
     #[test]
+    fn gossip_transaction_decode_cache_is_byte_bounded() {
+        let (signed, _accepted) = build_transaction("gossip-decode-cache-byte-bound");
+        let tx_hash = signed.hash();
+        let mut cache = GossipTxDecodeCache::with_limits(8, 10);
+
+        let first = Arc::new(vec![1_u8; 6]);
+        let first_key = GossipTxDecodeCacheKey::from_bytes(first.as_slice());
+        cache.insert(
+            first_key,
+            GossipTxDecodeCacheEntry {
+                encoded: Arc::clone(&first),
+                tx_hash,
+                consumed: first.len(),
+            },
+        );
+        assert!(cache.get(&first_key).is_some());
+        assert_eq!(cache.bytes, first.len());
+
+        let second = Arc::new(vec![2_u8; 6]);
+        let second_key = GossipTxDecodeCacheKey::from_bytes(second.as_slice());
+        cache.insert(
+            second_key,
+            GossipTxDecodeCacheEntry {
+                encoded: Arc::clone(&second),
+                tx_hash,
+                consumed: second.len(),
+            },
+        );
+        assert!(
+            cache.get(&first_key).is_none(),
+            "inserting past the byte cap should clear older cached payloads"
+        );
+        assert!(cache.get(&second_key).is_some());
+        assert_eq!(cache.bytes, second.len());
+
+        let oversized = Arc::new(vec![3_u8; 11]);
+        cache.insert(
+            second_key,
+            GossipTxDecodeCacheEntry {
+                encoded: oversized,
+                tx_hash,
+                consumed: 11,
+            },
+        );
+        assert!(
+            cache.get(&second_key).is_none(),
+            "oversized payloads should not remain cached"
+        );
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
     fn gossip_transaction_try_deserialize_uses_decode_cache() {
         let (signed, _accepted) = build_transaction("gossip-try-deserialize-cache-test");
         let payload = payload_for(&signed);
@@ -3612,6 +3697,7 @@ mod tests {
             debug_packet_loss_outbound_percent: 0,
 deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer: defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -3633,6 +3719,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_outbound_frame_queue_max_high_bytes:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
             consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
@@ -3918,6 +4012,28 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
+    fn gossip_deferred_slot_deduplicates_repeated_hashes() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+
+        let (_signed, accepted) = build_transaction("deferred-dedup");
+        let hash = accepted.hash();
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+
+        gossiper.defer_gossip_hashes([hash, hash]);
+        gossiper.defer_gossip_hashes([hash]);
+
+        assert_eq!(
+            gossiper.gossip_deferred[gossiper.deferred_index()].len(),
+            1,
+            "same transaction hash should be retained once per resend slot"
+        );
+    }
+
+    #[test]
     fn public_broadcast_retry_hashes_return_to_gossip_backlog() {
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let mut gossiper = closed_test_gossiper(resend_ticks);
@@ -4046,6 +4162,83 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         assert_eq!(targets, vec![peer]);
         assert_eq!(suppressed, 0);
+    }
+
+    #[test]
+    fn peer_recent_suppression_deduplicates_same_tick_entries() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-same-tick-dedup");
+        let tx_hash = signed.hash();
+        let slot = gossiper.peer_recent_slot_for_tick(
+            gossiper
+                .gossip_tick
+                .saturating_add(GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64),
+        );
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+
+        assert_eq!(
+            gossiper.peer_recent_ring[slot].len(),
+            1,
+            "same peer/hash expiry should have one ring entry"
+        );
+    }
+
+    #[test]
+    fn peer_recent_suppression_drops_stale_replaced_ring_entries() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-stale-ring-entry");
+        let tx_hash = signed.hash();
+        let ttl = GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64;
+        let first_expiry = gossiper.gossip_tick.saturating_add(ttl);
+        let first_slot = gossiper.peer_recent_slot_for_tick(first_expiry);
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        gossiper.advance_gossip_tick();
+        let second_expiry = gossiper.gossip_tick.saturating_add(ttl);
+        let second_slot = gossiper.peer_recent_slot_for_tick(second_expiry);
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+
+        assert_eq!(gossiper.peer_recent_ring[first_slot].len(), 1);
+        assert_eq!(gossiper.peer_recent_ring[second_slot].len(), 1);
+
+        gossiper.gossip_tick = first_expiry;
+        gossiper.expire_peer_recent_suppression();
+        assert!(
+            gossiper.peer_recent_ring[first_slot].is_empty(),
+            "overwritten expiry entry should be dropped instead of retained forever"
+        );
+        assert!(
+            gossiper
+                .peer_recently_sent
+                .get(&peer)
+                .is_some_and(|seen| seen.get(&tx_hash) == Some(&second_expiry)),
+            "newer suppression expiry should remain active"
+        );
+
+        gossiper.gossip_tick = second_expiry;
+        gossiper.expire_peer_recent_suppression();
+        assert!(
+            !gossiper.peer_recently_sent.contains_key(&peer),
+            "current suppression entry should still expire normally"
+        );
     }
 
     #[test]

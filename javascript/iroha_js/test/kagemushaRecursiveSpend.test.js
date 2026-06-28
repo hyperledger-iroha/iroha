@@ -2324,6 +2324,51 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
   assert.equal(initBundle.finalRoot.length, 32);
   assert.equal(initBundle.currentNote.amount, "7");
   assert.ok(initBundle.topupAnchorNullifiers.length >= 2);
+  const originalInitialRoot = Buffer.from(initBundle.initialRoot);
+  const mutatedInitialRoot = initBundle.initialRoot;
+  mutatedInitialRoot[0] ^= 0xff;
+  assert.deepEqual(initBundle.initialRoot, originalInitialRoot);
+  assert.deepEqual(initBundle.initial_root, originalInitialRoot);
+  const originalFinalRoot = Buffer.from(initBundle.finalRoot);
+  const mutatedFinalRoot = initBundle.final_root;
+  mutatedFinalRoot[0] ^= 0xff;
+  assert.deepEqual(initBundle.finalRoot, originalFinalRoot);
+  assert.deepEqual(initBundle.final_root, originalFinalRoot);
+  const originalTopupAnchorNullifiers = initBundle.topupAnchorNullifiers.map((value) =>
+    Buffer.from(value),
+  );
+  const mutatedTopupAnchors = initBundle.topupAnchorNullifiers;
+  mutatedTopupAnchors[0][0] ^= 0xff;
+  mutatedTopupAnchors.length = 0;
+  assert.deepEqual(initBundle.topupAnchorNullifiers, originalTopupAnchorNullifiers);
+  assert.deepEqual(initBundle.topup_anchor_nullifiers, originalTopupAnchorNullifiers);
+  const originalNoteCommitment = Buffer.from(initBundle.currentNote.noteCommitment);
+  const mutatedNoteCommitment = initBundle.currentNote.note_commitment;
+  mutatedNoteCommitment[0] ^= 0xff;
+  assert.deepEqual(initBundle.currentNote.noteCommitment, originalNoteCommitment);
+  assert.deepEqual(initBundle.current_note.note_commitment, originalNoteCommitment);
+  const originalSpendNullifier = Buffer.from(initBundle.currentNote.spendNullifier);
+  const mutatedSpendNullifier = initBundle.current_note.spend_nullifier;
+  mutatedSpendNullifier[0] ^= 0xff;
+  assert.deepEqual(initBundle.currentNote.spendNullifier, originalSpendNullifier);
+  assert.deepEqual(initBundle.current_note.spend_nullifier, originalSpendNullifier);
+  const mutableVerifierRecordBytes = syntheticKagemushaArchive(
+    KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
+    0x68,
+  );
+  const copiedVerifierRecordBytes = Buffer.from(mutableVerifierRecordBytes);
+  const copiedVerifierRecord = buildKagemushaRecursiveSpendVerifierRecordRef({
+    verifierKeyId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    recordBytes: mutableVerifierRecordBytes,
+  });
+  assert.equal(Object.isFrozen(copiedVerifierRecord), true);
+  mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0xff;
+  assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);
+  assert.deepEqual(copiedVerifierRecord.record_bytes, copiedVerifierRecordBytes);
+  const returnedVerifierRecordBytes = copiedVerifierRecord.record_bytes;
+  returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0xff;
+  assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);
+  assert.deepEqual(copiedVerifierRecord.record_bytes, copiedVerifierRecordBytes);
   const malformedTopupAnchorCases = [
     ["topup anchor empty list", [], "bundle.accumulator.topup_anchor_nullifiers count is out of range"],
     [
@@ -3391,6 +3436,26 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           verifierKeyId: "danglingRedeemLineageRecord",
           recordBytes: Buffer.from([0]),
         },
+      }),
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles or lineage witnesses/,
+    ),
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "7",
+        redeemProof,
+        lineageVerifierRecords: [
+          {
+            verifierKeyId: "danglingRedeemLineageRecords",
+            recordBytes: Buffer.from([0]),
+          },
+        ],
       }),
     kagemushaRequestCodecError(
       "field",

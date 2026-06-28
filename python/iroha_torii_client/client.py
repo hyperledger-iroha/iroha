@@ -2562,14 +2562,123 @@ class OfflineReadiness:
             return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
 
         def required_string(field: str) -> str:
-            return _require_exact_non_empty_string(
-                payload.get(field), f"offline readiness.{field}"
-            )
+            try:
+                return _require_exact_non_empty_string(
+                    payload.get(field), f"offline readiness.{field}"
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(str(exc)) from exc
 
         def required_positive_int(field: str) -> int:
-            return ToriiClient._coerce_positive_int(
-                payload.get(field), context=f"offline readiness.{field}"
-            )
+            value = payload.get(field)
+            context = f"offline readiness.{field}"
+            if isinstance(value, bool):
+                raise RuntimeError(f"{context} must be an integer")
+            if isinstance(value, int):
+                result = value
+            elif isinstance(value, str):
+                if re.fullmatch(r"[1-9][0-9]*", value) is None:
+                    raise RuntimeError(
+                        f"{context} must be an exact positive integer string"
+                    )
+                result = int(value, 10)
+            else:
+                raise RuntimeError(f"{context} must be an integer")
+            if result <= 0:
+                raise RuntimeError(f"{context} must be a positive integer")
+            if result > 2_147_483_647:
+                raise RuntimeError(f"{context} must fit in signed 32-bit range")
+            return result
+
+        abi7_fields = (
+            "offline_kagemusha_abi7",
+            "offline_kagemusha_abi7_mode",
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_abi7_circuit_id",
+            "offline_kagemusha_abi7_artifacts",
+        )
+        recursive_compact_fields = (
+            "offline_kagemusha_recursive_compact_available",
+            "offline_kagemusha_recursive_compact_mode",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_circuit_id",
+            "offline_kagemusha_recursive_compact_artifacts_available",
+        )
+        has_abi7_family = any(field in payload for field in abi7_fields)
+        has_recursive_compact_family = any(
+            field in payload for field in recursive_compact_fields
+        )
+        if not has_abi7_family and not has_recursive_compact_family:
+            required_bool("offline_kagemusha_abi7")
+
+        def decode_abi7_family() -> Dict[str, Any]:
+            return {
+                "available": required_bool("offline_kagemusha_abi7"),
+                "mode": required_string("offline_kagemusha_abi7_mode"),
+                "bridge_abi_version": required_positive_int(
+                    "offline_kagemusha_abi7_bridge_abi_version"
+                ),
+                "circuit_id": required_string("offline_kagemusha_abi7_circuit_id"),
+                "artifacts": required_bool("offline_kagemusha_abi7_artifacts"),
+            }
+
+        def decode_recursive_compact_family() -> Dict[str, Any]:
+            return {
+                "available": required_bool(
+                    "offline_kagemusha_recursive_compact_available"
+                ),
+                "mode": required_string("offline_kagemusha_recursive_compact_mode"),
+                "bridge_abi_version": required_positive_int(
+                    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
+                ),
+                "circuit_id": required_string(
+                    "offline_kagemusha_recursive_compact_circuit_id"
+                ),
+                "artifacts": required_bool(
+                    "offline_kagemusha_recursive_compact_artifacts_available"
+                ),
+            }
+
+        abi7_family = decode_abi7_family() if has_abi7_family else None
+        recursive_compact_family = (
+            decode_recursive_compact_family() if has_recursive_compact_family else None
+        )
+        if abi7_family is not None and recursive_compact_family is not None:
+            for property_name, abi7_field, recursive_compact_field in (
+                (
+                    "available",
+                    "offline_kagemusha_abi7",
+                    "offline_kagemusha_recursive_compact_available",
+                ),
+                (
+                    "mode",
+                    "offline_kagemusha_abi7_mode",
+                    "offline_kagemusha_recursive_compact_mode",
+                ),
+                (
+                    "bridge_abi_version",
+                    "offline_kagemusha_abi7_bridge_abi_version",
+                    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+                ),
+                (
+                    "circuit_id",
+                    "offline_kagemusha_abi7_circuit_id",
+                    "offline_kagemusha_recursive_compact_circuit_id",
+                ),
+                (
+                    "artifacts",
+                    "offline_kagemusha_abi7_artifacts",
+                    "offline_kagemusha_recursive_compact_artifacts_available",
+                ),
+            ):
+                if abi7_family[property_name] != recursive_compact_family[property_name]:
+                    raise RuntimeError(
+                        f"offline readiness.{abi7_field} must match "
+                        f"offline readiness.{recursive_compact_field}"
+                    )
+
+        abi7 = abi7_family or recursive_compact_family
+        recursive_compact = recursive_compact_family or abi7_family
 
         def optional_bool(field: str) -> Optional[bool]:
             if field not in payload:
@@ -2577,32 +2686,20 @@ class OfflineReadiness:
             return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
 
         return cls(
-            offline_kagemusha_abi7=required_bool("offline_kagemusha_abi7"),
-            offline_kagemusha_abi7_mode=required_string("offline_kagemusha_abi7_mode"),
-            offline_kagemusha_abi7_bridge_abi_version=required_positive_int(
-                "offline_kagemusha_abi7_bridge_abi_version"
-            ),
-            offline_kagemusha_abi7_circuit_id=required_string(
-                "offline_kagemusha_abi7_circuit_id"
-            ),
-            offline_kagemusha_abi7_artifacts=required_bool(
-                "offline_kagemusha_abi7_artifacts"
-            ),
-            offline_kagemusha_recursive_compact_available=required_bool(
-                "offline_kagemusha_recursive_compact_available"
-            ),
-            offline_kagemusha_recursive_compact_mode=required_string(
-                "offline_kagemusha_recursive_compact_mode"
-            ),
-            offline_kagemusha_recursive_compact_required_native_bridge_abi_version=required_positive_int(
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
-            ),
-            offline_kagemusha_recursive_compact_circuit_id=required_string(
-                "offline_kagemusha_recursive_compact_circuit_id"
-            ),
-            offline_kagemusha_recursive_compact_artifacts_available=required_bool(
-                "offline_kagemusha_recursive_compact_artifacts_available"
-            ),
+            offline_kagemusha_abi7=abi7["available"],
+            offline_kagemusha_abi7_mode=abi7["mode"],
+            offline_kagemusha_abi7_bridge_abi_version=abi7["bridge_abi_version"],
+            offline_kagemusha_abi7_circuit_id=abi7["circuit_id"],
+            offline_kagemusha_abi7_artifacts=abi7["artifacts"],
+            offline_kagemusha_recursive_compact_available=recursive_compact["available"],
+            offline_kagemusha_recursive_compact_mode=recursive_compact["mode"],
+            offline_kagemusha_recursive_compact_required_native_bridge_abi_version=recursive_compact[
+                "bridge_abi_version"
+            ],
+            offline_kagemusha_recursive_compact_circuit_id=recursive_compact["circuit_id"],
+            offline_kagemusha_recursive_compact_artifacts_available=recursive_compact[
+                "artifacts"
+            ],
             offline_telemetry=required_bool("offline_telemetry"),
             offline_note=optional_bool("offline_note"),
             offline_one_use_keys=optional_bool("offline_one_use_keys"),
@@ -5474,7 +5571,7 @@ class ToriiClient:
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
         params: Dict[str, Any] = {}
         if asset_id is not None:
-            params["asset_id"] = self._normalize_optional_string(
+            params["asset_id"] = _require_exact_non_empty_string(
                 asset_id,
                 "uaid portfolio asset_id",
             )
@@ -7956,13 +8053,13 @@ class ToriiClient:
             )
         if has_contract_address:
             return {
-                "contract_address": ToriiClient._require_non_empty_string(
+                "contract_address": _require_exact_non_empty_string(
                     contract_address,
                     f"{context}.contract_address",
                 )
             }
         return {
-            "contract_alias": ToriiClient._require_non_empty_string(
+            "contract_alias": _require_exact_non_empty_string(
                 contract_alias,
                 f"{context}.contract_alias",
             )
@@ -10689,14 +10786,19 @@ class ToriiClient:
     def _normalize_uaid_literal(value: Any, *, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a UAID string")
-        literal = value.strip()
-        if not literal:
+        literal = value
+        stripped = literal.strip()
+        if not stripped:
             raise RuntimeError(f"{context} must be a UAID string")
+        if stripped != literal:
+            raise ValueError(f"{context} must not contain surrounding whitespace")
         if literal.lower().startswith("uaid:"):
             hex_portion = literal[5:]
         else:
             hex_portion = literal
-        normalized = hex_portion.strip()
+        normalized = hex_portion
+        if normalized.strip() != normalized:
+            raise ValueError(f"{context} must not contain surrounding whitespace")
         if len(normalized) != 64:
             raise RuntimeError(f"{context} must contain 64 hex characters")
         try:

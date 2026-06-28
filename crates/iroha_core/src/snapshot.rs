@@ -1080,7 +1080,7 @@ fn restore_space_directory_manifests_from_kura(
         let block = kura
             .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
             .ok_or(TryReadError::MissingBlock { height })?;
-        for transaction in block.as_ref().transactions_vec() {
+        for transaction in block.as_ref().external_transactions() {
             restored += restore_space_directory_manifests_from_executable(
                 state,
                 transaction.instructions(),
@@ -2115,6 +2115,10 @@ mod tests {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            explorer_url: None,
+            explorer_host: None,
+            counterparty_account_codec: None,
+            counterparty_account_codec_key: None,
             counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
             verifier_target: "TronContract".to_owned(),
             production_ready: false,
@@ -2130,6 +2134,7 @@ mod tests {
             proof_artifact_hash: None,
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,

@@ -161,6 +161,37 @@ class CanaryError(RuntimeError):
     """Raised when a canary runbook is invalid."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise CanaryError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise CanaryError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise CanaryError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise CanaryError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise CanaryError("args must be an argparse.Namespace")
+    return args
+
+
 @dataclass(frozen=True)
 class StagePlan:
     """One subprocess stage planned by the canary runner."""
@@ -208,7 +239,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -252,6 +286,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise CanaryError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise CanaryError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise CanaryError(f"cannot inspect {label}: I/O error") from None
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise CanaryError(f"{label} must not be a symlink")
@@ -282,9 +321,14 @@ def _read_regular_file(
             raise CanaryError(f"{label} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise CanaryError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise CanaryError(f"cannot open {label} for reading: I/O error") from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
@@ -379,7 +423,7 @@ def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -401,7 +445,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -420,7 +464,7 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -483,7 +527,7 @@ def _preflight_numeric_cli_values(
     integer_flags: set[str],
     number_flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     flags = integer_flags | number_flags
     index = 0
     while index < len(raw_args):
@@ -521,7 +565,7 @@ def _same_existing_file(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
 
@@ -532,9 +576,19 @@ def _same_existing_path(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise CanaryError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise CanaryError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_summary_output_input_alias(
@@ -554,12 +608,12 @@ def _reject_summary_output_artifact_alias(
 ) -> None:
     if summary_out is None:
         return
-    summary_resolved = summary_out.resolve()
+    summary_resolved = _path_resolve(summary_out, "summary_out")
     for label, path, is_directory in artifact_paths:
         if str(summary_out) == str(path) or _same_existing_path(summary_out, path):
             raise CanaryError(f"summary_out must not reuse {label} path")
         if is_directory:
-            artifact_root = path.resolve()
+            artifact_root = _path_resolve(path, label)
             if summary_resolved == artifact_root or artifact_root in summary_resolved.parents:
                 raise CanaryError(f"summary_out must not be written under {label}")
 
@@ -582,14 +636,37 @@ def _ensure_text_output_target(
             path.parent.mkdir(parents=True, exist_ok=True)
         except FileExistsError as error:
             raise CanaryError(f"{label} must be a directory") from error
-    if path.parent.exists() or path.parent.is_symlink():
-        parent_mode = path.parent.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise CanaryError(f"cannot create {label} parent: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise CanaryError(f"cannot create {label} parent: I/O error") from None
+    def inspected_exists(target: Path, role: str) -> bool:
+        try:
+            return target.exists() or target.is_symlink()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise CanaryError(f"cannot inspect {label} {role}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise CanaryError(f"cannot inspect {label} {role}: I/O error") from None
+
+    def inspected_lstat(target: Path, role: str) -> os.stat_result:
+        try:
+            return target.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise CanaryError(f"cannot inspect {label} {role}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise CanaryError(f"cannot inspect {label} {role}: I/O error") from None
+
+    if inspected_exists(path.parent, "parent"):
+        parent_mode = inspected_lstat(path.parent, "parent").st_mode
         if stat.S_ISLNK(parent_mode):
             raise CanaryError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(parent_mode):
             raise CanaryError(f"{label} must be a directory")
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    if inspected_exists(path, "leaf"):
+        metadata = inspected_lstat(path, "leaf")
         if stat.S_ISLNK(metadata.st_mode):
             raise CanaryError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -611,6 +688,15 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label or str(current)
+            raise CanaryError(f"cannot inspect {label} ancestors: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label or str(current)
+            raise CanaryError(f"cannot inspect {label} ancestors: I/O error") from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -651,26 +737,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise CanaryError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise CanaryError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise CanaryError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise CanaryError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise CanaryError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise CanaryError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _load_json(path: Path, *, display_label: str | None = None) -> Any:
@@ -744,9 +852,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise CanaryError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise CanaryError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise CanaryError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -754,6 +865,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise CanaryError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise CanaryError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -764,14 +877,22 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise CanaryError(f"{label} must be a JSON object")
     return value
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise CanaryError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise CanaryError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise CanaryError(f"{label} contains unknown keys")
+    return present
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -858,13 +979,17 @@ def _required_context_string(value: dict[str, Any], key: str, label: str) -> str
 
 def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise CanaryError(f"{label}.{key} must be a non-empty string")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise CanaryError(f"{field_label} must be a non-empty string")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise CanaryError(f"{field_label} must be a non-empty string")
     if len(raw) > MAX_CLEAN_STRING_CHARS:
-        raise CanaryError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
-    _reject_control_chars(raw, f"{label}.{key}")
+        raise CanaryError(f"{field_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
+    _reject_control_chars(raw, field_label)
     if raw != raw.strip():
-        raise CanaryError(f"{label}.{key} must not have surrounding whitespace")
+        raise CanaryError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -872,13 +997,17 @@ def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
     if key not in value:
         return None
     raw = value.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise CanaryError(f"{label}.{key} must be a non-empty string when provided")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise CanaryError(f"{field_label} must be a non-empty string when provided")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise CanaryError(f"{field_label} must be a non-empty string when provided")
     if len(raw) > MAX_CLEAN_STRING_CHARS:
-        raise CanaryError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
-    _reject_control_chars(raw, f"{label}.{key}")
+        raise CanaryError(f"{field_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
+    _reject_control_chars(raw, field_label)
     if raw != raw.strip():
-        raise CanaryError(f"{label}.{key} must not have surrounding whitespace")
+        raise CanaryError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -917,7 +1046,7 @@ def _optional_positive_int(
     if key not in value:
         return None
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+    if type(raw) is not int or raw <= 0:
         raise CanaryError(f"{label}.{key} must be a positive integer")
     return raw
 
@@ -928,18 +1057,16 @@ def _optional_positive_number(
     if key not in value:
         return None
     raw = value.get(key)
-    if (
-        isinstance(raw, bool)
-        or not isinstance(raw, (int, float))
-        or not math.isfinite(float(raw))
-        or raw <= 0
-    ):
+    if type(raw) not in (int, float):
         raise CanaryError(f"{label}.{key} must be a positive number")
-    return float(raw)
+    parsed = float(raw)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise CanaryError(f"{label}.{key} must be a positive number")
+    return parsed
 
 
 def _require_positive_finite_number(value: float, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise CanaryError(f"{label} must be a positive finite number")
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -958,10 +1085,11 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise CanaryError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if isinstance(value, Path):
         return Path(value)
-    except TypeError as error:
-        raise CanaryError(f"{label} must be a path") from error
+    raise CanaryError(f"{label} must be a path")
 
 
 def _require_policy_booleans(args: argparse.Namespace) -> None:
@@ -987,24 +1115,28 @@ def _string_list(
             )
         return []
     raw = value[key]
-    if not isinstance(raw, list):
+    if type(raw) is not list:
         raise CanaryError(f"{label}.{key} must be an array of strings")
     if len(raw) > MAX_JSON_LIST_ITEMS:
         raise CanaryError(
             f"{label}.{key} must contain at most {MAX_JSON_LIST_ITEMS} items"
-        )
+    )
     result: list[str] = []
     for offset, item in enumerate(raw):
-        if not isinstance(item, str) or not item.strip():
-            raise CanaryError(f"{label}.{key}[{offset}] must be a non-empty string")
+        item_label = f"{label}.{key}[{offset}]"
+        if not isinstance(item, str):
+            raise CanaryError(f"{item_label} must be a non-empty string")
+        item = _plain_text(item, item_label)
+        if not item.strip():
+            raise CanaryError(f"{item_label} must be a non-empty string")
         if len(item) > MAX_CLEAN_STRING_CHARS:
             raise CanaryError(
-                f"{label}.{key}[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+                f"{item_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
             )
-        _reject_control_chars(item, f"{label}.{key}[{offset}]")
+        _reject_control_chars(item, item_label)
         if item != item.strip():
             raise CanaryError(
-                f"{label}.{key}[{offset}] must not have surrounding whitespace"
+                f"{item_label} must not have surrounding whitespace"
             )
         result.append(item)
     _reject_duplicate_strings(result, f"{label}.{key}")
@@ -1022,7 +1154,7 @@ def _reject_duplicate_strings(values: list[str], label: str) -> None:
 def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     seen: dict[str, int] = {}
     for offset, path in enumerate(paths):
-        key = str(path.resolve())
+        key = str(_path_resolve(path, f"{label}[{offset}]"))
         if key in seen:
             raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
@@ -1034,8 +1166,8 @@ def _reject_overlapping_paths(
     right: Path,
     right_label: str,
 ) -> None:
-    left_resolved = left.resolve()
-    right_resolved = right.resolve()
+    left_resolved = _path_resolve(left, left_label)
+    right_resolved = _path_resolve(right, right_label)
     if (
         left_resolved == right_resolved
         or right_resolved in left_resolved.parents
@@ -1049,11 +1181,13 @@ def _reject_receipts_covered_by_dirs(
     receipt_dirs: list[Path],
 ) -> None:
     dirs_by_key = {
-        str(receipt_dir.resolve()): offset
+        str(_path_resolve(receipt_dir, f"verify.receipt_dirs[{offset}]")): offset
         for offset, receipt_dir in enumerate(receipt_dirs)
     }
     for offset, receipt in enumerate(receipts):
-        dir_offset = dirs_by_key.get(str(receipt.parent.resolve()))
+        dir_offset = dirs_by_key.get(
+            str(_path_resolve(receipt.parent, f"verify.receipts[{offset}] parent"))
+        )
         if dir_offset is not None:
             raise CanaryError(
                 f"verify.receipts[{offset}] is already covered by "
@@ -1065,9 +1199,15 @@ def _reject_receipts_from_stage_dirs(
     receipts: list[Path],
     stage_receipt_dirs: list[Path],
 ) -> None:
-    stage_dirs = {str(receipt_dir.resolve()) for receipt_dir in stage_receipt_dirs}
+    stage_dirs = {
+        str(_path_resolve(receipt_dir, f"stage.receipt_dir[{offset}]"))
+        for offset, receipt_dir in enumerate(stage_receipt_dirs)
+    }
     for offset, receipt in enumerate(receipts):
-        if str(receipt.parent.resolve()) in stage_dirs:
+        if (
+            str(_path_resolve(receipt.parent, f"verify.receipts[{offset}] parent"))
+            in stage_dirs
+        ):
             raise CanaryError(
                 f"verify.receipts[{offset}] must not replace a generated "
                 "stage receipt_dir"
@@ -1124,8 +1264,8 @@ def _path_from_config(
     if path.is_absolute():
         return path
     candidate = config_dir / path
-    resolved_parent = candidate.parent.resolve()
-    root = config_dir.resolve()
+    resolved_parent = _path_resolve(candidate.parent, f"{label} parent")
+    root = _path_resolve(config_dir, "config directory")
     if not resolved_parent.is_relative_to(root):
         raise CanaryError(f"{label} relative paths must stay under config directory")
     return resolved_parent / candidate.name
@@ -1878,12 +2018,16 @@ def _preflight_verify_policy_covers_generated_receipts(
             )
         ]
         _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
-        selected_dirs = {str(receipt_dir.resolve()) for receipt_dir in receipt_dirs}
+        selected_dirs = {
+            str(_path_resolve(receipt_dir, f"verify.receipt_dirs[{offset}]"))
+            for offset, receipt_dir in enumerate(receipt_dirs)
+        }
         verified_receipt_stages = [
             stage
             for stage in receipt_stages
             if stage.receipt_dir is not None
-            and str(stage.receipt_dir.resolve()) in selected_dirs
+            and str(_path_resolve(stage.receipt_dir, f"{stage.name}.receipt_dir"))
+            in selected_dirs
         ]
         missing_receipt_stages = [
             stage.name for stage in receipt_stages if stage not in verified_receipt_stages
@@ -1941,11 +2085,11 @@ def _preflight_verify_policy_covers_generated_receipts(
 
 
 def _pipe_chunk_bytes(chunk: Any) -> bytes:
-    if isinstance(chunk, bytes):
+    if type(chunk) is bytes:
         return chunk
-    if isinstance(chunk, bytearray):
+    if type(chunk) is bytearray:
         return bytes(chunk)
-    if isinstance(chunk, memoryview):
+    if type(chunk) is memoryview:
         try:
             return chunk.cast("B").tobytes()
         except (TypeError, ValueError):
@@ -1990,7 +2134,7 @@ def _run_command_bounded(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         raise CanaryError("child stage could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
     read_failed = False
@@ -1999,12 +2143,12 @@ def _run_command_bounded(
         nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             read_failed = True
         finally:
             try:
                 pipe.close()
-            except OSError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 read_failed = True
 
     assert process.stdout is not None
@@ -2022,17 +2166,38 @@ def _run_command_bounded(
     stdout_thread.start()
     stderr_thread.start()
     timed_out = False
+    wait_failed = False
     try:
         returncode = process.wait(timeout=timeout_secs)
     except subprocess.TimeoutExpired:
         timed_out = True
-        process.kill()
-        process.wait()
+        try:
+            process.kill()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            process.wait()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
         returncode = 124
-    stdout_thread.join()
-    stderr_thread.join()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        wait_failed = True
+        try:
+            process.kill()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        returncode = 124
+    try:
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            read_failed = True
+    except (RuntimeError, TypeError, ValueError):
+        read_failed = True
     if read_failed:
         raise CanaryError("child stage output could not be read") from None
+    if wait_failed or isinstance(returncode, bool) or not isinstance(returncode, int):
+        raise CanaryError("child stage did not finish cleanly") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (
@@ -2338,7 +2503,7 @@ def build_stage_plans(
     _reject_unknown_keys(config, TOP_LEVEL_KEYS, "config")
     provider = _required_context_string(config, "provider", "config")
     environment = _required_context_string(config, "environment", "config")
-    config_dir = config_path.resolve().parent
+    config_dir = _path_resolve(config_path, "config path").parent
     if not allow_repository_fixture_paths:
         _reject_repository_iso_fixture_path(config_path, "config path")
 
@@ -2379,6 +2544,7 @@ def build_stage_plans(
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     if getattr(args, "config", None) is None:
         raise CanaryError("provide --config")
     args.config = _optional_cli_path(args.config, "--config")
@@ -2399,7 +2565,7 @@ def run(args: argparse.Namespace) -> int:
             create_parent=False,
         )
     config = _require_object(_load_json(config_path, display_label="config"), "config")
-    resolved_config_path = config_path.resolve()
+    resolved_config_path = _path_resolve(config_path, "--config")
     provider, environment, stages, verify_config = build_stage_plans(
         resolved_config_path,
         config,
@@ -2530,6 +2696,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Run ISO 20022 rail/notary adapters and verify canary receipts.",
         allow_abbrev=False,
     )
@@ -2570,10 +2737,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--config",
                 "--output-limit-bytes",
@@ -2582,19 +2750,19 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--plan-only",
                 "--require-explicit-policy",
             },
         )
         _preflight_numeric_cli_values(
-            argv,
+            normalised_argv,
             integer_flags={"--output-limit-bytes"},
             number_flags={"--stage-timeout-secs"},
         )
-        _preflight_output_cli_paths(argv, {"--config", "--summary-out"})
-        args = parser.parse_args(argv)
+        _preflight_output_cli_paths(normalised_argv, {"--config", "--summary-out"})
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except CanaryError as error:
         print(f"error: {error}", file=sys.stderr)

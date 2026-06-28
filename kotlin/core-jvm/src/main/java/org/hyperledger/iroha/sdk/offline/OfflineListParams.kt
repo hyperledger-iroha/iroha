@@ -59,7 +59,7 @@ class OfflineListParams(
         if (this.limit != null) params["limit"] = this.limit.toString()
         if (this.offset != null) params["offset"] = this.offset.toString()
         if (!sort.isNullOrBlank()) params["sort"] = sort
-        if (!assetId.isNullOrBlank()) params["asset_id"] = assetId.trim()
+        assetId?.let { params["asset_id"] = requireExactNonEmpty(it, "assetId") }
         if (this.certificateExpiresBeforeMs != null)
             params["certificate_expires_before_ms"] = this.certificateExpiresBeforeMs.toString()
         if (this.certificateExpiresAfterMs != null)
@@ -78,5 +78,11 @@ class OfflineListParams(
     enum class PlatformPolicy(@JvmField val slug: String) {
         PLAY_INTEGRITY("play_integrity"),
         HMS_SAFETY_DETECT("hms_safety_detect"),
+    }
+
+    private fun requireExactNonEmpty(value: String, field: String): String {
+        require(value.isNotBlank()) { "$field must not be blank" }
+        require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+        return value
     }
 }
