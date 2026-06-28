@@ -102,6 +102,10 @@ and completed history lives in [`status.md`](./status.md).
   prover output before use. Swift, Kotlin/JVM, and Android Java wallet runtime
   tests now also force audit/redeem verifier rejection and assert no spend,
   redeem reservation, or defund submission is recorded after rejection.
+  Offline-to-offline Kagemusha transfers remain fee-free, but chain-facing
+  shield and redeem transactions keep Nexus fees; same-asset self-redeems can
+  fund that fee from the offline balance they credit online so unfunded users
+  are not blocked when the redeemed amount covers the fee.
   Remaining cleanup is to archive historical model/codec helpers in the mobile
   SDKs that are still needed only for compatibility fixtures.
 - Snapshot-backed node restarts now target hash-journal validation for
