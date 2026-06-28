@@ -429,6 +429,14 @@ MissingQcHeightStallSafetyAnchors ==
   /\ ReservationWindowAnchors
   /\ MarkerHeightModeAnchors
 
+MissingQcHeightStallExactness ==
+  /\ MissingQcHeightStallCoreSafety
+  /\ MissingQcHeightStallSafetyAnchors
+
+MissingQcHeightStallCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcHeightStallExactness
+
 Safety ==
   MissingQcHeightStallSafetyAnchors
 

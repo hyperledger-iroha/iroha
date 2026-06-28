@@ -252,7 +252,7 @@ ValuesStayInDomain ==
     /\ InitialAvailablePayloads(candidate) \in AvailableStoreValues
     /\ ImplementationAvailablePayloads(candidate) \in AvailableStoreValues
 
-Safety ==
+EngineCommittedBlockStatePreservationExactness ==
   /\ FreshPreservesRound
   /\ FreshPreservesLockedQc
   /\ FreshPreservesHighestQc
@@ -265,6 +265,15 @@ Safety ==
   /\ NoopPreservesAvailablePayloads
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineCommittedBlockStatePreservationExactness
+
+EngineCommittedBlockStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommittedBlockStatePreservationExactness
+
+SafetyFast == EngineCommittedBlockStatePreservationExactness
 
 =============================================================================
 ====

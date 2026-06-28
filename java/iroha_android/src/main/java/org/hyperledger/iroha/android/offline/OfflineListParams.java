@@ -61,8 +61,8 @@ public final class OfflineListParams {
     limit().ifPresent(value -> params.put("limit", String.valueOf(value)));
     offset().ifPresent(value -> params.put("offset", String.valueOf(value)));
     sort().filter(value -> !value.isBlank()).ifPresent(value -> params.put("sort", value));
-    if (assetId != null && !assetId.isBlank()) {
-      params.put("asset_id", assetId.trim());
+    if (assetId != null) {
+      params.put("asset_id", requireExactNonEmpty(assetId, "assetId"));
     }
     if (certificateExpiresBeforeMs != null) {
       params.put("certificate_expires_before_ms", String.valueOf(certificateExpiresBeforeMs));
@@ -89,6 +89,17 @@ public final class OfflineListParams {
       params.put("only_missing_verdict", "true");
     }
     return params;
+  }
+
+  private static String requireExactNonEmpty(final String value, final String field) {
+    final String trimmed = Objects.requireNonNull(value, field + " must not be null").trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    if (!trimmed.equals(value)) {
+      throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
+    }
+    return value;
   }
 
   public static Builder builder() {

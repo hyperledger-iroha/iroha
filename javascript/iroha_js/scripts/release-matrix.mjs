@@ -334,7 +334,7 @@ function runShellCommand(command, options) {
     if (options.timeoutSeconds) {
       timeoutId = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGKILL");
+        child.kill("SIGTERM");
       }, options.timeoutSeconds * 1000);
     }
     child.on("close", (code, signal) => {

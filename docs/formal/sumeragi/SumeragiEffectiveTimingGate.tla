@@ -256,9 +256,12 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-EffectiveTimingExactness ==
+EffectiveTimingActionsMatchSpec ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+EffectiveTimingExactness ==
+  /\ EffectiveTimingActionsMatchSpec
 
 EffectiveTimingCorrectnessEnvelope ==
   /\ TypeInvariant

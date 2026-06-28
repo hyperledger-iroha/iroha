@@ -1052,6 +1052,30 @@ impl ReserveLifecycleRuntime {
             .collect()
     }
 
+    /// Return retained movement records visible to `account` after the optional sequence.
+    pub(crate) fn movements_since_visible_to(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+        account: &[u8],
+    ) -> Vec<ReserveMovementRecord> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        self.movements
+            .iter()
+            .filter(|movement| match since_sequence {
+                Some(sequence) => movement.sequence > sequence,
+                None => true,
+            })
+            .filter(|movement| {
+                movement.provider_account == account || movement.reserve_account == account
+            })
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
     /// Return the latest retained reserve movement sequence.
     pub(crate) fn latest_movement_sequence(&self) -> Option<u64> {
         self.movements.last().map(|movement| movement.sequence)
@@ -1142,7 +1166,6 @@ impl ReserveLifecycleRuntime {
                 .decision_rationale
                 .as_deref()
                 .is_some_and(|rationale| rationale == decision.rationale)
-            && existing.decided_at_unix == Some(decision.decided_at_unix)
         {
             return Ok(ReserveAppealDecisionOutcome {
                 record: existing,
@@ -1551,7 +1574,6 @@ fn appeal_record_matches_request(
         && record.reason == request.reason
         && record.evidence_digest_hex == request.evidence_digest_hex
         && record.idempotency_key == request.idempotency_key
-        && record.opened_at_unix == request.observed_at_unix
 }
 
 fn lifecycle_policy_record_matches_update(
@@ -1564,7 +1586,6 @@ fn lifecycle_policy_record_matches_update(
         && record.effective_at_unix == update.effective_at_unix
         && record.reason == update.reason
         && record.idempotency_key == update.idempotency_key
-        && record.observed_at_unix == update.observed_at_unix
 }
 
 fn lifecycle_with_stage_override(
@@ -1995,6 +2016,65 @@ mod tests {
     }
 
     #[test]
+    fn runtime_replays_appeal_when_defaulted_timestamp_changes() {
+        let mut runtime = ReserveLifecycleRuntime::default();
+        let request = appeal_request(0x18, 0x4A);
+        let first = runtime
+            .record_appeal(request.clone())
+            .expect("record appeal");
+
+        let mut replay = request;
+        replay.observed_at_unix = replay.observed_at_unix.saturating_add(1);
+        let duplicate = runtime
+            .record_appeal(replay)
+            .expect("replay appeal with fresh defaulted timestamp");
+
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.record, first.record);
+    }
+
+    #[test]
+    fn runtime_replays_appeal_decision_when_defaulted_timestamp_changes() {
+        let mut runtime = ReserveLifecycleRuntime::default();
+        runtime
+            .record_appeal(appeal_request(0x19, 0x4B))
+            .expect("record appeal");
+        let decision = appeal_decision(0x19, ReserveAppealStatus::Rejected);
+        let first = runtime
+            .record_appeal_decision(decision.clone())
+            .expect("record appeal decision");
+
+        let mut replay = decision;
+        replay.decided_at_unix = replay.decided_at_unix.saturating_add(1);
+        let duplicate = runtime
+            .record_appeal_decision(replay)
+            .expect("replay appeal decision with fresh defaulted timestamp");
+
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.record, first.record);
+        assert_eq!(duplicate.lifecycle_event, None);
+    }
+
+    #[test]
+    fn runtime_replays_lifecycle_policy_when_defaulted_timestamp_changes() {
+        let mut runtime = ReserveLifecycleRuntime::default();
+        let update = lifecycle_policy_update(0x66);
+        let first = runtime
+            .record_lifecycle_policy_update(update.clone())
+            .expect("record lifecycle policy");
+
+        let mut replay = update;
+        replay.observed_at_unix = replay.observed_at_unix.saturating_add(1);
+        let duplicate = runtime
+            .record_lifecycle_policy_update(replay)
+            .expect("replay lifecycle policy with fresh defaulted timestamp");
+
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.record, first.record);
+        assert!(duplicate.reprojected_events.is_empty());
+    }
+
+    #[test]
     fn runtime_applies_accepted_appeal_decision_to_current_lifecycle_state() {
         let mut runtime = ReserveLifecycleRuntime::default();
         runtime
@@ -2258,6 +2338,50 @@ mod tests {
         assert_eq!(snapshot.next_sequence, 2);
         assert_eq!(snapshot.provider_balances.len(), 1);
         assert_eq!(snapshot.movements.len(), 2);
+    }
+
+    #[test]
+    fn runtime_filters_visible_movements_before_applying_limit() {
+        fn movement_id(index: u64) -> [u8; 32] {
+            let mut id = [0_u8; 32];
+            id[..8].copy_from_slice(&index.to_le_bytes());
+            id
+        }
+
+        let mut runtime = ReserveLifecycleRuntime::default();
+        let visible_account = b"visible-provider".to_vec();
+        for index in 0_u64..500 {
+            runtime
+                .record_movement(ReserveMovementRequest {
+                    movement_id: movement_id(index),
+                    provider_id: movement_id(1_000 + index),
+                    provider_account: format!("other-provider-{index}").into_bytes(),
+                    reserve_account: b"other-reserve".to_vec(),
+                    asset_definition_id: b"xor#sora".to_vec(),
+                    kind: ReserveMovementKind::TopUp,
+                    amount: XorAmount::from_micro(1),
+                    idempotency_key: format!("other-movement-{index}"),
+                    observed_at_unix: index,
+                })
+                .expect("record invisible movement");
+        }
+        let visible = runtime
+            .record_movement(ReserveMovementRequest {
+                movement_id: movement_id(501),
+                provider_id: movement_id(1_501),
+                provider_account: visible_account.clone(),
+                reserve_account: b"visible-reserve".to_vec(),
+                asset_definition_id: b"xor#sora".to_vec(),
+                kind: ReserveMovementKind::TopUp,
+                amount: XorAmount::from_micro(1),
+                idempotency_key: "visible-movement".to_owned(),
+                observed_at_unix: 501,
+            })
+            .expect("record visible movement");
+
+        let page = runtime.movements_since_visible_to(None, 1, &visible_account);
+
+        assert_eq!(page, vec![visible.record]);
     }
 
     #[test]

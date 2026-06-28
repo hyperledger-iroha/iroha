@@ -2743,6 +2743,20 @@ impl NodeHandle {
         )
     }
 
+    /// Return local reserve movements visible to `account` after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn reserve_movements_since_visible_to(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+        account: &[u8],
+    ) -> Vec<ReserveMovementRecord> {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| Vec::new(),
+            |runtime| runtime.movements_since_visible_to(since_sequence, limit, account),
+        )
+    }
+
     /// Return the latest local reserve movement sequence accepted by this node.
     #[must_use]
     pub fn latest_reserve_movement_sequence(&self) -> Option<u64> {
@@ -12128,6 +12142,38 @@ mod tests {
         assert_eq!(snapshot.provider_balances.len(), 1);
         assert_eq!(snapshot.movements.len(), 2);
         assert!(handle.reserve_movements_since(None, 0).is_empty());
+    }
+
+    #[test]
+    fn node_handle_filters_visible_reserve_movements_before_limit() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let visible_account = b"visible-provider".to_vec();
+
+        for movement_byte in [0x70, 0x71] {
+            handle
+                .record_reserve_movement(reserve_movement_request(
+                    movement_byte,
+                    0x61,
+                    ReserveMovementKind::TopUp,
+                    XorAmount::from_micro(1),
+                ))
+                .expect("record invisible movement");
+        }
+        let mut visible = reserve_movement_request(
+            0x72,
+            0x62,
+            ReserveMovementKind::TopUp,
+            XorAmount::from_micro(1),
+        );
+        visible.provider_account = visible_account.clone();
+        let visible = handle
+            .record_reserve_movement(visible)
+            .expect("record visible movement");
+
+        let page = handle.reserve_movements_since_visible_to(None, 1, &visible_account);
+
+        assert_eq!(page, vec![visible.record]);
     }
 
     #[test]

@@ -135,8 +135,7 @@ LaneInterleaveMatchesSpec ==
        LaneCount(c) \in 0..3
 
 LaneInterleaveExactness ==
-  LaneInterleaveMatchesSpec
-
+  /\ LaneInterleaveMatchesSpec
 LaneInterleaveCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ LaneInterleaveExactness

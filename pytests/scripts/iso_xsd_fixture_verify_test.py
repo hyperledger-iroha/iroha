@@ -217,6 +217,258 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 detail = VERIFIER._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("xsd-hidden", detail)
+        hidden = "token=xsd-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = VERIFIER._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=xsd-ancestor-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._reject_symlinked_existing_ancestors(
+                            VERIFIER.Path("ancestor") / "leaf",
+                            display_label="summary_out",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=xsd-reader-inspect-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = VERIFIER.Path(raw_root) / "manifest.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._read_regular_file(path, display_label="manifest")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect manifest", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_file_stat_failures_return_false(self):
+        hidden = "token=xsd-alias-stat-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_stat = path_type.stat
+        cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for failure in cases:
+            with self.subTest(error=type(failure).__name__):
+
+                def failing_stat(_self, *args, error=failure, **kwargs):
+                    raise error
+
+                path_type.stat = failing_stat
+                try:
+                    self.assertFalse(
+                        VERIFIER._same_existing_file(
+                            VERIFIER.Path("left"),
+                            VERIFIER.Path("right"),
+                        )
+                    )
+                finally:
+                    path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=xsd-resolve-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+        target = VERIFIER.Path("manifest") / "iso"
+        for name, failure in failure_cases:
+            with self.subTest(name=name):
+
+                def failing_resolve(self, *args, error=failure, **kwargs):
+                    if self == target:
+                        raise error
+                    return original_resolve(self, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._validate_relative_path(
+                            "iso/pacs.002.001.10.xsd",
+                            target.parent,
+                            target.parent,
+                            "manifest.schemas[0].path",
+                            allow_parent_segments=False,
+                        )
+                finally:
+                    path_type.resolve = original_resolve
+
+                message = str(caught.exception)
+                self.assertIn("cannot resolve manifest.schemas[0].path parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(target), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=xsd-reader-open-secret"
+        cleanup_hidden = "token=xsd-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "manifest.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = VERIFIER.os.fdopen
+            original_close = VERIFIER.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            VERIFIER.os.fdopen = failing_fdopen
+            VERIFIER.os.close = failing_close
+            try:
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="manifest",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+                VERIFIER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open manifest for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=xsd-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            VERIFIER.os.fdopen = failing_fdopen
+            VERIFIER.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="manifest",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+                VERIFIER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open manifest for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=xsd-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            VERIFIER.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="manifest",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open manifest for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -399,8 +651,15 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertNotIn(str(root), message)
 
     def test_direct_run_scalar_paths_must_be_paths_before_manifest_loading(self):
+        hidden = "xsd-hostile-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         cases = (
             ("manifest", "manifest", object(), "--manifest"),
+            ("manifest pathlike", "manifest", HostilePathLike(), "--manifest"),
             ("summary", "summary_out", object(), "summary_out"),
             ("profile catalog", "profile_catalog", object(), "--profile-catalog"),
         )
@@ -425,6 +684,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     message = str(caught.exception)
                     self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn(hidden, message)
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
@@ -452,6 +712,171 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertIn("must not be a symlink", message)
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
+
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=xsd-output-inspect-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden)),
+            ("exists_runtime", "exists", RuntimeError(hidden)),
+            ("lstat_os", "lstat", OSError(5, hidden)),
+            ("lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._ensure_text_output_target(
+                            VERIFIER.Path("summary.json"),
+                            display_label="summary_out",
+                            create_parent=False,
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_parent_creation_failures_do_not_echo_detail(self):
+        hidden = "token=xsd-output-create-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("mkdir_os", OSError(5, hidden)),
+            ("mkdir_runtime", RuntimeError(hidden)),
+            ("mkdir_type", TypeError(hidden)),
+            ("mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                            VERIFIER._ensure_text_output_target(
+                                VERIFIER.Path(raw_root) / "out" / "summary.json",
+                                display_label="summary_out",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=xsd-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for summary_out"),
+            ("replace", None, "cannot replace summary_out"),
+            ("fsync_runtime", None, "cannot write temporary output for summary_out"),
+            ("replace_runtime", None, "cannot replace summary_out"),
+            ("fsync", "unlink", "cannot write temporary output for summary_out"),
+            ("fsync", "close", "cannot write temporary output for summary_out"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for summary_out"),
+            ("fsync", "close_runtime", "cannot write temporary output for summary_out"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "xsd.summary.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = VERIFIER.os.fsync
+                original_replace = VERIFIER.os.replace
+                original_unlink = VERIFIER.os.unlink
+                original_close = VERIFIER.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                VERIFIER.os.fsync = failing_fsync
+                VERIFIER.os.replace = failing_replace
+                VERIFIER.os.unlink = failing_unlink
+                VERIFIER.os.close = failing_close
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="summary_out",
+                        )
+                finally:
+                    VERIFIER.os.fsync = original_fsync
+                    VERIFIER.os.replace = original_replace
+                    VERIFIER.os.unlink = original_unlink
+                    VERIFIER.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
@@ -594,6 +1019,53 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=xsd-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--summary-out"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--summary-out",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--summary-out")],
+                "--summary-out requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("xsd-argv-secret", stderr)
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = (
@@ -1998,6 +2470,187 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 self.assertIn("control characters", message)
                 self.assertNotIn(hidden, message)
                 self.assertNotIn("xsd-string-leak", message)
+
+    def test_profile_catalog_strings_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "xsd-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        required = VERIFIER._required_string(
+            {"rail": HostileText("swift")},
+            "rail",
+            "profiles[0]",
+        )
+        self.assertEqual(required, "swift")
+        self.assertIs(type(required), str)
+        optional = VERIFIER._optional_string(
+            {"schema": HostileText("iso/fooo.001.001.01.xsd")},
+            "schema",
+            "fixtures[0]",
+        )
+        self.assertEqual(optional, "iso/fooo.001.001.01.xsd")
+        self.assertIs(type(optional), str)
+        string_list = VERIFIER._optional_string_list(
+            {"required_reference_datasets": [HostileText("bic-lei")]},
+            "required_reference_datasets",
+            "profiles[0]",
+        )
+        self.assertEqual(string_list, ["bic-lei"])
+        self.assertIs(type(string_list[0]), str)
+        present = VERIFIER._reject_unknown_keys(
+            {HostileText("rail"): "swift"},
+            {"rail"},
+            "profiles[0]",
+        )
+        self.assertEqual(present, {"rail"})
+        self.assertTrue(all(type(key) is str for key in present))
+
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string(
+                    {"rail": HostileText("swift\x1b")},
+                    "rail",
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"schema": HostileText("iso/fooo.001.001.01\x1b.xsd")},
+                    "schema",
+                    "fixtures[0]",
+                ),
+            ),
+            (
+                "list",
+                lambda: VERIFIER._optional_string_list(
+                    {"required_reference_datasets": [HostileText("bic\x1blei")]},
+                    "required_reference_datasets",
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "secret-scan",
+                lambda: VERIFIER._check_no_secret_material(
+                    {"metadata": HostileText("warning \x1b[31mred")}
+                ),
+            ),
+            (
+                "require-object-dict-subclass",
+                lambda: VERIFIER._require_object(
+                    HostileDict({"rail": "swift"}),
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "string-list-subclass",
+                lambda: VERIFIER._optional_string_list(
+                    {"required_reference_datasets": HostileList(["bic-lei"])},
+                    "required_reference_datasets",
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: VERIFIER._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: VERIFIER._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: VERIFIER._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "secret-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileText("private_key"): "redacted"}
+                ),
+            ),
+            (
+                "control-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileText("metadata\x1b"): "redacted"}
+                ),
+            ),
+            (
+                "unknown-key",
+                lambda: VERIFIER._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"rail"},
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "non-string-key",
+                lambda: VERIFIER._check_no_secret_material({HostileKey(): "redacted"}),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: VERIFIER._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"rail"},
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: VERIFIER._reject_unknown_keys(
+                    HostileDict({"rail": "redacted"}),
+                    {"rail"},
+                    "profiles[0]",
+                ),
+            ),
+            (
+                "secret-list-subclass",
+                lambda: VERIFIER._check_no_secret_material(HostileList(["redacted"])),
+            ),
+            (
+                "secret-dict-subclass",
+                lambda: VERIFIER._check_no_secret_material(
+                    HostileDict({"metadata": "redacted"})
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
 
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4449,6 +5102,31 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertNotIn(str(root), stderr)
             self.assertNotIn(hidden, stderr)
 
+    def test_xmllint_runtime_startup_failure_is_controlled_without_echo(self):
+        hidden = "token=xmllint-runtime-startup-secret"
+
+        def raising_popen(*_args, **_kwargs):
+            raise RuntimeError(hidden)
+
+        original_popen = VERIFIER.subprocess.Popen
+        VERIFIER.subprocess.Popen = raising_popen
+        try:
+            with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                VERIFIER._run_command_bounded(
+                    [str(Path(tempfile.gettempdir()) / hidden / "xmllint")],
+                    128,
+                    1.0,
+                )
+        finally:
+            VERIFIER.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("xmllint could not be started", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(tempfile.gettempdir(), message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
     def test_xmllint_output_read_failure_is_controlled_without_echo(self):
         hidden = "token=xmllint-pipe-secret"
 
@@ -4473,6 +5151,210 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_xmllint_runtime_pipe_read_failure_is_controlled_without_echo(self):
+        hidden = "token=xmllint-runtime-pipe-secret"
+
+        class FailingPipe:
+            def read(self, _size):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = FailingPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        original_popen = VERIFIER.subprocess.Popen
+        VERIFIER.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                VERIFIER._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            VERIFIER.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("xmllint output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_xmllint_runtime_pipe_close_failure_is_controlled_without_echo(self):
+        hidden = "token=xmllint-runtime-close-secret"
+
+        class ClosingPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = ClosingPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        original_popen = VERIFIER.subprocess.Popen
+        VERIFIER.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                VERIFIER._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            VERIFIER.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("xmllint output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_xmllint_runtime_wait_failure_is_controlled_without_echo(self):
+        hidden = "token=xmllint-runtime-wait-secret"
+        cleanup_hidden = "token=xmllint-runtime-kill-secret"
+        cases = (
+            ("wait failure", "wait"),
+            ("invalid returncode", "returncode"),
+        )
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        for name, mode in cases:
+            with self.subTest(name=name):
+
+                class FakeProcess:
+                    stdout = EmptyPipe()
+                    stderr = EmptyPipe()
+
+                    def wait(self, timeout=None):
+                        if mode == "wait":
+                            raise RuntimeError(hidden)
+                        return hidden
+
+                    def kill(self):
+                        raise RuntimeError(cleanup_hidden)
+
+                def fake_popen(*_args, **_kwargs):
+                    return FakeProcess()
+
+                original_popen = VERIFIER.subprocess.Popen
+                VERIFIER.subprocess.Popen = fake_popen
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._run_command_bounded(
+                            [sys.executable, "-c", "print('ok')"],
+                            128,
+                            1.0,
+                        )
+                finally:
+                    VERIFIER.subprocess.Popen = original_popen
+
+                message = str(caught.exception)
+                self.assertIn("xmllint did not finish cleanly", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_xmllint_runtime_thread_join_failure_is_controlled_without_echo(self):
+        hidden = "token=xmllint-runtime-thread-secret"
+        cases = ("join", "is_alive")
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = EmptyPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        for mode in cases:
+            with self.subTest(mode=mode):
+
+                class FakeThread:
+                    def __init__(self, *, target, args, daemon):
+                        self._target = target
+                        self._args = args
+
+                    def start(self):
+                        self._target(*self._args)
+
+                    def join(self, timeout=None):
+                        if mode == "join":
+                            raise RuntimeError(hidden)
+
+                    def is_alive(self):
+                        if mode == "is_alive":
+                            raise RuntimeError(hidden)
+                        return False
+
+                original_popen = VERIFIER.subprocess.Popen
+                original_thread = VERIFIER.threading.Thread
+                VERIFIER.subprocess.Popen = fake_popen
+                VERIFIER.threading.Thread = FakeThread
+                try:
+                    with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                        VERIFIER._run_command_bounded(
+                            [sys.executable, "-c", "print('ok')"],
+                            128,
+                            1.0,
+                        )
+                finally:
+                    VERIFIER.subprocess.Popen = original_popen
+                    VERIFIER.threading.Thread = original_thread
+
+                message = str(caught.exception)
+                self.assertIn("xmllint output could not be read", message)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
     def test_xmllint_pipe_reader_clamps_bytes_like_chunks_by_byte_length(self):
         class FakePipe:
             def __init__(self, chunks):
@@ -4496,6 +5378,41 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 )
                 self.assertEqual(captured, expected)
                 self.assertTrue(truncated)
+
+    def test_xmllint_pipe_reader_rejects_hostile_bytes_subclasses(self):
+        hidden = "token=xmllint-hostile-pipe-secret"
+
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        class HostileBytes(bytes):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytes_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytes_len={hidden}")
+
+        class HostileBytearray(bytearray):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytearray_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytearray_len={hidden}")
+
+        cases = (
+            ("bytes-subclass", HostileBytes(b"abcdefgh")),
+            ("bytearray-subclass", HostileBytearray(b"abcdefgh")),
+        )
+        for name, chunk in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(OSError) as caught:
+                    VERIFIER._read_limited_pipe(FakePipe([chunk]), 6)
+                self.assertIn("non-byte data", str(caught.exception))
+                self.assertNotIn(hidden, str(caught.exception))
 
     def test_xmllint_pipe_reader_rejects_non_byte_chunks_without_echo(self):
         hidden = "token=xmllint-pipe-secret"

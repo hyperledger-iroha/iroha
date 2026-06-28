@@ -512,6 +512,18 @@ class OfflineNoteTest {
         )
         assertFalse(
             NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = { throw IllegalArgumentException("bad library name") },
+                probeSymbol = { error("probe must not run") },
+            ),
+        )
+        assertFalse(
+            NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = { throw IllegalStateException("bad native loader") },
+                probeSymbol = { error("probe must not run") },
+            ),
+        )
+        assertFalse(
+            NativeOfflineNoteProver.detectNativeAvailability(
                 loadLibrary = {},
                 probeSymbol = { throw UnsatisfiedLinkError("missing symbol") },
             ),
@@ -520,6 +532,12 @@ class OfflineNoteTest {
             NativeOfflineNoteProver.detectNativeAvailability(
                 loadLibrary = {},
                 probeSymbol = { throw SecurityException("native bridge denied") },
+            ),
+        )
+        assertFalse(
+            NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw IllegalStateException("bad native probe") },
             ),
         )
 
@@ -628,6 +646,18 @@ class OfflineNoteTest {
                 probeSymbol = { true },
             )
         )
+        assertFalse(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = { throw IllegalStateException("bad native loader") },
+                probeSymbol = { error("probe must not run") },
+            )
+        )
+        assertFalse(
+            KagemushaCompactPaymentTokenProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw IllegalStateException("bad native probe") },
+            )
+        )
     }
 
     @Test
@@ -670,6 +700,18 @@ class OfflineNoteTest {
             KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
                 loadLibrary = { throw SecurityException("denied") },
                 probeSymbol = { true },
+            )
+        )
+        assertFalse(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = { throw IllegalStateException("bad native loader") },
+                probeSymbol = { error("probe must not run") },
+            )
+        )
+        assertFalse(
+            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw IllegalStateException("bad native probe") },
             )
         )
     }
@@ -3087,6 +3129,107 @@ class OfflineNoteTest {
         assertEquals(token.tokenIdHex(), hex(recipientSubmitter.defunds[0].second[0].tokenId()))
     }
 
+    @Test
+    fun walletRejectsAuditWhenRecursiveVerifierFails() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val chainId = string(derivation, "chain_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"))
+        val testIssuer = TestIssuerCertificateSigner()
+        val verifier = Ed25519OfflineNoteCertificateVerifier(listOf(testIssuer.publicKey))
+        val senderSigner = TestOwnerCertificateSigner()
+        val recipientSigner = TestOwnerCertificateSigner()
+        val sourceNote = issuerSourceWalletNote(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            assetDefinitionId = assetDefinitionId,
+            amount = string(chainIssue, "amount"),
+            issuerCertificate = testIssuer.issuerCertificate(senderSigner.accountId),
+            noteSecret = ByteArray(32) { 0x41.toByte() },
+            operationSuffix = "reject-audit-source",
+            createdAtMs = 1_700_000_000_000L,
+        )
+        val senderStore = InMemoryOfflineNoteStore()
+        senderStore.upsert(sourceNote)
+        val senderWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = senderSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderSigner.accountId)),
+            ownerCertificateSigner = senderSigner,
+            store = senderStore,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = RejectingProofVerifier(rejectAudit = true),
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(
+                listOf(
+                    ByteArray(32) { 0x42.toByte() },
+                    ByteArray(32) { 0x43.toByte() },
+                )
+            ),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { long(obj(fixture, "payment_token"), "created_at_ms") },
+        )
+        val recipientWallet = OfflineNoteWallet(
+            chainId = chainId,
+            accountId = recipientSigner.accountId,
+            attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(recipientSigner.accountId)),
+            ownerCertificateSigner = recipientSigner,
+            transactionSubmitter = RecordingTransactionSubmitter(),
+            proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
+            certificateVerifier = verifier,
+            randomSource = QueueRandomSource(listOf(ByteArray(32) { 0x44.toByte() })),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_200L },
+        )
+        val receiveRequest = recipientWallet.prepareReceive(
+            assetDefinitionId = assetDefinitionId,
+            amount = chainRedeemAmount(fixture),
+        )
+
+        assertIllegalArgumentContains("Offline Note recursive audit proof verification failed") {
+            senderWallet.pay(receiveRequest)
+        }
+        assertEquals(OfflineNoteWalletNoteState.SPENDABLE, senderStore.findNote(sourceNote.noteCommitment())?.state)
+        assertEquals(1, senderStore.listNotes().size)
+    }
+
+    @Test
+    fun walletRejectsRedeemWhenRecursiveVerifierFails() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val chainIssue = obj(chain, "issue")
+        val payment = obj(fixture, "payment_token")
+        val senderCertificate = certificate(obj(payment, "sender_key_certificate"))
+        val note = sourceWalletNote(fixture, senderCertificate)
+        val store = InMemoryOfflineNoteStore()
+        store.upsert(note)
+        val submitter = RecordingTransactionSubmitter()
+        val wallet = OfflineNoteWallet(
+            chainId = string(derivation, "chain_id"),
+            accountId = accountFromAssetId(string(chainIssue, "asset_id")),
+            attestationProvider = StaticAttestationProvider(senderCertificate),
+            store = store,
+            transactionSubmitter = submitter,
+            proofProvider = BindingProofProvider,
+            proofVerifier = RejectingProofVerifier(rejectRedeem = true),
+            certificateVerifier = certificateVerifier(fixture),
+            randomSource = QueueRandomSource(emptyList()),
+            idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
+            clock = { 1_700_000_001_300L },
+        )
+
+        assertIllegalArgumentContains("Offline Note recursive redeem proof verification failed") {
+            wallet.redeem(note)
+        }
+        assertTrue(submitter.defunds.isEmpty())
+        assertEquals(OfflineNoteWalletNoteState.SPENDABLE, store.findNote(note.noteCommitment())?.state)
+    }
+
     private fun chainRedeemAmount(fixture: Map<String, Any?>): String =
         string(obj(obj(fixture, "chain_vectors"), "redeem"), "amount")
 
@@ -4934,6 +5077,17 @@ class OfflineNoteTest {
 
         override fun verifyRedeem(redemption: OfflineNote.Redeem): Boolean =
             redemption.recursiveProof.publicInputsHash().contentEquals(redemption.publicInputsHash())
+    }
+
+    private class RejectingProofVerifier(
+        private val rejectAudit: Boolean = false,
+        private val rejectRedeem: Boolean = false,
+    ) : OfflineNoteProofVerifier {
+        override fun verifyAudit(audit: OfflineNote.AuditBundle): Boolean =
+            !rejectAudit && BindingProofVerifier.verifyAudit(audit)
+
+        override fun verifyRedeem(redemption: OfflineNote.Redeem): Boolean =
+            !rejectRedeem && BindingProofVerifier.verifyRedeem(redemption)
     }
 
     private class RecordingIssuerClient(

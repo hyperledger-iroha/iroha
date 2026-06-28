@@ -163,8 +163,11 @@ RecoveryHelperSafetyAnchors ==
   /\ PayloadFetchAnchors
 
 RbcRecoveryHelperExactness ==
-  RecoveryHelperSafetyAnchors
-
+  /\ AllCommittedMatches
+  /\ AllPayloadNeedsMatch
+  /\ CommittedAnchors
+  /\ PayloadSkipAnchors
+  /\ PayloadFetchAnchors
 RbcRecoveryHelperCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ RbcRecoveryHelperExactness

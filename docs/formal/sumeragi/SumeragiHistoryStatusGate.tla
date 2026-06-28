@@ -438,10 +438,14 @@ SafetyAnchors ==
   /\ NposHistoryAnchors
   /\ ConsensusKeyHistoryAnchors
 
+HistoryStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 HistoryStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ HistoryStatusExactness
 
 =============================================================================
 ====

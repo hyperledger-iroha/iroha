@@ -16,6 +16,14 @@ TON_CODE_BOC_ROOT_HASH = (
 )
 
 
+class HostilePublicKey:
+    def __str__(self):
+        raise AssertionError("secret-token hostile __str__")
+
+    def __repr__(self):
+        return "secret-token-hostile-key"
+
+
 def load_evidence_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_all_lanes_evidence.py"
@@ -2131,6 +2139,24 @@ def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys():
             (
                 (
                     "[[zk.sccp_destination_rollouts]]\n"
+                    'recovery_phrase_duplicate_key = "first"\n'
+                    'recovery_phrase_duplicate_key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("recovery_phrase_duplicate_key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
+                    'mnemonic_duplicate_key = "first"\n'
+                    'mnemonic_duplicate_key = "second"\n'
+                ),
+                "operator evidence:3: duplicate key with sensitive name",
+                ("mnemonic_duplicate_key", "first", "second"),
+            ),
+            (
+                (
+                    "[[zk.sccp_destination_rollouts]]\n"
                     'route|operator-duplicate-key = "first"\n'
                     'route|operator-duplicate-key = "second"\n'
                 ),
@@ -2155,6 +2181,55 @@ def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys():
         module.tomllib = original_tomllib
 
 
+def test_all_lanes_minimal_toml_sensitive_helpers_cover_marker_families():
+    module = load_evidence_module()
+    helper_cases = (
+        (
+            module._minimal_toml_duplicate_key_detail,
+            "duplicate key with sensitive name",
+        ),
+        (
+            module._toml_unsupported_section_detail,
+            "unsupported zk section with sensitive name",
+        ),
+        (
+            module._evidence_unsupported_section_detail,
+            "unsupported evidence section with sensitive name",
+        ),
+        (
+            module._unexpected_record_field_detail,
+            "unexpected field with sensitive name",
+        ),
+        (
+            module._unexpected_audit_hash_field_detail,
+            "source adapter gate audit hashes contains unexpected field with sensitive name",
+        ),
+    )
+
+    for marker in module.SENSITIVE_MINIMAL_TOML_KEY_MARKERS:
+        field_name = f"{marker}_operator_field"
+        for helper, expected_detail in helper_cases:
+            detail = helper(field_name)
+            assert detail == expected_detail, (helper.__name__, marker)
+            assert field_name not in detail
+
+    assert module._minimal_toml_duplicate_key_detail(
+        "public_operator_field"
+    ) == "duplicate key public_operator_field"
+    assert module._toml_unsupported_section_detail(
+        "public_operator_field"
+    ) == "unsupported zk section public_operator_field"
+    assert module._evidence_unsupported_section_detail(
+        "public_operator_field"
+    ) == "unsupported evidence section public_operator_field"
+    assert module._unexpected_record_field_detail(
+        "public_operator_field"
+    ) == "unexpected field public_operator_field"
+    assert module._unexpected_audit_hash_field_detail(
+        "public_operator_field"
+    ) == "source adapter gate audit hashes contains unexpected field: public_operator_field"
+
+
 def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
     module = load_evidence_module()
     original_tomllib = module.tomllib
@@ -2165,6 +2240,16 @@ def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names():
                 "[[zk.secret-token-section]]\nversion = 1\n",
                 "operator evidence:1: unsupported zk section with sensitive name",
                 "secret-token-section",
+            ),
+            (
+                "[[zk.recovery-phrase-section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with sensitive name",
+                "recovery-phrase-section",
+            ),
+            (
+                "[[zk.seed_phrase_section]]\nversion = 1\n",
+                "operator evidence:1: unsupported zk section with sensitive name",
+                "seed_phrase_section",
             ),
             (
                 "[[zk.route|operator-section]]\nversion = 1\n",
@@ -2287,24 +2372,71 @@ def test_all_lanes_cli_redacts_top_level_exception_details(
         ValueError,
     )
     for exception_type in top_level_exception_types:
+        sensitive_messages = (
+            ("secret-token /tmp/operator/private-path", ("secret-token", "private-path")),
+            ("operator secret%2dtoken value", ("secret%2dtoken",)),
+            ("operator private&#95;key value", ("private&#95;key",)),
+            ("operator password value", ("password",)),
+            ("operator passphrase value", ("passphrase",)),
+            ("operator bearer%20credential value", ("bearer%20credential",)),
+            ("operator authorization value", ("authorization",)),
+            ("operator access&#45;key value", ("access&#45;key",)),
+            ("operator api_key value", ("api_key",)),
+            ("operator client&#45;secret value", ("client&#45;secret",)),
+            ("operator recovery%2dphrase value", ("recovery%2dphrase",)),
+            ("operator recovery_phrase value", ("recovery_phrase",)),
+            ("operator session%3dabc value", ("session%3dabc",)),
+            ("operator token&#61;abc value", ("token&#61;abc",)),
+        )
+        for sensitive_message, leaked_markers in sensitive_messages:
 
-        def fail_load(_paths, exception_type=exception_type):
-            raise exception_type("secret-token /tmp/operator/private-path")
+            def fail_load(
+                _paths,
+                exception_type=exception_type,
+                sensitive_message=sensitive_message,
+            ):
+                raise exception_type(sensitive_message)
 
-        with monkeypatch.context() as patch:
-            patch.setattr(module, "load_evidence_bundle", fail_load)
-            try:
-                module.main([str(tmp_path / "evidence.toml")])
-            except SystemExit as exc:
-                assert exc.code == 2
-            else:
-                raise AssertionError("all-lanes CLI accepted top-level load failure")
+            with monkeypatch.context() as patch:
+                patch.setattr(module, "load_evidence_bundle", fail_load)
+                try:
+                    module.main([str(tmp_path / "evidence.toml")])
+                except SystemExit as exc:
+                    assert exc.code == 2
+                else:
+                    raise AssertionError("all-lanes CLI accepted top-level load failure")
 
-            captured = capsys.readouterr()
-            assert "SCCP all-lanes evidence validation failed" in captured.err
-            assert "secret-token" not in captured.err
-            assert "private-path" not in captured.err
-            assert exception_type.__name__ not in captured.err
+                captured = capsys.readouterr()
+                assert "SCCP all-lanes evidence validation failed" in captured.err
+                for leaked_marker in leaked_markers:
+                    assert leaked_marker not in captured.err
+                assert exception_type.__name__ not in captured.err
+
+
+def test_all_lanes_cli_preserves_safe_top_level_exception_detail(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = load_evidence_module()
+    safe_message = "route evidence is temporarily unavailable"
+
+    def fail_load(_paths):
+        raise RuntimeError(safe_message)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "load_evidence_bundle", fail_load)
+        try:
+            module.main([str(tmp_path / "evidence.toml")])
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("all-lanes CLI accepted top-level load failure")
+
+    captured = capsys.readouterr()
+    assert safe_message in captured.err
+    assert "SCCP all-lanes evidence validation failed" not in captured.err
+    assert "RuntimeError" not in captured.err
 
 
 def test_all_lanes_loader_rejects_duplicate_metadata_comments(tmp_path):
@@ -2678,6 +2810,20 @@ def test_all_lanes_evidence_rejects_unknown_record_fields():
     assert "domain 4 (ton): unexpected field unexpected_route_hash" in blockers
 
 
+def test_all_lanes_evidence_redacts_hostile_root_section_names():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    records[HostilePublicKey()] = []
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert "evidence section name must be a string" in blockers
+    assert "secret-token" not in blockers
+    assert "hostile" not in blockers
+
+
 def test_all_lanes_evidence_redacts_unsafe_unknown_record_fields():
     module = load_evidence_module()
     cases = (
@@ -2704,6 +2850,19 @@ def test_all_lanes_evidence_redacts_unsafe_unknown_record_fields():
         assert summary["production_ready"] is False
         assert expected in blockers
         assert str(field) not in blockers
+
+    records = complete_bundle(module)
+    records["sccp_source_verifier_materials"][0][HostilePublicKey()] = (
+        "operator-controlled"
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    blockers = "\n".join(summary["blockers"])
+    assert summary["production_ready"] is False
+    assert "unexpected non-string field name" in blockers
+    assert "secret-token" not in blockers
+    assert "hostile" not in blockers
 
 
 def test_all_lanes_evidence_rejects_reused_source_material_role_hashes():
@@ -3076,6 +3235,31 @@ def test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_fo
         ) in summary["blockers"]
 
 
+def test_all_lanes_evidence_rejects_source_adapter_deployment_control_hash_template_replays():
+    module = load_evidence_module()
+
+    for domain in module.SCCP_CORE_REMOTE_DOMAINS:
+        profile = module.LANE_PROFILES[domain]
+        template_hash = next(
+            iter(module._source_material_template_hashes(profile).values())
+        )
+        template_value = "0x" + template_hash.hex()
+        record_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
+        for field in ("adapter_verifier_vk_hash", "deployment_receipt_hash"):
+            records = complete_bundle(module)
+            records["sccp_source_adapter_engine_deployments"][record_index][field] = (
+                template_value
+            )
+
+            summary = module.validate_evidence_bundle(records)
+
+            assert summary["production_ready"] is False, (domain, field)
+            assert (
+                f"domain {domain} ({profile.chain}): {field} must be deployed "
+                "source-adapter evidence, not built-in template material"
+            ) in summary["blockers"]
+
+
 def test_all_lanes_evidence_reports_deployment_source_role_shape_independently():
     module = load_evidence_module()
     cases = (
@@ -3183,6 +3367,16 @@ def test_all_lanes_loader_redacts_unsupported_zk_section_names(tmp_path):
             "secret-token-zk-section",
         ),
         (
+            '[[zk."recovery-phrase-zk-section"]]\ndomain = 1\n',
+            "unsupported zk section with sensitive name",
+            "recovery-phrase-zk-section",
+        ),
+        (
+            '[[zk."mnemonic-zk-section"]]\ndomain = 1\n',
+            "unsupported zk section with sensitive name",
+            "mnemonic-zk-section",
+        ),
+        (
             '[[zk."route|operator-zk-section"]]\ndomain = 1\n',
             "unsupported zk section with malformed name",
             "route|operator-zk-section",
@@ -3272,6 +3466,50 @@ def test_route_allowlist_hash_rejects_zero_or_replayed_roles():
             assert "non-zero" in str(exc) or "must be distinct" in str(exc)
         else:
             raise AssertionError("replayed route allowlist evidence role was accepted")
+
+
+def test_route_allowlist_hash_rejects_template_source_record_inputs():
+    module = load_evidence_module()
+
+    for domain in module.SCCP_CORE_REMOTE_DOMAINS:
+        profile = module.LANE_PROFILES[domain]
+        template_hashes = tuple(
+            module._source_material_template_hashes(profile).values()
+        )
+        deployed_hashes = [
+            bytes([byte]) * 32
+            for byte in range(0x11, 0x40)
+            if bytes([byte]) * 32 not in template_hashes
+        ][:3]
+        assert len(deployed_hashes) == 3
+        source_material, source_deployment, destination_binding = deployed_hashes
+        template_hash = template_hashes[0]
+
+        for label, evidence in (
+            (
+                "source_verifier_material_hash",
+                (template_hash, source_deployment, destination_binding),
+            ),
+            (
+                "source_adapter_engine_deployment_hash",
+                (source_material, template_hash, destination_binding),
+            ),
+            (
+                "destination_binding_hash",
+                (source_material, source_deployment, template_hash),
+            ),
+        ):
+            try:
+                module.route_allowlist_hash_for_lane_evidence(profile, *evidence)
+            except ValueError as exc:
+                assert (
+                    f"{label} must be deployed evidence, "
+                    "not built-in template material"
+                ) in str(exc)
+            else:
+                raise AssertionError(
+                    f"{label} accepted built-in source material template hash"
+                )
 
 
 def test_all_lanes_accepts_verified_evm_live_toml(tmp_path):
@@ -7205,6 +7443,75 @@ def test_all_lanes_evidence_redacts_source_gate_recompute_failures(
             assert exception_type.__name__ not in rendered
 
 
+def test_all_lanes_public_source_gate_summaries_redact_signature_drift(
+    monkeypatch,
+) -> None:
+    """Public source-gate summaries must not leak helper signature drift."""
+
+    module = load_evidence_module()
+    records = complete_bundle(module)
+
+    def secret_token_source_gate_signature_drift():
+        raise AssertionError("unreachable signature-drift body")
+
+    original_load_sibling_module = module._load_sibling_module
+
+    def load_with_signature_drift(name):
+        sibling = original_load_sibling_module(name)
+        drifted_functions = {
+            "sccp_solana_source_state_evidence.py": (
+                "solana_full_light_client_gate_hash",
+            ),
+            "sccp_ton_source_state_evidence.py": (
+                "ton_full_light_client_gate_hash",
+            ),
+            "sccp_tron_source_bridge_evidence.py": (
+                "tron_dpos_source_gate_hash",
+                "tron_source_bridge_config_hash",
+            ),
+            "sccp_eth_source_bridge_evidence.py": (
+                "eth_source_gate_hash",
+                "eth_source_bridge_config_hash",
+            ),
+            "sccp_bsc_source_bridge_evidence.py": ("bsc_source_gate_hash",),
+        }.get(name, ())
+        for function_name in drifted_functions:
+            setattr(
+                sibling,
+                function_name,
+                secret_token_source_gate_signature_drift,
+            )
+        return sibling
+
+    monkeypatch.setattr(
+        module,
+        "_load_sibling_module",
+        load_with_signature_drift,
+    )
+
+    summary = module.validate_evidence_bundle(records)
+
+    expected_blockers = {
+        module.SCCP_DOMAIN_ETH: "EVM source gate cannot be recomputed",
+        module.SCCP_DOMAIN_BSC: "EVM source gate cannot be recomputed",
+        module.SCCP_DOMAIN_SOL: "Solana full light-client gate cannot be recomputed",
+        module.SCCP_DOMAIN_TON: "TON full light-client gate cannot be recomputed",
+        module.SCCP_DOMAIN_TRON: "TRON DPoS source gate cannot be recomputed",
+    }
+    assert summary["production_ready"] is False
+    rendered = json.dumps(summary, sort_keys=True)
+    assert "secret_token_source_gate_signature_drift" not in rendered
+    assert "unreachable signature-drift body" not in rendered
+
+    for domain, expected in expected_blockers.items():
+        profile = module.LANE_PROFILES[domain]
+        lane = next(item for item in summary["lanes"] if item["domain"] == domain)
+        source_gate = lane["source_adapter_gate"]
+        assert source_gate["ready"] is False
+        assert expected in source_gate["blockers"]
+        assert f"domain {domain} ({profile.chain}): {expected}" in summary["blockers"]
+
+
 def test_all_lanes_evidence_rejects_tron_dpos_source_gate_hash_drift():
     module = load_evidence_module()
     records = complete_bundle(module)
@@ -7475,6 +7782,32 @@ def test_all_lanes_evidence_requires_route_canary_metadata():
     assert "domain 3 (sol): route canary evidence hash metadata" in blockers
     assert "domain 3 (sol): route canary route allowlist hash metadata" in blockers
     assert "domain 3 (sol): route canary destination binding hash metadata" in blockers
+
+
+def test_all_lanes_evidence_rejects_route_canary_evidence_hash_template_replays():
+    module = load_evidence_module()
+
+    for domain in module.SCCP_CORE_REMOTE_DOMAINS:
+        records = complete_bundle(module)
+        profile = module.LANE_PROFILES[domain]
+        route = next(
+            record
+            for record in records["sccp_route_allowlists"]
+            if record["domain"] == domain
+        )
+        template_hash = next(iter(module._source_material_template_hashes(profile).values()))
+        template_value = "0x" + template_hash.hex()
+        route["_comment_route_canary_evidence_hash"] = template_value
+        if "route_canary_evidence_hash" in route:
+            route["route_canary_evidence_hash"] = template_value
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        assert (
+            f"domain {domain} ({profile.chain}): route canary evidence hash "
+            "must be live evidence, not built-in template material"
+        ) in "\n".join(summary["blockers"])
 
 
 def test_all_lanes_release_checklist_reports_ready_bundle():
@@ -7868,7 +8201,7 @@ def test_all_lanes_cli_suppresses_malformed_summary_blockers(capsys):
     original_load = module.load_evidence_bundle
     original_validate = module.validate_evidence_bundle
     summary = module.validate_evidence_bundle(complete_bundle(module))
-    summary["blockers"] = ["operator secret-token-blocker"]
+    summary["blockers"] = ["operator secret%2dtoken-blocker"]
 
     module.load_evidence_bundle = lambda paths: {}
     module.validate_evidence_bundle = lambda records: copy.deepcopy(summary)
@@ -7885,7 +8218,132 @@ def test_all_lanes_cli_suppresses_malformed_summary_blockers(capsys):
     assert payload["blockers"] == [
         "all-lanes summary blockers[0] contains sensitive name"
     ]
-    assert "secret-token-blocker" not in captured.out
+    assert "secret%2dtoken-blocker" not in captured.out
+
+
+def test_all_lanes_cli_suppresses_encoded_recovery_phrase_blockers(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    eth_lane = summary["lanes"][0]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator recovery%20phrase-root-blocker"]
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator recovery&#32;phrase-lane-blocker"]
+    eth_lane["source_adapter_gate"]["ready"] = False
+    eth_lane["source_adapter_gate"]["blockers"] = [
+        "operator recovery_phrase-gate-blocker"
+    ]
+    eth_lane["source_record_hashes"][
+        "source_verifier_material_hash"
+    ] = "operator recovery%20phrase-lane-value"
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: copy.deepcopy(summary)
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "all-lanes summary blockers[0] contains sensitive name" in blockers
+    assert "all-lanes summary lanes[0] blockers[0] contains sensitive name" in blockers
+    assert (
+        "all-lanes summary lanes[0].source_adapter_gate blockers[0] "
+        "contains sensitive name"
+    ) in blockers
+    assert (
+        "all-lanes summary lanes[0].source_record_hashes."
+        "source_verifier_material_hash contains sensitive value"
+    ) in blockers
+    assert "recovery%20phrase" not in captured.out
+    assert "recovery&#32;phrase" not in captured.out
+    assert "recovery_phrase" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_public_blocker_sanitizers_cover_marker_families():
+    module = load_evidence_module()
+    nested_label = (
+        "all-lanes summary lanes[0].source_record_hashes."
+        "source_verifier_material_hash"
+    )
+
+    assert module._blocker_text_issue("operator public rollout pending") is None
+    assert (
+        module._public_nested_lane_value_errors(
+            "operator public rollout pending",
+            nested_label,
+        )
+        == []
+    )
+
+    for marker in module.SENSITIVE_PUBLIC_BLOCKER_MARKERS:
+        encoded_marker = (
+            marker.replace("-", "%2d").replace("_", "%5f").replace(" ", "%20")
+        )
+        blocker = f"operator-{encoded_marker}-blocker"
+        value = f"operator-{encoded_marker}-lane-value"
+
+        assert module._blocker_text_issue(blocker) == "contains sensitive name"
+        assert module._public_nested_lane_value_errors(value, nested_label) == [
+            f"{nested_label} contains sensitive value"
+        ]
+
+    encoded_confusable_marker = "s%D0%B5cret-token"
+    assert (
+        module._blocker_text_issue(f"operator-{encoded_confusable_marker}-blocker")
+        == "contains sensitive name"
+    )
+    assert module._public_nested_lane_value_errors(
+        f"operator-{encoded_confusable_marker}-lane-value",
+        nested_label,
+    ) == [f"{nested_label} contains sensitive value"]
+
+    decoded_unsafe_blockers = (
+        ("safe%0Apublic-blocker", "contains control character"),
+        ("safe%E2%80%AEpublic-blocker", "contains non-ASCII character"),
+        ("safe%7Cpublic-blocker", "contains Markdown-unsafe character"),
+        ("safe%3Cpublic-blocker%3E", "contains Markdown-unsafe character"),
+    )
+    for blocker, issue in decoded_unsafe_blockers:
+        assert module._blocker_text_issue(blocker) == issue
+
+    decoded_unsafe_values = (
+        ("safe%0Apublic-value", "contains control character"),
+        ("safe%E2%80%AEpublic-value", "contains non-ASCII value"),
+        ("safe%7Cpublic-value", "contains Markdown-unsafe value"),
+        ("safe%3Cpublic-value%3E", "contains Markdown-unsafe value"),
+    )
+    for value, issue in decoded_unsafe_values:
+        assert module._public_nested_lane_value_errors(value, nested_label) == [
+            f"{nested_label} {issue}"
+        ]
+
+
+def test_all_lanes_cli_error_detail_rejects_decoded_unsafe_messages():
+    module = load_evidence_module()
+    fallback = "SCCP all-lanes evidence validation failed"
+
+    for detail in (
+        "safe%0Acollector detail",
+        "safe%E2%80%AEcollector detail",
+        "safe%7Ccollector detail",
+        "safe%3Ccollector detail%3E",
+    ):
+        assert module._cli_error_detail(RuntimeError(detail), fallback=fallback) == fallback
+
+    assert (
+        module._cli_error_detail(RuntimeError("safe collector detail"), fallback=fallback)
+        == "safe collector detail"
+    )
 
 
 def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys):
@@ -7894,20 +8352,27 @@ def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys)
     original_validate = module.validate_evidence_bundle
     summary = module.validate_evidence_bundle(complete_bundle(module))
     root_blocker = "safe duplicated root blocker"
+    encoded_root_blocker = "safe%20duplicated%20root%20blocker"
     lane_blocker = "safe duplicated lane blocker"
+    encoded_lane_blocker = "safe%20duplicated%20lane%20blocker"
     gate_blocker = "safe duplicated source gate blocker"
+    encoded_gate_blocker = "safe duplicated source&#32;gate blocker"
     checklist_blocker = "safe duplicated checklist blocker"
+    encoded_checklist_blocker = "safe%20duplicated%20checklist%20blocker"
     eth_lane = summary["lanes"][0]
     summary["production_ready"] = False
-    summary["blockers"] = [root_blocker, root_blocker]
+    summary["blockers"] = [root_blocker, encoded_root_blocker]
     eth_lane["production_ready"] = False
-    eth_lane["blockers"] = [lane_blocker, lane_blocker]
+    eth_lane["blockers"] = [lane_blocker, encoded_lane_blocker]
     eth_lane["source_adapter_gate"]["ready"] = False
-    eth_lane["source_adapter_gate"]["blockers"] = [gate_blocker, gate_blocker]
+    eth_lane["source_adapter_gate"]["blockers"] = [
+        gate_blocker,
+        encoded_gate_blocker,
+    ]
     summary["release_checklist"]["items"][0]["ready"] = False
     summary["release_checklist"]["items"][0]["blockers"] = [
         checklist_blocker,
-        checklist_blocker,
+        encoded_checklist_blocker,
     ]
 
     module.load_evidence_bundle = lambda paths: {}
@@ -7943,9 +8408,13 @@ def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking(capsys)
     assert "release_checklist" not in payload
     for copied_blocker in (
         root_blocker,
+        encoded_root_blocker,
         lane_blocker,
+        encoded_lane_blocker,
         gate_blocker,
+        encoded_gate_blocker,
         checklist_blocker,
+        encoded_checklist_blocker,
     ):
         assert copied_blocker not in captured.out
     assert "Traceback" not in captured.err
@@ -7965,6 +8434,7 @@ def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
         "operator_note": "safe note",
         "secret-token-summary": "secret-token-value",
         7: "secret-token-int-key",
+        HostilePublicKey(): "secret-token-hostile-root-key",
     }
     try:
         exit_code = module.main(["evidence.toml"])
@@ -7981,6 +8451,7 @@ def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking(capsys):
     assert "7" not in payload
     assert "safe note" not in captured.out
     assert "secret-token" not in captured.out
+    assert "hostile" not in captured.out
     assert "Traceback" not in captured.err
 
     blockers = "\n".join(payload["blockers"])
@@ -8126,20 +8597,36 @@ def test_all_lanes_cli_rejects_nested_lane_field_drift_without_leaking(capsys):
     summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
     lane = summary["lanes"][0]
     lane[7] = "safe lane int-key note"
+    lane[HostilePublicKey()] = "secret-token hostile lane note"
     lane["source_record_hashes"]["operator_note"] = "safe source note"
     lane["source_record_hashes"][7] = "safe source int-key note"
+    lane["source_record_hashes"][HostilePublicKey()] = (
+        "secret-token hostile source note"
+    )
     lane["source_adapter_gate"]["operator_note"] = "safe gate note"
     lane["source_adapter_gate"][7] = "safe gate int-key note"
+    lane["source_adapter_gate"][HostilePublicKey()] = (
+        "secret-token hostile gate note"
+    )
     lane["source_adapter_gate"]["audit_hashes"]["operator_override"] = hex32(0x73)
     lane["source_adapter_gate"]["audit_hashes"][7] = hex32(0x74)
+    lane["source_adapter_gate"]["audit_hashes"][HostilePublicKey()] = hex32(0x75)
     lane["evm_live_metadata"]["operator_note"] = "safe evm note"
     lane["evm_live_metadata"][7] = "safe evm int-key note"
+    lane["evm_live_metadata"][HostilePublicKey()] = "secret-token hostile evm note"
     lane["destination_binding"]["operator_note"] = "safe destination note"
     lane["destination_binding"][7] = "safe destination int-key note"
+    lane["destination_binding"][HostilePublicKey()] = (
+        "secret-token hostile destination note"
+    )
     lane["route_allowlist"]["operator_note"] = "safe route note"
     lane["route_allowlist"][7] = "safe route int-key note"
+    lane["route_allowlist"][HostilePublicKey()] = "secret-token hostile route note"
     lane["route_allowlist"]["route_canary"]["operator_note"] = "safe canary note"
     lane["route_allowlist"]["route_canary"][7] = "safe canary int-key note"
+    lane["route_allowlist"]["route_canary"][HostilePublicKey()] = (
+        "secret-token hostile canary note"
+    )
 
     module.load_evidence_bundle = lambda paths: {}
     module.validate_evidence_bundle = lambda records: summary
@@ -8227,6 +8714,8 @@ def test_all_lanes_cli_rejects_nested_lane_field_drift_without_leaking(capsys):
     assert "safe route int-key note" not in captured.out
     assert "safe canary note" not in captured.out
     assert "safe canary int-key note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "hostile" not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -8330,7 +8819,7 @@ def test_all_lanes_cli_rejects_copied_source_adapter_gate_drift_without_leaking(
     )
     eth_lane["source_adapter_gate"]["required"] = "true"
     eth_lane["source_adapter_gate"]["ready"] = "true"
-    eth_lane["source_adapter_gate"]["blockers"] = ["secret-token-gate-blocker"]
+    eth_lane["source_adapter_gate"]["blockers"] = ["private&#45;key-gate-blocker"]
     bsc_lane["source_adapter_gate"]["gate_hash"] = hex32(0)
     bsc_lane["source_adapter_gate"]["audit_hashes"]["evm_source_gate_hash"] = hex32(0)
 
@@ -8369,7 +8858,7 @@ def test_all_lanes_cli_rejects_copied_source_adapter_gate_drift_without_leaking(
         "all-lanes summary lanes[1]: source adapter gate audit hashes "
         "evm_source_gate_hash must be a canonical non-zero bytes32"
     ) in blockers
-    assert "secret-token" not in captured.out
+    assert "private&#45;key" not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -8776,6 +9265,177 @@ def test_all_lanes_cli_rejects_copied_ready_source_record_template_replay(capsys
     for forged_hash in forged_hashes:
         assert forged_hash not in captured.out
         assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_route_canary_template_replay(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    forged_hashes = set()
+
+    for domain, (_index, lane) in lanes.items():
+        profile = module.LANE_PROFILES[domain]
+        template_hash = next(
+            iter(module._source_material_template_hashes(profile).values())
+        )
+        forged_hash = "0x" + template_hash.hex()
+        lane["route_allowlist"]["route_canary"]["evidence_hash"] = forged_hash
+        forged_hashes.add(forged_hash)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    for _domain, (index, _lane) in lanes.items():
+        assert (
+            f"all-lanes summary lanes[{index}].route_allowlist.route_canary."
+            "evidence_hash must be live evidence, not built-in template material"
+        ) in blockers
+    for forged_hash in forged_hashes:
+        assert forged_hash not in captured.out
+        assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_route_canary_transcript_template_replay(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    forged_hashes = set()
+    forged_fields: dict[int, tuple[int, str]] = {}
+
+    for domain, (index, lane) in lanes.items():
+        candidate_fields = tuple(
+            field
+            for field in module.PUBLIC_LANE_ROUTE_CANARY_TEMPLATE_HASH_FIELDS_BY_DOMAIN[
+                domain
+            ]
+            if field != "evidence_hash"
+        )
+        if not candidate_fields:
+            continue
+        profile = module.LANE_PROFILES[domain]
+        template_hash = next(
+            iter(module._source_material_template_hashes(profile).values())
+        )
+        forged_hash = "0x" + template_hash.hex()
+        field = candidate_fields[0]
+        lane["route_allowlist"]["route_canary"][field] = forged_hash
+        forged_fields[domain] = (index, field)
+        forged_hashes.add(forged_hash)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert forged_fields
+    for _domain, (index, field) in forged_fields.items():
+        assert (
+            f"all-lanes summary lanes[{index}].route_allowlist.route_canary."
+            f"{field} must be live evidence, not built-in template material"
+        ) in blockers
+    for forged_hash in forged_hashes:
+        assert forged_hash not in captured.out
+        assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_template_loader_failure_without_leaking(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    original_template_hashes = module._source_material_template_hashes
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+
+    def broken_template_hashes(_profile):
+        raise RuntimeError("secret-token-template-loader")
+
+    module._source_material_template_hashes = broken_template_hashes
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+        module._source_material_template_hashes = original_template_hashes
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "template material validation failed" in blockers
+    assert "secret-token-template-loader" not in captured.out
+    assert "secret-token-template-loader" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_source_gate_requirement_failure_without_leaking(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    original_requirements = module._source_adapter_gate_requirements
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+
+    def broken_requirements(_domain):
+        raise RuntimeError("secret-token-source-gate-requirements")
+
+    module._source_adapter_gate_requirements = broken_requirements
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+        module._source_adapter_gate_requirements = original_requirements
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "source adapter gate requirement validation failed" in blockers
+    assert "secret-token-source-gate-requirements" not in captured.out
+    assert "secret-token-source-gate-requirements" not in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -11589,6 +12249,7 @@ def test_all_lanes_cli_rejects_malformed_release_checklist_without_leaking(capsy
             "ready": "true",
             "secret-token-checklist": "secret-token-value",
             7: "safe checklist int-key note",
+            HostilePublicKey(): "secret-token hostile checklist note",
             "items": [
                 {
                     "id": "all_required_lane_records",
@@ -11596,6 +12257,7 @@ def test_all_lanes_cli_rejects_malformed_release_checklist_without_leaking(capsy
                     "ready": True,
                     "blockers": [],
                     7: "safe checklist item int-key note",
+                    HostilePublicKey(): "secret-token hostile checklist item note",
                 },
                 {
                     "id": "all_required_lane_records",
@@ -11658,6 +12320,7 @@ def test_all_lanes_cli_rejects_malformed_release_checklist_without_leaking(capsy
     )
     assert "all-lanes summary release_checklist is invalid" in blockers
     assert "secret-token" not in captured.out
+    assert "hostile" not in captured.out
     assert "safe checklist int-key note" not in captured.out
     assert "safe checklist item int-key note" not in captured.out
     assert "operator hold" not in captured.out
@@ -12005,6 +12668,12 @@ def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields():
             "non-string field name",
         ),
         (
+            HostilePublicKey(),
+            hex32(0x76),
+            "domain 3 (sol): source adapter gate audit hashes contains "
+            "non-string field name",
+        ),
+        (
             "secret-token-replayed-audit-field",
             hex32(0x69),
             "domain 3 (sol): source adapter gate audit hashes contains "
@@ -12021,6 +12690,8 @@ def test_all_lanes_release_checklist_redacts_unsafe_source_gate_audit_fields():
 
         assert checklist["ready"] is False
         assert expected_blocker in blockers
+        assert "secret-token" not in blockers
+        assert "hostile" not in blockers
         if isinstance(field, str):
             assert field not in blockers
 
@@ -12063,6 +12734,8 @@ def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
                 "solana_full_accountsdb_lattice_verifier_hash": duplicate_audit_hash,
                 "solana_bank_fork_choice_verifier_hash": hex32(0x64),
                 "solana_full_light_client_gate_hash": route_canary_hash,
+                "secret-token-route-canary-audit": route_canary_hash,
+                HostilePublicKey(): route_canary_hash,
             },
             "blockers": [],
         },
@@ -12099,6 +12772,17 @@ def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
         "audit_hashes.solana_full_light_client_gate_hash must not reuse "
         "route_canary_evidence_hash"
     ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes contains unexpected "
+        "field with sensitive name"
+    ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes contains non-string "
+        "field name"
+    ) in blockers
+    assert "secret-token-route-canary-audit" not in blockers
+    assert "hostile" not in blockers
+    assert "__str__" not in blockers
 
 
 def test_all_lanes_release_checklist_rejects_evm_source_gate_policy_downgrade():

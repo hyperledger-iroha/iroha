@@ -342,12 +342,19 @@ RoundNextDueMatchesSpec ==
   \A c \in RoundCases:
     ActualRoundNextDue(c) = SpecRoundNextDue(c)
 
-Safety ==
+VNextDeadlineProtectionExactness ==
   /\ DueMatchesSpec
   /\ FreshMatchesSpec
   /\ TimeoutProtectionMatchesSpec
   /\ BackpressureProtectionMatchesSpec
   /\ RoundNextDueMatchesSpec
+
+Safety ==
+  VNextDeadlineProtectionExactness
+
+VNextDeadlineProtectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextDeadlineProtectionExactness
 
 BugDuePastNotNow ==
   ActualDueInstant("due_past") = SpecDueInstant("due_past")

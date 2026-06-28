@@ -320,4 +320,10 @@ MissingPayloadFetchWindowMatchesSpec ==
 SafetyFast ==
   MissingPayloadFetchWindowMatchesSpec
 
+MissingPayloadFetchWindowExactness ==
+  /\ MissingPayloadFetchWindowMatchesSpec
+MissingPayloadFetchWindowCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingPayloadFetchWindowExactness
+
 ====

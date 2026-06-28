@@ -173,9 +173,21 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-Safety ==
+VrfPenaltiesReportActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+VrfPenaltiesReportExactness ==
+  /\ VrfPenaltiesReportActionsMatchSpec
+
+VrfPenaltiesReportCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfPenaltiesReportExactness
+
+NoBugInvariant == VrfPenaltiesReportExactness
+
+Safety ==
+  VrfPenaltiesReportExactness
 
 BugInitialLastNonzero ==
   ImplementationActions(InitialEmpty) = SpecActions(InitialEmpty)

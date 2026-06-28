@@ -124,7 +124,7 @@ RosterAdmissionMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncRosterExactness ==
-  RosterAdmissionMatchesSpec
+  /\ RosterAdmissionMatchesSpec
 
 BlockSyncRosterCorrectnessEnvelope ==
   /\ TypeInvariant

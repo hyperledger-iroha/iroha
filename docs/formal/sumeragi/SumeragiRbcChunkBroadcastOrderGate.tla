@@ -272,8 +272,8 @@ NoShuffleFirstAndLastMatchSpec ==
     /\ first_index = SpecFirstIndex(candidate)
     /\ last_index = SpecLastIndex(candidate)
 
-FilteredOrderPreserved ==
-  preserves_filter_order
+FilterPreservesOrder ==
+  preserves_filter_order = TRUE
 
 NoDuplicateIndices ==
   ~has_duplicates
@@ -301,13 +301,28 @@ RbcChunkBroadcastOrderCoreSafety ==
   /\ DropLargeDropsNone
   /\ NoShufflePreservesOrder
   /\ NoShuffleFirstAndLastMatchSpec
-  /\ FilteredOrderPreserved
+  /\ FilterPreservesOrder
   /\ NoDuplicateIndices
   /\ NoOutOfRangeIndices
   /\ ShuffleDoesNotChangeCardinalityWithoutDrop
   /\ DropCountUsesOneBasedPositions
 
-RbcChunkBroadcastOrderExactness == RbcChunkBroadcastOrderCoreSafety
+RbcChunkBroadcastOrderExactness ==
+  /\ ShuffleApplicationMatchesSpec
+  /\ DroppedCountMatchesSpec
+  /\ OutputLengthMatchesSpec
+  /\ OutputLengthPlusDroppedEqualsInput
+  /\ DropNoneKeepsAll
+  /\ DropZeroIgnored
+  /\ DropEveryOneDropsAll
+  /\ DropLargeDropsNone
+  /\ NoShufflePreservesOrder
+  /\ NoShuffleFirstAndLastMatchSpec
+  /\ FilterPreservesOrder
+  /\ NoDuplicateIndices
+  /\ NoOutOfRangeIndices
+  /\ ShuffleDoesNotChangeCardinalityWithoutDrop
+  /\ DropCountUsesOneBasedPositions
 
 RbcChunkBroadcastOrderCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -351,7 +351,7 @@ IdleAndMissingStartedDoNotEmitTelemetry ==
     /\ ActualActions(reason, ClearMissingStarted) =
        {AfterInactive, AfterNoStart}
 
-Safety ==
+PacemakerBackpressureTrackerExactness ==
   /\ LabelsMatch
   /\ ActionsMatch
   /\ ReasonSignalsGateTelemetry
@@ -359,5 +359,12 @@ Safety ==
   /\ SustainedForwardUpdatesAgeOnly
   /\ ClearingObservesDurationAndResets
   /\ IdleAndMissingStartedDoNotEmitTelemetry
+
+Safety ==
+  PacemakerBackpressureTrackerExactness
+
+PacemakerBackpressureTrackerCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PacemakerBackpressureTrackerExactness
 
 ====

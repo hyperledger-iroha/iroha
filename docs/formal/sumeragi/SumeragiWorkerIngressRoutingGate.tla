@@ -650,7 +650,7 @@ WorkerLastActiveRestoresIdle ==
   /\ candidate = "worker_last_active_restores_idle" => idleRestored
   /\ candidate = "worker_not_last_active_keeps_stage" => ~idleRestored
 
-Safety ==
+WorkerIngressRoutingExactness ==
   /\ MatchesSpec
   /\ RouteMetadataMatchesQueue
   /\ AcceptedIngressRecordsQueue
@@ -664,6 +664,15 @@ Safety ==
   /\ WorkerDrainSequencing
   /\ WorkerBatchStopsOnEmpty
   /\ WorkerLastActiveRestoresIdle
+
+WorkerIngressRoutingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerIngressRoutingExactness
+
+NoBugInvariant == WorkerIngressRoutingExactness
+
+Safety ==
+  WorkerIngressRoutingExactness
 
 =============================================================================
 ====

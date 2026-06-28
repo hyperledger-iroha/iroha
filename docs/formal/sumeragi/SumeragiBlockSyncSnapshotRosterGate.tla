@@ -346,7 +346,7 @@ SnapshotRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncSnapshotRosterExactness ==
-  SnapshotRosterMatchesSpec
+  /\ SnapshotRosterMatchesSpec
 
 BlockSyncSnapshotRosterCorrectnessEnvelope ==
   /\ TypeInvariant

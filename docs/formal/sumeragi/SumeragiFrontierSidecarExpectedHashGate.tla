@@ -211,17 +211,16 @@ SidecarExpectedHashHasExactPositiveEvidence ==
   /\ SidecarCommitQcExactAccepted
 
 FrontierSidecarExpectedHashExactness ==
-  /\ SidecarExpectedHashRejectsNonExactInputs
-  /\ SidecarExpectedHashPreservesDeterministicOrdering
-  /\ SidecarExpectedHashHasExactPositiveEvidence
-
-SafetyFast ==
   /\ TrackedHintSafety
   /\ DeferredHintSafety
   /\ ObservedHeadSafety
   /\ CacheHintSafety
   /\ SidecarCommitQcSafety
-  /\ FrontierSidecarExpectedHashExactness
+  /\ SidecarExpectedHashRejectsNonExactInputs
+  /\ SidecarExpectedHashPreservesDeterministicOrdering
+  /\ SidecarExpectedHashHasExactPositiveEvidence
+
+SafetyFast == FrontierSidecarExpectedHashExactness
 
 TrackedHintAnchors ==
   /\ TrackedHintSafety
@@ -272,8 +271,7 @@ FrontierSidecarExpectedHashSafetyAnchors ==
 
 FrontierSidecarExpectedHashCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ FrontierSidecarExpectedHashSafetyAnchors
+  /\ FrontierSidecarExpectedHashExactness
 
 Safety == FrontierSidecarExpectedHashSafetyAnchors
 

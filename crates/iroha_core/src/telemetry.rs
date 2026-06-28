@@ -4914,15 +4914,26 @@ pub fn record_state_tx_queue_backpressure(
     telemetry: &StateTelemetry,
     depth: u64,
     capacity: u64,
+    retained_bytes: u64,
+    max_retained_bytes: u64,
     saturated_by_count: bool,
+    saturated_by_bytes: bool,
 ) {
     if telemetry.is_enabled() {
         telemetry.metrics.sumeragi_tx_queue_depth.set(depth);
         telemetry.metrics.sumeragi_tx_queue_capacity.set(capacity);
         telemetry
             .metrics
+            .sumeragi_tx_queue_retained_bytes
+            .set(retained_bytes);
+        telemetry
+            .metrics
+            .sumeragi_tx_queue_max_retained_bytes
+            .set(max_retained_bytes);
+        telemetry
+            .metrics
             .sumeragi_tx_queue_saturated
-            .set(u64::from(saturated_by_count));
+            .set(u64::from(saturated_by_count || saturated_by_bytes));
     }
 }
 
@@ -6123,14 +6134,23 @@ impl Telemetry {
         &self,
         depth: u64,
         capacity: u64,
+        retained_bytes: u64,
+        max_retained_bytes: u64,
         saturated_by_count: bool,
+        saturated_by_bytes: bool,
     ) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.sumeragi_tx_queue_depth.set(depth);
             self.metrics.sumeragi_tx_queue_capacity.set(capacity);
             self.metrics
+                .sumeragi_tx_queue_retained_bytes
+                .set(retained_bytes);
+            self.metrics
+                .sumeragi_tx_queue_max_retained_bytes
+                .set(max_retained_bytes);
+            self.metrics
                 .sumeragi_tx_queue_saturated
-                .set(u64::from(saturated_by_count));
+                .set(u64::from(saturated_by_count || saturated_by_bytes));
         }
     }
 
@@ -12448,14 +12468,18 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
-        record_state_tx_queue_backpressure(&telemetry, 12, 64, false);
+        record_state_tx_queue_backpressure(&telemetry, 12, 64, 1_024, 2_048, false, false);
         assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 12);
         assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 64);
+        assert_eq!(metrics.sumeragi_tx_queue_retained_bytes.get(), 1_024);
+        assert_eq!(metrics.sumeragi_tx_queue_max_retained_bytes.get(), 2_048);
         assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
 
-        record_state_tx_queue_backpressure(&telemetry, 63, 64, true);
+        record_state_tx_queue_backpressure(&telemetry, 63, 64, 2_048, 2_048, false, true);
         assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 63);
         assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 64);
+        assert_eq!(metrics.sumeragi_tx_queue_retained_bytes.get(), 2_048);
+        assert_eq!(metrics.sumeragi_tx_queue_max_retained_bytes.get(), 2_048);
         assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 1);
     }
 

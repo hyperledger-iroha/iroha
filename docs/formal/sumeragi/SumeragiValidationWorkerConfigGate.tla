@@ -206,8 +206,20 @@ ValidationWorkerConfigCoreSafety ==
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
 
+ValidationWorkerConfigExactness ==
+  ActualOutput = SpecOutput
+  /\ AutoThreadClampAnchors
+  /\ ExplicitThreadPreservation
+  /\ ZeroWorkCapDerivation
+  /\ ZeroResultCapDerivation
+  /\ ExplicitCapPreservation
+  /\ QueueCapsPositive
+ValidationWorkerConfigCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationWorkerConfigExactness
+
 SafetyFast ==
-  ValidationWorkerConfigCoreSafety
+  ValidationWorkerConfigExactness
 
 BugAutoMinFloor ==
   ActualAutoLow = SpecAutoLow

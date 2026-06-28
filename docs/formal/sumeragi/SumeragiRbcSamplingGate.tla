@@ -305,7 +305,17 @@ SafetyAnchors ==
   /\ SampleSelectionAnchors
   /\ MetadataAnchors
 
-RbcSamplingExactness == SafetyAnchors
+RbcSamplingExactness ==
+  /\ AllKindsMatchSpec
+  /\ AllOkSamplesWellFormed
+  /\ AllOkSamplesMatchSpec
+  /\ AllOkMetadataMatches
+  /\ LoadOutcomeAnchors
+  /\ InvalidRequestAnchors
+  /\ ProofFailureAnchors
+  /\ ValidKindAnchors
+  /\ SampleSelectionAnchors
+  /\ MetadataAnchors
 
 RbcSamplingCorrectnessEnvelope ==
   /\ TypeInvariant

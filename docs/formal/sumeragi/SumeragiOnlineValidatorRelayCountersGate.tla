@@ -276,6 +276,17 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+OnlineValidatorRelayCountersActionsMatchSpec ==
+  \A c \in Candidates:
+    ImplementationActions(c) = SpecActions(c)
+
+OnlineValidatorRelayCountersExactness ==
+  /\ OnlineValidatorRelayCountersActionsMatchSpec
+
+OnlineValidatorRelayCountersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ OnlineValidatorRelayCountersExactness
+
 BugOnlineEmptyRosterCountsAll ==
   ImplementationActions(OnlineEmptyRosterZero) =
     SpecActions(OnlineEmptyRosterZero)

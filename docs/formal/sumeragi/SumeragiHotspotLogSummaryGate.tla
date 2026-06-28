@@ -267,6 +267,13 @@ NoBugInvariant == HotspotLogSummaryCoreSafety
 
 SafetyFast == HotspotLogSummaryCoreSafety
 
+HotspotLogSummaryExactness ==
+  /\ HotspotLogSummaryCoreSafety
+
+HotspotLogSummaryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HotspotLogSummaryExactness
+
 BugInitKeepsCounts == NoBugInvariant
 BugInitKeepsLastEmit == NoBugInvariant
 BugTickWarnNotIncremented == NoBugInvariant

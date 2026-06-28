@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import re
 import subprocess
 import tempfile
@@ -56,13 +55,33 @@ def parse_metric_value(metrics_text: str, metric: str) -> Optional[float]:
 
 def extract_status_snapshot(payload: dict) -> dict:
     """Extract core counters from a /status JSON payload."""
+    sumeragi = payload.get("sumeragi") or {}
     return {
         "blocks": int(payload.get("blocks", 0) or 0),
         "blocks_non_empty": int(payload.get("blocks_non_empty", 0) or 0),
         "txs_approved": int(payload.get("txs_approved", 0) or 0),
         "txs_rejected": int(payload.get("txs_rejected", 0) or 0),
         "queue_size": int(payload.get("queue_size", 0) or 0),
+        "queue_retained_bytes": int(
+            payload.get("queue_retained_bytes", sumeragi.get("tx_queue_retained_bytes", 0)) or 0
+        ),
+        "queue_max_retained_bytes": int(
+            payload.get(
+                "queue_max_retained_bytes",
+                sumeragi.get("tx_queue_max_retained_bytes", 0),
+            )
+            or 0
+        ),
+        "queue_saturated": bool(
+            payload.get("queue_saturated", sumeragi.get("tx_queue_saturated", False))
+        ),
     }
+
+
+def extract_status_snapshot_with_delta(payload: dict, baseline_queue_size: int) -> tuple[dict, int]:
+    """Extract a /status snapshot and its queue-size delta from a baseline."""
+    status = extract_status_snapshot(payload)
+    return status, status["queue_size"] - baseline_queue_size
 
 
 @dataclass(frozen=True)
@@ -109,6 +128,11 @@ def torii_url_from_status(status_url: str) -> str:
     return normalize_torii_url(f"{parsed.scheme}://{parsed.netloc}")
 
 
+def request_with_accept(url: str, accept: str) -> urllib.request.Request:
+    """Build a URL request that asks Torii for a specific response format."""
+    return urllib.request.Request(url, headers={"Accept": accept})
+
+
 def render_client_config(base_text: str, torii_url: str) -> str:
     lines = base_text.splitlines()
     rendered = []
@@ -137,6 +161,24 @@ def count_rate_limit_hits(output: str) -> int:
     hits = output.count("status: 429")
     hits += output.lower().count("too many requests")
     return hits
+
+
+def is_backpressure_output(output: str) -> bool:
+    """Return true when CLI output shows Torii rejected load due queue pressure."""
+    if not output:
+        return False
+    lowered = output.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "status: 429",
+            "too many requests",
+            "prtry:queue_full",
+            "queue_full",
+            "queue=saturated",
+            "transaction queue is at capacity",
+        )
+    )
 
 
 PING_SUBMIT_RE = re.compile(r"Submitted\s+(?P<submitted>\d+)\s*/\s*(?P<attempted>\d+)\s+ping transactions", re.IGNORECASE)
@@ -346,11 +388,13 @@ def main() -> int:
         print(f"Parallel per shard: {shard_parallel}")
 
     def fetch_json(url: str) -> dict:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        request = request_with_accept(url, "application/json")
+        with urllib.request.urlopen(request, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def fetch_text(url: str) -> str:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        request = request_with_accept(url, "text/plain")
+        with urllib.request.urlopen(request, timeout=5) as resp:
             return resp.read().decode("utf-8")
 
     preferred_status_url = status_urls[0]
@@ -441,14 +485,19 @@ def main() -> int:
         thread.start()
 
     baseline_queue_by_peer: dict[str, int] = {}
+    baseline_queue_by_status_url: dict[str, int] = {}
     if status_enabled:
+        if baseline_source is not None:
+            baseline_queue_by_status_url[baseline_source] = baseline_status["queue_size"]
         for torii_url in peer_urls:
             status_url = urllib.parse.urljoin(torii_url, "status")
             try:
                 status_raw = fetch_json(status_url)
-                baseline_queue_by_peer[torii_url] = int(status_raw.get("queue_size", 0) or 0)
+                peer_baseline = extract_status_snapshot(status_raw)["queue_size"]
             except Exception:
-                baseline_queue_by_peer[torii_url] = baseline_status["queue_size"]
+                peer_baseline = baseline_status["queue_size"]
+            baseline_queue_by_peer[torii_url] = peer_baseline
+            baseline_queue_by_status_url[status_url] = peer_baseline
     else:
         baseline_queue_by_peer = {torii_url: 0 for torii_url in peer_urls}
 
@@ -492,19 +541,27 @@ def main() -> int:
         while True:
             try:
                 status_raw = fetch_json(shard.status_url)
-                status = extract_status_snapshot(status_raw)
-                delta = status["queue_size"] - shard.baseline_queue_size
+                status, delta = extract_status_snapshot_with_delta(
+                    status_raw,
+                    shard.baseline_queue_size,
+                )
             except Exception:
-                fallback_delta = None
+                fallback = None
                 try:
-                    fallback_raw, _ = fetch_status_with_fallback()
-                    fallback_status = extract_status_snapshot(fallback_raw)
-                    fallback_delta = fallback_status["queue_size"] - baseline_status["queue_size"]
+                    fallback_raw, fallback_source = fetch_status_with_fallback()
+                    fallback_baseline_queue_size = baseline_queue_by_status_url.get(
+                        fallback_source,
+                        baseline_status["queue_size"],
+                    )
+                    fallback = extract_status_snapshot_with_delta(
+                        fallback_raw,
+                        fallback_baseline_queue_size,
+                    )
                 except Exception:
-                    fallback_delta = None
+                    fallback = None
 
-                if fallback_delta is not None:
-                    delta = fallback_delta
+                if fallback is not None:
+                    status, delta = fallback
                 else:
                     if deadline is not None and time.monotonic() >= deadline:
                         print(
@@ -522,6 +579,18 @@ def main() -> int:
                     f"{args.queue_hard_limit}; aborting shard."
                 )
                 return False
+            if status["queue_saturated"]:
+                if deadline is not None and time.monotonic() >= deadline:
+                    retained = status["queue_retained_bytes"]
+                    retained_limit = status["queue_max_retained_bytes"]
+                    print(
+                        f"Shard {shard.torii_url}: queue stayed saturated before timeout "
+                        f"(retained_bytes={retained}, max_retained_bytes={retained_limit}); "
+                        "aborting shard."
+                    )
+                    return False
+                time.sleep(args.poll_interval)
+                continue
             if args.queue_soft_limit > 0 and delta > args.queue_soft_limit:
                 if deadline is not None and time.monotonic() >= deadline:
                     print(
@@ -608,105 +677,69 @@ def main() -> int:
                 return attempted
             return 0
 
-        if shard.batch_size > 0 and shard.batch_interval > 0:
-            parallel = shard.parallel
-            attempted = 0
-            planned_batches = int(math.ceil(shard.count / shard.batch_size))
-            while attempted < shard.count:
-                if not wait_for_queue(shard):
-                    returncode = 2
-                    break
-                batch = min(shard.batch_size, shard.count - attempted)
-                attempted += batch
-                batch_start = time.monotonic()
-                result = run_batch(batch, parallel)
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
-                stdout_chunks.append(stdout)
-                stderr_chunks.append(stderr)
-                combined = stdout + stderr
-                batch_rate_limits = count_rate_limit_hits(combined)
-                rate_limit_hits += batch_rate_limits
-                batch_submitted = extract_submitted(combined, batch, result.returncode)
-                submitted += batch_submitted
-                if result.returncode == 124:
+        paced = shard.batch_size > 0 and shard.batch_interval > 0
+        parallel = shard.parallel
+        batch_size = shard.batch_size if paced else shard.count
+        attempted = 0
+        while attempted < shard.count:
+            if not wait_for_queue(shard):
+                returncode = 2
+                break
+            batch = min(batch_size, shard.count - attempted)
+            attempted += batch
+            batch_start = time.monotonic()
+            result = run_batch(batch, parallel)
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            stdout_chunks.append(stdout)
+            stderr_chunks.append(stderr)
+            combined = stdout + stderr
+            batch_rate_limits = count_rate_limit_hits(combined)
+            batch_backpressure = is_backpressure_output(combined)
+            rate_limit_hits += batch_rate_limits
+            batch_submitted = extract_submitted(combined, batch, result.returncode)
+            submitted += batch_submitted
+            if result.returncode == 124:
+                timed_out = True
+            # Backpressure is the bounded-queue success path for burst repros:
+            # report the admitted count and keep attempting the configured load window.
+            if returncode == 0 and result.returncode != 0 and not batch_backpressure:
+                returncode = result.returncode
+
+            missing = batch - batch_submitted
+            if (
+                missing > 0
+                and not batch_backpressure
+                and batch_rate_limits == 0
+                and result.returncode not in (124, 2)
+                and parallel > 1
+            ):
+                retry_parallel = max(1, parallel // 2)
+                retry = run_batch(missing, retry_parallel)
+                r_stdout = retry.stdout or ""
+                r_stderr = retry.stderr or ""
+                stdout_chunks.append(r_stdout)
+                stderr_chunks.append(r_stderr)
+                r_combined = r_stdout + r_stderr
+                r_limits = count_rate_limit_hits(r_combined)
+                r_backpressure = is_backpressure_output(r_combined)
+                rate_limit_hits += r_limits
+                r_submitted = extract_submitted(r_combined, missing, retry.returncode)
+                submitted += r_submitted
+                missing -= r_submitted
+                if retry.returncode == 124:
                     timed_out = True
-                if returncode == 0 and result.returncode != 0:
-                    returncode = result.returncode
+                if returncode == 0 and retry.returncode != 0 and not r_backpressure:
+                    returncode = retry.returncode
+                # If the retry also fails, reduce parallelism for subsequent batches.
+                if missing > 0 and not r_backpressure and retry_parallel > 1:
+                    parallel = retry_parallel
 
-                missing = batch - batch_submitted
-                if (
-                    missing > 0
-                    and batch_rate_limits == 0
-                    and result.returncode not in (124, 2)
-                    and parallel > 1
-                ):
-                    retry_parallel = max(1, parallel // 2)
-                    retry = run_batch(missing, retry_parallel)
-                    r_stdout = retry.stdout or ""
-                    r_stderr = retry.stderr or ""
-                    stdout_chunks.append(r_stdout)
-                    stderr_chunks.append(r_stderr)
-                    r_combined = r_stdout + r_stderr
-                    r_limits = count_rate_limit_hits(r_combined)
-                    rate_limit_hits += r_limits
-                    r_submitted = extract_submitted(r_combined, missing, retry.returncode)
-                    submitted += r_submitted
-                    missing -= r_submitted
-                    if retry.returncode == 124:
-                        timed_out = True
-                    if returncode == 0 and retry.returncode != 0:
-                        returncode = retry.returncode
-                    # If the retry also fails, reduce parallelism for subsequent batches.
-                    if missing > 0 and retry_parallel > 1:
-                        parallel = retry_parallel
-
-                if missing > 0 and planned_batches > 0:
-                    # We do not extend the run; load windows are time-based. Missing txs stay
-                    # missing to avoid turning perf runs into multi-hour retries.
-                    pass
-
+            if paced:
                 elapsed = time.monotonic() - batch_start
                 sleep_for = shard.batch_interval - elapsed
                 if sleep_for > 0:
                     time.sleep(sleep_for)
-        else:
-            if not wait_for_queue(shard):
-                returncode = 2
-            else:
-                parallel = shard.parallel
-                result = run_batch(shard.count, parallel)
-                stdout = result.stdout or ""
-                stderr = result.stderr or ""
-                stdout_chunks.append(stdout)
-                stderr_chunks.append(stderr)
-                combined = stdout + stderr
-                batch_rate_limits = count_rate_limit_hits(combined)
-                rate_limit_hits += batch_rate_limits
-                returncode = result.returncode
-                submitted = extract_submitted(combined, shard.count, result.returncode)
-                if result.returncode == 124:
-                    timed_out = True
-                missing = shard.count - submitted
-                if (
-                    missing > 0
-                    and batch_rate_limits == 0
-                    and result.returncode not in (124, 2)
-                    and parallel > 1
-                ):
-                    retry_parallel = max(1, parallel // 2)
-                    retry = run_batch(missing, retry_parallel)
-                    r_stdout = retry.stdout or ""
-                    r_stderr = retry.stderr or ""
-                    stdout_chunks.append(r_stdout)
-                    stderr_chunks.append(r_stderr)
-                    r_combined = r_stdout + r_stderr
-                    rate_limit_hits += count_rate_limit_hits(r_combined)
-                    submitted += extract_submitted(r_combined, missing, retry.returncode)
-                    if retry.returncode == 124:
-                        timed_out = True
-                    if returncode == 0 and retry.returncode != 0:
-                        returncode = retry.returncode
 
         elapsed = time.monotonic() - start
         return LoadShardResult(

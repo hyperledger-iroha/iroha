@@ -345,7 +345,22 @@ RbcChunkAllocationCoreSafety ==
   /\ MinWrapperReverseTrimMatchesSpec
   /\ AllocationEntriesBoundedByTotalWhenPositive
 
-RbcChunkAllocationExactness == RbcChunkAllocationCoreSafety
+RbcChunkAllocationExactness ==
+  /\ BaseMatchesSpec
+  /\ MinMatchesSpec
+  /\ EmptyWeightsReturnEmpty
+  /\ ZeroTotalYieldsZeros
+  /\ AllZeroFallbackOnePass
+  /\ PositiveWeightBasePreservesTotal
+  /\ ZeroWeightGetsNoBaseAllocation
+  /\ EqualWeightsSplitEvenly
+  /\ RemainderTiesPreferLowerIndex
+  /\ LargestRemainderReceivesLeftover
+  /\ MinWrapperPreservesZeroTotal
+  /\ MinWrapperPreservesTotalForPositiveWeights
+  /\ MinWrapperNeverAllocatesZeroWeight
+  /\ MinWrapperReverseTrimMatchesSpec
+  /\ AllocationEntriesBoundedByTotalWhenPositive
 
 RbcChunkAllocationCorrectnessEnvelope ==
   /\ TypeInvariant

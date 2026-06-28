@@ -162,7 +162,7 @@ KnownHintlessMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncKnownHintlessExactness ==
-  KnownHintlessMatchesSpec
+  /\ KnownHintlessMatchesSpec
 
 BlockSyncKnownHintlessCorrectnessEnvelope ==
   /\ TypeInvariant

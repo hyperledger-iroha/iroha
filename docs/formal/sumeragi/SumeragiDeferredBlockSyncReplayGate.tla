@@ -200,7 +200,7 @@ DeferredReplayMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 DeferredBlockSyncReplayExactness ==
-  DeferredReplayMatchesSpec
+  /\ DeferredReplayMatchesSpec
 
 DeferredBlockSyncReplayCorrectnessEnvelope ==
   /\ TypeInvariant

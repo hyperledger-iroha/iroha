@@ -305,7 +305,7 @@ ActionsMatchSpec ==
     ImplementationActions(candidate) = SpecActions(candidate)
 
 ExecWitnessRecorderExactness ==
-  ActionsMatchSpec
+  /\ ActionsMatchSpec
 
 ExecWitnessRecorderCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -12,6 +12,7 @@ pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 pub const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
+const PK2_NEXUS_CHAIN_ID: &str = "cbdc16";
 
 /// Profile presets for `kagami genesis`/`kagami verify`.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +94,9 @@ pub fn profile_requires_npos(profile: GenesisProfile) -> bool {
 pub fn known_chain_discriminant_for_chain_id(chain_id: &str) -> Option<u16> {
     match chain_id {
         "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
-        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID => Some(NEXUS_CHAIN_DISCRIMINANT),
+        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID | PK2_NEXUS_CHAIN_ID => {
+            Some(NEXUS_CHAIN_DISCRIMINANT)
+        }
         _ => None,
     }
 }
@@ -221,6 +224,10 @@ mod tests {
         );
         assert_eq!(
             known_chain_discriminant_for_chain_id("iroha3-nexus"),
+            Some(NEXUS_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            known_chain_discriminant_for_chain_id("cbdc16"),
             Some(NEXUS_CHAIN_DISCRIMINANT)
         );
         assert_eq!(known_chain_discriminant_for_chain_id("unknown"), None);

@@ -342,8 +342,11 @@ NoBugInvariant == ConsensusRecoveryPruneCoreSafety
 
 SafetyFast == ConsensusRecoveryPruneCoreSafety
 
+ConsensusRecoveryPruneExactness ==
+  /\ ConsensusRecoveryPruneCoreSafety
+
 ConsensusRecoveryPruneCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ ConsensusRecoveryPruneCoreSafety
+  /\ ConsensusRecoveryPruneExactness
 
 ====

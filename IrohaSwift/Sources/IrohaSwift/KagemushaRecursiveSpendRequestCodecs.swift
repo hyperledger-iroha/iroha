@@ -365,6 +365,113 @@ public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable {
     public let finalRoot: Data
     public let topupAnchorNullifiers: [Data]
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
+
+    public init(
+        hopCount: Int,
+        proofCircuitId: String,
+        asset: String,
+        chainId: String,
+        initialRoot: Data,
+        finalRoot: Data,
+        topupAnchorNullifiers: [Data],
+        currentNote: KagemushaRecursiveSpendableNoteDescriptor
+    ) throws {
+        guard hopCount >= 1,
+              hopCount <= Int(KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1)
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.hop_count")
+        }
+        guard KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.proof_circuit_id")
+        }
+        try Self.requireAccumulatorAsset(asset)
+        try KagemushaRecursiveSpendRequestCodecs.requirePortableId(chainId, field: "chainId")
+        try Self.requireFixed32(initialRoot, field: "initialRoot")
+        try Self.requireFixed32(finalRoot, field: "finalRoot")
+        try Self.requireAccumulatorRoots(initialRoot: initialRoot, finalRoot: finalRoot)
+        try topupAnchorNullifiers.forEach {
+            try Self.requireFixed32($0, field: "topupAnchorNullifier")
+        }
+        try Self.requireTopupAnchorNullifiers(
+            topupAnchorNullifiers,
+            currentNote: currentNote
+        )
+
+        self.hopCount = hopCount
+        self.proofCircuitId = proofCircuitId
+        self.asset = asset
+        self.chainId = chainId
+        self.initialRoot = initialRoot
+        self.finalRoot = finalRoot
+        self.topupAnchorNullifiers = topupAnchorNullifiers
+        self.currentNote = currentNote
+    }
+
+    private static func requireAccumulatorAsset(_ asset: String) throws {
+        guard AssetDefinitionAddress.decode(asset) != nil || isHexAssetDefinitionFallback(asset) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.asset")
+        }
+    }
+
+    private static func isHexAssetDefinitionFallback(_ asset: String) -> Bool {
+        guard asset.count == 36, asset.hasPrefix("hex:") else {
+            return false
+        }
+        return asset.dropFirst(4).allSatisfy { character in
+            character >= "0" && character <= "9" || character >= "a" && character <= "f"
+        }
+    }
+
+    private static func requireFixed32(_ value: Data, field: String) throws {
+        guard value.count == 32 else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidField(field)
+        }
+    }
+
+    private static func requireAccumulatorRoots(initialRoot: Data, finalRoot: Data) throws {
+        guard initialRoot.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.initial_root")
+        }
+        guard finalRoot.contains(where: { $0 != 0 }),
+              finalRoot != initialRoot
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("bundle.accumulator.final_root")
+        }
+    }
+
+    private static func requireTopupAnchorNullifiers(
+        _ nullifiers: [Data],
+        currentNote: KagemushaRecursiveSpendableNoteDescriptor
+    ) throws {
+        guard !nullifiers.isEmpty,
+              nullifiers.count <= KagemushaRecursiveSpendRequestCodecs.foldStepMaxInputs
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                "bundle.accumulator.topup_anchor_nullifiers count is out of range"
+            )
+        }
+        for (index, nullifier) in nullifiers.enumerated() {
+            guard nullifier.contains(where: { $0 != 0 }) else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must not contain zero values"
+                )
+            }
+            if index > 0 {
+                guard nullifiers[index - 1].lexicographicallyPrecedes(nullifier) else {
+                    throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                        "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"
+                    )
+                }
+            }
+        }
+        guard !nullifiers.contains(currentNote.noteCommitment),
+              !nullifiers.contains(currentNote.spendNullifier)
+        else {
+            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"
+            )
+        }
+    }
 }
 
 public enum KagemushaRecursiveSpendRequestCodecs {
@@ -581,7 +688,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
                 "bundle.proof_circuit_id"
             )
         }
-        return KagemushaRecursiveSpendBundleSummary(
+        return try KagemushaRecursiveSpendBundleSummary(
             hopCount: accumulator.hopCount,
             proofCircuitId: proofCircuitId,
             asset: accumulator.asset,

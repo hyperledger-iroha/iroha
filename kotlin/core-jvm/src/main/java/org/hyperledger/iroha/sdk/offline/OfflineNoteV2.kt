@@ -191,10 +191,7 @@ object OfflineNoteV2 {
     fun registerDeviceAttestationInstruction(value: DeviceAttestationRegistrationV2): InstructionBox =
         InstructionBox.fromWirePayload(
             REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            encodeInstructionWrapper(
-                REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-                encodeDeviceAttestationRegistration(value),
-            ),
+            encodeRegisterDeviceAttestationInstructionPayload(value),
         )
 
     @JvmStatic
@@ -277,13 +274,7 @@ object OfflineNoteV2 {
 
     @JvmStatic
     fun decodeRegisterDeviceAttestationInstruction(bytes: ByteArray): DeviceAttestationRegistrationV2 =
-        decodeInstructionModel(
-            bytes,
-            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
-            DeviceAttestationRegistrationAdapter,
-        )
+        decodeRegisterDeviceAttestationInstructionModel(bytes)
 
     @JvmStatic
     fun hash(bytes: ByteArray): ByteArray = IrohaHash.prehash(bytes)
@@ -319,6 +310,52 @@ object OfflineNoteV2 {
             InstructionWrapperAdapter,
             0,
         )
+    }
+
+    private fun encodeRegisterDeviceAttestationInstructionPayload(
+        value: DeviceAttestationRegistrationV2,
+    ): ByteArray =
+        NoritoCodec.encode(
+            value,
+            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            RegisterDeviceAttestationInstructionAdapter,
+            NoritoHeader.COMPACT_LEN,
+        )
+
+    private fun decodeRegisterDeviceAttestationInstructionModel(
+        bytes: ByteArray,
+    ): DeviceAttestationRegistrationV2 {
+        val wirePayload = extractInstructionWirePayload(
+            bytes,
+            listOf(REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA),
+        )
+        try {
+            return NoritoCodec.decode(
+                wirePayload,
+                RegisterDeviceAttestationInstructionAdapter,
+                REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            )
+        } catch (canonicalError: RuntimeException) {
+            try {
+                val modelPayload = NoritoCodec.decode(
+                    wirePayload,
+                    InstructionWrapperPayloadAdapter,
+                    REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                )
+                return decodeModelPayload(
+                    modelPayload.bytes,
+                    DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
+                    DeviceAttestationRegistrationAdapter,
+                    modelPayload.flags,
+                )
+            } catch (legacyError: RuntimeException) {
+                legacyError.addSuppressed(canonicalError)
+                throw IllegalArgumentException(
+                    "Offline Note V2 register device attestation instruction envelope is invalid",
+                    legacyError,
+                )
+            }
+        }
     }
 
     private fun <T> decodeInstructionModel(
@@ -1158,6 +1195,15 @@ object OfflineNoteV2 {
     }
     private val InstructionWrapperPayloadAdapter: TypeAdapter<InstructionModelPayload> =
         InstructionWrapperAdapter
+
+    private object RegisterDeviceAttestationInstructionAdapter : TypeAdapter<DeviceAttestationRegistrationV2> {
+        override fun encode(encoder: NoritoEncoder, value: DeviceAttestationRegistrationV2) {
+            writeField(encoder) { DeviceAttestationRegistrationAdapter.encode(it, value) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): DeviceAttestationRegistrationV2 =
+            readField(decoder) { DeviceAttestationRegistrationAdapter.decode(it) }
+    }
 
     private object KeyCertificatePayloadAdapter : TypeAdapter<KeyCertificatePayloadV2> {
         override fun encode(encoder: NoritoEncoder, value: KeyCertificatePayloadV2) {

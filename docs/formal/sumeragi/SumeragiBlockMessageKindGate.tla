@@ -309,17 +309,20 @@ BlockMessageCompactRbcExactness ==
   /\ CompactKindCollapsesToRbcChunk
 
 BlockMessageKindExactness ==
-  /\ SafetyFast
-  /\ BlockMessageLogProjectionExactness
-  /\ BlockMessageStatusProjectionExactness
-  /\ BlockMessageCompactRbcExactness
+  /\ LogLabelsExact
+  /\ StatusProjectionExact
+  /\ NewViewBypassLabelsPreserved
+  /\ CertifiedFetchLogSubtypesPreserved
+  /\ CompactKindCollapsesToRbcChunk
+  /\ KuraReplicaAdvertStatusOmitted
+  /\ LogKindAnchors
+  /\ StatusKindAnchors
   /\ BlockMessageKindSafetyAnchors
 
 Safety == BlockMessageKindExactness
 
 BlockMessageKindCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ BlockMessageKindSafetyAnchors
+  /\ BlockMessageKindExactness
 
 ====

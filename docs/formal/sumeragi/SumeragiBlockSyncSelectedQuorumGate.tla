@@ -503,7 +503,7 @@ SelectedQuorumMatchesSpec ==
   /\ Matches("invalid_qc_checkpoint")
 
 BlockSyncSelectedQuorumExactness ==
-  SelectedQuorumMatchesSpec
+  /\ SelectedQuorumMatchesSpec
 
 BlockSyncSelectedQuorumCorrectnessEnvelope ==
   /\ TypeInvariant

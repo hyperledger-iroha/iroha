@@ -256,7 +256,20 @@ RbcRebroadcastSelectionCoreSafety ==
   /\ SelectionNeverExceedsRoster
   /\ MissingLocalQueryReturnsFalse
 
-RbcRebroadcastSelectionExactness == RbcRebroadcastSelectionCoreSafety
+RbcRebroadcastSelectionExactness ==
+  /\ PayloadCountMatchesSpec
+  /\ ReadyCountMatchesSpec
+  /\ EmptyRosterCountsZero
+  /\ PayloadCountTracksFaultTolerance
+  /\ ReadyCountTracksCommitQuorum
+  /\ CountsNeverExceedRoster
+  /\ SelectionMatchesSpec
+  /\ ZeroSelectionSelectsNone
+  /\ PositiveSelectionIncludesLeader
+  /\ FullCountSelectsWholeRoster
+  /\ PartialSelectionKeepsRequestedCount
+  /\ SelectionNeverExceedsRoster
+  /\ MissingLocalQueryReturnsFalse
 
 RbcRebroadcastSelectionCorrectnessEnvelope ==
   /\ TypeInvariant

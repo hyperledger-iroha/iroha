@@ -269,8 +269,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+VoteValidationDropStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 VoteValidationDropStatusExactness ==
-  Safety
+  /\ VoteValidationDropStatusActionsMatchSpec
 
 VoteValidationDropStatusCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -309,9 +309,12 @@ SafetyAnchors ==
   /\ MissingBundleAnchors
   /\ BroadRebroadcastAnchors
 
+RbcMissingInitRebroadcastExactness ==
+  /\ RbcMissingInitRebroadcastCoreSafety
+  /\ SafetyAnchors
+
 RbcMissingInitRebroadcastCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ SafetyAnchors
+  /\ RbcMissingInitRebroadcastExactness
 
 ====

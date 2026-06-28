@@ -146,7 +146,7 @@ BoundaryAndFutureAnchors ==
   /\ ActualIdleWait("at_gap") = NoWait
   /\ ActualIdleWait("future_last") = MinGap("future_last")
 
-WorkerTickGapCoreSafety ==
+WorkerTickGapExactness ==
   /\ \A c \in Cases: ActualShouldRun(c) = SpecShouldRun(c)
   /\ \A c \in Cases: ActualIdleWait(c) = SpecIdleWait(c)
   /\ \A c \in Cases: (ActualIdleWait(c) = NoWait) = ActualShouldRun(c)
@@ -158,8 +158,19 @@ WorkerTickGapCoreSafety ==
   /\ WaitReadinessPartition
   /\ BoundaryAndFutureAnchors
 
+WorkerTickGapCoreSafety == WorkerTickGapExactness
+
+WorkerTickGapCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerTickGapExactness
+
+NoBugInvariant == WorkerTickGapExactness
+
+Safety ==
+  WorkerTickGapExactness
+
 SafetyFast ==
-  WorkerTickGapCoreSafety
+  WorkerTickGapExactness
 
 BugRunStrictBoundary ==
   ActualShouldRun("at_gap") = SpecShouldRun("at_gap")

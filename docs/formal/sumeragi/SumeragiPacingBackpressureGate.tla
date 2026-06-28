@@ -211,6 +211,13 @@ NoBugInvariant == PacingBackpressureCoreSafety
 
 SafetyFast == PacingBackpressureCoreSafety
 
+PacingBackpressureExactness ==
+  /\ PacingBackpressureCoreSafety
+
+PacingBackpressureCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PacingBackpressureExactness
+
 BugInitIgnoresRx == NoBugInvariant
 BugRefreshReportsChangeOnEqual == NoBugInvariant
 BugRefreshMissesChange == NoBugInvariant

@@ -159,12 +159,15 @@ Next ==
 TypeInvariant ==
   checked \in 0..14
 
-Safety ==
+RangePullStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
 RangePullStatusExactness ==
-  Safety
+  /\ RangePullStatusActionsMatchSpec
+
+Safety ==
+  RangePullStatusExactness
 
 RangePullStatusCorrectnessEnvelope ==
   /\ TypeInvariant

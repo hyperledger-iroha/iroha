@@ -6146,21 +6146,22 @@ fn validate_sccp_groth16_proof_bytes_for_bundle(
     let Some(proof_bytes) = proof_bytes else {
         return Ok(());
     };
-    let public_inputs =
-        iroha_sccp::sccp_message_transparent_public_inputs(bundle).ok_or_else(|| {
-            sccp_bad_request(format!(
-                "{label} cannot be checked against SCCP public inputs"
-            ))
-        })?;
     let Some(proof) = iroha_sccp::decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes) else {
         return Err(sccp_bad_request(format!(
             "{label} must be a canonical Groth16 BN254 proof tuple"
         )));
     };
+    let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(bundle);
+    let expected_message_id = public_inputs
+        .as_ref()
+        .map_or(bundle.commitment.message_id, |inputs| inputs.message_id);
+    let expected_commitment_root = public_inputs
+        .as_ref()
+        .map_or(bundle.commitment_root, |inputs| inputs.commitment_root);
     if proof.version != 1
-        || proof.message_id != public_inputs.message_id
+        || proof.message_id != expected_message_id
         || proof.source_domain != manifest.local_domain
-        || proof.commitment_root != public_inputs.commitment_root
+        || proof.commitment_root != expected_commitment_root
         || iroha_sccp::encode_sccp_evm_groth16_bn254_proof_bytes(&proof) != proof_bytes
     {
         return Err(sccp_bad_request(format!(
@@ -18136,6 +18137,56 @@ pub(crate) fn push_accepted_transaction_for_ingress(
     push_accepted_transaction_for_ingress_with_routing_plan(queue, state, accepted_tx, None)
 }
 
+pub(crate) fn reject_ingress_if_queue_capacity_saturated(
+    queue: &Queue,
+    state: &CoreState,
+    incoming_tx_count: usize,
+) -> Result<()> {
+    if incoming_tx_count == 0 {
+        return Ok(());
+    }
+    let pressure = {
+        let block_time = state.sumeragi_effective_block_time();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    let count_room = pressure
+        .capacity
+        .get()
+        .saturating_sub(pressure.tracked_tx_count);
+    let incoming_retained_floor =
+        Queue::retained_byte_cost_floor_for_transactions(incoming_tx_count);
+    let saturated_by_count = pressure.saturated_by_count || incoming_tx_count > count_room;
+    let saturated_by_bytes = pressure.saturated_by_bytes
+        || pressure
+            .retained_bytes
+            .saturating_add(incoming_retained_floor)
+            > pressure.max_retained_bytes.get();
+
+    if !saturated_by_count && !saturated_by_bytes {
+        return Ok(());
+    }
+
+    iroha_logger::debug!(
+        incoming_tx_count,
+        queued = pressure.queued_tx_count,
+        tracked = pressure.tracked_tx_count,
+        capacity = pressure.capacity.get(),
+        retained_bytes = pressure.retained_bytes,
+        max_retained_bytes = pressure.max_retained_bytes.get(),
+        saturated_by_count,
+        saturated_by_bytes,
+        "rejecting transaction ingress before admission because queue capacity is saturated"
+    );
+
+    Err(Error::PushIntoQueue {
+        source: Box::new(queue::Error::Full),
+        backpressure: queue::BackpressureState::Saturated {
+            queued: pressure.queued_tx_count,
+            capacity: pressure.capacity,
+        },
+    })
+}
+
 pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -18166,10 +18217,17 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
 
     result
         .map_err(|queue::Failure { tx, err }| {
-            iroha_logger::warn!(
-                tx_hash=%tx.as_ref().hash(), ?err,
-                "Failed to push into queue"
-            );
+            if matches!(err, queue::Error::Full) {
+                iroha_logger::debug!(
+                    tx_hash = %tx.as_ref().hash(),
+                    "queue rejected transaction due to backpressure"
+                );
+            } else {
+                iroha_logger::warn!(
+                    tx_hash=%tx.as_ref().hash(), ?err,
+                    "Failed to push into queue"
+                );
+            }
 
             drop(tx);
             (err, queue.current_backpressure())
@@ -18262,6 +18320,7 @@ async fn handle_transaction_inner(
     _telemetry: &MaybeTelemetry,
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
+    reject_ingress_if_queue_capacity_saturated(queue.as_ref(), state.as_ref(), 1)?;
     let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
     iroha_logger::debug!(
         tx = %accepted_tx.hash(),
@@ -34006,6 +34065,7 @@ async fn execute_contract_bundle_request(
     telemetry: MaybeTelemetry,
     req: DeployContractBundleDto,
     dry_run: bool,
+    deploy_wait_timeout_override: Option<Duration>,
 ) -> Result<DeployContractBundleReceiptDto> {
     let planned = plan_contract_bundle(&chain_id, &kura, &state, &req, dry_run)?;
     if dry_run {
@@ -34089,7 +34149,8 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            let deploy_wait_timeout = contract_bundle_deploy_wait_timeout();
+            let deploy_wait_timeout =
+                deploy_wait_timeout_override.unwrap_or_else(contract_bundle_deploy_wait_timeout);
             if deploy_wait_timeout.is_zero() {
                 persist_contract_bundle_receipt(&receipt)?;
                 return Ok(receipt);
@@ -34290,9 +34351,10 @@ pub async fn handle_post_contract_deploy_bundle(
     dry_run: bool,
     NoritoJson(req): NoritoJson<DeployContractBundleDto>,
 ) -> Result<impl IntoResponse> {
-    let response =
-        execute_contract_bundle_request(chain_id, kura, queue, state, telemetry, req, dry_run)
-            .await?;
+    let response = execute_contract_bundle_request(
+        chain_id, kura, queue, state, telemetry, req, dry_run, None,
+    )
+    .await?;
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -34342,6 +34404,7 @@ pub async fn handle_post_contract_deploy(
         telemetry,
         wrap_single_contract_deploy_request(req),
         false,
+        Some(Duration::ZERO),
     )
     .await?;
     let response = single_contract_deploy_receipt_json(&receipt)?;
@@ -34749,6 +34812,7 @@ mod contract_bundle_tests {
             MaybeTelemetry::disabled(),
             request,
             true,
+            None,
         )
         .await
         .expect("dry-run receipt");
@@ -34793,6 +34857,7 @@ mod contract_bundle_tests {
             MaybeTelemetry::disabled(),
             request,
             false,
+            None,
         )
         .await
         .expect("resume receipt");
@@ -37861,6 +37926,22 @@ mod deploy_tests {
         );
         assert_eq!(
             v.get("status").and_then(norito::json::Value::as_str),
+            Some("submitted")
+        );
+        let completed_stages = v
+            .get("completed_stages")
+            .and_then(norito::json::Value::as_array)
+            .expect("completed stages array")
+            .iter()
+            .filter_map(norito::json::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(completed_stages, vec!["plan"]);
+        assert_eq!(
+            v.get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("status"))
+                .and_then(norito::json::Value::as_str),
             Some("submitted")
         );
         let ch = v
@@ -57221,8 +57302,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
     let tx_queue = json_object(vec![
         json_entry("depth", snap.tx_queue_depth),
         json_entry("capacity", snap.tx_queue_capacity),
+        json_entry("retained_bytes", snap.tx_queue_retained_bytes),
+        json_entry("max_retained_bytes", snap.tx_queue_max_retained_bytes),
         json_entry("saturated", snap.tx_queue_saturated),
         json_entry("saturated_by_count", snap.tx_queue_saturated_by_count),
+        json_entry("saturated_by_bytes", snap.tx_queue_saturated_by_bytes),
         json_entry("saturated_by_age", snap.tx_queue_saturated_by_age),
         json_entry("oldest_queued_age_ms", snap.tx_queue_oldest_queued_age_ms),
     ]);
@@ -59008,8 +59092,11 @@ mod status_tests {
         let snap = sumeragi::StatusSnapshot {
             tx_queue_depth: 4,
             tx_queue_capacity: 20_000,
+            tx_queue_retained_bytes: 1_024,
+            tx_queue_max_retained_bytes: 65_536,
             tx_queue_saturated: false,
             tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
             tx_queue_saturated_by_age: true,
             tx_queue_oldest_queued_age_ms: 7_500,
             ..Default::default()
@@ -59026,11 +59113,23 @@ mod status_tests {
             Some(20_000)
         );
         assert_eq!(
+            tx_queue.get("retained_bytes").and_then(Value::as_u64),
+            Some(1_024)
+        );
+        assert_eq!(
+            tx_queue.get("max_retained_bytes").and_then(Value::as_u64),
+            Some(65_536)
+        );
+        assert_eq!(
             tx_queue.get("saturated").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
             tx_queue.get("saturated_by_count").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            tx_queue.get("saturated_by_bytes").and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
@@ -63048,7 +63147,11 @@ mod cursor_mode_tests {
 
 #[cfg(test)]
 mod transaction_ingress_overload_tests {
-    use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+    use std::{
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_core::{
         kura::Kura,
@@ -63078,6 +63181,41 @@ mod transaction_ingress_overload_tests {
 
     fn checked_transaction_ingress_keypair(seed: u8, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, iroha_crypto::Algorithm::Ed25519, context)
+    }
+
+    #[test]
+    fn transaction_ingress_precheck_rejects_incoming_batch_over_retained_byte_budget() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let mut queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(32).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(32).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        queue_cfg.max_retained_bytes =
+            NonZeroU64::new(Queue::retained_byte_cost_floor_for_transactions(1))
+                .expect("non-zero retained byte budget");
+        let queue = Queue::from_config(queue_cfg, events);
+
+        reject_ingress_if_queue_capacity_saturated(&queue, &state, 1)
+            .expect("one incoming tx should fit the empty byte budget");
+        let err = reject_ingress_if_queue_capacity_saturated(&queue, &state, 2)
+            .expect_err("incoming batch should be shed before admission");
+        match err {
+            Error::PushIntoQueue {
+                source,
+                backpressure,
+            } => {
+                assert!(matches!(source.as_ref(), iroha_core::queue::Error::Full));
+                assert!(backpressure.is_saturated());
+            }
+            other => panic!("expected queue backpressure error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -88975,6 +89113,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
+    normalize_status_block_visibility(&mut status);
     if !nexus_enabled {
         status.strip_nexus();
     } else if let Some(policy) = nexus_routing_policy {
@@ -89035,6 +89174,18 @@ pub async fn handle_status(
             }
         }
     }
+}
+
+#[cfg(feature = "telemetry")]
+fn normalize_status_block_visibility(status: &mut Status) {
+    let Some(sumeragi) = status.sumeragi.as_ref() else {
+        return;
+    };
+    let finality_height = sumeragi.commit_qc_height;
+    if finality_height <= status.blocks {
+        return;
+    }
+    status.blocks = finality_height;
 }
 
 #[cfg(feature = "telemetry")]
@@ -89379,6 +89530,27 @@ mod tests {
             status_value_by_path(&status, "sorafs_micropayments/feed/credits/outstanding").unwrap();
         assert_eq!(outstanding, json_value(&7u128));
         assert!(status_value_by_path(&status, "sorafs_micropayments/unknown").is_none());
+    }
+
+    #[test]
+    fn status_block_visibility_falls_back_to_sumeragi_commit_height() {
+        let metrics = Metrics::default();
+        let mut status = Status::from(&metrics);
+        status.blocks = 0;
+        status.blocks_non_empty = 0;
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_274;
+        sumeragi.highest_qc_height = 4_275;
+        sumeragi.locked_qc_height = 4_273;
+
+        super::normalize_status_block_visibility(&mut status);
+
+        assert_eq!(status.blocks, 4_274);
+        assert_eq!(status.blocks_non_empty, 0);
+
+        status.blocks = 4_273;
+        super::normalize_status_block_visibility(&mut status);
+        assert_eq!(status.blocks, 4_274);
     }
 
     #[cfg(feature = "app_api")]

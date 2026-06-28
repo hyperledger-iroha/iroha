@@ -340,8 +340,11 @@ NoBugInvariant == StaleViewPendingPruneCoreSafety
 
 SafetyFast == StaleViewPendingPruneCoreSafety
 
+StaleViewPendingPruneExactness ==
+  /\ StaleViewPendingPruneCoreSafety
+
 StaleViewPendingPruneCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ StaleViewPendingPruneCoreSafety
+  /\ StaleViewPendingPruneExactness
 
 ====

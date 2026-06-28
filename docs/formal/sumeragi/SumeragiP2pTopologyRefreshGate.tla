@@ -347,7 +347,7 @@ P2pRefreshIdleSkipExact ==
     ActualCase(c) = SpecCase(c)
 
 P2pTopologyRefreshExactness ==
-  /\ Safety
+  /\ ActualOutput = SpecOutput
   /\ P2pRefreshDecisionExact
   /\ P2pRefreshAdvertisementExact
   /\ P2pRefreshLocalRemovalExact

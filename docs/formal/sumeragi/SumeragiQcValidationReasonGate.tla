@@ -214,7 +214,7 @@ QcValidationReasonMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 QcValidationReasonExactness ==
-  QcValidationReasonMatchesSpec
+  /\ QcValidationReasonMatchesSpec
 
 QcValidationReasonCorrectnessEnvelope ==
   /\ TypeInvariant

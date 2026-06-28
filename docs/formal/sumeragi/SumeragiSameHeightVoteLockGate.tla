@@ -280,9 +280,19 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-Safety ==
+SameHeightVoteLockActionsMatchSpec ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+SameHeightVoteLockExactness ==
+  /\ SameHeightVoteLockActionsMatchSpec
+
+SameHeightVoteLockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SameHeightVoteLockExactness
+
+Safety ==
+  SameHeightVoteLockExactness
 
 BugEmptyRosterReturnsLock ==
   ImplementationActions(EmptyRosterNone) = SpecActions(EmptyRosterNone)

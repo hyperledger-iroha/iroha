@@ -430,7 +430,9 @@ RbcDeliverEmissionCoreSafety ==
   /\ DecisionExact
   /\ GateStable
 
-RbcDeliverEmissionExactness == RbcDeliverEmissionCoreSafety
+RbcDeliverEmissionExactness ==
+  /\ DecisionExact
+  /\ GateStable
 
 RbcDeliverEmissionCorrectnessEnvelope ==
   /\ TypeInvariant

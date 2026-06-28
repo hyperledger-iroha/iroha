@@ -249,5 +249,24 @@ SignedTicksHaveConsistentOutputs ==
   /\ signed = advanceOutput
   /\ signed = proposalPhase
 
+EngineTickExactness ==
+  /\ EveryTickAdvancesView
+  /\ EveryTickSignsNewView
+  /\ EveryTickEmitsAdvanceView
+  /\ EveryTickEntersProposalPhase
+  /\ TicksClearInflightValidation
+  /\ TicksPreservePendingFinality
+  /\ HighestTicksUseHighestSubject
+  /\ NoHighestTicksUseZeroSubject
+  /\ HighestTicksBindHighestQc
+  /\ NoHighestTicksDoNotBindHighestQc
+  /\ SignedTicksHaveConsistentOutputs
+
+EngineTickCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineTickExactness
+
+Safety == EngineTickExactness
+
 =============================================================================
 ====

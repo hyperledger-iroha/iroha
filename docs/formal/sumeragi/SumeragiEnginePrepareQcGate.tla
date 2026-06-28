@@ -192,4 +192,27 @@ IgnoredPrepareDoesNotMutateLock ==
 LockAndHighestFollowSigned ==
   locked \cup highest \subseteq signed
 
+EnginePrepareQcExactness ==
+  /\ SignedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ SafePrepareQcsSign
+  /\ UnsafePrepareQcsAreIgnored
+  /\ WrongContextNeverSigns
+  /\ WrongQuorumPolicyNeverSigns
+  /\ StaleViewNeverSigns
+  /\ CommittedHeightNeverSigns
+  /\ ReplayPrepareNeverSigns
+  /\ ConflictingPrepareNeverSigns
+  /\ PendingFinalityNeverSigns
+  /\ SignedPrepareRecordsLock
+  /\ SignedPrepareRecordsHighest
+  /\ IgnoredPrepareDoesNotMutateLock
+  /\ LockAndHighestFollowSigned
+
+EnginePrepareQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePrepareQcExactness
+
+SafetyFast == EnginePrepareQcExactness
+
 ====

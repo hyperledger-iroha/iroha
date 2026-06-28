@@ -685,6 +685,20 @@ def _unlink_replace_temp_outputs(args: argparse.Namespace) -> list[str]:
     return errors
 
 
+def _cleanup_existing_temp_output_for_replace(
+    final_path: Path,
+    temp_path: Path,
+    label: str,
+    *,
+    replace: bool,
+) -> list[str]:
+    if not (temp_path.exists() or temp_path.is_symlink()):
+        return []
+    if not replace:
+        return [f"{label} temporary output already exists"]
+    return _unlink_temp_output_for_replace(final_path, label)
+
+
 def _validate_output_paths_can_be_replaced(
     entries: tuple[tuple[Path, str], ...],
 ) -> list[str]:
@@ -712,6 +726,17 @@ def _cleanup_profile_for_resume(profile: str, staged_artifact_dir: Path) -> list
             )
             for name in _profile_output_names(profile)
         )
+    )
+
+
+def _cleanup_profile_temp_outputs_for_resume(
+    profile: str,
+    staged_artifact_dir: Path,
+) -> list[str]:
+    log_name = LINEAGE_KEY_ARTIFACT_LOG_FILENAMES[profile]
+    return _unlink_temp_output_for_replace(
+        staged_artifact_dir / log_name,
+        f"staged {profile} lineage key artifact log",
     )
 
 
@@ -1318,6 +1343,12 @@ def _try_resume_key_artifact_phase(
 ) -> tuple[bool, list[str]]:
     if not _profile_has_any_output(profile, staged_artifact_dir):
         return False, []
+    temp_cleanup_errors = _cleanup_profile_temp_outputs_for_resume(
+        profile,
+        staged_artifact_dir,
+    )
+    if temp_cleanup_errors:
+        return False, temp_cleanup_errors
     if not _validate_reusable_key_artifact_phase(
         staged_artifact_dir=staged_artifact_dir,
         profile=profile,
@@ -1343,8 +1374,14 @@ def _run_lineage_key_artifact_command(
     log_name = LINEAGE_KEY_ARTIFACT_LOG_FILENAMES[profile]
     final_log = staged_artifact_dir / log_name
     temp_log = staged_artifact_dir / f".{log_name}.staged-runner.tmp"
-    if temp_log.exists() or temp_log.is_symlink():
-        return 1, [f"staged {profile} lineage key artifact log temporary output already exists"]
+    temp_cleanup_errors = _cleanup_existing_temp_output_for_replace(
+        final_log,
+        temp_log,
+        f"staged {profile} lineage key artifact log",
+        replace=replace,
+    )
+    if temp_cleanup_errors:
+        return 1, temp_cleanup_errors
     start = time.monotonic()
     try:
         exit_code = (
@@ -1521,11 +1558,20 @@ def run_staged_lineage_proof(
         cleanup_errors = _unlink_resume_outputs(_run_level_output_paths(args))
         if cleanup_errors:
             return 1, cleanup_errors
+        temp_cleanup_errors = _unlink_replace_temp_outputs(args)
+        if temp_cleanup_errors:
+            return 1, temp_cleanup_errors
 
     proof_log = args.staged_artifact_dir / PROOF_LOG_FILENAME
     temp_log = args.staged_artifact_dir / f".{PROOF_LOG_FILENAME}.staged-runner.tmp"
-    if temp_log.exists() or temp_log.is_symlink():
-        return 1, ["staged proof log temporary output already exists"]
+    temp_cleanup_errors = _cleanup_existing_temp_output_for_replace(
+        proof_log,
+        temp_log,
+        "staged proof log",
+        replace=args.replace or args.resume_key_artifacts,
+    )
+    if temp_cleanup_errors:
+        return 1, temp_cleanup_errors
 
     command = shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)
     start = monotonic()

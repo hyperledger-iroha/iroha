@@ -232,4 +232,24 @@ ActivationRequiresFreshBoundaryRecord ==
 NoDuplicateOrConflictRecord ==
   recorded \subseteq {candidate \in Candidates : Fresh(candidate)}
 
+EngineCommittedBlockExactness ==
+  /\ RecordedMatchesSpec
+  /\ ActivatedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ FreshCommitNotificationsRecord
+  /\ FreshBoundaryReconfigurationActivates
+  /\ PlainCommitNotificationsNeverActivate
+  /\ NonBoundaryReconfigurationNeverActivates
+  /\ DuplicateNotificationsAreIdempotent
+  /\ ConflictingNotificationsAreIgnored
+  /\ ConflictsNeverOverwrite
+  /\ ActivationRequiresFreshBoundaryRecord
+  /\ NoDuplicateOrConflictRecord
+
+EngineCommittedBlockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommittedBlockExactness
+
+SafetyFast == EngineCommittedBlockExactness
+
 ====

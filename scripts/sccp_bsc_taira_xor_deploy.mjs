@@ -273,14 +273,16 @@ const BSC_CONTRACT_CODE_ROLES = Object.freeze([
 
 const DESTINATION_BINDING_LABEL = "iroha:sccp:evm-destination-binding:v1";
 const SECRET_KEY_PATTERN =
-  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret|password|api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|bearer(?:[_-]?token)?|session[_-]?token|refresh[_-]?token)/iu;
+  /(?:private[\s_-]?key|mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|secret|password|api[\s_-]?(?:key|token)|access[\s_-]?token|auth[\s_-]?token|bearer(?:[\s_-]?token)?|session[\s_-]?token|refresh[\s_-]?token)/iu;
 const SECRET_ASSIGNMENT_PATTERN =
-  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret|password|api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|bearer(?:[_-]?token)?|session[_-]?token|refresh[_-]?token)\s*[:=]\s*("[^"]*"|'[^']*'|<[^>]+>|\S+)/giu;
+  /(?:private[\s_-]?key|mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|secret|password|api[\s_-]?(?:key|token)|access[\s_-]?token|auth[\s_-]?token|bearer(?:[\s_-]?token)?|session[\s_-]?token|refresh[\s_-]?token)\s*[:=]\s*("[^"]*"|'[^']*'|<[^>]+>|\S+)/giu;
 const BEARER_TOKEN_TEXT_PATTERN = /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}\b/iu;
 const REDACTED_SECRET_ASSIGNMENT_VALUE_PATTERN =
   /^(?:redacted|<redacted>|\*{3,}|runtime[-_ ]?only|<runtime[-_ ]?only>|operator[-_ ]?provided|<operator[-_ ]?provided>|replace[_-]with[_-][A-Z0-9_ -]+)$/iu;
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
+const HTML_ENTITY_PATTERN =
+  /&(?:#([0-9]{1,7})|#x([0-9a-f]{1,6})|amp|lt|gt|quot|apos);/giu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 const PLACEHOLDER_BURN_RECORD_TEXT_PATTERN =
   /(?:diagnostic|dummy|fixture|mock|placeholder|stub|test-only)/iu;
@@ -3604,6 +3606,7 @@ function normalizeCanonicalStringList(value, label) {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be a list of non-empty strings.`);
   }
+  const seenBlockers = new Set();
   return ownArrayValues(value).map(([index, entry]) => {
     if (
       typeof entry !== "string" ||
@@ -3614,8 +3617,85 @@ function normalizeCanonicalStringList(value, label) {
         `${label}[${index}] must be a non-empty canonical string.`,
       );
     }
+    if (/[\u0000-\u001f\u007f]/u.test(entry)) {
+      throw new Error(`${label}[${index}] contains control character.`);
+    }
+    if (/[^\u0020-\u007e]/u.test(entry)) {
+      throw new Error(`${label}[${index}] must be printable ASCII.`);
+    }
+    const decodedIssue = decodedPublicBlockerTextIssue(entry);
+    if (decodedIssue !== null) {
+      throw new Error(`${label}[${index}] ${decodedIssue}.`);
+    }
+    if (sensitivePublicBlockerText(entry)) {
+      throw new Error(`${label}[${index}] contains sensitive name.`);
+    }
+    const blockerKey = canonicalPublicBlockerKey(entry);
+    if (seenBlockers.has(blockerKey)) {
+      throw new Error(`${label} must not contain duplicate strings.`);
+    }
+    seenBlockers.add(blockerKey);
     return entry;
   });
+}
+
+function decodedPublicBlockerText(value) {
+  let decoded = value.replace(
+    HTML_ENTITY_PATTERN,
+    (match, decimalEntity, hexEntity) => {
+      if (decimalEntity !== undefined) {
+        const codePoint = Number.parseInt(decimalEntity, 10);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (hexEntity !== undefined) {
+        const codePoint = Number.parseInt(hexEntity, 16);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      const namedEntity = match.toLowerCase();
+      if (namedEntity === "&amp;") return "&";
+      if (namedEntity === "&lt;") return "<";
+      if (namedEntity === "&gt;") return ">";
+      if (namedEntity === "&quot;") return '"';
+      if (namedEntity === "&apos;") return "'";
+      return match;
+    },
+  );
+  for (let index = 0; index < 3; index += 1) {
+    let nextDecoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+  }
+  return decoded;
+}
+
+function decodedPublicBlockerTextIssue(value) {
+  const decoded = decodedPublicBlockerText(value);
+  if (/[\u0000-\u001f\u007f]/u.test(decoded)) {
+    return "contains decoded control character";
+  }
+  if (/[^\u0020-\u007e]/u.test(decoded)) {
+    return "contains decoded non-ASCII character";
+  }
+  return null;
+}
+
+function sensitivePublicBlockerText(value) {
+  return SECRET_KEY_PATTERN.test(decodedPublicBlockerText(value));
+}
+
+function canonicalPublicBlockerKey(value) {
+  return decodedPublicBlockerText(value).toLowerCase();
 }
 
 function postDeployLiveEvidenceProductionBlockers(record) {
@@ -14290,7 +14370,9 @@ async function commandPublishRouteManifest(options) {
   const { buildTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
-  const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
   const transaction = buildTransaction({
     chainId,
     authority,
@@ -14528,61 +14610,6 @@ async function waitForBurnRecordVkRegistryEntry(toriiUrl, vk, timeoutMs) {
   return { entry: lastEntry, problems: lastProblems };
 }
 
-async function submitBurnRecordVkRegisterViaAppApi({
-  toriiUrl,
-  authority,
-  privateKey,
-  vk,
-}) {
-  const { privateKeyMultihash } = await import(
-    "../javascript/iroha_js/src/crypto.js"
-  );
-  const encodedPrivateKey = privateKeyMultihash(privateKey, {
-    algorithm: "ed25519",
-  });
-  const exposedPrivateKey = encodedPrivateKey.includes(":")
-    ? encodedPrivateKey
-    : `ed25519:${encodedPrivateKey}`;
-  const registerUrl = new URL("/v1/zk/vk/register", toriiUrl);
-  const request = {
-    authority,
-    private_key: exposedPrivateKey,
-    backend: vk.id.backend,
-    name: vk.id.name,
-    version: vk.recordInput.version,
-    circuit_id: vk.recordInput.circuitId,
-    public_inputs_schema_hash_hex: vk.publicInputsSchemaHash.slice(2),
-    curve: vk.recordInput.curve,
-    gas_schedule_id: vk.recordInput.gasScheduleId,
-    vk_len: vk.vkBytes.bytes.length,
-    max_proof_bytes: vk.recordInput.maxProofBytes,
-    commitment_hex: vk.commitment.slice(2),
-    vk_bytes: vk.vkBytes.text,
-    status: vk.recordInput.status,
-  };
-  const response = await fetch(registerUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/plain, */*",
-    },
-    body: JSON.stringify(request),
-  });
-  if (![200, 201, 202, 204].includes(response.status)) {
-    const preview = await responseBodyPreview(response);
-    throw new Error(
-      `Torii responded with HTTP ${response.status} while registering burn-record VK${
-        preview ? `: ${preview}` : ""
-      }`,
-    );
-  }
-  return {
-    accepted: true,
-    httpStatus: response.status,
-    path: registerUrl.pathname,
-  };
-}
-
 async function commandPublishBurnRecordVk(options) {
   const manifestPath = normalizeBscRouteManifestPath(
     options["route-manifest"] ?? options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
@@ -14679,7 +14706,6 @@ async function commandPublishBurnRecordVk(options) {
       toriiUrl,
       chainId,
       authority,
-      appApiPath: "/v1/zk/vk/register",
       registryReadback: existingEntry,
       gasAssetId,
       gasLimit,
@@ -14715,16 +14741,76 @@ async function commandPublishBurnRecordVk(options) {
     normalizePrivateKey(process.env[privateKeyEnv], privateKeyEnv).slice(2),
     "hex",
   );
-  const submission = await submitBurnRecordVkRegisterViaAppApi({
-    toriiUrl,
+  const metadata = {
+    routeId,
+    assetKey,
+    action: "publish_burn_record_vk",
+    gas_asset_id: gasAssetId,
+    gas_limit: gasLimit,
+  };
+  const { buildTransaction } = await import(
+    "../javascript/iroha_js/src/transaction.js"
+  );
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
+  const transaction = buildTransaction({
+    chainId,
     authority,
+    instructions: [instruction],
+    metadata,
     privateKey,
-    vk,
   });
-  const registryResult = waitForCommit
-    ? await waitForBurnRecordVkRegistryEntry(toriiUrl, vk, commitTimeoutMs)
-    : { entry: null, problems: [] };
-  if (waitForCommit && (!registryResult.entry || registryResult.problems.length > 0)) {
+  const client = new ToriiClient(toriiUrl);
+  const hash = normalizeTransactionHash(
+    transaction.hash.toString("hex"),
+    "local transaction hash",
+  );
+  const submission = await submitSignedTransactionRawToTairaPipeline(
+    client,
+    toriiUrl,
+    transaction.signedTransaction,
+    hash,
+    { waitForCommit, timeoutMs: commitTimeoutMs },
+  );
+  const submittedHash = normalizeTransactionHash(
+    submission.hash,
+    "submitted transaction hash",
+  );
+  const statusKind = transactionStatusKind(submission.status);
+  const registryResult =
+    waitForCommit && statusKind === "Applied"
+      ? await waitForBurnRecordVkRegistryEntry(toriiUrl, vk, commitTimeoutMs)
+      : { entry: null, problems: [] };
+  const submissionEvidence = {
+    submitted: true,
+    alreadyRegistered: false,
+    toriiUrl,
+    chainId,
+    authority,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
+    registryReadback: registryResult.entry,
+    gasAssetId,
+    gasLimit,
+    waitForCommit,
+    commitTimeoutMs,
+  };
+  await writeJsonNoSecrets(out, {
+    ...artifact,
+    submission: submissionEvidence,
+  });
+  if (waitForCommit && statusKind !== "Applied") {
+    throw new Error(
+      `TAIRA burn-record VK registration was not applied: ${statusKind ?? "unknown"}.`,
+    );
+  }
+  if (
+    waitForCommit &&
+    (!registryResult.entry || registryResult.problems.length > 0)
+  ) {
     throw new Error(
       `TAIRA burn-record VK registry readback failed${
         registryResult.problems.length > 0
@@ -14733,24 +14819,6 @@ async function commandPublishBurnRecordVk(options) {
       }`,
     );
   }
-  const submissionEvidence = {
-    submitted: true,
-    alreadyRegistered: false,
-    toriiUrl,
-    chainId,
-    authority,
-    appApiPath: submission.path,
-    httpStatus: submission.httpStatus,
-    registryReadback: registryResult.entry,
-    gasAssetId,
-    gasLimit,
-    waitForCommit,
-    commitTimeoutMs,
-  };
-  await writeJsonNoSecrets(out, {
-      ...artifact,
-      submission: submissionEvidence,
-    });
   return {
     ok: true,
     wrote: out,
@@ -14759,8 +14827,10 @@ async function commandPublishBurnRecordVk(options) {
     toriiUrl,
     chainId,
     authority,
-    appApiPath: submission.path,
-    httpStatus: submission.httpStatus,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
     gasAssetId,
     gasLimit,
     waitForCommit,

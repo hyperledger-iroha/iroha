@@ -74,6 +74,11 @@ object OfflineNote {
         "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimage"
     private const val PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimage"
+    /**
+     * Historical classic Offline Note instruction wire names retained only for
+     * compatibility fixture decoding; production offline payments use Kagemusha
+     * flows.
+     */
     const val ISSUE_INSTRUCTION_SCHEMA: String =
         "iroha_data_model::isi::offline::IssueOfflineNote"
     const val REDEEM_INSTRUCTION_SCHEMA: String =

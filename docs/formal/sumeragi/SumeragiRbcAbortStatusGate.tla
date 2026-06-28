@@ -209,10 +209,14 @@ SafetyAnchors ==
   /\ ZeroSlotAnchors
   /\ SnapshotAnchors
 
+RbcAbortStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 RbcAbortStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ RbcAbortStatusExactness
 
 =============================================================================
 ====

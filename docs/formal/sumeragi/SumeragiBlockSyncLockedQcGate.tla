@@ -310,7 +310,7 @@ BlockSyncLockedQcCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 BlockSyncLockedQcExactness ==
-  BlockSyncLockedQcCoreSafety
+  /\ BlockSyncLockedQcCoreSafety
 
 BlockSyncLockedQcCorrectnessEnvelope ==
   /\ TypeInvariant

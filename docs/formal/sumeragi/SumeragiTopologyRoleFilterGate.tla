@@ -300,7 +300,10 @@ TopologyAuditRoleRotationExact ==
     ActualAudit(c) = SpecAudit(c)
 
 TopologyRoleFilterExactness ==
-  /\ SafetyFast
+  /\ \A c \in RoleCases: ActualRole(c) = SpecRole(c)
+  /\ \A c \in GroupCases: ActualGroup(c) = SpecGroup(c)
+  /\ \A c \in FilterCases: ActualFilter(c) = SpecFilter(c)
+  /\ \A c \in AuditCases: ActualAudit(c) = SpecAudit(c)
   /\ TopologyRolePartitionExact
   /\ TopologyRoleSliceExact
   /\ TopologySignatureFilterExact

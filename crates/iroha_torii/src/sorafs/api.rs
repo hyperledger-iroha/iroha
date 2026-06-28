@@ -10984,13 +10984,10 @@ pub(crate) async fn handle_get_sorafs_reserve_movements(
     };
     let limit = normalize_limit(query.limit);
     let visible_account = verified.account.to_string().into_bytes();
-    let movements = state
-        .sorafs_node
-        .reserve_movements_since(query.since, MAX_LIST_LIMIT)
-        .into_iter()
-        .filter(|movement| reserve_movement_visible_to(movement, &visible_account))
-        .take(limit)
-        .collect::<Vec<_>>();
+    let movements =
+        state
+            .sorafs_node
+            .reserve_movements_since_visible_to(query.since, limit, &visible_account);
     let tip_sequence = state
         .sorafs_node
         .latest_reserve_movement_sequence()
@@ -33230,6 +33227,30 @@ mod advert_tests {
         Bytes::from(norito::json::to_vec(&request).expect("encode reserve movement request"))
     }
 
+    fn reserve_test_id(index: u64) -> [u8; 32] {
+        let mut id = [0_u8; 32];
+        id[..8].copy_from_slice(&index.to_le_bytes());
+        id
+    }
+
+    fn local_reserve_movement_request(
+        index: u64,
+        provider_account: Vec<u8>,
+        reserve_account: Vec<u8>,
+    ) -> ReserveMovementRequest {
+        ReserveMovementRequest {
+            movement_id: reserve_test_id(index),
+            provider_id: reserve_test_id(10_000 + index),
+            provider_account,
+            reserve_account,
+            asset_definition_id: reserve_asset_definition_literal().into_bytes(),
+            kind: ReserveMovementKind::TopUp,
+            amount: sorafs_manifest::deal::XorAmount::from_micro(1),
+            idempotency_key: format!("local-movement-{index}"),
+            observed_at_unix: 1_800_010_000 + index,
+        }
+    }
+
     fn reserve_movement_custody_body(status: &str, tx_hash: [u8; 32]) -> Bytes {
         Bytes::from(
             norito::json::to_vec(&ReserveMovementCustodyUpdateRequestDto {
@@ -35446,6 +35467,53 @@ mod advert_tests {
 
         let reserve_view = get_reserve_movements(app, &auth.buyer, Some("limit=10")).await;
         assert_eq!(reserve_view.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn reserve_movement_endpoint_filters_visible_records_before_page_cap() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        for index in 0_u64..MAX_LIST_LIMIT as u64 {
+            app.sorafs_node
+                .record_reserve_movement(local_reserve_movement_request(
+                    index,
+                    format!("other-provider-{index}").into_bytes(),
+                    b"other-reserve".to_vec(),
+                ))
+                .expect("record invisible reserve movement");
+        }
+        let visible = app
+            .sorafs_node
+            .record_reserve_movement(local_reserve_movement_request(
+                MAX_LIST_LIMIT as u64 + 1,
+                auth.provider.account.to_string().into_bytes(),
+                auth.buyer.account.to_string().into_bytes(),
+            ))
+            .expect("record visible reserve movement");
+
+        let movements = get_reserve_movements(app, &auth.provider, Some("limit=1")).await;
+
+        assert_eq!(movements.status(), StatusCode::OK);
+        let body = body::to_bytes(movements.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve movements body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve movements body");
+        let movements = value
+            .get("movements")
+            .and_then(Value::as_array)
+            .expect("reserve movements");
+        let expected_movement_id_hex = hex::encode(visible.record.movement_id);
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("next_since").and_then(Value::as_u64),
+            Some(visible.record.sequence)
+        );
+        assert_eq!(
+            movements
+                .first()
+                .and_then(|movement| movement.get("movement_id_hex"))
+                .and_then(Value::as_str),
+            Some(expected_movement_id_hex.as_str())
+        );
     }
 
     #[tokio::test]

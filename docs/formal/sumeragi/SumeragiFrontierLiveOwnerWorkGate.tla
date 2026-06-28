@@ -546,8 +546,30 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+FrontierLiveOwnerWorkExactness ==
+  /\ ResultsMatchSpec
+  /\ TerminalModesSuppressOwnerWork
+  /\ PrimaryLiveSourcesAccepted
+  /\ InvalidLocalSourcesRejected
+  /\ CompetingQuorumRequiresLaterLockedView
+  /\ TerminalPendingBlocksOnlyLocalVotePaths
+  /\ LocalVoteHistoryMustMatchExactLocalSlot
+  /\ FallthroughSourcesSurviveEarlierMisses
+  /\ NoWorkRejected
+  /\ AcceptedEvidenceClassAnchors
+  /\ TerminalModeRejectionAnchors
+  /\ PendingAndCommitShapeRejectionAnchors
+  /\ CompetingQuorumRejectionAnchors
+  /\ FallthroughPreservationAnchors
+  /\ LocalVoteHistoryRejectionAnchors
+  /\ ConflictAdapterMatchesSpec
+  /\ ConflictAdapterBlocksLiveDifferentHash
+  /\ ConflictAdapterRequiresExactSlotMismatch
+  /\ ConflictAdapterRequiresLiveOwnerWork
+  /\ ConflictAdapterAnchors
+
 FrontierLiveOwnerWorkCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ NoBugInvariant
+  /\ FrontierLiveOwnerWorkExactness
 
 ====

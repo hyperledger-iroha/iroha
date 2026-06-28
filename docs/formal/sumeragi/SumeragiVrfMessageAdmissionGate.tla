@@ -358,7 +358,7 @@ NormalRevealRefreshesPrf ==
 CommitDoesNotRefreshPrf ==
   candidate \in CommitCases => ~prf_refreshed
 
-Safety ==
+VrfMessageAdmissionExactness ==
   /\ AcceptMatchesSpec
   /\ LateMatchesSpec
   /\ StagingMatchesSpec
@@ -374,5 +374,13 @@ Safety ==
   /\ LateRevealDoesNotRefreshPrf
   /\ NormalRevealRefreshesPrf
   /\ CommitDoesNotRefreshPrf
+
+Safety == VrfMessageAdmissionExactness
+
+VrfMessageAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfMessageAdmissionExactness
+
+NoBugInvariant == VrfMessageAdmissionExactness
 
 ====

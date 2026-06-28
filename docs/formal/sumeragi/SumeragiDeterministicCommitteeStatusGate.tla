@@ -97,7 +97,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..7
 
-Safety ==
+DeterministicCommitteeStatusActionsMatchSpec ==
   /\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
   /\ ImplementationActions(CommitteeSizeRecord) =
        SpecActions(CommitteeSizeRecord)
@@ -113,7 +113,10 @@ Safety ==
        SpecActions(ResetAfterRecordClears)
 
 DeterministicCommitteeStatusExactness ==
-  Safety
+  /\ DeterministicCommitteeStatusActionsMatchSpec
+
+Safety ==
+  DeterministicCommitteeStatusExactness
 
 DeterministicCommitteeStatusCorrectnessEnvelope ==
   /\ TypeInvariant

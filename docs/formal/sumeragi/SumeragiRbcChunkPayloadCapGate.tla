@@ -173,7 +173,8 @@ RbcChunkPayloadCapCoreSafety ==
     /\ ActualCap(c) = SpecCap(c)
     /\ ActualFit(c)
 
-RbcChunkPayloadCapExactness == RbcChunkPayloadCapCoreSafety
+RbcChunkPayloadCapExactness ==
+  /\ RbcChunkPayloadCapCoreSafety
 
 RbcChunkPayloadCapCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -300,8 +300,17 @@ TypeInvariant ==
 VoteRosterCacheCoreSafety ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
 
+VoteRosterCacheExactness ==
+  /\ VoteRosterCacheCoreSafety
+
+VoteRosterCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteRosterCacheExactness
+
+NoBugInvariant == VoteRosterCacheExactness
+
 SafetyFast ==
-  VoteRosterCacheCoreSafety
+  VoteRosterCacheExactness
 
 BugCacheEmptyInserts ==
   ActualActions(CacheVoteEmptyIgnored) = SpecActions(CacheVoteEmptyIgnored)

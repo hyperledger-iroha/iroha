@@ -420,8 +420,20 @@ SlotAuthoritativePayloadCoreSafety ==
   /\ RbcSlotPolicy
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == SlotAuthoritativePayloadCoreSafety
+SlotAuthoritativePayloadExactness ==
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ PendingSlotPolicy
+  /\ InflightSlotPolicy
+  /\ KuraSlotPolicy
+  /\ RbcSlotPolicy
+  /\ LookupShapeMatchesShortCircuit
+SlotAuthoritativePayloadCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SlotAuthoritativePayloadExactness
 
-SafetyFast == SlotAuthoritativePayloadCoreSafety
+NoBugInvariant == SlotAuthoritativePayloadExactness
+
+SafetyFast == SlotAuthoritativePayloadExactness
 
 ====

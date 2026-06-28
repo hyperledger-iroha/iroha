@@ -166,8 +166,7 @@ DistinctVoteEpochsMatchesSpec ==
        ActualReplayCount(c) = SpecReplayCount(c)
 
 DistinctVoteEpochsExactness ==
-  DistinctVoteEpochsMatchesSpec
-
+  /\ DistinctVoteEpochsMatchesSpec
 DistinctVoteEpochsCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ DistinctVoteEpochsExactness

@@ -1718,6 +1718,49 @@ test("TRON route-config refuses production-ready manifests with handoff placehol
   });
 });
 
+test("TRON route-config permits placeholder-looking tokens in opaque route-manifest payloads", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const opaqueArtifactB64 = `${"A".repeat(96)}todo`;
+    const opaqueArtifactBytes = Buffer.from(opaqueArtifactB64, "base64");
+    assert.equal(opaqueArtifactBytes.toString("base64"), opaqueArtifactB64);
+    const opaqueAddress = "TStubyr4QyoSNizHf6kPxHYxNnJNLVBJgT";
+    assert.equal(
+      normalizeTronBase58Address(opaqueAddress, "opaque address").base58,
+      opaqueAddress,
+    );
+
+    const toml = buildTairaXorRouteConfigToml({
+      ...manifest,
+      tairaXorTokenAddress: opaqueAddress,
+      tairaXorBurnRecord: {
+        ...manifest.tairaXorBurnRecord,
+        contractArtifactB64: opaqueArtifactB64,
+        artifactSha256: bytesToHex(sha256(opaqueArtifactBytes)),
+      },
+    });
+
+    assert.match(toml, /production_ready = true/u);
+    assert.match(toml, new RegExp(opaqueArtifactB64, "u"));
+  });
+});
+
 test("TRON route-config requires post-deploy evidence for production manifests", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
@@ -2428,6 +2471,138 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
         error,
       );
     }
+    for (const [field, blocker, label] of [
+      [
+        "source_event_transaction_production_blockers",
+        "secret%2dtoken-source-event-blocker",
+        "TRON route-config percent-encoded sensitive blocker",
+      ],
+      [
+        "source_event_transaction_production_blockers",
+        "secret%20source-event-blocker",
+        "TRON route-config percent-encoded whitespace sensitive blocker",
+      ],
+      [
+        "route_canary_production_blockers",
+        "private&#95;key-route-canary-blocker",
+        "TRON route-config HTML-entity sensitive blocker",
+      ],
+      [
+        "route_canary_production_blockers",
+        "private&#32;key-route-canary-blocker",
+        "TRON route-config HTML-entity whitespace sensitive blocker",
+      ],
+    ]) {
+      const patchedManifest = {
+        ...manifest,
+        postDeployLiveEvidence: {
+          ...manifest.postDeployLiveEvidence,
+          [field]: [blocker],
+        },
+      };
+      let caught;
+      try {
+        buildTairaXorRouteConfigToml(patchedManifest);
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof Error, label);
+      assert.match(caught.message, /contains sensitive name/u, label);
+      assert.doesNotMatch(caught.message, new RegExp(blocker, "u"), label);
+    }
+    for (const [field, blocker, encodedBlocker, label] of [
+      [
+        "source_event_transaction_production_blockers",
+        "safe duplicated source event blocker",
+        "safe%20duplicated%20source%20event%20blocker",
+        "TRON route-config decoded duplicate source event blocker",
+      ],
+      [
+        "route_canary_production_blockers",
+        "safe duplicated route canary blocker",
+        "safe duplicated route&#32;canary blocker",
+        "TRON route-config decoded duplicate route canary blocker",
+      ],
+    ]) {
+      const patchedManifest = {
+        ...manifest,
+        postDeployLiveEvidence: {
+          ...manifest.postDeployLiveEvidence,
+          [field]: [blocker, encodedBlocker],
+        },
+      };
+      let caught;
+      try {
+        buildTairaXorRouteConfigToml(patchedManifest);
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof Error, label);
+      assert.match(caught.message, /must not contain duplicate strings/u, label);
+      assert.doesNotMatch(caught.message, new RegExp(blocker, "u"), label);
+      assert.doesNotMatch(caught.message, new RegExp(encodedBlocker, "u"), label);
+    }
+    for (const [field, blocker, expected, label] of [
+      [
+        "source_event_transaction_production_blockers",
+        "source event blocker\nnext line",
+        /contains control character/u,
+        "TRON route-config source event blocker newline",
+      ],
+      [
+        "route_canary_production_blockers",
+        "route canary blocker\tfield",
+        /contains control character/u,
+        "TRON route-config route canary blocker tab",
+      ],
+      [
+        "source_event_transaction_production_blockers",
+        "source event blocker\x7fdel",
+        /contains control character/u,
+        "TRON route-config source event blocker DEL",
+      ],
+      [
+        "route_canary_production_blockers",
+        "route canary blocker clé",
+        /must be printable ASCII/u,
+        "TRON route-config route canary blocker non-ASCII",
+      ],
+      [
+        "source_event_transaction_production_blockers",
+        "source%0Aevent-blocker",
+        /contains decoded control character/u,
+        "TRON route-config source event blocker percent-encoded newline",
+      ],
+      [
+        "route_canary_production_blockers",
+        "route&#9;canary-blocker",
+        /contains decoded control character/u,
+        "TRON route-config route canary blocker HTML-entity tab",
+      ],
+      [
+        "route_canary_production_blockers",
+        "route%E2%80%AEcanary-blocker",
+        /contains decoded non-ASCII character/u,
+        "TRON route-config route canary blocker percent-encoded bidi",
+      ],
+    ]) {
+      const patchedManifest = {
+        ...manifest,
+        postDeployLiveEvidence: {
+          ...manifest.postDeployLiveEvidence,
+          [field]: [blocker],
+        },
+      };
+      let caught;
+      try {
+        buildTairaXorRouteConfigToml(patchedManifest);
+      } catch (error) {
+        caught = error;
+      }
+      assert.ok(caught instanceof Error, label);
+      assert.match(caught.message, expected, label);
+      assert.doesNotMatch(caught.message, new RegExp(blocker, "u"), label);
+    }
   });
 });
 
@@ -2748,6 +2923,74 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
       );
     });
   }
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const live = JSON.parse(JSON.stringify(routeLiveEvidence()));
+    live.source_event_transaction.source_event_transaction_production_ready = false;
+    live.source_event_transaction.source_event_transaction_production_blockers = [
+      "private&#32;key-source-event-blocker",
+    ];
+    await writeJson(liveEvidencePath, live);
+
+    let caught;
+    try {
+      await buildTairaXorRouteManifestDraft({
+        evidence: evidencePath,
+        "taira-contract": contractPath,
+        verifier: verifierPath,
+        "verifier-code-hash": routeHash("deployed-verifier-code"),
+        "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        "vk-backend": "halo2/ipa",
+        "vk-name": "taira_xor_burn_record_v1",
+        "live-evidence": liveEvidencePath,
+        "production-ready": "true",
+        "live-readback-checked": "true",
+        "confirm-mainnet": "taira_tron_xor",
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof Error, "TRON live evidence encoded sensitive blocker");
+    assert.match(caught.message, /contains sensitive name/u);
+    assert.doesNotMatch(caught.message, /private&#32;key/u);
+  });
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const blocker = "safe duplicated live source blocker";
+    const encodedBlocker = "safe%20duplicated%20live%20source%20blocker";
+    const live = JSON.parse(JSON.stringify(routeLiveEvidence()));
+    live.source_event_transaction.source_event_transaction_production_ready = false;
+    live.source_event_transaction.source_event_transaction_production_blockers = [
+      blocker,
+      encodedBlocker,
+    ];
+    await writeJson(liveEvidencePath, live);
+
+    let caught;
+    try {
+      await buildTairaXorRouteManifestDraft({
+        evidence: evidencePath,
+        "taira-contract": contractPath,
+        verifier: verifierPath,
+        "verifier-code-hash": routeHash("deployed-verifier-code"),
+        "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        "vk-backend": "halo2/ipa",
+        "vk-name": "taira_xor_burn_record_v1",
+        "live-evidence": liveEvidencePath,
+        "production-ready": "true",
+        "live-readback-checked": "true",
+        "confirm-mainnet": "taira_tron_xor",
+      });
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof Error, "TRON live evidence decoded duplicate blocker");
+    assert.match(caught.message, /must not contain duplicate strings/u);
+    assert.doesNotMatch(caught.message, new RegExp(blocker, "u"));
+    assert.doesNotMatch(caught.message, new RegExp(encodedBlocker, "u"));
+  });
 });
 
 test("route manifest draft rejects wrong route, wrong network, and duplicate deployment addresses", async () => {

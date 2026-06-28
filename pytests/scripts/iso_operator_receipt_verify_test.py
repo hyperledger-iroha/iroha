@@ -72,6 +72,548 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 detail = VERIFIER._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("receipt-hidden", detail)
+        hidden = "token=receipt-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = VERIFIER._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=receipt-ancestor-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                        VERIFIER._reject_symlinked_existing_ancestors(
+                            VERIFIER.Path("ancestor") / "leaf",
+                            display_label="receipt",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=receipt-reader-inspect-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = VERIFIER.Path(raw_root) / "receipt.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                        VERIFIER._read_regular_file(path, display_label="receipt")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_input_directory_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=receipt-input-dir-inspect-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_lstat = path_type.lstat
+        helper_cases = (
+            (
+                "_ensure_input_directory",
+                lambda path: VERIFIER._ensure_input_directory(
+                    path,
+                    "anchor.store_dir",
+                    display_path=False,
+                ),
+                "cannot inspect anchor.store_dir",
+            ),
+            (
+                "discover_receipts",
+                lambda path: VERIFIER.discover_receipts(
+                    path,
+                    display_label="receipt_dir",
+                ),
+                "cannot inspect receipt_dir",
+            ),
+        )
+        failure_cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for helper_name, action, expected in helper_cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(helper=helper_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        path = VERIFIER.Path(raw_root) / "receipts"
+                        path.mkdir()
+
+                        def failing_lstat(self, error=failure):
+                            if self == path:
+                                raise error
+                            return original_lstat(self)
+
+                        path_type.lstat = failing_lstat
+                        try:
+                            with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                                action(path)
+                        finally:
+                            path_type.lstat = original_lstat
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(path), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_source_path_exists_failures_do_not_echo_detail(self):
+        hidden = "token=receipt-source-exists-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_exists = path_type.exists
+        failure_cases = (
+            ("exists_os", OSError(5, hidden)),
+            ("exists_runtime", RuntimeError(hidden)),
+            ("exists_type", TypeError(hidden)),
+            ("exists_value", ValueError(hidden)),
+        )
+
+        def anchor_receipt(root):
+            return {
+                VERIFIER.ANCHOR_DIGEST_FIELD: "1" * 64,
+                VERIFIER.INDEX_DIGEST_FIELD: "2" * 64,
+                "record_count": 1,
+                "anchor_path": str(root / VERIFIER.LATEST_ANCHOR_FILE),
+            }
+
+        def rail_receipt(root):
+            xml_path = root / "rail-status.xml"
+            return {
+                "payload_sha256": "3" * 64,
+                "message_type": "pacs.002",
+                "profile": "generic-iso20022",
+                "rail_message_id": "rail-drop-1",
+                "xml_path": str(xml_path),
+                "sidecar_path": str(xml_path.with_suffix(".xml.json")),
+            }
+
+        def setup_store(root):
+            return root / "store"
+
+        def setup_messages(root):
+            store_dir = root / "store"
+            store_dir.mkdir()
+            return store_dir / VERIFIER.RECORDS_DIR
+
+        def setup_record(root):
+            messages_dir = root / "store" / VERIFIER.RECORDS_DIR
+            messages_dir.mkdir(parents=True)
+            return messages_dir / "record.json"
+
+        cases = (
+            (
+                "store_dir",
+                setup_store,
+                lambda root: VERIFIER._verify_persisted_record_sources(
+                    {"records": []},
+                    root / "store",
+                    "anchor",
+                    require_source_files=True,
+                ),
+                "cannot inspect anchor.store_dir",
+            ),
+            (
+                "messages_dir",
+                setup_messages,
+                lambda root: VERIFIER._verify_persisted_record_sources(
+                    {"records": []},
+                    root / "store",
+                    "anchor",
+                    require_source_files=True,
+                ),
+                f"cannot inspect anchor.store_dir/{VERIFIER.RECORDS_DIR}",
+            ),
+            (
+                "record_path",
+                setup_record,
+                lambda root: VERIFIER._verify_persisted_record_sources(
+                    {"records": [{"filename": "record.json"}]},
+                    root / "store",
+                    "anchor",
+                    require_source_files=False,
+                ),
+                "cannot inspect anchor.records[0].source",
+            ),
+            (
+                "digest_anchor",
+                lambda root: root / VERIFIER.ANCHOR_DIR / f"{'2' * 64}.notary.json",
+                lambda root: VERIFIER._verify_anchor_path_peers(
+                    root / VERIFIER.LATEST_ANCHOR_FILE,
+                    root,
+                    index_sha256="2" * 64,
+                    receipt_label="receipt",
+                    require_source_files=True,
+                ),
+                "cannot inspect receipt digest-addressed anchor peer",
+            ),
+            (
+                "anchor_path",
+                lambda root: root / VERIFIER.LATEST_ANCHOR_FILE,
+                lambda root: VERIFIER._verify_anchor_source(
+                    anchor_receipt(root),
+                    root / "receipt.json",
+                    require_source_files=True,
+                    display_label="receipt",
+                ),
+                "cannot inspect receipt anchor_path",
+            ),
+            (
+                "sidecar_path",
+                lambda root: (root / "rail-status.xml").with_suffix(".xml.json"),
+                lambda root: VERIFIER._verify_rail_source(
+                    rail_receipt(root),
+                    root / "receipt.json",
+                    require_source_files=True,
+                    allow_legacy_colr007=False,
+                    allow_default_profile=False,
+                    display_label="receipt",
+                ),
+                "cannot inspect receipt sidecar_path",
+            ),
+            (
+                "xml_path",
+                lambda root: root / "rail-status.xml",
+                lambda root: VERIFIER._verify_rail_source(
+                    rail_receipt(root),
+                    root / "receipt.json",
+                    require_source_files=False,
+                    allow_legacy_colr007=False,
+                    allow_default_profile=False,
+                    display_label="receipt",
+                ),
+                "cannot inspect receipt xml_path",
+            ),
+        )
+        for case_name, setup_target, action, expected in cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(case=case_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = VERIFIER.Path(raw_root)
+                        target = setup_target(root)
+
+                        def failing_exists(self, error=failure):
+                            if self == target:
+                                raise error
+                            return original_exists(self)
+
+                        path_type.exists = failing_exists
+                        try:
+                            with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                                action(root)
+                        finally:
+                            path_type.exists = original_exists
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_source_path_symlink_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=receipt-source-symlink-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_is_symlink = path_type.is_symlink
+        failure_cases = (
+            ("symlink_os", OSError(5, hidden)),
+            ("symlink_runtime", RuntimeError(hidden)),
+            ("symlink_type", TypeError(hidden)),
+            ("symlink_value", ValueError(hidden)),
+        )
+        for case_name, target_for, action, expected in (
+            (
+                "digest_anchor",
+                lambda root: root / VERIFIER.ANCHOR_DIR / f"{'2' * 64}.notary.json",
+                lambda root: VERIFIER._verify_anchor_path_peers(
+                    root / VERIFIER.LATEST_ANCHOR_FILE,
+                    root,
+                    index_sha256="2" * 64,
+                    receipt_label="receipt",
+                    require_source_files=True,
+                ),
+                "cannot inspect receipt digest-addressed anchor peer",
+            ),
+            (
+                "anchor_path",
+                lambda root: root / VERIFIER.LATEST_ANCHOR_FILE,
+                lambda root: VERIFIER._verify_anchor_source(
+                    {
+                        VERIFIER.ANCHOR_DIGEST_FIELD: "1" * 64,
+                        VERIFIER.INDEX_DIGEST_FIELD: "2" * 64,
+                        "record_count": 1,
+                        "anchor_path": str(root / VERIFIER.LATEST_ANCHOR_FILE),
+                    },
+                    root / "receipt.json",
+                    require_source_files=True,
+                    display_label="receipt",
+                ),
+                "cannot inspect receipt anchor_path",
+            ),
+        ):
+            for failure_name, failure in failure_cases:
+                with self.subTest(case=case_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = VERIFIER.Path(raw_root)
+                        target = target_for(root)
+
+                        def failing_is_symlink(self, error=failure):
+                            if self == target:
+                                raise error
+                            return original_is_symlink(self)
+
+                        path_type.is_symlink = failing_is_symlink
+                        try:
+                            with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                                action(root)
+                        finally:
+                            path_type.is_symlink = original_is_symlink
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_source_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=receipt-resolve-secret"
+        path_type = type(VERIFIER.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+
+        def rail_receipt(root):
+            xml_path = root / "rail-status.xml"
+            return {
+                "payload_sha256": "3" * 64,
+                "message_type": "pacs.002",
+                "profile": "generic-iso20022",
+                "rail_message_id": "rail-drop-1",
+                "xml_path": str(xml_path),
+                "sidecar_path": str(xml_path.with_suffix(".xml.json")),
+            }
+
+        cases = (
+            (
+                "sidecar",
+                lambda root: (root / "rail-status.xml").with_suffix(".xml.json"),
+                lambda root: VERIFIER._verify_rail_source(
+                    rail_receipt(root),
+                    root / "receipt.json",
+                    require_source_files=False,
+                    allow_legacy_colr007=False,
+                    allow_default_profile=False,
+                    display_label="receipt",
+                ),
+                "cannot resolve receipt sidecar_path",
+            ),
+            (
+                "duplicate_path",
+                lambda root: root / "receipt-0.receipt.json",
+                lambda root: VERIFIER._reject_duplicate_paths(
+                    [root / "receipt-0.receipt.json"]
+                ),
+                "cannot resolve receipt[0]",
+            ),
+        )
+        for case_name, setup_target, action, expected in cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(case=case_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = VERIFIER.Path(raw_root)
+                        target = setup_target(root)
+
+                        def failing_resolve(self, *args, error=failure, **kwargs):
+                            if self == target:
+                                raise error
+                            return original_resolve(self, *args, **kwargs)
+
+                        path_type.resolve = failing_resolve
+                        try:
+                            with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                                action(root)
+                        finally:
+                            path_type.resolve = original_resolve
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=receipt-reader-open-secret"
+        cleanup_hidden = "token=receipt-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "receipt.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = VERIFIER.os.fdopen
+            original_close = VERIFIER.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            VERIFIER.os.fdopen = failing_fdopen
+            VERIFIER.os.close = failing_close
+            try:
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="receipt",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+                VERIFIER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open receipt for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=receipt-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            VERIFIER.os.fdopen = failing_fdopen
+            VERIFIER.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="receipt",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+                VERIFIER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open receipt for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=receipt-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            VERIFIER.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="receipt",
+                    )
+            finally:
+                VERIFIER.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open receipt for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -404,6 +946,53 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--receipt-di", stderr.getvalue())
 
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=receipt-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--receipt"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--receipt",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--receipt")],
+                "--receipt requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("receipt-argv-secret", stderr)
+
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = ("--unknown-receipt\x1bflag", "--unknown-receipt\u202eflag")
         for hidden in cases:
@@ -603,6 +1192,222 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertIn(f"{label} must not contain control characters", message)
                 self.assertNotIn(hidden, message)
                 self.assertNotIn(value, message)
+
+    def test_clean_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "receipt-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        clean = VERIFIER._require_clean_string(
+            HostileText("business-message"),
+            "receipt.business_message_id",
+        )
+        self.assertEqual(clean, "business-message")
+        self.assertIs(type(clean), str)
+        optional = VERIFIER._normalize_optional_string(
+            HostileText("swift-cbpr-plus"),
+            "receipt.profile",
+            allow_embedded_whitespace=False,
+        )
+        self.assertEqual(optional, "swift-cbpr-plus")
+        self.assertIs(type(optional), str)
+        sidecar_optional = VERIFIER._normalize_sidecar_optional_string(
+            {"business_message_id": HostileText("biz-123")},
+            "business_message_id",
+            "sidecar.business_message_id",
+        )
+        self.assertEqual(sidecar_optional, "biz-123")
+        self.assertIs(type(sidecar_optional), str)
+        paths = VERIFIER._required_cli_path_sequence(
+            [HostileText("receipts/one.json")],
+            "--receipt",
+        )
+        self.assertEqual([str(path) for path in paths], ["receipts/one.json"])
+        present = VERIFIER._reject_unknown_keys(
+            {HostileText("kind"): "rail_gateway"},
+            {"kind"},
+            "receipt",
+        )
+        self.assertEqual(present, {"kind"})
+        self.assertTrue(all(type(key) is str for key in present))
+        VERIFIER._require_exact_keys(
+            {HostileText("kind"): "rail_gateway"},
+            {"kind"},
+            "receipt",
+        )
+        derived = VERIFIER._derived_pacs002_code(
+            {
+                "state": "Pending",
+                "hold_reason_code": None,
+                "change_reason_codes": HostileList(["AMND"]),
+                "ledger_tx_queued": False,
+            },
+            "record",
+        )
+        self.assertEqual(derived, "ACTC")
+
+        cases = (
+            (
+                "clean",
+                lambda: VERIFIER._require_clean_string(
+                    HostileText("business\x1bmessage"),
+                    "receipt.business_message_id",
+                ),
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._normalize_optional_string(
+                    HostileText("swift\x1bprofile"),
+                    "receipt.profile",
+                    allow_embedded_whitespace=False,
+                ),
+            ),
+            (
+                "sidecar-optional",
+                lambda: VERIFIER._normalize_sidecar_optional_string(
+                    {"business_message_id": HostileText("biz\x1b123")},
+                    "business_message_id",
+                    "sidecar.business_message_id",
+                ),
+            ),
+            (
+                "secret-scan",
+                lambda: VERIFIER._check_no_secret_material(
+                    {"metadata": HostileText("warning \x1b[31mred")},
+                    Path("receipt.json"),
+                ),
+            ),
+            (
+                "json-array-list-subclass",
+                lambda: VERIFIER._require_json_array(
+                    HostileList(["ok"]),
+                    "receipt.records",
+                ),
+            ),
+            (
+                "persisted-context-dict-subclass",
+                lambda: VERIFIER._verify_persisted_context(
+                    HostileDict({"business_message_id": "business-message"}),
+                    "record.context",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: VERIFIER._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: VERIFIER._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: VERIFIER._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "secret-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileText("private_key"): "redacted"},
+                    Path("receipt.json"),
+                ),
+            ),
+            (
+                "control-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileText("metadata\x1b"): "redacted"},
+                    Path("receipt.json"),
+                ),
+            ),
+            (
+                "unknown-key",
+                lambda: VERIFIER._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"kind"},
+                    "receipt",
+                ),
+            ),
+            (
+                "non-string-key",
+                lambda: VERIFIER._check_no_secret_material(
+                    {HostileKey(): "redacted"},
+                    Path("receipt.json"),
+                ),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: VERIFIER._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"kind"},
+                    "receipt",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: VERIFIER._reject_unknown_keys(
+                    HostileDict({"kind": "redacted"}),
+                    {"kind"},
+                    "receipt",
+                ),
+            ),
+            (
+                "exact-non-string-key",
+                lambda: VERIFIER._require_exact_keys(
+                    {HostileKey(): "redacted"},
+                    {"kind"},
+                    "receipt",
+                ),
+            ),
+            (
+                "secret-list-subclass",
+                lambda: VERIFIER._check_no_secret_material(
+                    HostileList(["redacted"]),
+                    Path("receipt.json"),
+                ),
+            ),
+            (
+                "secret-dict-subclass",
+                lambda: VERIFIER._check_no_secret_material(
+                    HostileDict({"metadata": "redacted"}),
+                    Path("receipt.json"),
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
 
     def test_overlong_clean_metadata_strings_are_rejected_without_echo(self):
         overlong = "M" * (VERIFIER.MAX_CLEAN_STRING_CHARS + 1)
@@ -1958,8 +2763,24 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertNotIn(str(root), error)
 
     def test_direct_run_receipt_selectors_must_be_repeatable_path_lists_before_loading(self):
+        hidden = "receipt-hostile-selector-list-secret"
+        pathlike_hidden = "receipt-hostile-selector-pathlike-secret"
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={pathlike_hidden}")
+
         cases = (
             ("receipt bare string", "receipt", "missing.receipt.json", "--receipt"),
+            ("receipt hostile list", "receipt", HostileList(["missing.receipt.json"]), "--receipt"),
+            ("receipt hostile pathlike", "receipt", [HostilePathLike()], "--receipt[0]"),
             ("receipt bad entry", "receipt", [object()], "--receipt[0]"),
             ("receipt-dir bare string", "receipt_dir", "receipts", "--receipt-dir"),
             ("receipt-dir bad entry", "receipt_dir", [object()], "--receipt-dir[0]"),
@@ -1986,10 +2807,12 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
                     self.assertEqual(stdout.getvalue(), "")
                     error = str(caught.exception)
-                    if "bare string" in name:
+                    if not label.endswith("[0]"):
                         self.assertIn(f"{label} must be a repeatable path list", error)
                     else:
                         self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn(hidden, error)
+                    self.assertNotIn(pathlike_hidden, error)
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 

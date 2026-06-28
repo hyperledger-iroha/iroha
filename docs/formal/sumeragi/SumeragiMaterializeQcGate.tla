@@ -242,8 +242,11 @@ MaterializeQcCoreSafety ==
   /\ FailClosedCasesStayNone
 
 MaterializeQcExactness ==
-  MaterializeQcCoreSafety
-
+  /\ ResultMatchesSpec
+  /\ TryFormMatchesSpec
+  /\ KuraRecoveryMatchesSpec
+  /\ CacheInsertionMatchesSpec
+  /\ FailClosedCasesStayNone
 MaterializeQcCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ MaterializeQcExactness

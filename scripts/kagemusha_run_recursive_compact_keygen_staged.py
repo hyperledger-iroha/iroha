@@ -628,6 +628,20 @@ def _unlink_replace_temp_outputs(args: argparse.Namespace) -> list[str]:
     return errors
 
 
+def _cleanup_existing_temp_output_for_replace(
+    final_path: Path,
+    temp_path: Path,
+    label: str,
+    *,
+    replace: bool,
+) -> list[str]:
+    if not (temp_path.exists() or temp_path.is_symlink()):
+        return []
+    if not replace:
+        return [f"{label} temporary output already exists"]
+    return _unlink_temp_output_for_replace(final_path, label)
+
+
 def _validate_output_paths_can_be_replaced(
     entries: tuple[tuple[Path, str], ...],
 ) -> list[str]:
@@ -1437,15 +1451,29 @@ def run_staged_keygen(
     elif args.resume_keygen and _has_any_staged_output(args):
         reuse_errors = _validate_reusable_staged_keygen(args)
         if not reuse_errors:
+            temp_cleanup_errors = _unlink_replace_temp_outputs(args)
+            if temp_cleanup_errors:
+                return 1, temp_cleanup_errors
             return 0, []
         cleanup_errors = _unlink_resume_outputs(_staged_output_entries(args))
         if cleanup_errors:
             return 1, cleanup_errors
 
+    if args.resume_keygen and not args.replace:
+        temp_cleanup_errors = _unlink_replace_temp_outputs(args)
+        if temp_cleanup_errors:
+            return 1, temp_cleanup_errors
+
     final_log = args.staged_artifact_dir / GENERATOR_LOG_FILENAME
     temp_log = args.staged_artifact_dir / f".{GENERATOR_LOG_FILENAME}.staged-runner.tmp"
-    if temp_log.exists() or temp_log.is_symlink():
-        return 1, ["staged recursive compact key generator log temporary output already exists"]
+    temp_cleanup_errors = _cleanup_existing_temp_output_for_replace(
+        final_log,
+        temp_log,
+        "staged recursive compact key generator log",
+        replace=args.replace or args.resume_keygen,
+    )
+    if temp_cleanup_errors:
+        return 1, temp_cleanup_errors
 
     command = shlex.split(DEFAULT_COMPACT_KEY_COMMAND)
     started = time.monotonic()

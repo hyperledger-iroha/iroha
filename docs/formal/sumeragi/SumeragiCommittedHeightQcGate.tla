@@ -401,21 +401,15 @@ CommittedHeightDecisionExact ==
   /\ DecisionMatchesSpec
   /\ DropReasonMatchesSpec
 
-CommittedHeightRecordOnlyEffectsExact ==
-  RecordOnlySideEffectsMatch
-
 CommittedHeightValidationExact ==
   /\ ValidationMatchesSpec
   /\ ValidationContextMatchesSpec
 
-CommittedHeightEvidenceExact ==
-  EvidenceMatchesSpec
-
 CommittedHeightQcAdmissionExactness ==
   /\ CommittedHeightDecisionExact
-  /\ CommittedHeightRecordOnlyEffectsExact
+  /\ RecordOnlySideEffectsMatch
   /\ CommittedHeightValidationExact
-  /\ CommittedHeightEvidenceExact
+  /\ EvidenceMatchesSpec
 
 CommittedHeightQcAdmissionCorrectnessEnvelope ==
   /\ TypeInvariant

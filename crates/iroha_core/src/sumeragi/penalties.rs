@@ -954,6 +954,8 @@ mod tests {
                 missing_request_stale_height_margin:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+                pending_block_cap:
+                    iroha_config::parameters::defaults::sumeragi::RECOVERY_PENDING_BLOCK_CAP,
                 pending_block_sync_cap:
                     iroha_config::parameters::defaults::sumeragi::RECOVERY_PENDING_BLOCK_SYNC_CAP,
                 pending_proposal_cap:
@@ -1008,6 +1010,8 @@ mod tests {
                 session_ttl: Duration::from_secs(0),
                 rebroadcast_sessions_per_tick: 1,
                 payload_chunks_per_tick: 1,
+                outbound_queue_max_sessions: 1,
+                outbound_queue_max_bytes: 1,
                 inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                 store_max_sessions: 0,
                 store_soft_sessions: 0,

@@ -80,6 +80,11 @@ impl FastJsonWrite for Queue {
         out.push_str("capacity");
         out.push_str("\":");
         let _ = write!(out, "{}", self.capacity.get());
+        out.push(',');
+        out.push('"');
+        out.push_str("max_retained_bytes");
+        out.push_str("\":");
+        let _ = write!(out, "{}", self.max_retained_bytes.get());
         out.push('}');
     }
 }
@@ -1449,7 +1454,9 @@ impl<'a> FastFromJson<'a> for Queue {
     fn parse(w: &mut TapeWalker<'a>, _arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
         let mut capacity: Option<NonZero<usize>> = None;
+        let mut max_retained_bytes: Option<NonZeroU64> = None;
         let capacity_key = norito::json::key_hash_const("capacity");
+        let max_retained_bytes_key = norito::json::key_hash_const("max_retained_bytes");
         while !w.peek_object_end()? {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
@@ -1459,6 +1466,9 @@ impl<'a> FastFromJson<'a> for Queue {
                         .map_err(|_| NoritoError::Message("usize overflow".into()))?;
                     capacity = NonZero::new(value);
                 }
+                key if key == max_retained_bytes_key && w.last_key() == "max_retained_bytes" => {
+                    max_retained_bytes = NonZeroU64::new(w.parse_u64_inline()?);
+                }
                 _ => w.skip_value()?,
             }
             let _ = w.consume_comma_if_present()?;
@@ -1466,6 +1476,8 @@ impl<'a> FastFromJson<'a> for Queue {
         w.expect_object_end()?;
         Ok(Queue {
             capacity: capacity.ok_or_else(|| NoritoError::Message("missing capacity".into()))?,
+            max_retained_bytes: max_retained_bytes
+                .ok_or_else(|| NoritoError::Message("missing max_retained_bytes".into()))?,
         })
     }
 }
@@ -2635,12 +2647,15 @@ impl From<&'_ base::Logger> for Logger {
 pub struct Queue {
     /// Maximum number of transactions kept in the queue.
     pub capacity: NonZero<usize>,
+    /// Estimated maximum retained queue memory budget in bytes.
+    pub max_retained_bytes: NonZeroU64,
 }
 
 impl From<&'_ base::Queue> for Queue {
     fn from(value: &'_ base::Queue) -> Self {
         Self {
             capacity: value.capacity,
+            max_retained_bytes: value.max_retained_bytes,
         }
     }
 }
@@ -3541,6 +3556,7 @@ mod test {
             },
             queue: Queue {
                 capacity: nonzero!(656_565_usize),
+                max_retained_bytes: nonzero!(123_456_789_u64),
             },
             consensus: Consensus {
                 mode: "permissioned".to_string(),
@@ -3661,7 +3677,8 @@ mod test {
                 "require_sm_openssl_preview_match": true
               },
               "queue": {
-                "capacity": 656565
+                "capacity": 656565,
+                "max_retained_bytes": 123456789
               },
               "consensus": {
                 "mode": "permissioned",

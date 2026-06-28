@@ -314,8 +314,12 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+SettlementStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
 SettlementStatusExactness ==
-  Safety
+  /\ SettlementStatusActionsMatchSpec
 
 SettlementStatusCorrectnessEnvelope ==
   /\ TypeInvariant

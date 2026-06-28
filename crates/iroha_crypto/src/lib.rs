@@ -1631,11 +1631,6 @@ impl PublicKeyCompact {
         let algorithm = self.try_algorithm()?;
         PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
     }
-
-    fn try_from_full(public_key: &PublicKeyFull) -> Result<Self, ParseError> {
-        let payload = public_key.try_payload()?;
-        Ok(Self::new(public_key.algorithm(), payload.as_ref()))
-    }
 }
 
 impl From<PublicKeyFull> for PublicKeyCompact {
@@ -1647,30 +1642,25 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let full = self
-            .validated_full()
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let compact = PublicKeyCompact::try_from_full(&full)
+        self.validated_full()
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
-            &compact.algorithm_and_payload,
+            &self.algorithm_and_payload,
             writer,
         )
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let full = self.validated_full().ok()?;
-        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
+        self.validated_full().ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
-            &compact.algorithm_and_payload,
+            &self.algorithm_and_payload,
         )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let full = self.validated_full().ok()?;
-        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
+        self.validated_full().ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
-            &compact.algorithm_and_payload,
+            &self.algorithm_and_payload,
         )
     }
 }
@@ -2076,24 +2066,26 @@ impl FromStr for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let full = self
-            .validated_full()
+        self.validated_full()
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let compact = PublicKeyCompact::try_from_full(&full)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        norito::core::NoritoSerialize::serialize(&compact, writer)
+        <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
+            &self.0.algorithm_and_payload,
+            writer,
+        )
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let full = self.validated_full().ok()?;
-        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
-        norito::core::NoritoSerialize::encoded_len_hint(&compact)
+        self.validated_full().ok()?;
+        <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
+            &self.0.algorithm_and_payload,
+        )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let full = self.validated_full().ok()?;
-        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
-        norito::core::NoritoSerialize::encoded_len_exact(&compact)
+        self.validated_full().ok()?;
+        <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
+            &self.0.algorithm_and_payload,
+        )
     }
 }
 
@@ -4171,7 +4163,7 @@ mod tests {
             .try_to_bytes()
             .expect("generated public key must be well-formed");
         let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-        let compact = PublicKeyCompact::try_from_full(&full).expect("checked compact conversion");
+        let compact = PublicKeyCompact::from(full);
 
         assert_eq!(compact.try_algorithm().expect("algorithm tag"), algorithm);
         assert_eq!(compact.try_payload().expect("payload"), payload);

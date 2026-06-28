@@ -356,7 +356,7 @@ LookupAnchors ==
   /\ SpecActions(CurrentViewWrongHeightReturnsNone) = {ReturnNone}
   /\ SpecActions(CurrentViewMatchingHeightReturnsView) = {ReturnView}
 
-Safety ==
+PhaseTrackerExactness ==
   /\ PhaseTrackerMatchesSpec
   /\ NewTrackerMatchesSpec
   /\ StartRoundMatchesSpec
@@ -375,6 +375,13 @@ Safety ==
   /\ RecordNewViewAnchors
   /\ RecordPhaseAnchors
   /\ LookupAnchors
+
+Safety ==
+  PhaseTrackerExactness
+
+PhaseTrackerCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PhaseTrackerExactness
 
 BugNewHasHeight ==
   ImplementationActions(NewHasNoHeight) = SpecActions(NewHasNoHeight)

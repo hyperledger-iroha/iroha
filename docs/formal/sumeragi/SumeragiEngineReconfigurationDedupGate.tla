@@ -358,7 +358,7 @@ NoSyntheticChangeValues ==
     /\ InitialPendingActivation(candidate) \in ActivationValues
     /\ CandidateActivation(candidate) \in ActivationValues
 
-Safety ==
+EngineReconfigurationDedupExactness ==
   /\ StageAfterMatchesSpec
   /\ EmitMatchesSpec
   /\ AlreadyScheduledSameHeightPreservesPending
@@ -372,5 +372,14 @@ Safety ==
   /\ ConflictsPreservePendingAndStaySilent
   /\ PlainCommitsPreservePendingAndStaySilent
   /\ NoSyntheticChangeValues
+
+Safety ==
+  EngineReconfigurationDedupExactness
+
+EngineReconfigurationDedupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineReconfigurationDedupExactness
+
+SafetyFast == EngineReconfigurationDedupExactness
 
 ====

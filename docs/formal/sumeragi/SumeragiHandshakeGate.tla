@@ -114,6 +114,12 @@ HandshakeMatchesSpec ==
 SafetyFast ==
   HandshakeMatchesSpec
 
+HandshakeExactness ==
+  /\ HandshakeMatchesSpec
+HandshakeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ HandshakeExactness
+
 BugValidateRejectsMatch ==
   ActualValidate("all_match") = SpecValidate("all_match")
 

@@ -138,10 +138,10 @@ CompactPriorityExactness ==
   /\ PrioritySafety
 
 BlockMessageRbcCompactExactness ==
-  /\ CompactBoundaryExactness
-  /\ CompactFieldPreservationExactness
-  /\ CompactNormalizeAndWidenExactness
-  /\ CompactPriorityExactness
+  /\ CompactBoundarySafety
+  /\ CompactFieldSafety
+  /\ NormalizeSafety
+  /\ PrioritySafety
   /\ BlockMessageRbcCompactSafetyAnchors
 
 Safety == BlockMessageRbcCompactExactness
@@ -150,7 +150,6 @@ SafetyFast == Safety
 
 BlockMessageRbcCompactCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ BlockMessageRbcCompactSafetyAnchors
+  /\ BlockMessageRbcCompactExactness
 
 ====

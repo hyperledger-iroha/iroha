@@ -198,4 +198,16 @@ NoHeightCommittedByMultipleValidatorSets ==
   /\ committedOld \cap committedMixed = {}
   /\ committedNew \cap committedMixed = {}
 
+ValidatorSetTransitionExactness ==
+  /\ ActivationRequiresOldBoundaryFinality
+  /\ NewCertificatesStartAtActivationHeight
+  /\ NewCertificatesRequireActivation
+  /\ OldCertificatesStopBeforeActivationHeight
+  /\ NoMixedValidatorSetCertificates
+  /\ NoHeightCommittedByMultipleValidatorSets
+
+ValidatorSetTransitionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidatorSetTransitionExactness
+
 ====

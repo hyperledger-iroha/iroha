@@ -230,7 +230,7 @@ InvalidProposalEvidenceBuildMatchesSpec ==
   /\ ValidBuiltEvidenceShape(BuildQcParentHeight)
 
 InvalidProposalEvidenceBuildExactness ==
-  InvalidProposalEvidenceBuildMatchesSpec
+  /\ InvalidProposalEvidenceBuildMatchesSpec
 
 InvalidProposalEvidenceBuildCorrectnessEnvelope ==
   /\ TypeInvariant

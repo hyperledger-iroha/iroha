@@ -253,7 +253,7 @@ SignedQuorumFetchFallbackMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 SignedQuorumFetchFallbackExactness ==
-  SignedQuorumFetchFallbackMatchesSpec
+  /\ SignedQuorumFetchFallbackMatchesSpec
 
 SignedQuorumFetchFallbackCorrectnessEnvelope ==
   /\ TypeInvariant

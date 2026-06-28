@@ -149,7 +149,7 @@ ImplicitRecoveryMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncImplicitRecoveryExactness ==
-  ImplicitRecoveryMatchesSpec
+  /\ ImplicitRecoveryMatchesSpec
 
 BlockSyncImplicitRecoveryCorrectnessEnvelope ==
   /\ TypeInvariant

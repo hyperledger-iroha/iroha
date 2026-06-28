@@ -198,4 +198,23 @@ CommitEntersProposalPhase ==
 IgnoredPayloadsDoNotClearPending ==
   ignored \cap pendingCleared = {}
 
+EnginePayloadAvailabilityExactness ==
+  /\ EveryPayloadIsRecordedAvailable
+  /\ CommittedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ PayloadOnlyNeverCommits
+  /\ MismatchedPayloadsNeverCommit
+  /\ MatchingPayloadCommits
+  /\ MismatchedPayloadsPreservePending
+  /\ MatchingPayloadClearsPending
+  /\ CommitClearsPending
+  /\ CommitEntersProposalPhase
+  /\ IgnoredPayloadsDoNotClearPending
+
+EnginePayloadAvailabilityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EnginePayloadAvailabilityExactness
+
+SafetyFast == EnginePayloadAvailabilityExactness
+
 ====

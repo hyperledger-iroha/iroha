@@ -570,4 +570,16 @@ FrontierRecoveryAdvanceSafetyAnchors ==
 Safety ==
   FrontierRecoveryAdvanceSafetyAnchors
 
+FrontierRecoveryAdvanceExactness ==
+  /\ CauseAnchors
+  /\ EarlyGateAnchors
+  /\ ExactFrontierAnchors
+  /\ ActionableStateAnchors
+  /\ SuppressionAnchors
+  /\ CatchUpAnchors
+  /\ RotateAnchors
+FrontierRecoveryAdvanceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierRecoveryAdvanceExactness
+
 ====

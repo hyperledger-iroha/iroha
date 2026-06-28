@@ -293,7 +293,7 @@ AppliedResultsReachTerminalState ==
     /\ candidate \in MatchingWorkerResultCases
     /\ nextState \in {"Valid", "Invalid"}
 
-Safety ==
+VNextValidationExactness ==
   /\ DecisionMatchesSpec
   /\ RunningTimeoutBoundaryMatchesSpec
   /\ BackpressureTimeoutBoundaryMatchesSpec
@@ -304,5 +304,15 @@ Safety ==
   /\ StaleWorkerResultsIgnored
   /\ IgnoredResultsPreserveState
   /\ AppliedResultsReachTerminalState
+
+Safety ==
+  VNextValidationExactness
+
+VNextValidationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextValidationExactness
+
+SafetyFast ==
+  VNextValidationExactness
 
 ====

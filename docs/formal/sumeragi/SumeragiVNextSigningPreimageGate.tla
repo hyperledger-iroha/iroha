@@ -267,7 +267,7 @@ SuspectHashBindsBody ==
 SuspectHashExcludesSignature ==
   candidate = "suspect_hash" => "vote_signature" \notin fields
 
-Safety ==
+VNextSigningPreimageExactness ==
   /\ FieldsMatchSpec
   /\ PreimageBindsDomain
   /\ RechainPreimageUsesRechainTypeOnly
@@ -282,5 +282,15 @@ Safety ==
   /\ UnsignedVotesStartWithoutSignature
   /\ SuspectHashBindsBody
   /\ SuspectHashExcludesSignature
+
+Safety ==
+  VNextSigningPreimageExactness
+
+VNextSigningPreimageCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextSigningPreimageExactness
+
+SafetyFast ==
+  VNextSigningPreimageExactness
 
 ====

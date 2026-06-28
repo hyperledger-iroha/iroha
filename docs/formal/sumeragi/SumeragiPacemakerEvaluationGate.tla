@@ -291,7 +291,7 @@ AttemptRequiresDeadlineAndNoHardBackpressure ==
     /\ deadline_advanced
     /\ candidate \notin HardCases
 
-Safety ==
+PacemakerEvaluationExactness ==
   /\ InitialDeferralMatchesSpec
   /\ FireDeferralMatchesSpec
   /\ ProposalAttemptMatchesSpec
@@ -310,6 +310,13 @@ Safety ==
   /\ DeferralTrackerMatchesPressure
   /\ DeadlineAdvancesExactlyWhenDue
   /\ AttemptRequiresDeadlineAndNoHardBackpressure
+
+Safety ==
+  PacemakerEvaluationExactness
+
+PacemakerEvaluationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PacemakerEvaluationExactness
 
 =============================================================================
 ====

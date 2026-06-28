@@ -294,7 +294,7 @@ ActionsMatchSpec ==
     ImplementationActions(candidate) = SpecActions(candidate)
 
 ExecWitnessAccessKeyExactness ==
-  ActionsMatchSpec
+  /\ ActionsMatchSpec
 
 ExecWitnessAccessKeyCorrectnessEnvelope ==
   /\ TypeInvariant

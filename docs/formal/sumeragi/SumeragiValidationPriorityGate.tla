@@ -217,7 +217,7 @@ DeliveredRbcDominatesReadyQuorum ==
 RbcReadyCanBypassWhenAlone ==
   candidate = "rbc_ready" => reason = "rbc_ready_quorum"
 
-Safety ==
+ValidationPriorityExactness ==
   /\ ReasonMatchesSpec
   /\ BypassMatchesSpec
   /\ TipGuardBlocksOffTipEvidence
@@ -228,5 +228,12 @@ Safety ==
   /\ CommitVotesDominateRbc
   /\ DeliveredRbcDominatesReadyQuorum
   /\ RbcReadyCanBypassWhenAlone
+
+Safety ==
+  ValidationPriorityExactness
+
+ValidationPriorityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationPriorityExactness
 
 ====

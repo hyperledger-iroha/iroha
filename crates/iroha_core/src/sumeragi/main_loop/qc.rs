@@ -937,13 +937,8 @@ impl Actor {
 
         let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
         let payload_hash = iroha_crypto::Hash::new(&payload_bytes);
-        let mut pending = PendingBlock::new_with_payload_bytes(
-            block.as_ref().clone(),
-            payload_hash,
-            qc.height,
-            qc.view,
-            payload_bytes,
-        );
+        let mut pending =
+            PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             pending.note_commit_qc_observed(qc.epoch);
         }
@@ -953,6 +948,7 @@ impl Actor {
         self.pending
             .pending_blocks
             .insert(qc.subject_block_hash, pending);
+        self.enforce_pending_block_cap(qc.subject_block_hash, "qc_local_payload_rehydrate");
         self.deferred_block_sync_updates
             .remove(&(qc.height, qc.view, qc.subject_block_hash));
         self.flush_frontier_body_requesters(block.as_ref());
@@ -1417,7 +1413,11 @@ impl Actor {
         );
     }
 
-    fn defer_qc_for_roster(&mut self, qc: crate::sumeragi::consensus::Qc, reason: &'static str) {
+    pub(super) fn defer_qc_for_roster(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        reason: &'static str,
+    ) {
         let key = Self::qc_tally_key(&qc);
         let now = Instant::now();
         if self.deferred_qcs.contains_key(&key) {
@@ -1439,6 +1439,47 @@ impl Actor {
         let height = qc.height;
         let view = qc.view;
         let block_hash = qc.subject_block_hash;
+        match bounded_qc_insert_decision(&self.deferred_qcs, key, DEFERRED_ROSTER_QC_CAP) {
+            BoundedQcInsertDecision::Insert => {}
+            BoundedQcInsertDecision::DropIncoming => {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::Backpressure,
+                );
+                debug!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    block = %block_hash,
+                    cap = DEFERRED_ROSTER_QC_CAP,
+                    reason,
+                    "dropping deferred roster QC because bounded queue is full"
+                );
+                return;
+            }
+            BoundedQcInsertDecision::Evict(evicted) => {
+                self.deferred_qcs.remove(&evicted);
+                self.deferred_qc_roster_state.remove(&evicted);
+                super::status::inc_qc_deferred_expired();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_qc_deferred_expired();
+                }
+                debug!(
+                    phase = ?phase,
+                    height,
+                    view,
+                    block = %block_hash,
+                    evicted_height = evicted.2,
+                    evicted_view = evicted.3,
+                    evicted_block = %evicted.1,
+                    cap = DEFERRED_ROSTER_QC_CAP,
+                    reason,
+                    "evicting older deferred roster QC from bounded queue"
+                );
+            }
+        }
         self.deferred_qcs.insert(key, qc);
         self.deferred_qc_roster_state.insert(
             key,

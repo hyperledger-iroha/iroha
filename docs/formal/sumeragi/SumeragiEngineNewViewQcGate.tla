@@ -337,4 +337,30 @@ IgnoredNewViewQcsDoNotMutate ==
   /\ ignored \cap highestImproved = {}
   /\ ignored \cap highestPreserved = {}
 
+EngineNewViewQcExactness ==
+  /\ AcceptedMatchesSpec
+  /\ IgnoredMatchesSpec
+  /\ SafeNewViewQcsAdvance
+  /\ UnsafeNewViewQcsAreIgnored
+  /\ WrongContextNeverAccepted
+  /\ WrongQuorumPolicyNeverAccepted
+  /\ StaleOrSameViewNeverAccepted
+  /\ IncompatibleHighestNeverAccepted
+  /\ AcceptedNewViewQcsEmitAdvance
+  /\ AcceptedNewViewQcsEnterProposal
+  /\ AcceptedNewViewQcsClearValidation
+  /\ AcceptedNewViewQcsPreservePendingFinality
+  /\ ImprovingHighestQcIsRecorded
+  /\ LowerHighestQcDoesNotOverwrite
+  /\ AcceptedLowerHighestPreservesCurrentHighest
+  /\ AcceptedNoHighestDoesNotChangeHighest
+  /\ IgnoredNewViewQcsDoNotMutate
+
+Safety ==
+  EngineNewViewQcExactness
+
+EngineNewViewQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineNewViewQcExactness
+
 ====

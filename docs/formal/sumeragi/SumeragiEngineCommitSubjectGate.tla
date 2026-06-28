@@ -220,7 +220,7 @@ SuccessfulCommitsEmitExactlyOnce ==
     SpecCommits(candidate) =>
       ImplementationEmitsCommitBlock(candidate)
 
-Safety ==
+EngineCommitSubjectExactness ==
   /\ CommitSubjectMatchesSpec
   /\ FreshCommitsRecordSubject
   /\ MatchingCommittedStillCommits
@@ -230,5 +230,14 @@ Safety ==
   /\ SuccessfulCommitsClearValidation
   /\ SuccessfulCommitsReturnProposalPhase
   /\ SuccessfulCommitsEmitExactlyOnce
+
+Safety ==
+  EngineCommitSubjectExactness
+
+EngineCommitSubjectCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineCommitSubjectExactness
+
+SafetyFast == EngineCommitSubjectExactness
 
 ====

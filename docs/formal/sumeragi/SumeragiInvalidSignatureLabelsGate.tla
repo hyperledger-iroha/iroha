@@ -183,9 +183,18 @@ InvalidSignatureLabelSafetyAnchors ==
   /\ KindLabelsDistinct
   /\ OutcomeLabelsDistinct
 
+InvalidSignatureLabelsExactness ==
+  /\ KindLabelsExact
+  /\ KindTelemetryLabelsWrapAsStr
+  /\ InvalidOutcomeLabelsExact
+  /\ RbcMismatchShouldLogExact
+  /\ KindLabelsDistinct
+  /\ OutcomeLabelsDistinct
+  /\ SampleMetricTupleStable
+  /\ InvalidSignatureLabelSafetyAnchors
+
 InvalidSignatureLabelsCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ InvalidSignatureLabelSafetyAnchors
+  /\ InvalidSignatureLabelsExactness
 
 ====

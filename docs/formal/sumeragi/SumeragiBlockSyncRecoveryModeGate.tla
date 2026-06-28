@@ -191,9 +191,12 @@ Next == UNCHANGED vars
 
 TypeInvariant == checked \in Candidates
 
-BlockSyncRecoveryModeExactness ==
+BlockSyncRecoveryModeActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+BlockSyncRecoveryModeExactness ==
+  /\ BlockSyncRecoveryModeActionsMatchSpec
 
 BlockSyncRecoveryModeCorrectnessEnvelope ==
   /\ TypeInvariant

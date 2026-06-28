@@ -179,8 +179,15 @@ TypeInvariant ==
 SignatureIndexRecoveryMatchesSpec ==
   \A c \in Cases: ActualResult(c) = SpecResult(c)
 
+SignatureIndexRecoveryExactness ==
+  /\ SignatureIndexRecoveryMatchesSpec
+
+SignatureIndexRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SignatureIndexRecoveryExactness
+
 SafetyFast ==
-  SignatureIndexRecoveryMatchesSpec
+  SignatureIndexRecoveryExactness
 
 BugAcceptEmpty ==
   ActualResult("empty") = SpecResult("empty")

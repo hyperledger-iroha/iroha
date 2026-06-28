@@ -302,6 +302,26 @@ DropReanchorMatches ==
   \A case \in DropCases:
     ActualDropReanchor(case) = SpecDropReanchor(case)
 
+MissingLockedQcRecoveryExactness ==
+  /\ RequestReturnMatches
+  /\ RequestFetchMatches
+  /\ RequestRosterMatches
+  /\ RequestViewWindowMatches
+  /\ RequestFieldsMatch
+  /\ RequestRosterProofMatches
+  /\ StaleConflictPredicateMatches
+  /\ DropRequestAttemptMatches
+  /\ DropFetchMatches
+  /\ DropClearMatches
+  /\ DropLockMatches
+  /\ DropHighestMatches
+  /\ DropPruneMatches
+  /\ DropReanchorMatches
+
+MissingLockedQcRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingLockedQcRecoveryExactness
+
 Init ==
   checked = 0
 

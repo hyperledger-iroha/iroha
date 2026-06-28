@@ -297,26 +297,17 @@ RecordedTimingGateAnchors ==
   /\ SpecEmpty = FALSE
   /\ ActualEmpty = FALSE
 
-CommitStageTimingZeroThresholdExact ==
-  ZeroThresholdSuppressionAnchors
-
-CommitStageTimingBlockingExact ==
-  BlockingTotalThresholdAnchors
-
 CommitStageTimingStageExact ==
   /\ NonBlockingStageIsolationAnchors
   /\ StageMaximumThresholdAnchors
   /\ ValidationSubstageThresholdAnchors
 
-CommitStageTimingRecordedGateExact ==
-  RecordedTimingGateAnchors
-
 CommitStageTimingThresholdExactness ==
   /\ CommitStageTimingOutputExact
-  /\ CommitStageTimingZeroThresholdExact
-  /\ CommitStageTimingBlockingExact
+  /\ ZeroThresholdSuppressionAnchors
+  /\ BlockingTotalThresholdAnchors
   /\ CommitStageTimingStageExact
-  /\ CommitStageTimingRecordedGateExact
+  /\ RecordedTimingGateAnchors
 
 CommitStageTimingThresholdCorrectnessEnvelope ==
   /\ TypeInvariant

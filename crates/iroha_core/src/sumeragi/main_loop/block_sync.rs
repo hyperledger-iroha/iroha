@@ -3061,6 +3061,7 @@ impl Actor {
             );
             return true;
         }
+        let mut inserted_pending_block = false;
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut entry) => {
                 let pending = entry.get_mut();
@@ -3074,35 +3075,21 @@ impl Actor {
                     return false;
                 }
                 if pending.is_retry_aborted() {
-                    pending.revive_after_abort_with_payload_bytes(
-                        block.clone(),
-                        payload_hash,
-                        height,
-                        view,
-                        payload_bytes,
-                    );
+                    pending.revive_after_abort(block.clone(), payload_hash, height, view);
                 } else {
-                    pending.replace_block_with_payload_bytes(
-                        block.clone(),
-                        payload_hash,
-                        height,
-                        view,
-                        payload_bytes,
-                    );
+                    pending.replace_block(block.clone(), payload_hash, height, view);
                 }
                 pending.note_commit_qc_observed(response.commit_qc.epoch);
             }
             Entry::Vacant(entry) => {
-                let mut pending = PendingBlock::new_with_payload_bytes(
-                    block.clone(),
-                    payload_hash,
-                    height,
-                    view,
-                    payload_bytes,
-                );
+                let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
                 pending.note_commit_qc_observed(response.commit_qc.epoch);
                 entry.insert(pending);
+                inserted_pending_block = true;
             }
+        }
+        if inserted_pending_block {
+            self.enforce_pending_block_cap(block_hash, "certified_block_fetch_response");
         }
         self.maybe_cache_rehydrated_kura_body(&block);
         self.deferred_missing_payload_qcs
@@ -8923,18 +8910,13 @@ impl Actor {
 
         let payload_bytes = super::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
-        let mut pending = PendingBlock::new_with_payload_bytes(
-            block.clone(),
-            payload_hash,
-            block_height,
-            block_view,
-            payload_bytes,
-        );
+        let mut pending = PendingBlock::new(block.clone(), payload_hash, block_height, block_view);
         if let Some(epoch) = observed_commit_qc_epoch.or(deferred_commit_qc_epoch) {
             pending.note_commit_qc_observed(epoch);
         }
 
         self.pending.pending_blocks.insert(block_hash, pending);
+        self.enforce_pending_block_cap(block_hash, "frontier_block_sync_payload");
         self.deferred_block_sync_updates
             .remove(&(block_height, block_view, block_hash));
         self.flush_frontier_body_requesters(block);
@@ -9099,6 +9081,44 @@ impl Actor {
                 "dropping duplicate known-block QC work item"
             );
             return;
+        }
+        match bounded_qc_insert_decision(&self.known_block_qc_work, key, KNOWN_BLOCK_QC_WORK_CAP) {
+            BoundedQcInsertDecision::Insert => {}
+            BoundedQcInsertDecision::DropIncoming => {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::Backpressure,
+                );
+                debug!(
+                    phase = ?work.qc.phase,
+                    height = work.qc.height,
+                    view = work.qc.view,
+                    block = %work.qc.subject_block_hash,
+                    cap = KNOWN_BLOCK_QC_WORK_CAP,
+                    "dropping known-block QC work because bounded queue is full"
+                );
+                return;
+            }
+            BoundedQcInsertDecision::Evict(evicted) => {
+                self.known_block_qc_work.remove(&evicted);
+                super::status::inc_qc_deferred_expired();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_qc_deferred_expired();
+                }
+                debug!(
+                    phase = ?work.qc.phase,
+                    height = work.qc.height,
+                    view = work.qc.view,
+                    block = %work.qc.subject_block_hash,
+                    evicted_height = evicted.2,
+                    evicted_view = evicted.3,
+                    evicted_block = %evicted.1,
+                    cap = KNOWN_BLOCK_QC_WORK_CAP,
+                    "evicting older known-block QC work from bounded queue"
+                );
+            }
         }
         self.known_block_qc_work.insert(key, work);
         self.record_consensus_message_handling(

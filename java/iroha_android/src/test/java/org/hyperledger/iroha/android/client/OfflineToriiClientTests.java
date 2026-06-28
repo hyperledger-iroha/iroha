@@ -37,7 +37,7 @@ public final class OfflineToriiClientTests {
               "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
               "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
               "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_recursive_compact_artifacts_available": true
+              "offline_kagemusha_recursive_compact_artifacts_available": false
             }
             """);
     final OfflineToriiClient client =
@@ -68,7 +68,7 @@ public final class OfflineToriiClientTests {
         : "offline_kagemusha_recursive_compact_required_native_bridge_abi_version mismatch";
     assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId())
         : "offline_kagemusha_recursive_compact_circuit_id mismatch";
-    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()
+    assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()
         : "offline_kagemusha_recursive_compact_artifacts_available mismatch";
   }
 
@@ -83,7 +83,7 @@ public final class OfflineToriiClientTests {
               "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
               "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
               "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_recursive_compact_artifacts_available": true
+              "offline_kagemusha_recursive_compact_artifacts_available": false
             }
             """);
     final OfflineToriiClient client =
@@ -108,7 +108,7 @@ public final class OfflineToriiClientTests {
         : "offline_kagemusha_recursive_compact_required_native_bridge_abi_version mismatch";
     assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId())
         : "offline_kagemusha_recursive_compact_circuit_id mismatch";
-    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()
+    assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()
         : "offline_kagemusha_recursive_compact_artifacts_available mismatch";
   }
 

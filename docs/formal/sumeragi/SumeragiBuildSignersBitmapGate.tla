@@ -221,7 +221,8 @@ DuplicateSignerCollapsedExact ==
   ActualBitmap("duplicates_collapsed") = <<36>>
 
 BuildSignersBitmapExactness ==
-  /\ Safety
+  /\ \A c \in Cases:
+    ActualBitmap(c) = SpecBitmap(c)
   /\ BitmapLengthExact
   /\ ZeroRosterAndAllocationExact
   /\ SingleSignerBitExact

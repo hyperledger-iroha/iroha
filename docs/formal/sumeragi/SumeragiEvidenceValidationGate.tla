@@ -346,7 +346,7 @@ EvidenceValidationMatchesSpec ==
   /\ Matches("censorship_signature_precedes_quorum")
 
 EvidenceValidationExactness ==
-  EvidenceValidationMatchesSpec
+  /\ EvidenceValidationMatchesSpec
 
 EvidenceValidationCorrectnessEnvelope ==
   /\ TypeInvariant

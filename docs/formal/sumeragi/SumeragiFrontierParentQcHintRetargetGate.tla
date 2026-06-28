@@ -252,11 +252,6 @@ ParentQcHintRetargetPreservesRewriteTargets ==
   /\ ActualTarget(NonFrontierParentNoRetarget) = ExpectedHash
 
 FrontierParentQcHintRetargetExactness ==
-  /\ ParentQcHintRetargetHasExactPositiveEvidence
-  /\ ParentQcHintRetargetRejectsIneligibleInputs
-  /\ ParentQcHintRetargetPreservesRewriteTargets
-
-SafetyFast ==
   /\ GateExact
   /\ RetargetExact
   /\ RewriteExact
@@ -264,7 +259,11 @@ SafetyFast ==
   /\ ProgressGateStable
   /\ RequestBranchStable
   /\ RewriteStable
-  /\ FrontierParentQcHintRetargetExactness
+  /\ ParentQcHintRetargetHasExactPositiveEvidence
+  /\ ParentQcHintRetargetRejectsIneligibleInputs
+  /\ ParentQcHintRetargetPreservesRewriteTargets
+
+SafetyFast == FrontierParentQcHintRetargetExactness
 
 GateAnchors ==
   /\ GateExact
@@ -323,8 +322,7 @@ FrontierParentQcHintRetargetSafetyAnchors ==
 
 FrontierParentQcHintRetargetCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ FrontierParentQcHintRetargetSafetyAnchors
+  /\ FrontierParentQcHintRetargetExactness
 
 Safety == FrontierParentQcHintRetargetSafetyAnchors
 

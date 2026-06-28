@@ -446,7 +446,7 @@ ValuesStayInDomain ==
     /\ ImplementationFetchBlock(candidate) \in FieldValues
     /\ ImplementationFetchPayload(candidate) \in FieldValues
 
-Safety ==
+EngineCommitQcAvailableCommitExactness ==
   /\ CommittedHeightMatchesSpec
   /\ CommittedBlockMatchesSpec
   /\ ValidationMatchesSpec
@@ -469,8 +469,8 @@ Safety ==
   /\ NoCommitWithoutPayloadAvailable
   /\ ValuesStayInDomain
 
-EngineCommitQcAvailableCommitExactness ==
-  Safety
+Safety ==
+  EngineCommitQcAvailableCommitExactness
 
 EngineCommitQcAvailableCommitCorrectnessEnvelope ==
   /\ TypeInvariant

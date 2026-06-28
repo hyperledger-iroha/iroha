@@ -29,6 +29,7 @@ SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.m
 SORAFS_ORDERBOOK_PLAN = DOCS_SOURCE_DIR / "sorafs_orderbook_plan.md"
 SORAFS_COMMIT_REVEAL_PLAN = DOCS_SOURCE_DIR / "sorafs_commit_reveal_plan.md"
 SORAFS_POP_CREDENTIALS_PLAN = DOCS_SOURCE_DIR / "sorafs_pop_credentials_plan.md"
+SORAFS_PDP_PLAN = DOCS_SOURCE_DIR / "sorafs_pdp_plan.md"
 SORAFS_POR_PLAN = DOCS_SOURCE_DIR / "sorafs_por_plan.md"
 SORAFS_POR_VALIDATOR_PLAN = DOCS_SOURCE_DIR / "sorafs_por_validator_plan.md"
 SORAFS_POTR_PLAN = DOCS_SOURCE_DIR / "sorafs_potr_plan.md"
@@ -8163,6 +8164,84 @@ def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
+def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_PDP_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "the provider protocol is not production ready yet. Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until real provider proof generation, signature verification, and governance archival are implemented.",
+        "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
+        "Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp` but returns `400 Bad Request` so clients do not mistake PoR samples for PDP provider proofs.",
+        "Do not remove the Torii fail-closed PDP guard until these local gates exist:",
+        "Provider challenge queue:",
+        "Deterministic proof generation from stored payloads",
+        "Provider signature verification over canonical PDP proof bytes with governance-controlled key material.",
+        "Governance DAG archival for accepted PDP proofs and PDP failure reports.",
+        "Repair pipeline handoff for `pdp_failure` events.",
+        "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
+        "Required before production enablement:",
+        "Storage-node integration tests that generate PDP proofs from persisted payloads and validate them against commitment roots.",
+        "Torii endpoint tests for challenge issuance, proof submission, governance archival, repair handoff, and telemetry counters.",
+        "Remaining production gates:",
+        "Ship operator CLI commands and SDK validators.",
+        "Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_pdp_provider_protocol_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/sorafs/pdp/challenge",
+        "/sorafs/pdp/next",
+        "/sorafs/pdp/proof",
+        "/v1/sorafs/pdp/challenge",
+        "/v1/sorafs/pdp/next",
+        "/v1/sorafs/pdp/proof",
+        "/v1/sorafs/pdp/provider-transport",
+        "/v1/sorafs/pdp/proof-generation",
+        "/v1/sorafs/pdp/provider-signatures",
+        "/v1/sorafs/pdp/inclusion-witnesses",
+        "/v1/sorafs/pdp/governance-archive",
+        "/v1/sorafs/pdp/repair-handoff",
+        "/v1/sorafs/pdp/operator-cli",
+        "/v1/sorafs/pdp/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "pdp-challenge",
+        "pdp-fetch",
+        "pdp-respond",
+        "pdp-verify",
+        "pdp-status",
+        "pdp-export",
+        "pdp-provider-transport",
+        "pdp-proof-generation",
+        "pdp-governance-archive",
+        "pdp-repair-handoff",
+        "pdp-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
 def test_governance_dag_ipfs_ipns_work_stays_unshipped_in_docs() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
 
@@ -8765,6 +8844,71 @@ def test_sorafs_proto_plan_documents_only_active_fixture_generators() -> None:
     assert [name for name in documented_fixture_bins if name not in existing_bins] == []
     assert "Do not document retired generator names as required workflow" in source
     assert "not defining a separate\n`sora-proto` codec outside Norito" in source
+
+
+def test_sorafs_proto_release_evidence_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_PROTO_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "Remaining work is live release evidence and SDK distribution hygiene, not defining a separate `sora-proto` codec outside Norito.",
+        "Every payload that crosses a SoraFS boundary must be encoded with Norito. JSON views are for operator readability and fixtures; they are not alternate wire formats.",
+        "SDKs should call the reference validator or C ABI facade for schema checks rather than reimplementing Norito layout rules.",
+        "Transport should preserve raw Norito bytes and may include decoded JSON only as commentary.",
+        "Unknown versions, missing required fields, invalid signatures, and broken fixture cross-links must fail closed.",
+        "Publish release bundles that include the refreshed `.to` fixtures, human-readable JSON commentary, validation outcomes, and digest manifests.",
+        "Keep portal error-catalog links synchronized with `ValidationOutcomeV1` codes.",
+        "Capture SDK smoke evidence that JavaScript/TypeScript, Python, Swift, Kotlin, Java, and C# consumers validate the same committed fixtures through shared validators or FFI bindings.",
+        "Re-run fixture and reference-validator smoke tests whenever Norito payload layouts, signing domains, or governance payload variants change.",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_sorafs_proto_release_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/proto",
+        "/v1/sorafs/sora-proto",
+        "/v1/sorafs/schema-registry",
+        "/v1/sorafs/schema/service",
+        "/v1/sorafs/wire-format/service",
+        "/v1/sorafs/fixtures/release-bundle",
+        "/v1/sorafs/fixtures/sdk-smoke",
+        "/v1/sorafs/proto/release-bundle",
+        "/v1/sorafs/proto/promotion",
+    )
+    unshipped_cli_subcommands = (
+        "sora-proto",
+        "sorafs-proto",
+        "proto-schema-service",
+        "schema-registry-service",
+        "wire-format-service",
+        "proto-release-bundle",
+        "fixture-release-bundle",
+        "fixture-bundle-publish",
+        "sdk-smoke-publish",
+        "proto-promote",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
 
 
 def test_pdp_proof_stream_remains_fail_closed_until_provider_protocol_ships() -> None:

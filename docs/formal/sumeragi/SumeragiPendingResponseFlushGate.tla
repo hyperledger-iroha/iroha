@@ -311,7 +311,7 @@ PendingResponseFlushMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 PendingResponseFlushExactness ==
-  PendingResponseFlushMatchesSpec
+  /\ PendingResponseFlushMatchesSpec
 
 PendingResponseFlushCorrectnessEnvelope ==
   /\ TypeInvariant

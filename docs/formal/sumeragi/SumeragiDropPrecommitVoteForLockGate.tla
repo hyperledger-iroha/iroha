@@ -241,7 +241,7 @@ ActionsMatchSpec ==
     ImplementationActions(c) = SpecActions(c)
 
 DropPrecommitVoteForLockExactness ==
-  ActionsMatchSpec
+  /\ ActionsMatchSpec
 
 DropPrecommitVoteForLockCorrectnessEnvelope ==
   /\ TypeInvariant

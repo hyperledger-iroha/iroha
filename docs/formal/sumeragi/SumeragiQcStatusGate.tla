@@ -416,9 +416,13 @@ SafetyAnchors ==
   /\ LockedSameTupleAnchors
   /\ LockedSnapshotAnchors
 
+QcStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 QcStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ QcStatusExactness
 
 ====
