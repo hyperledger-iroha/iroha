@@ -2848,9 +2848,7 @@ def _kagemusha_read_spendable_note(
     amount_payload, cursor = _kagemusha_read_norito_field(
         payload, cursor, flags, "bundle.accumulator.current_note.amount"
     )
-    if cursor != len(payload):
-        raise ValueError("Trailing bytes after bundle.accumulator.current_note")
-    return KagemushaRecursiveSpendableNoteDescriptor(
+    note = KagemushaRecursiveSpendableNoteDescriptor(
         note_commitment=_kagemusha_read_fixed_bytes(
             note_payload,
             flags,
@@ -2869,6 +2867,9 @@ def _kagemusha_read_spendable_note(
             "bundle.accumulator.current_note.amount",
         ),
     )
+    if cursor != len(payload):
+        raise ValueError("Trailing bytes after bundle.accumulator.current_note")
+    return note
 
 
 def _kagemusha_read_fixed_bytes(

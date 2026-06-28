@@ -586,8 +586,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   repeatable direct selector inputs for pending message IDs, notary endpoints,
   trust bundles, receipt selectors, evidence summaries, and readiness summaries
   require exact `list` or `tuple` containers before length checks or iteration,
+  compact evidence/readiness role collectors and XSD material-path collectors
+  also require exact plain nested summary objects before `.get()` or indexing
+  can run,
   direct scalar and repeatable path arguments accept only sanitized strings or
-  real `pathlib.Path` instances before filesystem loading,
+  exact concrete stdlib `pathlib` path instances before filesystem loading,
+  rejecting path subclasses before `__fspath__` or `__str__` can run,
   the rail gateway direct `message` selector rejects hostile path-like objects
   and list subclasses before inbox discovery,
   operator-evidence canary command arrays normalize child command entries to
@@ -601,9 +605,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   caller-provided objects can service `getattr` or `setattr`,
   CLI-facing and JSON-summary numeric scalar helpers require exact built-in
   `int`/`float` values or sanitized numeric strings before conversion,
-  comparison, freshness-budget, timeout, byte-limit, count, day, or status-code
-  checks, so hostile numeric subclasses cannot run conversion or comparison
-  hooks during direct API or replay helper use,
+  comparison, freshness-budget, timeout, byte-limit, count, day, version, or
+  status-code checks, so hostile numeric subclasses cannot run conversion or
+  comparison hooks during direct API or replay helper use,
+  and the remaining direct file-read limits, bounded child-command output
+  limits, child return-code validators, verified-count summaries, freshness
+  projections, and public response-metadata classifiers follow the same exact
+  built-in integer boundary,
   operator-evidence and production-readiness direct text validators copy
   hostile `str` subclasses to plain strings before rail-message-id, CLI
   context/profile, artifact path, timestamp, XSD source/fixture path,
@@ -1048,10 +1056,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   arguments or malformed `--summary-out` path tokens before argparse can echo
   them, so failed public downloads can be archived as explicit operator
   evidence while redistributable packages are still pending.
-  A bounded live recheck at `2026-06-26T10:38:15+00:00` with
+  A bounded live recheck at `2026-06-28T09:59:15+00:00` with
   `--timeout-secs 3 --max-bytes 512` still timed out across all eight recorded
   official download URLs with `0` downloaded bytes; the summary digest was
-  `43b0786d772fd045d645160308ac20ed95aa3c5e9bcdea5625d4d31fe5798448`.
+  `afe0130f92b797563e12b45879a08e5edce724c69f839515803cd46ebabc7503`.
   Final readiness now accepts those probe summaries through
   `--pending-xsd-probe-summary`, rechecks their digest, freshness, pinned ISO
   metadata, probe counts, bounded sample digest shape, per-row

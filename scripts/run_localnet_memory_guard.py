@@ -23,8 +23,8 @@ DEFAULT_COUNT = 100_000
 DEFAULT_PARALLEL = 64
 DEFAULT_BATCH_SIZE = 1_000
 DEFAULT_BATCH_INTERVAL = 1.0
-DEFAULT_QUEUE_SOFT_LIMIT = 1_000
-DEFAULT_QUEUE_HARD_LIMIT = 8_000
+DEFAULT_QUEUE_SOFT_LIMIT = 0
+DEFAULT_QUEUE_HARD_LIMIT = 0
 DEFAULT_QUEUE_WAIT_TIMEOUT = 300.0
 
 
@@ -310,40 +310,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     samples: list[MemorySample] = []
     tx_log = args.out_dir / "tx_load.log"
     tx_log.parent.mkdir(parents=True, exist_ok=True)
-    with tx_log.open("w", encoding="utf-8") as log:
-        tx_env = os.environ.copy()
-        tx_env["PYTHONUNBUFFERED"] = "1"
-        tx_proc = subprocess.Popen(
-            build_tx_load_cmd(args),
-            cwd=args.iroha_dir,
-            env=tx_env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        try:
-            while tx_proc.poll() is None:
-                processes = peer_processes(args.out_dir)
-                sample = sample_memory(processes)
-                samples.append(sample)
-                if sample.total_rss_bytes > limit_bytes:
-                    print(
-                        "memory guard tripped: "
-                        f"{sample.total_rss_bytes} bytes RSS across {sample.peers} peers "
-                        f"(limit {limit_bytes})",
-                        file=sys.stderr,
-                    )
-                    terminate_child(tx_proc)
-                    stop_localnet(args.out_dir)
-                    write_report(report, samples, tx_proc.returncode)
-                    return 3
-                time.sleep(args.poll_interval)
-        finally:
-            terminate_child(tx_proc)
+    try:
+        with tx_log.open("w", encoding="utf-8") as log:
+            tx_env = os.environ.copy()
+            tx_env["PYTHONUNBUFFERED"] = "1"
+            tx_proc = subprocess.Popen(
+                build_tx_load_cmd(args),
+                cwd=args.iroha_dir,
+                env=tx_env,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            try:
+                while tx_proc.poll() is None:
+                    processes = peer_processes(args.out_dir)
+                    sample = sample_memory(processes)
+                    samples.append(sample)
+                    if sample.total_rss_bytes > limit_bytes:
+                        print(
+                            "memory guard tripped: "
+                            f"{sample.total_rss_bytes} bytes RSS across {sample.peers} peers "
+                            f"(limit {limit_bytes})",
+                            file=sys.stderr,
+                        )
+                        terminate_child(tx_proc)
+                        write_report(report, samples, tx_proc.returncode)
+                        return 3
+                    time.sleep(args.poll_interval)
+            finally:
+                terminate_child(tx_proc)
 
-    stop_localnet(args.out_dir)
-    write_report(report, samples, tx_proc.returncode)
-    return int(tx_proc.returncode or 0)
+        write_report(report, samples, tx_proc.returncode)
+        return int(tx_proc.returncode or 0)
+    finally:
+        stop_localnet(args.out_dir)
 
 
 if __name__ == "__main__":

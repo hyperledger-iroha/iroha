@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import io
 import sys
+from pathlib import Path
 import unittest
 
 from pytests.scripts import iso_audit_notary_adapter_test as audit_test
@@ -150,8 +151,236 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
             def __gt__(self, _other):
                 raise RuntimeError(f"gt={hidden}")
 
+        class HostilePath(type(Path("hostile"))):
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+        class HostileStr(str):
+            def __new__(cls, value):
+                return str.__new__(cls, value)
+
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def __hash__(self):
+                raise RuntimeError(f"hash={hidden}")
+
+            def __eq__(self, _other):
+                raise RuntimeError(f"eq={hidden}")
+
+            def startswith(self, _prefix):
+                raise RuntimeError(f"startswith={hidden}")
+
+        class HostileDict(dict):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"getitem={hidden}")
+
+            def get(self, _key, _default=None):
+                raise RuntimeError(f"get={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"items={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
         self.assertIsNone(rail_test.ADAPTER._parse_http_status_code(HostileInt(200)))
         self.assertIsNone(audit_test.ADAPTER._parse_http_status_code(HostileInt(200)))
+        self.assertIsNone(probe_test.PROBE._http_status_code(HostileInt(200)))
+
+        non_exception_cases = (
+            (
+                "production-readiness-version-output",
+                lambda: readiness_test.READINESS._version_for_readiness_output(
+                    HostileInt(1),
+                    1,
+                ),
+                "unsupported",
+            ),
+            (
+                "production-readiness-freshness-budget",
+                lambda: readiness_test.READINESS._freshness_budget_for_readiness_output(
+                    HostileInt(1),
+                    30,
+                ),
+                "unsupported",
+            ),
+            (
+                "production-readiness-probe-public-status",
+                lambda: readiness_test.READINESS._pending_xsd_probe_response_metadata_is_publicly_supported(
+                    {
+                        "status": "reachable",
+                        "looks_like_xsd": True,
+                        "http_status": HostileInt(200),
+                        "downloaded_bytes": 64,
+                        "sample_sha256": "1" * 64,
+                    }
+                ),
+                False,
+            ),
+            (
+                "production-readiness-probe-public-bytes",
+                lambda: readiness_test.READINESS._pending_xsd_probe_response_metadata_is_publicly_supported(
+                    {
+                        "status": "reachable",
+                        "looks_like_xsd": True,
+                        "http_status": 200,
+                        "downloaded_bytes": HostileInt(64),
+                        "sample_sha256": "1" * 64,
+                    }
+                ),
+                False,
+            ),
+            (
+                "production-readiness-receipt-public-status",
+                lambda: readiness_test.READINESS._receipt_response_metadata_is_publicly_supported(
+                    {
+                        "ok": True,
+                        "status_code": HostileInt(200),
+                        "response_body_sha256": "1" * 64,
+                    }
+                ),
+                False,
+            ),
+            (
+                "xsd-summary-material-paths-hostile-dict",
+                lambda: xsd_test.VERIFIER._summary_material_input_paths(
+                    Path("fixture_manifest.json"),
+                    {
+                        "schemas": [HostileDict({"path": "xsd/pacs.008.xsd"})],
+                        "fixtures": [HostileDict({"path": "xml/pacs.008.xml"})],
+                    },
+                ),
+                (),
+            ),
+            (
+                "xsd-summary-material-paths-hostile-str",
+                lambda: xsd_test.VERIFIER._summary_material_input_paths(
+                    Path("fixture_manifest.json"),
+                    {
+                        "schemas": [{"path": HostileStr("xsd/pacs.008.xsd")}],
+                        "fixtures": [{"path": HostileStr("xml/pacs.008.xml")}],
+                    },
+                ),
+                (),
+            ),
+            (
+                "operator-evidence-compact-receipts-hostile-dict",
+                lambda: evidence_test.EVIDENCE._compact_receipt_summaries(
+                    [{"receipt_summary": HostileDict({"receipts": []})}],
+                    None,
+                ),
+                [],
+            ),
+            (
+                "operator-evidence-artifact-reuse-hostile-dict",
+                lambda: evidence_test.EVIDENCE._reject_compact_json_artifact_path_role_reuse(
+                    [
+                        {
+                            "config_path": "run/canary-config.json",
+                            "path": "run/canary.summary.json",
+                            "receipt_summary": HostileDict({"receipts": []}),
+                        }
+                    ],
+                    [],
+                    receipt_summary=HostileDict({"receipts": []}),
+                ),
+                None,
+            ),
+            (
+                "operator-evidence-artifact-reuse-hostile-str",
+                lambda: evidence_test.EVIDENCE._reject_compact_json_artifact_path_role_reuse(
+                    [
+                        {
+                            "config_path": "run/canary-config.json",
+                            "path": "run/canary.summary.json",
+                            "receipt_summary": {
+                                "receipts": [{"path": HostileStr("run/receipt.json")}],
+                            },
+                        }
+                    ],
+                    [],
+                    receipt_summary={
+                        "receipts": [{"path": HostileStr("run/direct-receipt.json")}],
+                    },
+                ),
+                None,
+            ),
+            (
+                "production-readiness-artifact-reuse-hostile-dict",
+                lambda: readiness_test.READINESS._block_compact_json_artifact_path_role_reuse(
+                    [
+                        {
+                            "config_path": "run/canary-config.json",
+                            "path": "run/canary.summary.json",
+                            "receipt_summary": HostileDict({"receipts": []}),
+                        }
+                    ],
+                    [],
+                    Path("run/evidence.summary.json"),
+                    [],
+                    archive_receipts=HostileDict({"receipts": []}),
+                ),
+                None,
+            ),
+            (
+                "production-readiness-artifact-reuse-hostile-str",
+                lambda: readiness_test.READINESS._block_compact_json_artifact_path_role_reuse(
+                    [
+                        {
+                            "config_path": "run/canary-config.json",
+                            "path": "run/canary.summary.json",
+                            "receipt_summary": {
+                                "receipts": [{"path": HostileStr("run/receipt.json")}],
+                            },
+                        }
+                    ],
+                    [],
+                    Path("run/evidence.summary.json"),
+                    [],
+                    archive_receipts={
+                        "receipts": [{"path": HostileStr("run/direct-receipt.json")}],
+                    },
+                ),
+                None,
+            ),
+            (
+                "production-readiness-receipt-path-roles-hostile-str",
+                lambda: readiness_test.READINESS._receipt_path_material_roles(
+                    [
+                        {
+                            "path": HostileStr("run/receipt.json"),
+                            "source_path": HostileStr("run/source.xml"),
+                        }
+                    ],
+                    "receipt_summary",
+                ),
+                [],
+            ),
+            (
+                "production-readiness-xsd-gap-diagnostics-hostile-dict",
+                lambda: readiness_test.READINESS._xsd_gap_diagnostic_entries(
+                    [HostileDict({"path": "xsd/pacs.008.xsd"})],
+                ),
+                [],
+            ),
+        )
+        for name, call, expected in non_exception_cases:
+            with self.subTest(name=name):
+                try:
+                    result = call()
+                except Exception as error:
+                    message = str(error)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn("iso-numeric-helper-secret", message)
+                    self.fail(f"{name} raised {type(error).__name__}")
+                self.assertEqual(result, expected)
 
         cases = (
             (
@@ -184,6 +413,14 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                 "--timeout-secs must be a positive finite number",
             ),
             (
+                "audit-notary-optional-path",
+                lambda: audit_test.ADAPTER._optional_cli_path(
+                    HostilePath("anchor.json"),
+                    "--anchor",
+                ),
+                "--anchor must be a path",
+            ),
+            (
                 "rail-gateway-int",
                 lambda: rail_test.ADAPTER._require_positive_cli_int(
                     HostileInt(7),
@@ -198,6 +435,39 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                     "--timeout-secs",
                 ),
                 "--timeout-secs must be a positive finite number",
+            ),
+            (
+                "rail-gateway-optional-path",
+                lambda: rail_test.ADAPTER._optional_cli_path(
+                    HostilePath("message.xml"),
+                    "--message",
+                ),
+                "--message must be a path",
+            ),
+            (
+                "rail-gateway-message-path",
+                lambda: rail_test.ADAPTER._normalise_message_argument(
+                    HostilePath("message.xml"),
+                ),
+                "message must be a path",
+            ),
+            (
+                "rail-gateway-read-file-max-bytes",
+                lambda: rail_test.ADAPTER._read_regular_file(
+                    Path("missing.xml"),
+                    max_bytes=HostileInt(1),
+                    path_label="message",
+                ),
+                "max file bytes must be a positive integer",
+            ),
+            (
+                "rail-gateway-bounded-read-max-bytes",
+                lambda: rail_test.ADAPTER._bounded_read(
+                    Path("missing.xml"),
+                    HostileInt(1),
+                    path_label="message",
+                ),
+                "max payload bytes must be a positive integer",
             ),
             (
                 "receipt-nonnegative",
@@ -217,12 +487,38 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                 "receipt status_code must be null or an HTTP status integer",
             ),
             (
+                "receipt-read-file-max-bytes",
+                lambda: receipt_test.VERIFIER._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    display_label="receipt",
+                ),
+                "max file bytes must be a positive integer",
+            ),
+            (
+                "receipt-path-list-entry",
+                lambda: receipt_test.VERIFIER._required_cli_path_sequence(
+                    [HostilePath("receipt.json")],
+                    "--receipt",
+                ),
+                "--receipt[0] must be a path",
+            ),
+            (
                 "audit-notary-nonnegative",
                 lambda: audit_test.ADAPTER._require_nonnegative_int(
                     HostileInt(0),
                     "record.updated_at_ms",
                 ),
                 "record.updated_at_ms must be a non-negative integer",
+            ),
+            (
+                "audit-notary-read-file-max-bytes",
+                lambda: audit_test.ADAPTER._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    path_label="anchor",
+                ),
+                "max file bytes must be a positive integer",
             ),
             (
                 "operator-canary-int",
@@ -251,12 +547,63 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                 "stage timeout seconds must be a positive finite number",
             ),
             (
+                "operator-canary-optional-path",
+                lambda: canary_test.CANARY._optional_cli_path(
+                    HostilePath("config.json"),
+                    "--config",
+                ),
+                "--config must be a path",
+            ),
+            (
+                "operator-canary-read-file-max-bytes",
+                lambda: canary_test.CANARY._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    display_label="config",
+                ),
+                "max file bytes must be a positive integer",
+            ),
+            (
+                "operator-canary-run-command-output-limit",
+                lambda: canary_test.CANARY._run_command_bounded(
+                    ["canary-child"],
+                    HostileInt(1),
+                    1.0,
+                ),
+                "output limit bytes must be positive",
+            ),
+            (
                 "trust-bundle-int",
                 lambda: trust_test.VERIFIER._optional_positive_cli_int(
                     HostileInt(7),
                     "--max-source-age-days",
                 ),
                 "--max-source-age-days must be a positive integer",
+            ),
+            (
+                "trust-bundle-optional-path",
+                lambda: trust_test.VERIFIER._optional_cli_path(
+                    HostilePath("bundle.json"),
+                    "--bundle",
+                ),
+                "--bundle must be a path",
+            ),
+            (
+                "trust-bundle-path-list-entry",
+                lambda: trust_test.VERIFIER._required_cli_path_sequence(
+                    [HostilePath("bundle.json")],
+                    "--bundle",
+                ),
+                "--bundle[0] must be a path",
+            ),
+            (
+                "trust-bundle-read-file-max-bytes",
+                lambda: trust_test.VERIFIER._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    display_label="bundle",
+                ),
+                "max file bytes must be a positive integer",
             ),
             (
                 "operator-evidence-int",
@@ -293,12 +640,54 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                 "summary.failures must be a non-negative integer",
             ),
             (
+                "operator-evidence-optional-path",
+                lambda: evidence_test.EVIDENCE._optional_cli_path(
+                    HostilePath("summary.json"),
+                    "--canary-summary",
+                ),
+                "--canary-summary must be a path",
+            ),
+            (
+                "operator-evidence-path-list-entry",
+                lambda: evidence_test.EVIDENCE._required_cli_path_sequence(
+                    [HostilePath("summary.json")],
+                    "--canary-summary",
+                ),
+                "--canary-summary[0] must be a path",
+            ),
+            (
+                "operator-evidence-read-file-max-bytes",
+                lambda: evidence_test.EVIDENCE._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    display_label="summary",
+                ),
+                "max file bytes must be a positive integer",
+            ),
+            (
+                "operator-evidence-run-command-output-limit",
+                lambda: evidence_test.EVIDENCE._run_command_bounded(
+                    ["receipt-verifier"],
+                    HostileInt(1),
+                    1.0,
+                ),
+                "output limit bytes must be positive",
+            ),
+            (
                 "xsd-fixture-float",
                 lambda: xsd_test.VERIFIER._require_positive_finite_number(
                     HostileFloat(1.0),
                     "xmllint timeout seconds",
                 ),
                 "xmllint timeout seconds must be a positive finite number",
+            ),
+            (
+                "xsd-fixture-optional-path",
+                lambda: xsd_test.VERIFIER._optional_cli_path(
+                    HostilePath("manifest.json"),
+                    "--manifest",
+                ),
+                "--manifest must be a path",
             ),
             (
                 "xsd-fixture-nonnegative-field",
@@ -308,6 +697,24 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                     "profile.asset",
                 ),
                 "profile.asset.minor_units must be a non-negative integer when set",
+            ),
+            (
+                "xsd-fixture-read-file-max-bytes",
+                lambda: xsd_test.VERIFIER._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    display_label="manifest",
+                ),
+                "max file bytes must be a positive integer",
+            ),
+            (
+                "xsd-fixture-run-command-output-limit",
+                lambda: xsd_test.VERIFIER._run_command_bounded(
+                    ["xmllint"],
+                    HostileInt(1),
+                    1.0,
+                ),
+                "output limit bytes must be positive",
             ),
             (
                 "production-readiness-int",
@@ -351,6 +758,31 @@ class IsoCliArgvNormalizationTest(unittest.TestCase):
                     "probe.http_status",
                 ),
                 "probe.http_status must be an HTTP status code or null",
+            ),
+            (
+                "production-readiness-optional-path",
+                lambda: readiness_test.READINESS._optional_cli_path(
+                    HostilePath("summary.json"),
+                    "--xsd-summary",
+                ),
+                "--xsd-summary must be a path",
+            ),
+            (
+                "production-readiness-path-list-entry",
+                lambda: readiness_test.READINESS._required_cli_path_sequence(
+                    [HostilePath("summary.json")],
+                    "--xsd-summary",
+                ),
+                "--xsd-summary[0] must be a path",
+            ),
+            (
+                "production-readiness-read-file-max-bytes",
+                lambda: readiness_test.READINESS._read_regular_file(
+                    Path("missing.json"),
+                    max_bytes=HostileInt(1),
+                    display_label="summary",
+                ),
+                "max file bytes must be a positive integer",
             ),
         )
         for name, call, expected in cases:

@@ -456,7 +456,7 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         raise AdapterError(f"{label} must be a path")
     if isinstance(value, str):
         return Path(_plain_text(value, label))
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         return Path(value)
     raise AdapterError(f"{label} must be a path")
 
@@ -520,7 +520,7 @@ def _read_regular_file(
     path_label: str | None = None,
 ) -> bytes:
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise AdapterError("max file bytes must be a positive integer")
     display_path = path_label if path_label is not None else str(path)
@@ -1940,7 +1940,7 @@ def verify_audit_index(index: Any) -> dict[str, Any]:
     require_digest_matches(index, INDEX_DIGEST_FIELD, "audit index")
     record_count = index.get("record_count")
     records = index.get("records")
-    if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
+    if type(record_count) is not int or record_count < 0:
         raise AdapterError("audit index record_count must be a non-negative integer")
     if record_count == 0:
         raise AdapterError("audit index record_count must be positive before notary publication")
@@ -1987,11 +1987,7 @@ def verify_anchor_file(
             f"{anchor_label} index_sha256 does not match embedded audit index digest"
         )
     anchor_record_count = anchor_value.get("record_count")
-    if (
-        isinstance(anchor_record_count, bool)
-        or not isinstance(anchor_record_count, int)
-        or anchor_record_count < 0
-    ):
+    if type(anchor_record_count) is not int or anchor_record_count < 0:
         raise AdapterError(f"{anchor_label} record_count must be a non-negative integer")
     if anchor_record_count != audit_index.get("record_count"):
         raise AdapterError(f"{anchor_label} record_count does not match embedded audit index")

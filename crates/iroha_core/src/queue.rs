@@ -8214,7 +8214,6 @@ pub mod tests {
             &tx,
             hash,
             &plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8329,7 +8328,6 @@ pub mod tests {
             &tx,
             hash,
             &stale_plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8441,7 +8439,6 @@ pub mod tests {
             &tx,
             hash,
             &stale_plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8623,7 +8620,6 @@ pub mod tests {
             &tx,
             hash,
             &stale_plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -10553,7 +10549,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let batch = queue.gossip_batch_with_state(1, &fixture.state);
 
@@ -11315,7 +11315,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let nexus = fixture.state.nexus_snapshot();
         queue.reconfigure_nexus_with_state(&nexus, &fixture.state, None);
@@ -11375,7 +11379,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let nexus = fixture.state.nexus_snapshot();
         let state_view = fixture.state.view();
@@ -11437,7 +11445,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let state_view = fixture.state.view();
         let mut expired = Vec::new();
@@ -11513,7 +11525,6 @@ pub mod tests {
         assert!(!queue.txs.contains_key(&hash));
         assert!(queue.routing_decisions.get(&hash).is_none());
         assert!(queue.routing_plans.get(&hash).is_none());
-        assert!(queue.tx_gossip_payloads.get(&hash).is_none());
         assert_eq!(queue.active_len(), 0);
         assert_eq!(queue.queued_len(), 0);
         assert!(

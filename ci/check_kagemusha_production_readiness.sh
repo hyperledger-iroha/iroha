@@ -2819,7 +2819,8 @@ TEXT_REQUIREMENTS = {
         "abi7_archive_fixture_missing_archive",
         "KagemushaCommand::RecursiveCompactKeyArtifacts",
         "KagemushaRecursiveCompactKeyArtifactsArgs",
-        "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_archive",
         "kagemusha_recursive_compact_payment_token_vk_record_from_box",
         "validate_release_local_json_file",
         "_validate_release_local_json_file_for_read",
@@ -7643,8 +7644,8 @@ TEXT_REQUIREMENTS = {
         "KagemushaCommand::LineageRecord",
         "KagemushaRecursiveCompactKeyArtifactsArgs",
         "KagemushaLineageRecordArgs",
-        "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
-        "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_bytes",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_archive",
         "KagemushaRecursiveCompactKeyArtifactsV1::new",
         'arg(long, value_name = "PATH", required = true)',
         "--key-artifacts-out and --verifier-keys-out must both be provided for ABI-7 recursive compact production key packages",
@@ -7679,7 +7680,7 @@ TEXT_REQUIREMENTS = {
         "Writing {} Reserved-lineage key package to {}",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         "KagemushaRecursiveCompactUnavailable",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",
@@ -16405,8 +16406,8 @@ if mode == "--negative-control-compact-key-release-tooling":
         "ABI-7 compact key release tooling",
         lambda: override_text(
             "crates/iroha_cli/src/zk.rs",
-            "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
-            "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled",
+            "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
+            "write_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled",
         ),
     )
     raise SystemExit(0)

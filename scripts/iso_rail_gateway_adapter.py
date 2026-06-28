@@ -501,7 +501,7 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         raise AdapterError(f"{label} must be a path")
     if isinstance(value, str):
         return Path(_plain_text(value, label))
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         return Path(value)
     raise AdapterError(f"{label} must be a path")
 
@@ -648,7 +648,7 @@ def _read_regular_file(
     path_label: str | None = None,
 ) -> bytes:
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise AdapterError("max file bytes must be a positive integer")
     display_path = path_label if path_label is not None else str(path)
@@ -1381,7 +1381,7 @@ def _bounded_read(
     *,
     path_label: str | None = None,
 ) -> bytes:
-    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+    if type(max_bytes) is not int or max_bytes <= 0:
         raise AdapterError("max payload bytes must be a positive integer")
     display_path = path_label if path_label is not None else str(path)
     try:
@@ -1671,7 +1671,7 @@ def _normalise_message_argument(value: Any) -> str | None:
         if raw == "":
             raise AdapterError("message must be a non-empty path")
         return raw
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         raw = str(Path(value))
         if raw == "":
             raise AdapterError("message must be a non-empty path")

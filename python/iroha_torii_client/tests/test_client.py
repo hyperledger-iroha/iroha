@@ -2800,7 +2800,7 @@ def test_submit_bridge_proof_posts_tron_proof_material() -> None:
     binding_hash = _sample_sccp_tron_destination_binding_hash()
 
     response = client.submit_bridge_proof(
-        authority=" alice@sora ",
+        authority="alice@sora",
         message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
         network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
         verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
@@ -2846,6 +2846,38 @@ def test_submit_bridge_proof_rejects_ambiguous_bundle_selection_before_request()
             burn_bundle={"version": 1},
             message_bundle={"version": 1},
         )
+
+    assert session.calls == []
+
+
+def test_submit_bridge_proof_rejects_padded_signing_fields_before_request() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    public_key_hex = "aa" * 32
+    signature_b64 = base64.b64encode(b"bridge proof signature").decode("ascii")
+
+    cases = (
+        (
+            {"authority": " alice@sora "},
+            "bridge proof submit\\.authority must not contain surrounding whitespace",
+        ),
+        (
+            {"public_key_hex": f" {public_key_hex} "},
+            "bridge proof submit\\.public_key_hex must not contain surrounding whitespace",
+        ),
+        (
+            {"signature_b64": f" {signature_b64} "},
+            "bridge proof submit\\.signature_b64 must not contain surrounding whitespace",
+        ),
+    )
+    for overrides, message in cases:
+        request = {
+            "authority": "alice@sora",
+            "message_bundle": SCCP_TEST_MESSAGE_BUNDLE,
+        }
+        request.update(overrides)
+        with pytest.raises(ValueError, match=message):
+            client.submit_bridge_proof(**request)
 
     assert session.calls == []
 
@@ -2910,7 +2942,7 @@ def test_submit_bridge_message_posts_tron_proof_material() -> None:
     binding_hash = _sample_sccp_tron_destination_binding_hash()
 
     response = client.submit_bridge_message(
-        authority=" alice@sora ",
+        authority="alice@sora",
         message_bundle=SCCP_TEST_MESSAGE_BUNDLE,
         network_id_hex=bytes.fromhex(SCCP_TEST_TRON_NETWORK_ID),
         verifier_code_hash_hex=f"0x{SCCP_TEST_TRON_VERIFIER_CODE_HASH}",
@@ -2945,6 +2977,38 @@ def test_submit_bridge_message_posts_tron_proof_material() -> None:
         "settlement": {"route": "xor"},
         "creation_time_ms": "1779660000000",
     }
+
+
+def test_submit_bridge_message_rejects_padded_signing_fields_before_request() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    public_key_hex = "bb" * 32
+    signature_b64 = base64.b64encode(b"bridge message signature").decode("ascii")
+
+    cases = (
+        (
+            {"authority": " alice@sora "},
+            "bridge message submit\\.authority must not contain surrounding whitespace",
+        ),
+        (
+            {"public_key_hex": f" {public_key_hex} "},
+            "bridge message submit\\.public_key_hex must not contain surrounding whitespace",
+        ),
+        (
+            {"signature_b64": f" {signature_b64} "},
+            "bridge message submit\\.signature_b64 must not contain surrounding whitespace",
+        ),
+    )
+    for overrides, message in cases:
+        request = {
+            "authority": "alice@sora",
+            "message_bundle": SCCP_TEST_MESSAGE_BUNDLE,
+        }
+        request.update(overrides)
+        with pytest.raises(ValueError, match=message):
+            client.submit_bridge_message(**request)
+
+    assert session.calls == []
 
 
 @pytest.mark.parametrize(

@@ -278,7 +278,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label or str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise CanaryError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -1087,7 +1087,7 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         raise CanaryError(f"{label} must be a path")
     if isinstance(value, str):
         return Path(_plain_text(value, label))
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         return Path(value)
     raise CanaryError(f"{label} must be a path")
 
@@ -2122,8 +2122,7 @@ def _run_command_bounded(
     timeout_secs: float,
 ) -> tuple[int, str, bool, str, bool, bool]:
     if (
-        isinstance(output_limit_bytes, bool)
-        or not isinstance(output_limit_bytes, int)
+        type(output_limit_bytes) is not int
         or output_limit_bytes <= 0
     ):
         raise CanaryError("output limit bytes must be positive")
@@ -2196,7 +2195,7 @@ def _run_command_bounded(
         read_failed = True
     if read_failed:
         raise CanaryError("child stage output could not be read") from None
-    if wait_failed or isinstance(returncode, bool) or not isinstance(returncode, int):
+    if wait_failed or type(returncode) is not int:
         raise CanaryError("child stage did not finish cleanly") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
@@ -2584,8 +2583,7 @@ def run(args: argparse.Namespace) -> int:
     _reject_summary_output_artifact_alias(args.summary_out, artifact_paths)
     output_limit_bytes = getattr(args, "output_limit_bytes", None)
     if (
-        isinstance(output_limit_bytes, bool)
-        or not isinstance(output_limit_bytes, int)
+        type(output_limit_bytes) is not int
         or output_limit_bytes <= 0
     ):
         raise CanaryError("--output-limit-bytes must be positive")

@@ -11,18 +11,20 @@ and completed history lives in [`status.md`](./status.md).
 
 **Status:** active.
 
-- Rerun the guarded 100,000 transaction localnet memory repro after rebuilding
-  release binaries with the transaction queue retained-byte guard, and retain
-  the memory report. Queue admission and requeue now cap retained transaction
-  backlog with `queue.max_retained_bytes` (default 128 MiB, charging canonical
-  payload bytes plus a 128 KiB retained-heap estimate per queued transaction),
-  and Torii now rejects single and batch ingress before admission work when the
-  count/byte budget is already saturated or the incoming batch cannot fit its
-  minimum retained-byte charge. The memory guard now drives 1,000-transaction
-  batches with 64-way CLI parallelism by default so the repro observes node
-  backpressure instead of hiding it behind a 10k client-side burst. Tune the
+- Keep the guarded 100,000 transaction localnet memory repro as a release gate
+  for transaction ingress backpressure. Queue admission and requeue now cap
+  retained transaction backlog with `queue.max_retained_bytes` (default
+  128 MiB, charging canonical payload bytes plus a 128 KiB retained-heap
+  estimate per queued transaction), and Torii now rejects single and batch
+  ingress before admission work when the count/byte budget is already saturated
+  or the incoming batch cannot fit its minimum retained-byte charge. The current
+  100,000-transaction attempted burst report
+  `/tmp/iroha-oom-repro-20260628-100k-post-128m-burst/memory_guard_report.json`
+  completed under the 8 GiB guard (`6,289,670,144` bytes peak total RSS,
+  `1,621,311,488` bytes largest peer), with queue-full responses treated as
+  expected node-side backpressure rather than harness failure. Tune the
   retained-byte default, Torii admission shedding, or the per-peer P2P outbound
-  frame queue caps only if the post-early-shed report shows real operator
+  frame queue caps only if future release-gate reports show real operator
   backpressure needs different limits. Deferred P2P outbound frames held while a peer session is
   missing are now capped by per-peer encoded-byte budget in addition to the
   existing count and TTL limits. The transaction routing metadata ledger is now
@@ -503,7 +505,10 @@ and completed history lives in [`status.md`](./status.md).
   zero amounts before summary metadata is trusted. The SDK parity guard pins
   those SDK markers, package-dist decode coverage, C# managed-decoder xUnit
   mirrors for the decoder guards, and workflow-wired adversarial fixture
-  mutation negative controls. The SDKs additionally pin short/long fixed-array
+  mutation negative controls. JavaScript source/package-dist and Python also
+  validate the typed current note before reporting trailing nested current-note
+  fields, so surplus Norito fields cannot mask invalid note material. The SDKs
+  additionally pin short/long fixed-array
   current-note field shapes for nested note commitments and spend nullifiers;
   editable non-C# decoders report those shape failures with full
   `bundle.accumulator.current_note.*` labels, and the C# mirrors are covered by
@@ -1658,13 +1663,15 @@ and completed history lives in [`status.md`](./status.md).
   artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` explicitly so
   the localnet lifecycle gate is not hidden behind tooling defaults.
 - Current Kagemusha live production readiness is narrowed to evidence
-  collection: the current best rollup accepts the 4-peer production-localnet
-  lifecycle evidence and the current-key Pixel 6 multid2d Android slot, while
-  final release remains blocked on a completed Reserved-lineage proof evidence
-  packet, completed ABI-7 recursive compact key evidence, and physical Android
-  matrix coverage for Pixel 7, Pixel 8, Pixel Fold/Tablet, Samsung Galaxy S23,
-  and Samsung Galaxy S24. Keep further lineage and compact retries deferred
-  while live cargo/rustc or compact keygen jobs are still consuming the host.
+  collection: the current best rollup accepts the checked
+  `artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` 4-peer
+  production-localnet lifecycle evidence, but the previous current-key Pixel 6
+  multid2d `target/` Android slot is no longer present on disk. Final release
+  remains blocked on a completed Reserved-lineage proof evidence packet,
+  completed ABI-7 recursive compact key evidence, and physical Android
+  standard-matrix plus offline D2D transport evidence for every required
+  standard family. Keep further lineage and compact retries deferred while live
+  cargo/rustc or compact keygen jobs are still consuming the host.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -3181,9 +3188,20 @@ and completed history lives in [`status.md`](./status.md).
   zero-exit execution report, and log byte count validate, then reruns missing
   or failed regular phase outputs, including signal-style failures such as
   `exit_code = -9`, while still rejecting symlinked or hardlinked staged
-  material. `--resume-key-artifacts` is mutually exclusive with
-  `--replace`, so a caller cannot mix selective phase-boundary resume with full
-  staged-output replacement.
+  material. Interrupted resume retries now also remove stale
+  `.staged-runner.tmp` logs through the same identity-checked cleanup path
+  before rerunning or reusing a key-artifact phase; resumed proof reruns also
+  clear stale identity-checked run-level metadata temp files before fresh proof
+  reports are written, while symlinked temp logs still fail closed.
+  `--resume-key-artifacts` is mutually exclusive with `--replace`, so a caller
+  cannot mix selective phase-boundary resume with full staged-output
+  replacement.
+  The ABI-7 recursive compact key staged runner now applies the same
+  identity-checked temp-log cleanup for `--resume-keygen`, so interrupted
+  compact retries and complete reusable keygen returns can proceed after stale
+  regular `.staged-runner.tmp` generator logs. Resume reruns also clear stale
+  identity-checked metadata temp files before fresh compact reports are
+  written, while symlinked temp logs still fail closed.
   Staged metadata writes are now self-verifying: after the atomic rename the
   runner reopens marker, elapsed, and JSON report files, checks the opened file
   identity, and compares exact bytes before returning.
@@ -9449,7 +9467,7 @@ and completed history lives in [`status.md`](./status.md).
 	  validation, governance/repair, observability, and approval artifacts are
 	  present. PoR/PDP proof-stream request envelopes cap `sample_count` at
 	  `500` before manifest lookup. The code-only
-	  placeholder/TODO marker sweep now
+	  placeholder-marker sweep now
 	  leaves only intentional
 	  negative tests, fail-closed placeholder-material guards, fallback skeleton
 	  naming, manifest-derived source rendering, and telemetry peer compatibility
@@ -12149,8 +12167,13 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  endpoints, trust bundles, receipt selectors, evidence summaries, and
 	  readiness summaries that require exact `list` or `tuple` containers before
 	  length checks or iteration,
+	  compact evidence/readiness role collectors and XSD material-path collectors
+	  that require exact plain nested summary objects before `.get()` or indexing
+	  can run,
 	  direct scalar and repeatable path arguments that accept only sanitized
-	  strings or real `pathlib.Path` instances before filesystem loading,
+	  strings or exact concrete stdlib `pathlib` path instances before
+	  filesystem loading, rejecting path subclasses before `__fspath__` or
+	  `__str__` can run,
 	  rail gateway direct `message` selector validation that rejects hostile
 	  path-like objects and list subclasses before inbox discovery,
 	  operator-evidence canary command arrays that normalize child command
@@ -12165,7 +12188,11 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  CLI-facing and JSON-summary numeric scalar helpers that require exact
 	  built-in `int`/`float` values or sanitized numeric strings before
 	  conversion, comparison, freshness-budget, timeout, byte-limit, count,
-	  day, or status-code checks,
+	  day, version, or status-code checks,
+	  exact built-in integer boundaries for remaining file-read limits, bounded
+	  child-command output limits, child return-code validators,
+	  verified-count summaries, freshness projections, and public
+	  response-metadata classifiers,
 	  operator-evidence and production-readiness direct text validators that copy
 	  hostile `str` subclasses to plain strings before rail-message-id, CLI
 	  context/profile, artifact path, timestamp, XSD source/fixture path,

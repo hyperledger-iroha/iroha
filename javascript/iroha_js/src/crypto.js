@@ -4773,17 +4773,18 @@ function kagemushaReadSpendableNotePayload(payload, flags) {
     "bundle.accumulator.current_note.amount",
   );
   offset = field.offset;
+  const note = kagemushaNormalizeSpendableNote({
+    noteCommitment,
+    spendNullifier,
+    amount,
+  });
   if (offset !== payload.length) {
     throw kagemushaArchiveCodecError(
       "bundle.accumulator.current_note",
       "currentNote has trailing bytes",
     );
   }
-  return kagemushaNormalizeSpendableNote({
-    noteCommitment,
-    spendNullifier,
-    amount,
-  });
+  return note;
 }
 
 function kagemushaReadFixedBytesFlexible(payload, flags, expectedSize, field) {

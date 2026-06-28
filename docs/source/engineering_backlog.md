@@ -1277,9 +1277,12 @@ Repeatable direct selector inputs for pending message IDs, notary endpoints,
 trust bundles, receipt selectors, evidence summaries, and readiness summaries
 now require exact `list` or `tuple` containers before length checks or
 iteration.
+Compact evidence/readiness role collectors and XSD material-path collectors now
+require exact plain nested summary objects before `.get()` or indexing can run.
 Direct scalar and repeatable path arguments now accept only sanitized strings or
-real `pathlib.Path` instances before filesystem loading, so arbitrary
-path-like objects cannot run `__fspath__` during validation.
+exact concrete stdlib `pathlib` path instances before filesystem loading, so
+arbitrary path-like objects and path subclasses cannot run `__fspath__` or
+`__str__` during validation.
 The rail gateway direct `message` selector now follows the same rule and rejects
 hostile path-like objects plus list subclasses before inbox discovery.
 Operator-evidence canary command arrays now normalize child command entries to
@@ -1296,9 +1299,13 @@ construction uses explicit program names instead of reading ambient
 `getattr` or `setattr`.
 CLI-facing and JSON-summary numeric scalar helpers now also require exact
 built-in `int`/`float` values or sanitized numeric strings before conversion,
-comparison, freshness-budget, timeout, byte-limit, count, day, or status-code
-checks, so hostile numeric subclasses cannot run `__int__`, `__float__`, or
-comparison hooks during direct API or replay helper use.
+comparison, freshness-budget, timeout, byte-limit, count, day, version, or
+status-code checks, so hostile numeric subclasses cannot run `__int__`,
+`__float__`, or comparison hooks during direct API or replay helper use. The
+remaining file-read limits, bounded child-command output limits, child
+return-code validators, verified-count summaries, freshness projections, and
+public response-metadata classifiers now use the same exact built-in integer
+boundary.
 Operator-evidence and production-readiness direct text validators now also copy
 hostile `str` subclasses to plain strings before rail-message-id, CLI context,
 artifact path, timestamp, XSD source/fixture path, reviewed-gap, pending-source

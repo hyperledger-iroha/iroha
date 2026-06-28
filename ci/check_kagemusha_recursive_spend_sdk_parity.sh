@@ -3976,7 +3976,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*10\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*12\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -11651,6 +11651,12 @@ def check_javascript(texts, errors):
                 "function kagemushaTypedArchivePayload(",
                 "function kagemushaCompactPayloadForRequest(",
                 "function kagemushaSpendableNotePayload(",
+                "const note = kagemushaNormalizeSpendableNote({\n"
+                "    noteCommitment,\n"
+                "    spendNullifier,\n"
+                "    amount,\n"
+                "  });\n"
+                "  if (offset !== payload.length) {",
                 "function kagemushaAccountIdPayload(",
                 "AccountAddress.parseEncoded(recipient)",
                 "kagemushaCanonicalU128Decimal",
@@ -12420,6 +12426,16 @@ def check_javascript(texts, errors):
             "recursiveSpendBundleWithEqualCurrentNoteNullifier(),",
             "recursiveSpendBundleWithCurrentNoteField(2, kagemushaZeroNumericPayload())",
             "/numeric amount must be greater than zero/",
+            "function recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(",
+            "function recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField()",
+            "const currentNoteValidationPrecedenceCases = [",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(0, Buffer.alloc(32))",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(1, Buffer.alloc(32))",
+            "recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField()",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(\n"
+            "        2,\n"
+            "        kagemushaZeroNumericPayload(),\n"
+            "      )",
             '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x04, 32)",
@@ -13513,6 +13529,16 @@ def check_javascript(texts, errors):
             "recursiveSpendBundleWithEqualCurrentNoteNullifier(),",
             "recursiveSpendBundleWithCurrentNoteField(2, kagemushaZeroNumericPayload())",
             "/numeric amount must be greater than zero/",
+            "function recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(",
+            "function recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField()",
+            "const currentNoteValidationPrecedenceCases = [",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(0, Buffer.alloc(32))",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(1, Buffer.alloc(32))",
+            "recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField()",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(\n"
+            "        2,\n"
+            "        kagemushaZeroNumericPayload(),\n"
+            "      )",
             '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             '[0, kagemushaFixedArrayPayload(0x04, 33), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "kagemushaCountPrefixedFixedArrayPayload(0x04, 32)",
@@ -14996,9 +15022,11 @@ def check_python(texts, errors):
     )
     require(
         "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request" in script
         and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch" in script
         and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch" in script,
-        "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions",
+        "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
         errors,
     )
     require(
@@ -15067,6 +15095,38 @@ def check_python(texts, errors):
             "assert session.calls == []",
         ),
         "Python Torii query selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            '"authority": _require_exact_non_empty_string(',
+            '"bridge proof submit.authority"',
+            '"bridge proof submit.public_key_hex"',
+            'context="bridge proof submit.public_key_hex"',
+            '"bridge proof submit.signature_b64"',
+            '"bridge message submit.authority"',
+            '"bridge message submit.public_key_hex"',
+            'context="bridge message submit.public_key_hex"',
+            '"bridge message submit.signature_b64"',
+            "expected_length=64",
+        ),
+        "Python bridge submit signing-field exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            "test_submit_bridge_proof_rejects_padded_signing_fields_before_request",
+            "test_submit_bridge_message_rejects_padded_signing_fields_before_request",
+            "bridge proof submit\\\\.authority must not contain surrounding whitespace",
+            "bridge proof submit\\\\.signature_b64 must not contain surrounding whitespace",
+            "bridge message submit\\\\.public_key_hex must not contain surrounding whitespace",
+            "assert session.calls == []",
+        ),
+        "Python bridge submit signing-field exactness tests",
         errors,
     )
     require_contains(
@@ -15493,6 +15553,11 @@ def check_python(texts, errors):
             "decode_kagemusha_recursive_spend_verify_result(",
             "def lineage_witness_required_for_redeem(self) -> bool:",
             "decode_kagemusha_recursive_spend_bundle(",
+            "def _kagemusha_read_spendable_note(",
+            "note = KagemushaRecursiveSpendableNoteDescriptor(",
+            "    if cursor != len(payload):\n"
+            "        raise ValueError(\"Trailing bytes after bundle.accumulator.current_note\")\n"
+            "    return note",
             "lineage_verifier_record is required for reserved-lineage bundles",
             "lineage_verifier_record is only valid for reserved-lineage bundles",
             "lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses",
@@ -16075,6 +16140,22 @@ def check_python(texts, errors):
             "_recursive_spend_bundle_with_equal_current_note_nullifier()",
             "            _recursive_spend_bundle_with_equal_current_note_nullifier(),",
             "_recursive_spend_bundle_with_current_note_field(2, _zero_numeric_payload())",
+            "def _recursive_spend_bundle_with_current_note_field_and_trailing_field(",
+            "def _recursive_spend_bundle_with_equal_current_note_nullifier_and_trailing_field()",
+            "masked_current_notes = (",
+            "_recursive_spend_bundle_with_current_note_field_and_trailing_field(\n"
+            "                0,\n"
+            "                bytes(32),\n"
+            "            )",
+            "_recursive_spend_bundle_with_current_note_field_and_trailing_field(\n"
+            "                1,\n"
+            "                bytes(32),\n"
+            "            )",
+            "_recursive_spend_bundle_with_equal_current_note_nullifier_and_trailing_field()",
+            "_recursive_spend_bundle_with_current_note_field_and_trailing_field(\n"
+            "                2,\n"
+            "                _zero_numeric_payload(),\n"
+            "            )",
             "_recursive_spend_bundle_with_current_note_field(\n"
             "                2,\n"
             '                _numeric_payload(b"\\x01", scale=1),\n'
@@ -26623,6 +26704,10 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
     topup_anchor_precedence_labels = (
         "malformed proof cannot mask invalid top-up anchor nullifiers",
         "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+        "malformed proof cannot mask current-note top-up anchor reuse",
+        "trailing accumulator cannot mask current-note top-up anchor reuse",
+        "malformed proof cannot mask duplicate top-up anchors",
+        "trailing accumulator cannot mask descending top-up anchors",
     )
     for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
         require_contains(
@@ -28299,6 +28384,14 @@ if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":
             "Python SDK contract selector exactness test filter",
         ),
         (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request"',
+            "Python SDK bridge proof signing-field exactness test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request"',
+            "Python SDK bridge message signing-field exactness test filter",
+        ),
+        (
             ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch"',
             "Python SDK UAID path literal exactness test filter",
         ),
@@ -28320,7 +28413,7 @@ if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":
             run_checks(texts)
         except ParityError as error:
             message = str(error)
-            expected = "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions"
+            expected = "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions"
             expected_labels = (expected,)
             if expected not in message:
                 raise SystemExit(
@@ -47962,6 +48055,36 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(0, Buffer.alloc(32))",
+            "recursiveSpendBundleWithCurrentNoteField(0, Buffer.alloc(32))",
+            "JavaScript recursive spend bundle current-note guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(1, Buffer.alloc(32))",
+            "recursiveSpendBundleWithCurrentNoteField(1, Buffer.alloc(32))",
+            "JavaScript recursive spend bundle current-note guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField()",
+            "recursiveSpendBundleWithEqualCurrentNoteNullifier()",
+            "JavaScript recursive spend bundle current-note guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(\n"
+            "        2,\n"
+            "        kagemushaZeroNumericPayload(),\n"
+            "      )",
+            "recursiveSpendBundleWithCurrentNoteField(\n"
+            "        2,\n"
+            "        kagemushaZeroNumericPayload(),\n"
+            "      )",
+            "JavaScript recursive spend bundle current-note guard tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             '[0, kagemushaFixedArrayPayload(0x04, 31), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             '[0, Buffer.alloc(32, 1), "archive", "bundle.accumulator.current_note.note_commitment", null]',
             "JavaScript recursive spend bundle current-note guard tests",
@@ -48042,6 +48165,42 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
             "python/iroha_python/tests/kagemusha_test.py",
             "_recursive_spend_bundle_with_current_note_field(2, _zero_numeric_payload())",
             '_shared_recursive_spend_archive("init_bundle")',
+            "Python recursive spend bundle current-note guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_current_note_field_and_trailing_field(\n"
+            "                0,\n"
+            "                bytes(32),\n"
+            "            )",
+            '_shared_recursive_spend_archive("init_bundle")',
+            "Python recursive spend bundle current-note guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_current_note_field_and_trailing_field(\n"
+            "                1,\n"
+            "                bytes(32),\n"
+            "            )",
+            '_shared_recursive_spend_archive("init_bundle")',
+            "Python recursive spend bundle current-note guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_equal_current_note_nullifier_and_trailing_field()",
+            "_recursive_spend_bundle_with_equal_current_note_nullifier()",
+            "Python recursive spend bundle current-note guard tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "_recursive_spend_bundle_with_current_note_field_and_trailing_field(\n"
+            "                2,\n"
+            "                _zero_numeric_payload(),\n"
+            "            )",
+            "_recursive_spend_bundle_with_current_note_field(\n"
+            "                2,\n"
+            "                _zero_numeric_payload(),\n"
+            "            )",
             "Python recursive spend bundle current-note guard tests",
         ),
         (
@@ -48222,6 +48381,68 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
             "JavaScript package dist recursive spend bundle current-note coverage",
         ),
         (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(0, Buffer.alloc(32))",
+            "recursiveSpendBundleWithCurrentNoteField(0, Buffer.alloc(32))",
+            "JavaScript package dist recursive spend bundle current-note coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(1, Buffer.alloc(32))",
+            "recursiveSpendBundleWithCurrentNoteField(1, Buffer.alloc(32))",
+            "JavaScript package dist recursive spend bundle current-note coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField()",
+            "recursiveSpendBundleWithEqualCurrentNoteNullifier()",
+            "JavaScript package dist recursive spend bundle current-note coverage",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(\n"
+            "        2,\n"
+            "        kagemushaZeroNumericPayload(),\n"
+            "      )",
+            "recursiveSpendBundleWithCurrentNoteField(\n"
+            "        2,\n"
+            "        kagemushaZeroNumericPayload(),\n"
+            "      )",
+            "JavaScript package dist recursive spend bundle current-note coverage",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "  const note = kagemushaNormalizeSpendableNote({\n"
+            "    noteCommitment,\n"
+            "    spendNullifier,\n"
+            "    amount,\n"
+            "  });\n"
+            "  if (offset !== payload.length) {",
+            "  if (offset !== payload.length) {",
+            "javascript/iroha_js/src/crypto.js typed recursive spend request codecs",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "  const note = kagemushaNormalizeSpendableNote({\n"
+            "    noteCommitment,\n"
+            "    spendNullifier,\n"
+            "    amount,\n"
+            "  });\n"
+            "  if (offset !== payload.length) {",
+            "  if (offset !== payload.length) {",
+            "javascript/iroha_js/dist/crypto.js typed recursive spend request codecs",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "    if cursor != len(payload):\n"
+            "        raise ValueError(\"Trailing bytes after bundle.accumulator.current_note\")\n"
+            "    return note",
+            "    if cursor != len(payload):\n"
+            "        raise ValueError(\"Trailing bytes after bundle.accumulator.current_note\")\n"
+            "    return KagemushaRecursiveSpendableNoteDescriptor(",
+            "Python typed recursive spend request codecs",
+        ),
+        (
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
             "RecursiveSpendBundleWithCurrentNoteField(\n"
             "                    initBundleArchive,\n"
@@ -48350,6 +48571,22 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
         ),
     }
     def expected_bundle_current_note_label(target, old, label):
+        if (
+            "AndTrailingField" in old
+            or "_and_trailing_field" in old
+            or "currentNoteValidationPrecedenceCases" in old
+            or "masked_current_notes" in old
+        ):
+            return label
+        if (
+            target in (
+                "javascript/iroha_js/src/crypto.js",
+                "javascript/iroha_js/dist/crypto.js",
+                "python/iroha_python/src/iroha_python/kagemusha.py",
+            )
+            and ("current_note" in old or "kagemushaNormalizeSpendableNote" in old)
+        ):
+            return label
         if target.startswith("csharp/"):
             return label
         marker = old.splitlines()[0]
@@ -48375,15 +48612,18 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
                 marker,
             )
         elif target == "python/iroha_python/src/iroha_python/kagemusha.py":
-            marker = (
-                r"pattern def _kagemusha_read_fixed_bytes\([\s\S]*?\) -> bytes:"
-                r"[\s\S]*?if len\(payload\) == expected_size:[\s\S]*?return payload"
-                r"[\s\S]*?out = bytearray\(\)[\s\S]*?cursor = 0"
-                r"[\s\S]*?while cursor < len\(payload\):[\s\S]*?"
-                r"_kagemusha_read_norito_field\(payload, cursor, flags, field\)"
-                r"[\s\S]*?if len\(item\) != 1:[\s\S]*?"
-                r"if len\(out\) != expected_size:[\s\S]*?return bytes\(out\)"
-            )
+            if "def _kagemusha_read_fixed_bytes(" in old:
+                marker = (
+                    r"pattern def _kagemusha_read_fixed_bytes\([\s\S]*?\) -> bytes:"
+                    r"[\s\S]*?if len\(payload\) == expected_size:[\s\S]*?return payload"
+                    r"[\s\S]*?out = bytearray\(\)[\s\S]*?cursor = 0"
+                    r"[\s\S]*?while cursor < len\(payload\):[\s\S]*?"
+                    r"_kagemusha_read_norito_field\(payload, cursor, flags, field\)"
+                    r"[\s\S]*?if len\(item\) != 1:[\s\S]*?"
+                    r"if len\(out\) != expected_size:[\s\S]*?return bytes\(out\)"
+                )
+            else:
+                marker = marker.strip()
         else:
             marker = next(
                 (
@@ -48988,6 +49228,10 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
     topup_anchor_precedence_labels = (
         "malformed proof cannot mask invalid top-up anchor nullifiers",
         "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+        "malformed proof cannot mask current-note top-up anchor reuse",
+        "trailing accumulator cannot mask current-note top-up anchor reuse",
+        "malformed proof cannot mask duplicate top-up anchors",
+        "trailing accumulator cannot mask descending top-up anchors",
     )
     replacements = (
         (
@@ -49259,6 +49503,16 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
                 replacement,
                 label,
                 "case label",
+                replace_all=True,
+            )
+        for precedence_label in topup_anchor_precedence_labels:
+            replacement = precedence_label.replace(" ", "_") + "_removed"
+            detect_topup_anchor_nullifier_invariant_mutation(
+                target,
+                precedence_label,
+                replacement,
+                label,
+                "precedence label",
                 replace_all=True,
             )
     message_targets = (
@@ -56393,7 +56647,7 @@ if mode == "--negative-control-non-csharp-uaid-path-literal-exactness":
             "JavaScript SDK package-dist UAID path literal focused selector",
             "Python UAID path literal exactness",
             "Python UAID path literal exactness tests",
-            "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions",
+            "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
             "Swift UAID path literal exactness",
             "Swift UAID path literal exactness tests",
             "Kagemusha Swift SDK script must run Torii query selector exactness tests",
@@ -56928,11 +57182,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;",
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -56940,7 +57194,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*10\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*12\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:

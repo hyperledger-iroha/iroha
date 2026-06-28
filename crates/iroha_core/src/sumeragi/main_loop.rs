@@ -1010,7 +1010,11 @@ mod requeue_block_transaction_tests {
         );
         assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
 
-        crate::queue::routing_ledger::record_plan(tx_hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            tx_hash,
+            fixture.stale_plan.clone(),
+            iroha_config::parameters::defaults::queue::CAPACITY.get(),
+        );
         let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
             &queue,
             &fixture.state,

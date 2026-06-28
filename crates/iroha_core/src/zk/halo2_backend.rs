@@ -16,7 +16,7 @@ use halo2_proofs::{
     plonk::{
         Advice, Assigned, Circuit, Column, Error as PlonkError, ProvingKey as Halo2ProvingKey,
         VerifyingKey as Halo2VerifyingKey, create_proof as halo2_create_proof,
-        keygen_pk as halo2_keygen_pk, keygen_vk as halo2_keygen_vk,
+        keygen_pk as halo2_keygen_pk, keygen_pk2 as halo2_keygen_pk2, keygen_vk as halo2_keygen_vk,
         verify_proof as halo2_verify_proof,
     },
     poly::{
@@ -73,9 +73,26 @@ where
     halo2_keygen_pk(params, vk, circuit)
 }
 
+/// Generate a Pasta Halo2 proving key and its verifying key in one pass.
+pub(crate) fn keygen_pk2<C>(
+    params: &PastaParams,
+    circuit: &C,
+    compress_selectors: bool,
+) -> Result<ProvingKey, PlonkError>
+where
+    C: Circuit<Scalar>,
+{
+    halo2_keygen_pk2(params, circuit, compress_selectors)
+}
+
 /// Return the standard processed verifying-key serialization.
 pub(crate) fn verifying_key_to_processed_bytes(vk: &VerifyingKey) -> Vec<u8> {
     vk.to_bytes(SerdeFormat::Processed)
+}
+
+/// Return the standard processed proving-key serialization while consuming the key.
+pub(crate) fn proving_key_into_processed_bytes(pk: ProvingKey) -> Vec<u8> {
+    pk.into_bytes(SerdeFormat::Processed)
 }
 
 /// Return the standard processed proving-key serialization.

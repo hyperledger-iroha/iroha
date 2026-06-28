@@ -1961,6 +1961,41 @@ public final class KagemushaRecursiveSpendProverTest {
     assert "bundle.accumulator.topup_anchor_nullifiers must not contain zero values"
             .equals(trailingAccumulatorAndTopupAnchors.getMessage())
         : trailingAccumulatorCannotMaskInvalidTopupAnchorNullifiers;
+    final Object[][] maskedTopupAnchorPrecedenceCases = {
+      {
+        "malformed proof cannot mask current-note top-up anchor reuse",
+        recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+            Collections.singletonList(init.currentNote.noteCommitment())),
+        "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"
+      },
+      {
+        "trailing accumulator cannot mask current-note top-up anchor reuse",
+        recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+            Collections.singletonList(init.currentNote.spendNullifier())),
+        "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"
+      },
+      {
+        "malformed proof cannot mask duplicate top-up anchors",
+        recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+            Arrays.asList(init.topupAnchorNullifiers().get(0), init.topupAnchorNullifiers().get(0))),
+        "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"
+      },
+      {
+        "trailing accumulator cannot mask descending top-up anchors",
+        recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+            Arrays.asList(init.topupAnchorNullifiers().get(1), init.topupAnchorNullifiers().get(0))),
+        "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"
+      }
+    };
+    for (final Object[] maskedTopupAnchorPrecedenceCase : maskedTopupAnchorPrecedenceCases) {
+      final String label = (String) maskedTopupAnchorPrecedenceCase[0];
+      final byte[] archive = (byte[]) maskedTopupAnchorPrecedenceCase[1];
+      final String expectedMessage = (String) maskedTopupAnchorPrecedenceCase[2];
+      final IllegalArgumentException error =
+          captureIllegalArgument(
+              () -> KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive));
+      assert expectedMessage.equals(error.getMessage()) : label;
+    }
     final Object[][] malformedAccumulatorFields = {
       {
         0,

@@ -1182,6 +1182,9 @@ pub struct KagemushaRecursiveCompactKeyArtifactsArgs {
     /// Output path for ABI-7 recursive compact verifier key envelope bytes
     #[arg(long, value_name = "PATH")]
     vk_out: std::path::PathBuf,
+    /// Optional existing ABI-7 recursive compact verifier key envelope bytes
+    #[arg(long, value_name = "PATH")]
+    vk_in: Option<std::path::PathBuf>,
     /// Output path for ABI-7 recursive compact proving key archive bytes
     #[arg(long, value_name = "PATH")]
     pk_out: std::path::PathBuf,
@@ -1320,15 +1323,29 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
             }
         }
 
-        eprintln!(
-            "Generating ABI-7 recursive compact verifier key for `{}` opening_len={}",
-            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
-            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN
-        );
-        let vk_box =
+        let vk_box = if let Some(path) = &self.vk_in {
+            eprintln!(
+                "Reading ABI-7 recursive compact verifier key for `{}` opening_len={} from {}",
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN,
+                path.display()
+            );
+            let bytes = std::fs::read(path)
+                .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+            iroha::data_model::proof::VerifyingKeyBox::new(
+                iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                bytes,
+            )
+        } else {
+            eprintln!(
+                "Generating ABI-7 recursive compact verifier key for `{}` opening_len={}",
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN
+            );
             iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box().map_err(|err| {
                 eyre::eyre!("failed to generate ABI-7 recursive compact verifier key: {err}")
-            })?;
+            })?
+        };
 
         eprintln!(
             "Writing ABI-7 recursive compact verifier key to {}",
@@ -1368,23 +1385,24 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
             iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
             iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN
         );
-        let proving_key =
-            iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes(
+        eprintln!(
+            "Writing ABI-7 recursive compact proving key archive to {}",
+            self.pk_out.display()
+        );
+        write_kagemusha_lineage_key_artifact_file_with(&self.pk_out, |file| {
+            iroha_core::zk::write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive(
+                file,
                 &vk_box,
             )
             .map_err(|err| {
                 eyre::eyre!(
                     "failed to derive ABI-7 recursive compact proving key archive: {err}"
                 )
-            })?;
-
-        eprintln!(
-            "Writing ABI-7 recursive compact proving key archive to {}",
-            self.pk_out.display()
-        );
-        let pk_summary = compact_key_output_summary(&proving_key);
-        write_kagemusha_lineage_key_artifact_file(&self.pk_out, &proving_key)
-            .wrap_err_with(|| format!("failed to write {}", self.pk_out.display()))?;
+            })
+        })
+        .wrap_err_with(|| format!("failed to write {}", self.pk_out.display()))?;
+        let pk_summary = compact_key_output_summary_from_file(&self.pk_out)
+            .wrap_err_with(|| format!("failed to summarize {}", self.pk_out.display()))?;
 
         let package_summaries = if let (Some(key_artifacts_path), Some(verifier_keys_path)) =
             (&self.key_artifacts_out, &self.verifier_keys_out)
@@ -1403,8 +1421,16 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                         "failed to generate ABI-7 recursive compact append verifier key: {err}"
                     )
                 })?;
-            let append_proving_key =
-                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_bytes(
+            let append_archive_path =
+                temporary_compact_append_proving_key_archive_path(key_artifacts_path)?;
+            eprintln!(
+                "Deriving ABI-7 recursive compact append proving key archive for `{}` opening_len={}",
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN
+            );
+            write_kagemusha_lineage_key_artifact_file_with(&append_archive_path, |file| {
+                iroha_core::zk::write_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_archive(
+                    file,
                     &append_vk_box,
                     iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN,
                 )
@@ -1412,13 +1438,20 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
                     eyre::eyre!(
                         "failed to derive ABI-7 recursive compact append proving key archive: {err}"
                     )
-                })?;
+                })
+            })
+            .wrap_err_with(|| format!("failed to write {}", append_archive_path.display()))?;
+            let proving_key = std::fs::read(&self.pk_out)
+                .wrap_err_with(|| format!("failed to read {}", self.pk_out.display()))?;
+            let append_proving_key = std::fs::read(&append_archive_path)
+                .wrap_err_with(|| format!("failed to read {}", append_archive_path.display()))?;
+            let _ = std::fs::remove_file(&append_archive_path);
             let key_artifacts =
                 iroha::data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1::new(vec![
                     iroha::data_model::offline::KagemushaRecursiveCompactKeyArtifactEntryV1::new(
                         iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN,
                         vk_box.clone(),
-                        proving_key.clone(),
+                        proving_key,
                         append_vk_box,
                         append_proving_key,
                     )
@@ -1434,27 +1467,22 @@ impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
             let verifier_keys = key_artifacts.verifier_keys().map_err(|err| {
                 eyre::eyre!("failed to derive ABI-7 recursive compact verifier-key package: {err}")
             })?;
-            let key_artifacts_bytes = norito::to_bytes(&key_artifacts).map_err(|err| {
-                eyre::eyre!("failed to encode ABI-7 recursive compact key package: {err}")
-            })?;
-            let verifier_keys_bytes = norito::to_bytes(&verifier_keys).map_err(|err| {
-                eyre::eyre!("failed to encode ABI-7 recursive compact verifier-key package: {err}")
-            })?;
-            let key_artifacts_summary = compact_key_output_summary(&key_artifacts_bytes);
-            let verifier_keys_summary = compact_key_output_summary(&verifier_keys_bytes);
-
             eprintln!(
                 "Writing ABI-7 recursive compact key package to {}",
                 key_artifacts_path.display()
             );
-            write_kagemusha_lineage_key_artifact_file(key_artifacts_path, &key_artifacts_bytes)
+            write_kagemusha_norito_artifact_file(key_artifacts_path, &key_artifacts)
                 .wrap_err_with(|| format!("failed to write {}", key_artifacts_path.display()))?;
             eprintln!(
                 "Writing ABI-7 recursive compact verifier-key package to {}",
                 verifier_keys_path.display()
             );
-            write_kagemusha_lineage_key_artifact_file(verifier_keys_path, &verifier_keys_bytes)
+            write_kagemusha_norito_artifact_file(verifier_keys_path, &verifier_keys)
                 .wrap_err_with(|| format!("failed to write {}", verifier_keys_path.display()))?;
+            let key_artifacts_summary = compact_key_output_summary_from_file(key_artifacts_path)
+                .wrap_err_with(|| format!("failed to summarize {}", key_artifacts_path.display()))?;
+            let verifier_keys_summary = compact_key_output_summary_from_file(verifier_keys_path)
+                .wrap_err_with(|| format!("failed to summarize {}", verifier_keys_path.display()))?;
             Some((key_artifacts_summary, verifier_keys_summary))
         } else {
             None
@@ -1486,6 +1514,47 @@ fn compact_key_output_summary(bytes: &[u8]) -> CompactKeyOutputSummary {
         len: bytes.len(),
         sha256: hex::encode(Sha256::digest(bytes)),
     }
+}
+
+fn compact_key_output_summary_from_file(path: &std::path::Path) -> Result<CompactKeyOutputSummary> {
+    use sha2::{Digest as _, Sha256};
+    use std::io::Read as _;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut len = 0usize;
+    let mut buf = [0u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        len = len.checked_add(read).ok_or_else(|| {
+            eyre::eyre!("artifact length overflow while hashing {}", path.display())
+        })?;
+        hasher.update(&buf[..read]);
+    }
+    Ok(CompactKeyOutputSummary {
+        len,
+        sha256: hex::encode(hasher.finalize()),
+    })
+}
+
+fn temporary_compact_append_proving_key_archive_path(
+    key_artifacts_path: &std::path::Path,
+) -> Result<std::path::PathBuf> {
+    let parent = key_artifacts_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = key_artifacts_path
+        .file_name()
+        .ok_or_else(|| eyre::eyre!("artifact output path must include a file name"))?
+        .to_string_lossy();
+    Ok(parent.join(format!(
+        ".{file_name}.append-pk-{}",
+        std::process::id()
+    )))
 }
 
 fn kagemusha_recursive_compact_key_artifacts_summary(
@@ -1693,6 +1762,29 @@ impl Run for KagemushaLineageKeyArtifactsArgs {
 fn write_kagemusha_lineage_key_artifact_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write as _;
 
+    write_kagemusha_lineage_key_artifact_file_with(path, |file| {
+        file.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+fn write_kagemusha_norito_artifact_file<T>(path: &std::path::Path, value: &T) -> Result<()>
+where
+    T: norito::core::NoritoSerialize,
+{
+    write_kagemusha_lineage_key_artifact_file_with(path, |file| {
+        norito::core::to_writer_seek(file, value)
+            .map_err(|err| eyre::eyre!("failed to encode Norito artifact: {err}"))
+    })
+}
+
+fn write_kagemusha_lineage_key_artifact_file_with<F>(
+    path: &std::path::Path,
+    mut write: F,
+) -> Result<()>
+where
+    F: FnMut(&mut std::fs::File) -> Result<()>,
+{
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1713,9 +1805,12 @@ fn write_kagemusha_lineage_key_artifact_file(path: &std::path::Path, bytes: &[u8
             .open(&candidate)
         {
             Ok(mut file) => {
-                if let Err(err) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+                if let Err(err) = write(&mut file).and_then(|()| {
+                    file.sync_all()?;
+                    Ok(())
+                }) {
                     let _ = std::fs::remove_file(&candidate);
-                    return Err(err.into());
+                    return Err(err);
                 }
                 temp_path = Some(candidate);
                 break;
@@ -2519,6 +2614,7 @@ mod tests {
         let compact_artifacts = Command::Kagemusha(KagemushaCommand::RecursiveCompactKeyArtifacts(
             KagemushaRecursiveCompactKeyArtifactsArgs {
                 vk_out: "recursive-compact.vk".into(),
+                vk_in: None,
                 pk_out: "recursive-compact.pk".into(),
                 key_artifacts_out: Some("recursive-compact-key-artifacts.norito".into()),
                 verifier_keys_out: Some("recursive-compact-verifier-keys.norito".into()),
@@ -2610,6 +2706,7 @@ mod tests {
             let mut context = TestContext::new();
             let err = KagemushaRecursiveCompactKeyArtifactsArgs {
                 vk_out: "recursive-compact-len4.vk".into(),
+                vk_in: None,
                 pk_out: "recursive-compact-len4.pk".into(),
                 key_artifacts_out,
                 verifier_keys_out,
@@ -2634,6 +2731,7 @@ mod tests {
         let mut context = TestContext::new();
         let err = KagemushaRecursiveCompactKeyArtifactsArgs {
             vk_out: "recursive-compact-len4.vk".into(),
+            vk_in: None,
             pk_out: "recursive-compact-len4.pk".into(),
             key_artifacts_out: None,
             verifier_keys_out: None,

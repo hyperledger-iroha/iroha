@@ -62,6 +62,21 @@ def test_extract_status_snapshot_reads_sumeragi_queue_bytes():
     assert snapshot["queue_saturated"] is True
 
 
+def test_extract_status_snapshot_with_delta_keeps_saturation_fields():
+    payload = {
+        "queue_size": 9,
+        "queue_retained_bytes": 4096,
+        "queue_max_retained_bytes": 8192,
+        "queue_saturated": True,
+    }
+    snapshot, delta = MODULE.extract_status_snapshot_with_delta(payload, 4)
+
+    assert delta == 5
+    assert snapshot["queue_saturated"] is True
+    assert snapshot["queue_retained_bytes"] == 4096
+    assert snapshot["queue_max_retained_bytes"] == 8192
+
+
 def test_normalize_torii_url_adds_trailing_slash():
     assert MODULE.normalize_torii_url("http://localhost:8080") == "http://localhost:8080/"
     assert MODULE.normalize_torii_url("http://localhost:8080/") == "http://localhost:8080/"
@@ -92,6 +107,19 @@ def test_render_client_config_inserts_when_missing():
 def test_count_rate_limit_hits_counts_status():
     output = "status: 429\nToo Many Requests\nstatus: 429\n"
     assert MODULE.count_rate_limit_hits(output) == 3
+
+
+def test_is_backpressure_output_detects_queue_full():
+    output = (
+        "status: 429 Too Many Requests\n"
+        "reject code: PRTRY:QUEUE_FULL\n"
+        "queue=saturated queued=1020/262144\n"
+    )
+    assert MODULE.is_backpressure_output(output) is True
+
+
+def test_is_backpressure_output_ignores_unrelated_failure():
+    assert MODULE.is_backpressure_output("Failed to decode transaction") is False
 
 
 def test_torii_url_from_status_uses_host():

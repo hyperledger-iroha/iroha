@@ -5206,7 +5206,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-compact-key-release-tooling",
-      /derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes[\s\S]*?derive_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled/u,
+      /write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive[\s\S]*?write_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled/u,
       "ABI-7 compact key release tooling",
     ],
     [
@@ -16273,7 +16273,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "JavaScript SDK package-dist UAID path literal focused selector",
       "Python UAID path literal exactness",
       "Python UAID path literal exactness tests",
-      "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions",
+      "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
       "Swift UAID path literal exactness",
       "Swift UAID path literal exactness tests",
       "Kagemusha Swift SDK script must run Torii query selector exactness tests",
@@ -16618,18 +16618,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*10\\s\*;[\s\S]*?C native bridge ABI version/u,
-    "SDK parity guard must pin the native C bridge ABI-10 advertisement",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*12\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-12 advertisement",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 8;/u,
-    "native C bridge ABI negative control must mutate ABI 10 back to the stale ABI 8 value",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;/u,
+    "native C bridge ABI negative control must mutate ABI 12 back to the stale ABI 10 value",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*10\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "native C bridge ABI negative control must require the exact ABI-10 diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*12\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-12 diagnostic",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
@@ -17404,7 +17404,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":',
       end: 'if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script":',
-      marker: "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions",
+      marker: "Kagemusha Python SDK script must run Torii query selector, bridge submit, and UAID path literal exactness regressions",
       label: "Python Torii selector filter branch must require the selector exactness label",
     },
     {
@@ -27177,8 +27177,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonRunner,
-    /python\/iroha_torii_client\/tests\/test_client\.py::test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch/,
-    "Kagemusha Python SDK runner must exercise Torii query selector and UAID path literal exactness tests",
+    /python\/iroha_torii_client\/tests\/test_client\.py::test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch[\s\S]*python\/iroha_torii_client\/tests\/test_client\.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch/,
+    "Kagemusha Python SDK runner must exercise Torii query selector, bridge submit, and UAID path literal exactness tests",
   );
   assert.match(
     pythonRunner,
@@ -27210,8 +27210,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     pythonToriiSelectorFilterBranch,
-    /test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*?test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch[\s\S]*?Python SDK Torii selector test filter drift was not detected[\s\S]*?negative control rejected Python SDK Torii selector test filter drift/u,
-    "Python Torii selector runner-filter negative control must mutate and detect all focused selector filters",
+    /test_call_contract_rejects_padded_selectors_before_dispatch[\s\S]*?test_submit_bridge_proof_rejects_padded_signing_fields_before_request[\s\S]*?test_submit_bridge_message_rejects_padded_signing_fields_before_request[\s\S]*?test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch[\s\S]*?Python SDK Torii selector test filter drift was not detected[\s\S]*?negative control rejected Python SDK Torii selector test filter drift/u,
+    "Python Torii selector runner-filter negative control must mutate and detect all focused selector and bridge filters",
   );
   const pythonOfflineReadinessFilterBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-python-sdk-offline-readiness-test-filter-script":'),

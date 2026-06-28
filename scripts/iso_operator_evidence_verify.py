@@ -818,7 +818,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label or str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise EvidenceError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -1473,8 +1473,7 @@ def _run_command_bounded(
     timeout_secs: float,
 ) -> tuple[int, str, bool, str, bool, bool]:
     if (
-        isinstance(output_limit_bytes, bool)
-        or not isinstance(output_limit_bytes, int)
+        type(output_limit_bytes) is not int
         or output_limit_bytes <= 0
     ):
         raise EvidenceError("output limit bytes must be positive")
@@ -1550,7 +1549,7 @@ def _run_command_bounded(
         read_failed = True
     if read_failed:
         raise EvidenceError("receipt verifier output could not be read") from None
-    if wait_failed or isinstance(returncode, bool) or not isinstance(returncode, int):
+    if wait_failed or type(returncode) is not int:
         raise EvidenceError("receipt verifier did not finish cleanly") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
@@ -1931,11 +1930,7 @@ def _verify_receipt_entry_metadata(
                 f"{entry_label}.index_path must not point to checked-in ISO fixture artifacts"
             )
         record_count = receipt_entry.get("record_count")
-        if (
-            isinstance(record_count, bool)
-            or not isinstance(record_count, int)
-            or record_count <= 0
-        ):
+        if type(record_count) is not int or record_count <= 0:
             raise EvidenceError(f"{entry_label}.record_count must be a positive integer")
     elif receipt_kind == "iso-rail-gateway":
         _reject_forbidden_receipt_metadata(
@@ -2126,7 +2121,7 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         raise EvidenceError(f"{label} must be a path")
     if isinstance(value, str):
         return Path(_plain_text(value, label))
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         return Path(value)
     raise EvidenceError(f"{label} must be a path")
 
@@ -2780,11 +2775,7 @@ def _verify_receipt_verifier_summary(
             f"{RECEIPT_SUMMARY_VERSION}"
         )
     verified_receipts = receipt_obj.get("verified_receipts")
-    if (
-        isinstance(verified_receipts, bool)
-        or not isinstance(verified_receipts, int)
-        or verified_receipts <= 0
-    ):
+    if type(verified_receipts) is not int or verified_receipts <= 0:
         raise EvidenceError(f"{label}.verified_receipts must be positive")
     allow_failed = _required_bool(receipt_obj, "allow_failed", label)
     if allow_failed and not args.allow_failed_receipts:
@@ -3824,7 +3815,7 @@ def _stage_summary(
     if _required_bool(stage, "timed_out", label):
         raise EvidenceError(f"{label} timed out")
     returncode = stage.get("returncode")
-    if isinstance(returncode, bool) or not isinstance(returncode, int):
+    if type(returncode) is not int:
         raise EvidenceError(f"{label}.returncode must be an integer")
     if returncode != 0:
         raise EvidenceError(f"{label} failed with returncode {returncode}")
@@ -5314,7 +5305,7 @@ def verify_trust_summary(
         raise EvidenceError(f"{label} did not emit profile JSON")
 
     verified_bundles = summary.get("verified_bundles")
-    if isinstance(verified_bundles, bool) or not isinstance(verified_bundles, int) or verified_bundles <= 0:
+    if type(verified_bundles) is not int or verified_bundles <= 0:
         raise EvidenceError(f"{label}.verified_bundles must be a positive integer")
     bundles = _require_list(summary.get("bundles"), f"{label}.bundles")
     if len(bundles) != verified_bundles:
@@ -5612,7 +5603,7 @@ def _compact_receipt_summaries(
         summaries.append(receipt_summary)
     for canary in canaries:
         canary_receipt_summary = canary.get("receipt_summary")
-        if isinstance(canary_receipt_summary, dict):
+        if type(canary_receipt_summary) is dict:
             summaries.append(canary_receipt_summary)
     return summaries
 
@@ -5731,7 +5722,7 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
             seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
             for field, field_label in source_material_checks:
                 value = receipt.get(field)
-                if not isinstance(value, str):
+                if type(value) is not str:
                     continue
                 seen_for_field = seen_source_material[field]
                 previous = seen_for_field.get(value)
@@ -5758,7 +5749,7 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
     seen_bundle_digests: dict[str, tuple[int, int]] = {}
     for trust_offset, trust in enumerate(trusts):
         profile_json_sha256 = trust.get("profile_json_sha256")
-        if isinstance(profile_json_sha256, str):
+        if type(profile_json_sha256) is str:
             if profile_json_sha256 in seen_profile_json_digests:
                 first_trust = seen_profile_json_digests[profile_json_sha256]
                 raise EvidenceError(
@@ -5810,12 +5801,12 @@ def _reject_compact_json_artifact_path_role_reuse(
             f"canary_summaries[{canary_offset}].config_path",
         )
         canary_receipt_summary = canary.get("receipt_summary")
-        if isinstance(canary_receipt_summary, dict):
+        if type(canary_receipt_summary) is dict:
             for receipt_offset, receipt in enumerate(
                 canary_receipt_summary["receipts"]
             ):
                 receipt_path = receipt.get("path")
-                if isinstance(receipt_path, str):
+                if type(receipt_path) is str:
                     material_paths.setdefault(
                         receipt_path,
                         (
@@ -5829,10 +5820,10 @@ def _reject_compact_json_artifact_path_role_reuse(
                 profile["path"],
                 f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path",
             )
-    if isinstance(receipt_summary, dict):
+    if type(receipt_summary) is dict:
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_path = receipt.get("path")
-            if isinstance(receipt_path, str):
+            if type(receipt_path) is str:
                 material_paths.setdefault(
                     receipt_path,
                     f"receipt_verification.receipts[{receipt_offset}].path",
@@ -5959,7 +5950,7 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
             raise EvidenceError(f"{label}[{offset}] must be a path")
         if isinstance(entry, str):
             paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
-        elif isinstance(entry, Path):
+        elif type(entry) is type(Path()):
             paths.append(Path(entry))
         else:
             raise EvidenceError(f"{label}[{offset}] must be a path")

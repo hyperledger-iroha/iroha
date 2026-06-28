@@ -366,7 +366,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label or str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise TrustBundleError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -1266,7 +1266,7 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         raise TrustBundleError(f"{label} must be a path")
     if isinstance(value, str):
         return Path(_plain_text(value, label))
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         return Path(value)
     raise TrustBundleError(f"{label} must be a path")
 
@@ -1284,7 +1284,7 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
             raise TrustBundleError(f"{label}[{offset}] must be a path")
         if isinstance(entry, str):
             paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
-        elif isinstance(entry, Path):
+        elif type(entry) is type(Path()):
             paths.append(Path(entry))
         else:
             raise TrustBundleError(f"{label}[{offset}] must be a path")
