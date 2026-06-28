@@ -610,6 +610,10 @@ FrontierProposalGraceExactness ==
   /\ MissingQcAnchors
   /\ SaturatingArithmeticAnchors
 
+FrontierProposalGraceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierProposalGraceExactness
+
 SafetyFast ==
   FrontierProposalGraceExactness
 

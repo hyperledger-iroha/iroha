@@ -199,7 +199,14 @@ TypeInvariant ==
 DeferredReplayMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DeferredReplayMatchesSpec
+DeferredBlockSyncReplayExactness ==
+  DeferredReplayMatchesSpec
+
+DeferredBlockSyncReplayCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DeferredBlockSyncReplayExactness
+
+SafetyFast == DeferredBlockSyncReplayExactness
 
 EmptyQueueNoop ==
   Matches("empty_queue")

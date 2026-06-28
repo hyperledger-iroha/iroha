@@ -1983,7 +1983,8 @@ fn normalize_hex32_lower(value: &str, context: &str) -> Result<String> {
 }
 
 fn normalize_hex_lower<const N: usize>(value: &str, context: &str) -> Result<String> {
-    let hex_value = value.trim().strip_prefix("0x").unwrap_or(value.trim());
+    let value = value.trim();
+    let hex_value = value.strip_prefix("0x").unwrap_or(value);
     let bytes = hex::decode(hex_value)
         .wrap_err_with(|| format!("{context} must be a {N}-byte hex string"))?;
     if bytes.len() != N {
@@ -2117,7 +2118,7 @@ pub struct SorafsModerationQuarantineFilter {
 }
 
 impl SorafsModerationQuarantineFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2133,7 +2134,7 @@ pub struct SorafsModerationModelRegistryFilter {
 }
 
 impl SorafsModerationModelRegistryFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2149,7 +2150,7 @@ pub struct SorafsModerationBallotsFilter {
 }
 
 impl SorafsModerationBallotsFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2167,7 +2168,7 @@ pub struct SorafsModerationBallotEventsFilter {
 }
 
 impl SorafsModerationBallotEventsFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(since) = self.since {
             req = req.param("since", &since);
         }
@@ -2178,7 +2179,7 @@ impl SorafsModerationBallotEventsFilter {
     }
 }
 
-/// Filters for SoraFS transparency readback endpoints.
+/// Filters for `SoraFS` transparency readback endpoints.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsTransparencyReadbackFilter {
     /// Maximum number of records to return.
@@ -2186,7 +2187,7 @@ pub struct SorafsTransparencyReadbackFilter {
 }
 
 impl SorafsTransparencyReadbackFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -2194,7 +2195,7 @@ impl SorafsTransparencyReadbackFilter {
     }
 }
 
-/// Filters for SoraFS appeal finance readback endpoints.
+/// Filters for `SoraFS` appeal finance readback endpoints.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsAppealFinanceReadbackFilter {
     /// Maximum number of records to return.
@@ -2202,11 +2203,81 @@ pub struct SorafsAppealFinanceReadbackFilter {
 }
 
 impl SorafsAppealFinanceReadbackFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
         req
+    }
+}
+
+/// Filters for `/v1/sorafs/reserve/movements` readback.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsReserveMovementReadbackFilter {
+    /// Optional movement sequence to resume from.
+    pub since: Option<u64>,
+    /// Maximum number of movement records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsReserveMovementReadbackFilter {
+    fn apply_to_url(self, url: &mut Url) {
+        if let Some(since) = self.since {
+            url.query_pairs_mut()
+                .append_pair("since", &since.to_string());
+        }
+        if let Some(limit) = self.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+    }
+}
+
+/// Filters for `/v1/sorafs/reserve/credit-lines` readback.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsReserveCreditLineReadbackFilter {
+    /// Maximum number of credit-line records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsReserveCreditLineReadbackFilter {
+    fn apply_to_url(self, url: &mut Url) {
+        if let Some(limit) = self.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+    }
+}
+
+/// Filters for `/v1/sorafs/reserve/appeals` readback.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsReserveAppealReadbackFilter {
+    /// Maximum number of appeal records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsReserveAppealReadbackFilter {
+    fn apply_to_url(self, url: &mut Url) {
+        if let Some(limit) = self.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+    }
+}
+
+/// Filters for `/v1/sorafs/reserve/lifecycle/policy` readback.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsReserveLifecyclePolicyReadbackFilter {
+    /// Maximum number of policy records to return.
+    pub limit: Option<u32>,
+}
+
+impl SorafsReserveLifecyclePolicyReadbackFilter {
+    fn apply_to_url(self, url: &mut Url) {
+        if let Some(limit) = self.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
     }
 }
 
@@ -2218,7 +2289,7 @@ pub struct SorafsModerationScreeningResultsFilter {
 }
 
 impl SorafsModerationScreeningResultsFilter {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
         if let Some(limit) = self.limit {
             req = req.param("limit", &limit);
         }
@@ -12803,6 +12874,57 @@ impl Client {
         norito::json::Value::from(alias_map)
     }
 
+    fn sorafs_pin_register_manifest_bytes(
+        manifest: &sorafs_manifest::ManifestV1,
+        manifest_bytes: Option<&[u8]>,
+        include_encoded_manifest: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        if let Some(bytes) = manifest_bytes {
+            let decoded: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(bytes)
+                .wrap_err("failed to decode manifest_bytes for pin registration")?;
+            if &decoded != manifest {
+                return Err(eyre!(
+                    "manifest_bytes payload does not match manifest for pin registration"
+                ));
+            }
+            return Ok(Some(bytes.to_vec()));
+        }
+        if include_encoded_manifest {
+            return manifest
+                .encode()
+                .map(Some)
+                .wrap_err("failed to encode manifest for pin registration");
+        }
+        Ok(None)
+    }
+
+    fn insert_sorafs_pin_chunker_fields(
+        map: &mut norito::json::Map,
+        manifest: &sorafs_manifest::ManifestV1,
+    ) {
+        let chunker = &manifest.chunking;
+        map.insert(
+            "chunker_profile_id".into(),
+            norito::json::Value::from(u64::from(chunker.profile_id.0)),
+        );
+        map.insert(
+            "chunker_namespace".into(),
+            norito::json::Value::from(chunker.namespace.as_str()),
+        );
+        map.insert(
+            "chunker_name".into(),
+            norito::json::Value::from(chunker.name.as_str()),
+        );
+        map.insert(
+            "chunker_semver".into(),
+            norito::json::Value::from(chunker.semver.as_str()),
+        );
+        map.insert(
+            "chunker_multihash_code".into(),
+            norito::json::Value::from(chunker.multihash_code),
+        );
+    }
+
     fn build_sorafs_pin_register_payload(
         params: SorafsPinRegisterArgs<'_>,
         manifest_digest_override: Option<[u8; 32]>,
@@ -12824,25 +12946,11 @@ impl Client {
                 .wrap_err("failed to compute manifest digest for pin registration")?
                 .as_bytes(),
         };
-        let encoded_manifest;
-        let manifest_bytes = if let Some(bytes) = manifest_bytes {
-            let decoded: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(bytes)
-                .wrap_err("failed to decode manifest_bytes for pin registration")?;
-            if &decoded != manifest {
-                return Err(eyre!(
-                    "manifest_bytes payload does not match manifest for pin registration"
-                ));
-            }
-            Some(bytes)
-        } else if manifest_digest_override.is_none() {
-            encoded_manifest = manifest
-                .encode()
-                .wrap_err("failed to encode manifest for pin registration")?;
-            Some(encoded_manifest.as_slice())
-        } else {
-            None
-        };
-        let chunker = &manifest.chunking;
+        let manifest_bytes = Self::sorafs_pin_register_manifest_bytes(
+            manifest,
+            manifest_bytes,
+            manifest_digest_override.is_none(),
+        )?;
         let mut map = norito::json::Map::new();
         map.insert(
             "authority".into(),
@@ -12854,26 +12962,7 @@ impl Client {
                 private_key.clone(),
             ))?,
         );
-        map.insert(
-            "chunker_profile_id".into(),
-            norito::json::Value::from(u64::from(chunker.profile_id.0)),
-        );
-        map.insert(
-            "chunker_namespace".into(),
-            norito::json::Value::from(chunker.namespace.as_str()),
-        );
-        map.insert(
-            "chunker_name".into(),
-            norito::json::Value::from(chunker.name.as_str()),
-        );
-        map.insert(
-            "chunker_semver".into(),
-            norito::json::Value::from(chunker.semver.as_str()),
-        );
-        map.insert(
-            "chunker_multihash_code".into(),
-            norito::json::Value::from(chunker.multihash_code),
-        );
+        Self::insert_sorafs_pin_chunker_fields(&mut map, manifest);
         map.insert(
             "pin_policy".into(),
             Self::sorafs_pin_policy_value(&manifest.pin_policy),
@@ -12886,7 +12975,7 @@ impl Client {
             map.insert(
                 "manifest_b64".into(),
                 norito::json::Value::from(
-                    base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
+                    base64::engine::general_purpose::STANDARD.encode(&manifest_bytes),
                 ),
             );
         }
@@ -13066,7 +13155,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_quarantine(
         &self,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/quarantine");
         filter
@@ -13082,7 +13171,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_model_registry(
         &self,
-        filter: &SorafsModerationModelRegistryFilter,
+        filter: SorafsModerationModelRegistryFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/model-registry");
         filter
@@ -13144,7 +13233,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_ballots(
         &self,
-        filter: &SorafsModerationBallotsFilter,
+        filter: SorafsModerationBallotsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots");
         filter
@@ -13162,7 +13251,7 @@ impl Client {
         &self,
         case_id: &str,
         round_id: &str,
-        filter: &SorafsModerationBallotsFilter,
+        filter: SorafsModerationBallotsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let case_id = require_non_empty_path_segment(case_id, "case_id")?;
         let round_id = require_non_empty_path_segment(round_id, "round_id")?;
@@ -13184,7 +13273,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_ballot_events(
         &self,
-        filter: &SorafsModerationBallotEventsFilter,
+        filter: SorafsModerationBallotEventsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/events");
         filter
@@ -13254,7 +13343,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_transparency_cycles(
         &self,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/cycles");
         filter
@@ -13272,7 +13361,7 @@ impl Client {
     pub fn get_sorafs_transparency_cycle(
         &self,
         cycle_id_hex: &str,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let cycle_id_hex = normalize_hex_lower::<16>(cycle_id_hex, "cycle_id_hex")?;
         let path = format!("v1/sorafs/transparency/cycles/{cycle_id_hex}");
@@ -13310,7 +13399,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_transparency_explorer(
         &self,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/explorer");
         filter
@@ -13326,7 +13415,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_transparency_token_issuances(
         &self,
-        filter: &SorafsTransparencyReadbackFilter,
+        filter: SorafsTransparencyReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/tokens");
         filter
@@ -13405,6 +13494,180 @@ impl Client {
             "v1/sorafs/transparency/privacy-aggregates/publish-due",
             payload,
             "transparency privacy aggregate publish-due",
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/reserve/top-up`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_reserve_top_up_json(&self, payload: &[u8]) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json("v1/sorafs/reserve/top-up", payload, "reserve top-up")
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/reserve/withdraw`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_reserve_withdrawal_json(&self, payload: &[u8]) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json("v1/sorafs/reserve/withdraw", payload, "reserve withdrawal")
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/reserve/movements/{movement_id_hex}/custody`.
+    ///
+    /// # Errors
+    /// Returns an error if the movement id is malformed, the payload is not
+    /// JSON, request construction fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_reserve_movement_custody_json(
+        &self,
+        movement_id_hex: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let movement_id_hex = normalize_hex_lower::<32>(movement_id_hex, "movement_id_hex")?;
+        let path = format!("v1/sorafs/reserve/movements/{movement_id_hex}/custody");
+        self.post_sorafs_signed_json(&path, payload, "reserve movement custody")
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/reserve/movements`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction fails, signing fails, or the
+    /// HTTP call fails.
+    pub fn get_sorafs_reserve_movements(
+        &self,
+        filter: SorafsReserveMovementReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/movements");
+        filter.apply_to_url(&mut url);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/reserve/credit-lines`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction fails, signing fails, or the
+    /// HTTP call fails.
+    pub fn get_sorafs_reserve_credit_lines(
+        &self,
+        filter: SorafsReserveCreditLineReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/credit-lines");
+        filter.apply_to_url(&mut url);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}`.
+    ///
+    /// # Errors
+    /// Returns an error if the provider id is malformed, request construction
+    /// fails, signing fails, or the HTTP call fails.
+    pub fn get_sorafs_reserve_credit_line(
+        &self,
+        provider_id_hex: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let provider_id_hex = normalize_hex_lower::<32>(provider_id_hex, "provider_id_hex")?;
+        let path = format!("v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/reserve/balances/{provider_id_hex}`.
+    ///
+    /// # Errors
+    /// Returns an error if the provider id is malformed, request construction
+    /// fails, signing fails, or the HTTP call fails.
+    pub fn get_sorafs_reserve_balance(&self, provider_id_hex: &str) -> Result<Response<Vec<u8>>> {
+        let provider_id_hex = normalize_hex_lower::<32>(provider_id_hex, "provider_id_hex")?;
+        let path = format!("v1/sorafs/reserve/balances/{provider_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/reserve/appeals`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_reserve_appeal_json(&self, payload: &[u8]) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json("v1/sorafs/reserve/appeals", payload, "reserve appeal")
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision`.
+    ///
+    /// # Errors
+    /// Returns an error if the appeal id is malformed, the payload is not JSON,
+    /// request construction fails, signing fails, or the HTTP call fails.
+    pub fn post_sorafs_reserve_appeal_decision_json(
+        &self,
+        appeal_id_hex: &str,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        let appeal_id_hex = normalize_hex_lower::<32>(appeal_id_hex, "appeal_id_hex")?;
+        let path = format!("v1/sorafs/reserve/appeals/{appeal_id_hex}/decision");
+        self.post_sorafs_signed_json(&path, payload, "reserve appeal decision")
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/reserve/appeals`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction fails, signing fails, or the
+    /// HTTP call fails.
+    pub fn get_sorafs_reserve_appeals(
+        &self,
+        filter: SorafsReserveAppealReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/appeals");
+        filter.apply_to_url(&mut url);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: signed POST `/v1/sorafs/reserve/lifecycle/policy`.
+    ///
+    /// # Errors
+    /// Returns an error if the payload is not JSON, request construction fails,
+    /// signing fails, or the HTTP call fails.
+    pub fn post_sorafs_reserve_lifecycle_policy_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<Response<Vec<u8>>> {
+        self.post_sorafs_signed_json(
+            "v1/sorafs/reserve/lifecycle/policy",
+            payload,
+            "reserve lifecycle policy",
+        )
+    }
+
+    /// Convenience: signed GET `/v1/sorafs/reserve/lifecycle/policy`.
+    ///
+    /// # Errors
+    /// Returns an error if request construction fails, signing fails, or the
+    /// HTTP call fails.
+    pub fn get_sorafs_reserve_lifecycle_policy(
+        &self,
+        filter: SorafsReserveLifecyclePolicyReadbackFilter,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/lifecycle/policy");
+        filter.apply_to_url(&mut url);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
         )
     }
 
@@ -13555,7 +13818,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_appeal_finance_reports(
         &self,
-        filter: &SorafsAppealFinanceReadbackFilter,
+        filter: SorafsAppealFinanceReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/reports");
         filter
@@ -13571,7 +13834,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_appeal_finance_weekly_rollups(
         &self,
-        filter: &SorafsAppealFinanceReadbackFilter,
+        filter: SorafsAppealFinanceReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/weekly-rollups");
         filter
@@ -13587,7 +13850,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_appeal_finance_settlement_receipts(
         &self,
-        filter: &SorafsAppealFinanceReadbackFilter,
+        filter: SorafsAppealFinanceReadbackFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(
             &self.torii_url,
@@ -13606,7 +13869,7 @@ impl Client {
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_moderation_screening_results(
         &self,
-        filter: &SorafsModerationScreeningResultsFilter,
+        filter: SorafsModerationScreeningResultsFilter,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/screening-results");
         filter
@@ -13728,13 +13991,19 @@ impl Client {
     pub fn get_sorafs_moderation_quarantine_operator_panel(
         &self,
         quarantine_id_hex: &str,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>> {
         let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
         let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
-        let url = join_torii_url(&self.torii_url, &path);
-        let request = self.account_signed_request(HttpMethod::GET, url, Vec::new())?;
-        self.send_builder(filter.apply(request).header("Accept", APPLICATION_JSON))
+        let mut url = join_torii_url(&self.torii_url, &path);
+        if let Some(limit) = filter.limit {
+            url.query_pairs_mut()
+                .append_pair("limit", &limit.to_string());
+        }
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/object`.
@@ -24468,7 +24737,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_quarantine(&filter)
+                .get_sorafs_moderation_quarantine(filter)
                 .expect("moderation quarantine list request");
         });
 
@@ -24500,7 +24769,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_model_registry(&filter)
+                .get_sorafs_moderation_model_registry(filter)
                 .expect("moderation model registry list request");
         });
 
@@ -24669,7 +24938,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_ballots(&filter)
+                .get_sorafs_moderation_ballots(filter)
                 .expect("moderation ballots list request");
         });
 
@@ -24689,7 +24958,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_ballot("case/401", "round 7", &filter)
+                .get_sorafs_moderation_ballot("case/401", "round 7", filter)
                 .expect("moderation ballot get request");
         });
 
@@ -24715,7 +24984,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_ballot_events(&filter)
+                .get_sorafs_moderation_ballot_events(filter)
                 .expect("moderation ballot events request");
         });
 
@@ -24880,7 +25149,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_cycles(&filter)
+                .get_sorafs_transparency_cycles(filter)
                 .expect("transparency cycles list request");
         });
 
@@ -24901,7 +25170,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_cycle(&cycle_id, &filter)
+                .get_sorafs_transparency_cycle(&cycle_id, filter)
                 .expect("transparency cycle get request");
         });
 
@@ -24952,7 +25221,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_explorer(&filter)
+                .get_sorafs_transparency_explorer(filter)
                 .expect("transparency explorer request");
         });
 
@@ -24972,7 +25241,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_transparency_token_issuances(&filter)
+                .get_sorafs_transparency_token_issuances(filter)
                 .expect("transparency token issuance request");
         });
 
@@ -25312,6 +25581,406 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_reserve_movement_posts_signed_json_requests() {
+        let client = client_with_base_url(base_url());
+        let top_up_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let withdraw_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let custody_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let appeal_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let appeal_decision_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let policy_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json::to_vec(&norito::json!({
+            "provider_id_hex": ("11".repeat(32)),
+            "provider_account": "provider",
+            "reserve_account": "reserve",
+            "asset_definition_id": "xor#wonderland",
+            "amount_micro_xor": "2500000",
+            "idempotency_key": "provider-top-up-1",
+        }))
+        .expect("encode reserve movement payload");
+        let custody_payload = norito::json::to_vec(&norito::json!({
+            "status": "submitted",
+            "tx_hash_hex": ("22".repeat(32)),
+        }))
+        .expect("encode reserve custody payload");
+        let appeal_payload = norito::json::to_vec(&norito::json!({
+            "provider_id_hex": ("33".repeat(32)),
+            "provider_account": "provider",
+            "requested_stage": "grace",
+            "reason": "provider supplied evidence",
+            "idempotency_key": "appeal-1",
+        }))
+        .expect("encode reserve appeal payload");
+        let appeal_decision_payload = norito::json::to_vec(&norito::json!({
+            "status": "accepted",
+            "decision_account": "authority",
+            "rationale": "evidence accepted",
+        }))
+        .expect("encode reserve appeal decision payload");
+        let policy_payload = norito::json::to_vec(&norito::json!({
+            "authority_account": "authority",
+            "grace_period_days": 7,
+            "default_after_days": 30,
+            "effective_at_unix": 1800000000u64,
+            "reason": "initial reserve lifecycle policy",
+            "idempotency_key": "policy-1",
+        }))
+        .expect("encode reserve lifecycle policy payload");
+
+        with_mock_http(
+            respond_with(
+                &top_up_store,
+                json_response(StatusCode::ACCEPTED, r#"{"schema":"top-up"}"#),
+            ),
+            || {
+                client
+                    .post_sorafs_reserve_top_up_json(&payload)
+                    .expect("reserve top-up request");
+            },
+        );
+        with_mock_http(
+            respond_with(
+                &withdraw_store,
+                json_response(StatusCode::ACCEPTED, r#"{"schema":"withdrawal"}"#),
+            ),
+            || {
+                client
+                    .post_sorafs_reserve_withdrawal_json(&payload)
+                    .expect("reserve withdrawal request");
+            },
+        );
+        with_mock_http(
+            respond_with(
+                &custody_store,
+                json_response(StatusCode::ACCEPTED, r#"{"schema":"custody"}"#),
+            ),
+            || {
+                client
+                    .post_sorafs_reserve_movement_custody_json(
+                        &format!("0x{}", "AA".repeat(32)),
+                        &custody_payload,
+                    )
+                    .expect("reserve movement custody request");
+            },
+        );
+        with_mock_http(
+            respond_with(
+                &appeal_store,
+                json_response(StatusCode::ACCEPTED, r#"{"schema":"appeal"}"#),
+            ),
+            || {
+                client
+                    .post_sorafs_reserve_appeal_json(&appeal_payload)
+                    .expect("reserve appeal request");
+            },
+        );
+        with_mock_http(
+            respond_with(
+                &appeal_decision_store,
+                json_response(StatusCode::ACCEPTED, r#"{"schema":"appeal-decision"}"#),
+            ),
+            || {
+                client
+                    .post_sorafs_reserve_appeal_decision_json(
+                        &format!("0x{}", "BB".repeat(32)),
+                        &appeal_decision_payload,
+                    )
+                    .expect("reserve appeal decision request");
+            },
+        );
+        with_mock_http(
+            respond_with(
+                &policy_store,
+                json_response(StatusCode::ACCEPTED, r#"{"schema":"policy"}"#),
+            ),
+            || {
+                client
+                    .post_sorafs_reserve_lifecycle_policy_json(&policy_payload)
+                    .expect("reserve lifecycle policy request");
+            },
+        );
+
+        let top_up = top_up_store.lock().expect("top-up snapshots");
+        let top_up = top_up.first().expect("top-up snapshot");
+        assert_eq!(top_up.method, HttpMethod::POST);
+        assert_eq!(top_up.url.path(), "/v1/sorafs/reserve/top-up");
+        let headers: HashMap<_, _> = top_up.headers.iter().cloned().collect();
+        assert!(headers.contains_key(HEADER_ACCOUNT));
+        assert!(headers.contains_key(HEADER_SIGNATURE));
+        assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
+        assert!(headers.contains_key(HEADER_NONCE));
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        let body: JsonValue = norito::json::from_slice(&top_up.body).expect("decode top-up body");
+        assert_eq!(
+            body.get("amount_micro_xor").and_then(JsonValue::as_str),
+            Some("2500000")
+        );
+
+        let withdrawal = withdraw_store.lock().expect("withdrawal snapshots");
+        let withdrawal = withdrawal.first().expect("withdrawal snapshot");
+        assert_eq!(withdrawal.method, HttpMethod::POST);
+        assert_eq!(withdrawal.url.path(), "/v1/sorafs/reserve/withdraw");
+        assert!(
+            withdrawal
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "withdrawal request must be signed"
+        );
+
+        let custody = custody_store.lock().expect("custody snapshots");
+        let custody = custody.first().expect("custody snapshot");
+        assert_eq!(custody.method, HttpMethod::POST);
+        assert_eq!(
+            custody.url.path(),
+            format!("/v1/sorafs/reserve/movements/{}/custody", "aa".repeat(32))
+        );
+        let custody_headers: HashMap<_, _> = custody.headers.iter().cloned().collect();
+        assert!(custody_headers.contains_key(HEADER_ACCOUNT));
+        assert!(custody_headers.contains_key(HEADER_SIGNATURE));
+        assert_eq!(
+            custody_headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+        let body: JsonValue = norito::json::from_slice(&custody.body).expect("decode custody body");
+        assert_eq!(
+            body.get("status").and_then(JsonValue::as_str),
+            Some("submitted")
+        );
+
+        let appeal = appeal_store.lock().expect("appeal snapshots");
+        let appeal = appeal.first().expect("appeal snapshot");
+        assert_eq!(appeal.method, HttpMethod::POST);
+        assert_eq!(appeal.url.path(), "/v1/sorafs/reserve/appeals");
+        assert!(
+            appeal
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "appeal request must be signed"
+        );
+
+        let appeal_decision = appeal_decision_store
+            .lock()
+            .expect("appeal decision snapshots");
+        let appeal_decision = appeal_decision.first().expect("appeal decision snapshot");
+        assert_eq!(appeal_decision.method, HttpMethod::POST);
+        assert_eq!(
+            appeal_decision.url.path(),
+            format!("/v1/sorafs/reserve/appeals/{}/decision", "bb".repeat(32))
+        );
+        assert!(
+            appeal_decision
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "appeal decision request must be signed"
+        );
+
+        let policy = policy_store.lock().expect("policy snapshots");
+        let policy = policy.first().expect("policy snapshot");
+        assert_eq!(policy.method, HttpMethod::POST);
+        assert_eq!(policy.url.path(), "/v1/sorafs/reserve/lifecycle/policy");
+        assert!(
+            policy
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "policy request must be signed"
+        );
+    }
+
+    #[test]
+    fn sorafs_reserve_readback_gets_are_signed_and_normalize_provider_id() {
+        let client = client_with_base_url(base_url());
+        let movements_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let balance_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let credit_lines_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let credit_line_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let appeals_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let policy_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+
+        with_mock_http(
+            respond_with(&movements_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_reserve_movements(SorafsReserveMovementReadbackFilter {
+                        since: Some(7),
+                        limit: Some(25),
+                    })
+                    .expect("reserve movements request");
+            },
+        );
+        with_mock_http(
+            respond_with(&balance_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_reserve_balance(&format!("0x{}", "AB".repeat(32)))
+                    .expect("reserve balance request");
+            },
+        );
+        with_mock_http(
+            respond_with(&credit_lines_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_reserve_credit_lines(SorafsReserveCreditLineReadbackFilter {
+                        limit: Some(5),
+                    })
+                    .expect("reserve credit-lines request");
+            },
+        );
+        with_mock_http(
+            respond_with(&credit_line_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_reserve_credit_line(&format!("0x{}", "CD".repeat(32)))
+                    .expect("reserve credit-line request");
+            },
+        );
+        with_mock_http(
+            respond_with(&appeals_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_reserve_appeals(SorafsReserveAppealReadbackFilter {
+                        limit: Some(7),
+                    })
+                    .expect("reserve appeals request");
+            },
+        );
+        with_mock_http(
+            respond_with(&policy_store, json_response(StatusCode::OK, "{}")),
+            || {
+                client
+                    .get_sorafs_reserve_lifecycle_policy(
+                        SorafsReserveLifecyclePolicyReadbackFilter { limit: Some(3) },
+                    )
+                    .expect("reserve lifecycle policy request");
+            },
+        );
+
+        let movements = movements_store.lock().expect("movement snapshots");
+        let movements = movements.first().expect("movement snapshot");
+        assert_eq!(movements.method, HttpMethod::GET);
+        assert_eq!(movements.url.path(), "/v1/sorafs/reserve/movements");
+        assert_eq!(movements.url.query(), Some("since=7&limit=25"));
+        let movement_headers: HashMap<_, _> = movements.headers.iter().cloned().collect();
+        assert!(movement_headers.contains_key(HEADER_ACCOUNT));
+        assert!(movement_headers.contains_key(HEADER_SIGNATURE));
+        assert_eq!(
+            movement_headers.get("accept"),
+            Some(&APPLICATION_JSON.to_owned())
+        );
+
+        let balance = balance_store.lock().expect("balance snapshots");
+        let balance = balance.first().expect("balance snapshot");
+        assert_eq!(balance.method, HttpMethod::GET);
+        assert_eq!(
+            balance.url.path(),
+            format!("/v1/sorafs/reserve/balances/{}", "ab".repeat(32))
+        );
+        assert!(
+            balance
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "balance request must be signed"
+        );
+
+        let credit_lines = credit_lines_store.lock().expect("credit-lines snapshots");
+        let credit_lines = credit_lines.first().expect("credit-lines snapshot");
+        assert_eq!(credit_lines.method, HttpMethod::GET);
+        assert_eq!(credit_lines.url.path(), "/v1/sorafs/reserve/credit-lines");
+        assert_eq!(credit_lines.url.query(), Some("limit=5"));
+        assert!(
+            credit_lines
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "credit-lines request must be signed"
+        );
+
+        let credit_line = credit_line_store.lock().expect("credit-line snapshots");
+        let credit_line = credit_line.first().expect("credit-line snapshot");
+        assert_eq!(credit_line.method, HttpMethod::GET);
+        assert_eq!(
+            credit_line.url.path(),
+            format!(
+                "/v1/sorafs/reserve/credit-lines/providers/{}",
+                "cd".repeat(32)
+            )
+        );
+        assert!(
+            credit_line
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "credit-line request must be signed"
+        );
+
+        let appeals = appeals_store.lock().expect("appeals snapshots");
+        let appeals = appeals.first().expect("appeals snapshot");
+        assert_eq!(appeals.method, HttpMethod::GET);
+        assert_eq!(appeals.url.path(), "/v1/sorafs/reserve/appeals");
+        assert_eq!(appeals.url.query(), Some("limit=7"));
+        assert!(
+            appeals
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "appeals request must be signed"
+        );
+
+        let policy = policy_store.lock().expect("policy snapshots");
+        let policy = policy.first().expect("policy snapshot");
+        assert_eq!(policy.method, HttpMethod::GET);
+        assert_eq!(policy.url.path(), "/v1/sorafs/reserve/lifecycle/policy");
+        assert_eq!(policy.url.query(), Some("limit=3"));
+        assert!(
+            policy
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "policy readback request must be signed"
+        );
+    }
+
+    #[test]
+    fn sorafs_reserve_json_rejects_empty_payload_and_bad_provider_id() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .post_sorafs_reserve_top_up_json(&[])
+            .expect_err("empty reserve top-up payload must be rejected");
+        assert!(err.to_string().contains("reserve top-up"));
+
+        let err = client
+            .get_sorafs_reserve_balance("deadbeef")
+            .expect_err("bad provider id must be rejected");
+        assert!(err.to_string().contains("provider_id_hex"));
+        let err = client
+            .get_sorafs_reserve_credit_line("deadbeef")
+            .expect_err("bad credit-line provider id must be rejected");
+        assert!(err.to_string().contains("provider_id_hex"));
+
+        let payload = norito::json::to_vec(&norito::json!({
+            "status": "submitted",
+            "tx_hash_hex": ("22".repeat(32)),
+        }))
+        .expect("encode reserve custody payload");
+        let err = client
+            .post_sorafs_reserve_movement_custody_json("deadbeef", &payload)
+            .expect_err("bad movement id must be rejected");
+        assert!(err.to_string().contains("movement_id_hex"));
+        let err = client
+            .post_sorafs_reserve_appeal_decision_json("deadbeef", &payload)
+            .expect_err("bad appeal id must be rejected");
+        assert!(err.to_string().contains("appeal_id_hex"));
+    }
+
+    #[test]
     fn sorafs_appeal_finance_deposit_sends_signed_json_request() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -25494,7 +26163,7 @@ mod tests {
             respond_with(&reports_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
-                    .get_sorafs_appeal_finance_reports(&filter)
+                    .get_sorafs_appeal_finance_reports(filter)
                     .expect("appeal finance reports request");
             },
         );
@@ -25502,7 +26171,7 @@ mod tests {
             respond_with(&rollups_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
-                    .get_sorafs_appeal_finance_weekly_rollups(&filter)
+                    .get_sorafs_appeal_finance_weekly_rollups(filter)
                     .expect("appeal finance weekly rollups request");
             },
         );
@@ -25510,7 +26179,7 @@ mod tests {
             respond_with(&receipts_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
-                    .get_sorafs_appeal_finance_settlement_receipts(&filter)
+                    .get_sorafs_appeal_finance_settlement_receipts(filter)
                     .expect("appeal finance settlement receipts request");
             },
         );
@@ -25577,7 +26246,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_screening_results(&filter)
+                .get_sorafs_moderation_screening_results(filter)
                 .expect("moderation screening list request");
         });
 
@@ -25942,7 +26611,7 @@ mod tests {
 
         with_mock_http(respond_with(&store, response), || {
             client
-                .get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, &filter)
+                .get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, filter)
                 .expect("moderation quarantine operator panel request");
         });
 
@@ -25964,6 +26633,31 @@ mod tests {
         assert!(headers.contains_key(HEADER_TIMESTAMP_MS));
         assert!(headers.contains_key(HEADER_NONCE));
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
+        let timestamp_ms = headers
+            .get(HEADER_TIMESTAMP_MS)
+            .expect("timestamp header")
+            .parse::<u64>()
+            .expect("timestamp header should parse");
+        let nonce = headers.get(HEADER_NONCE).expect("nonce header");
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(
+                headers
+                    .get(HEADER_SIGNATURE)
+                    .expect("signature header")
+                    .as_bytes(),
+            )
+            .expect("signature header should decode");
+        let signature = Signature::from_bytes(&signature_bytes);
+        let signed_message = Client::operator_request_message(
+            &HttpMethod::GET,
+            &snapshot.url,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
+        signature
+            .verify(client.key_pair.public_key(), &signed_message)
+            .expect("signature must cover filtered operator-panel URL");
     }
 
     #[test]

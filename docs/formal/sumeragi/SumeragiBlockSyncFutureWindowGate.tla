@@ -275,7 +275,14 @@ TypeInvariant ==
 FutureWindowMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == FutureWindowMatchesSpec
+BlockSyncFutureWindowExactness ==
+  FutureWindowMatchesSpec
+
+BlockSyncFutureWindowCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncFutureWindowExactness
+
+SafetyFast == BlockSyncFutureWindowExactness
 
 KnownBlockAllowed ==
   Matches("known_block")

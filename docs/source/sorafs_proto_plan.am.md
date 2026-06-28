@@ -4,14 +4,9 @@ direction: ltr
 source: docs/source/sorafs_proto_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e843072093b18bc3fcae6c4a2898cd2b091dd7e9d445986c730899d1b9805421
-source_last_modified: "2026-01-05T09:28:12.087905+00:00"
+source_hash: e5d81629f284ea39ef1503f7671171e95987f5b7c7dc84a2c884c58777aba890
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
-title: SoraFS Wire Format & Schema Reference
-summary: SF-10 implementation status for canonical Norito payloads, fixtures, validators, and remaining release-evidence work.
----
-
----
 title: SoraFS Wire Format & Schema Reference
 summary: SF-10 implementation status for canonical Norito payloads, fixtures, validators, and remaining release-evidence work.
 ---

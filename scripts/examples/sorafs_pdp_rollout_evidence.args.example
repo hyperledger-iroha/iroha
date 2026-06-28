@@ -1,0 +1,12 @@
+# Reviewed SF-13 PDP rollout evidence gate arguments.
+# Point the evidence directory at the reviewed artifact root. Review only
+# payload-free rollout summaries. Keep proof payloads, bearer tokens, signing
+# keys, raw challenge material, and operator secrets in runtime-only locations.
+--evidence-dir /var/tmp/sorafs/pdp-rollout
+--summary-out /var/tmp/sorafs/pdp-rollout-summary.json
+--max-evidence-age-secs 604800
+--max-route-latency-ms 1500
+--max-proof-latency-ms 90000
+--min-providers 3
+--min-challenges 3
+--min-proofs 3

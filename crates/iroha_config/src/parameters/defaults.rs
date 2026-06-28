@@ -1202,6 +1202,16 @@ pub mod sorafs {
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
         }
 
+        /// Reserve lifecycle scheduler defaults.
+        pub mod reserve_lifecycle {
+            /// Enable config-backed SFM-6 reserve lifecycle advancement.
+            pub const ENABLED: bool = false;
+            /// Default reserve lifecycle scheduler cadence (seconds).
+            pub const INTERVAL_SECONDS: u64 = 60 * 60;
+            /// Default delay before the first reserve lifecycle scheduler tick (seconds).
+            pub const INITIAL_DELAY_SECONDS: u64 = 0;
+        }
+
         /// Stream token issuance defaults.
         pub mod tokens {
             use std::path::PathBuf;
@@ -3126,6 +3136,10 @@ pub mod sumeragi {
     pub const RBC_DISK_STORE_TTL_MS: u64 = RBC_SESSION_TTL_MS;
     /// Default maximum bytes allocated for disk-backed RBC chunks.
     pub const RBC_DISK_STORE_MAX_BYTES: u64 = RBC_STORE_MAX_BYTES as u64;
+    /// Native AMX vote sessions retained while proposer collection is in progress.
+    pub const NATIVE_AMX_SESSION_CACHE_MAX: NonZeroUsize = nonzero!(1024_usize);
+    /// Exact attestation-body buckets retained per native AMX vote session.
+    pub const NATIVE_AMX_SESSION_BODY_BUCKET_MAX: NonZeroUsize = nonzero!(256_usize);
     /// Default maximum number of RBC chunks stashed before INIT per session.
     ///
     /// Keep this aligned with Sumeragi's maximum total chunks per RBC session (currently `1024`)

@@ -855,7 +855,23 @@ mod app {
         };
 
         match command {
-            SorafsCommand::Reserve(ReserveCommand::Quote(_) | ReserveCommand::Ledger(_)) => true,
+            SorafsCommand::Reserve(
+                ReserveCommand::Quote(_) | ReserveCommand::Ledger(_) | ReserveCommand::Lifecycle(_),
+            ) => true,
+            SorafsCommand::Reserve(
+                ReserveCommand::TopUp(_)
+                | ReserveCommand::Withdraw(_)
+                | ReserveCommand::Movements(_)
+                | ReserveCommand::Status(_)
+                | ReserveCommand::Custody(_)
+                | ReserveCommand::CreditLines(_)
+                | ReserveCommand::CreditStatus(_)
+                | ReserveCommand::AppealSubmit(_)
+                | ReserveCommand::Appeals(_)
+                | ReserveCommand::AppealDecide(_)
+                | ReserveCommand::PolicyUpdate(_)
+                | ReserveCommand::Policy(_),
+            ) => false,
             SorafsCommand::Incentives(
                 IncentivesCommand::Compute(_)
                 | IncentivesCommand::OpenDispute(_)

@@ -210,7 +210,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
     sorafs::pin_registry::{PinStatus, StorageClass},
-    zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
+    zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::StorageReadOnly;
@@ -220,8 +220,9 @@ use super::{
     *,
 };
 use crate::{
-    smartcontracts::Execute, soracloud_runtime::soracloud_hf_generated_source_binding,
-    state::StateTransaction,
+    smartcontracts::Execute,
+    soracloud_runtime::soracloud_hf_generated_source_binding,
+    state::{StateTransaction, public_lane_validator_record_matches_key},
 };
 
 const CAN_MANAGE_SORACLOUD_PERMISSION: &str = "CanManageSoracloud";
@@ -555,11 +556,16 @@ fn require_active_public_lane_validator(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let is_active_validator = state_transaction.world.public_lane_validators.iter().any(
-        |((_lane_id, account_id), record)| {
-            account_id == authority && record.status == PublicLaneValidatorStatus::Active
-        },
-    );
+    let is_active_validator =
+        state_transaction
+            .world
+            .public_lane_validators
+            .iter()
+            .any(|(key, record)| {
+                public_lane_validator_record_matches_key(key, record)
+                    && key.1 == *authority
+                    && record.status == PublicLaneValidatorStatus::Active
+            });
     if is_active_validator {
         Ok(())
     } else {
@@ -1575,6 +1581,7 @@ fn validate_soracloud_fhe_public_key_proof_native_envelope_bytes(
     )
 }
 
+#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
 ) -> Result<(), InstructionExecutionError> {
@@ -1585,6 +1592,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
     )
 }
 
+#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
 ) -> Result<(), InstructionExecutionError> {
@@ -1593,6 +1601,95 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
         envelope_bytes,
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
     )
+}
+
+struct SoracloudFheStatementOpenVerifyContract {
+    proof_label: &'static str,
+    shape_label: &'static str,
+    wrapper_label: &'static str,
+    expected_circuit_id: &'static str,
+    expected_public_inputs_schema: &'static [u8],
+    max_native_envelope_bytes: usize,
+}
+
+const FHE_FULL_BOOTSTRAP_MATERIAL_OPEN_VERIFY_CONTRACT: SoracloudFheStatementOpenVerifyContract =
+    SoracloudFheStatementOpenVerifyContract {
+        proof_label: "FHE full-bootstrap material proof",
+        shape_label: "FHE full-bootstrap material OpenVerifyEnvelope",
+        wrapper_label: "FHE full-bootstrap material STARK public-input wrapper",
+        expected_circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+        expected_public_inputs_schema:
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        max_native_envelope_bytes:
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+    };
+
+const FHE_FULL_BOOTSTRAP_EXECUTION_OPEN_VERIFY_CONTRACT: SoracloudFheStatementOpenVerifyContract =
+    SoracloudFheStatementOpenVerifyContract {
+        proof_label: "FHE full-bootstrap execution proof",
+        shape_label: "FHE full-bootstrap execution OpenVerifyEnvelope",
+        wrapper_label: "FHE full-bootstrap execution STARK public-input wrapper",
+        expected_circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        expected_public_inputs_schema:
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        max_native_envelope_bytes:
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+    };
+
+fn validate_soracloud_fhe_statement_open_verify_envelope(
+    contract: &SoracloudFheStatementOpenVerifyContract,
+    envelope: &OpenVerifyEnvelope,
+    statement_hash: Hash,
+    bounds: OpenVerifyEnvelopeBounds,
+) -> Result<StarkFriOpenProofV1, InstructionExecutionError> {
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(format!(
+            "{} envelope must declare STARK backend",
+            contract.proof_label
+        )));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(format!(
+            "{} envelope aux must be empty",
+            contract.proof_label
+        )));
+    }
+    envelope.validate_with_bounds(bounds).map_err(|err| {
+        invalid_parameter(format!("invalid {} shape: {err}", contract.shape_label))
+    })?;
+    if envelope.circuit_id != contract.expected_circuit_id {
+        return Err(invalid_parameter(format!(
+            "{} circuit id must be canonical v1",
+            contract.proof_label
+        )));
+    }
+    if envelope.public_inputs != contract.expected_public_inputs_schema {
+        return Err(invalid_parameter(format!(
+            "{} public-input schema mismatch",
+            contract.proof_label
+        )));
+    }
+    let open = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+        .map_err(|err| invalid_parameter(format!("invalid {}: {err}", contract.wrapper_label)))?;
+    if open.version != 1 {
+        return Err(invalid_parameter(format!(
+            "{} version must be 1",
+            contract.wrapper_label
+        )));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(format!(
+            "{} public inputs do not match statement hash",
+            contract.proof_label
+        )));
+    }
+    validate_soracloud_fhe_stark_native_envelope_bytes(
+        contract.proof_label,
+        &open.envelope_bytes,
+        contract.max_native_envelope_bytes,
+    )?;
+    Ok(open)
 }
 
 #[cfg(feature = "zk-stark")]
@@ -3310,53 +3407,11 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_envelope(
     envelope: &OpenVerifyEnvelope,
     statement_hash: Hash,
 ) -> Result<(), InstructionExecutionError> {
-    if envelope.backend != BackendTag::Stark {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope must declare STARK backend",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope aux must be empty",
-        ));
-    }
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material OpenVerifyEnvelope shape: {err}"
-            ))
-        })?;
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof circuit id must be canonical v1",
-        ));
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public-input schema mismatch",
-        ));
-    }
-    let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material STARK public-input wrapper: {err}"
-            ))
-        })?;
-    if open.version != 1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material STARK public-input wrapper version must be 1",
-        ));
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open.public_inputs != expected_public_inputs {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public inputs do not match statement hash",
-        ));
-    }
-    validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
-        &open.envelope_bytes,
+    validate_soracloud_fhe_statement_open_verify_envelope(
+        &FHE_FULL_BOOTSTRAP_MATERIAL_OPEN_VERIFY_CONTRACT,
+        envelope,
+        statement_hash,
+        soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds(),
     )?;
     let vk_commitment = attachment.vk_commitment.ok_or_else(|| {
         invalid_parameter("FHE full-bootstrap material proof requires vk_commitment")
@@ -3383,54 +3438,11 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_envelope(
     envelope: &OpenVerifyEnvelope,
     statement_hash: Hash,
 ) -> Result<(), InstructionExecutionError> {
-    if envelope.backend != BackendTag::Stark {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof envelope must declare STARK backend",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof envelope aux must be empty",
-        ));
-    }
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap execution OpenVerifyEnvelope shape: {err}"
-            ))
-        })?;
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof circuit id must be canonical v1",
-        ));
-    }
-    if envelope.public_inputs
-        != SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof public-input schema mismatch",
-        ));
-    }
-    let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap execution STARK public-input wrapper: {err}"
-            ))
-        })?;
-    if open.version != 1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution STARK public-input wrapper version must be 1",
-        ));
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open.public_inputs != expected_public_inputs {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap execution proof public inputs do not match statement hash",
-        ));
-    }
-    validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
-        &open.envelope_bytes,
+    validate_soracloud_fhe_statement_open_verify_envelope(
+        &FHE_FULL_BOOTSTRAP_EXECUTION_OPEN_VERIFY_CONTRACT,
+        envelope,
+        statement_hash,
+        soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds(),
     )?;
     let vk_commitment = attachment.vk_commitment.ok_or_else(|| {
         invalid_parameter("FHE full-bootstrap execution proof requires vk_commitment")
@@ -3871,53 +3883,11 @@ fn verify_soracloud_fhe_full_bootstrap_material_proof_backend(
         ));
     }
     let envelope = full_bootstrap_material_proof_attachment_envelope(attachment)?;
-    if envelope.backend != BackendTag::Stark {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope must declare STARK backend",
-        ));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof envelope aux must be empty",
-        ));
-    }
-    envelope
-        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material OpenVerifyEnvelope shape: {err}"
-            ))
-        })?;
-    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof circuit id must be canonical v1",
-        ));
-    }
-    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
-    {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public-input schema mismatch",
-        ));
-    }
-    let open =
-        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
-            invalid_parameter(format!(
-                "invalid FHE full-bootstrap material STARK public-input wrapper: {err}"
-            ))
-        })?;
-    if open.version != 1 {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material STARK public-input wrapper version must be 1",
-        ));
-    }
-    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-    if open.public_inputs != expected_public_inputs {
-        return Err(invalid_parameter(
-            "FHE full-bootstrap material proof public inputs do not match statement hash",
-        ));
-    }
-    validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
-        &open.envelope_bytes,
+    validate_soracloud_fhe_statement_open_verify_envelope(
+        &FHE_FULL_BOOTSTRAP_MATERIAL_OPEN_VERIFY_CONTRACT,
+        &envelope,
+        statement_hash,
+        soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds(),
     )?;
     let record = state_transaction
         .world
@@ -8262,14 +8232,15 @@ fn hf_active_validator_stakes(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<BTreeMap<AccountId, u128>, InstructionExecutionError> {
     let mut stakes = BTreeMap::new();
-    for ((_lane_id, validator_account_id), record) in
-        state_transaction.world.public_lane_validators.iter()
-    {
+    for (key, record) in state_transaction.world.public_lane_validators.iter() {
+        if !public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
         if record.status != PublicLaneValidatorStatus::Active {
             continue;
         }
         let stake = numeric_to_u128(&record.total_stake)?;
-        let entry = stakes.entry(validator_account_id.clone()).or_insert(0_u128);
+        let entry = stakes.entry(key.1.clone()).or_insert(0_u128);
         *entry = (*entry).saturating_add(stake.max(1));
     }
     Ok(stakes)
@@ -18078,6 +18049,63 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(8),
+                validator: BOB_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(9_000, 0),
+                self_stake: Numeric::new(9_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        assert!(
+            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+            "a row whose storage-key lane disagrees with the embedded record lane must not grant Soracloud runtime authority"
+        );
+
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::SINGLE, BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: ALICE_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(8_000, 0),
+                self_stake: Numeric::new(8_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        assert!(
+            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+            "a row whose storage-key validator disagrees with the embedded record validator must not grant Soracloud runtime authority"
+        );
+        Ok(())
+    }
+
     fn insert_active_public_lane_validator(
         state_transaction: &mut StateTransaction<'_, '_>,
         validator: AccountId,
@@ -18099,6 +18127,63 @@ mod tests {
                 last_reward_epoch: None,
             },
         );
+    }
+
+    #[test]
+    fn hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        insert_active_public_lane_validator(&mut state_transaction, BOB_ID.clone(), 700);
+
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::new(2), BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(3),
+                validator: BOB_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(9_000, 0),
+                self_stake: Numeric::new(9_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::new(4), BOB_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::new(4),
+                validator: ALICE_ID.clone(),
+                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                stake_account: BOB_ID.clone(),
+                total_stake: Numeric::new(8_000, 0),
+                self_stake: Numeric::new(8_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+
+        let stakes = hf_active_validator_stakes(&state_transaction)?;
+        assert_eq!(stakes.get(&ALICE_ID), Some(&1_000_u128));
+        assert_eq!(
+            stakes.get(&BOB_ID),
+            Some(&700_u128),
+            "mismatched key/record validator rows must not inflate HF active stake"
+        );
+        Ok(())
     }
 
     fn configure_staking_assets_for_validator_slash_test(

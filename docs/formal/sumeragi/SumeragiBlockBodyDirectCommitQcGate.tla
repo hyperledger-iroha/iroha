@@ -159,7 +159,14 @@ TypeInvariant ==
 DirectCommitQcMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DirectCommitQcMatchesSpec
+BlockBodyDirectCommitQcExactness ==
+  DirectCommitQcMatchesSpec
+
+BlockBodyDirectCommitQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockBodyDirectCommitQcExactness
+
+SafetyFast == BlockBodyDirectCommitQcExactness
 
 UpdateEmbeddedReturned ==
   Matches("update_embedded_qc")

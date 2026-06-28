@@ -1,0 +1,21 @@
+# Reviewed SF-13 PDP rollout evidence collection arguments.
+# The runner only verifies existing payload-free JSON artifacts; collect them
+# from the deployment with site-local commands before running this plan.
+# Run with:
+#   python3 scripts/run_sorafs_pdp_rollout_evidence.py \
+#     @scripts/examples/sorafs_pdp_rollout_collection.args.example \
+#     --dry-run
+--out-dir /var/tmp/sorafs/pdp-rollout
+--provider-transport-evidence /var/tmp/sorafs/pdp-rollout/provider-transport.json
+--proof-generation-evidence /var/tmp/sorafs/pdp-rollout/proof-generation.json
+--validator-replay-evidence /var/tmp/sorafs/pdp-rollout/validator-replay.json
+--governance-repair-evidence /var/tmp/sorafs/pdp-rollout/governance-repair.json
+--observability-evidence /var/tmp/sorafs/pdp-rollout/observability.json
+--governance-approval-evidence /var/tmp/sorafs/pdp-rollout/governance-approval.json
+--summary-out /var/tmp/sorafs/pdp-rollout/rollout-summary.json
+--max-evidence-age-secs 604800
+--max-route-latency-ms 1500
+--max-proof-latency-ms 90000
+--min-providers 3
+--min-challenges 3
+--min-proofs 3

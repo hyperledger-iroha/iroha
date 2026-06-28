@@ -18,7 +18,7 @@ use iroha_data_model::{
     ChainId, DataSpaceId,
     account::AccountId,
     isi::InstructionBox,
-    nexus::{LaneCatalog, LaneId, LaneVisibility},
+    nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
     peer::PeerId,
     transaction::{SignedTransaction, signed::TransactionEntrypoint},
 };
@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     IrohaNetwork, NetworkMessage,
-    queue::{GossipBatchEntry, Queue, RoutingDecision, RoutingPlan},
+    queue::{GossipBatchEntry, Queue, RoutingDecision, RoutingPlan, resolve_routing_decision},
     state::{State, StatelessValidationContext, TransactionsReadOnly},
     tx::{
         AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
@@ -623,15 +623,22 @@ impl TransactionGossiper {
         }
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
-        let (entries, lane_config, lane_catalog, commit_topology) = {
+        let (entries, lane_config, lane_catalog, dataspace_catalog, commit_topology) = {
             let nexus = self.state.nexus_snapshot();
             let lane_config = nexus.lane_config.clone();
             let lane_catalog = nexus.lane_catalog.clone();
+            let dataspace_catalog = nexus.dataspace_catalog.clone();
             let entries = self
                 .queue
                 .gossip_batch_with_state(self.gossip_size.get(), &self.state);
             let commit_topology = self.state.commit_topology_snapshot();
-            (entries, lane_config, lane_catalog, commit_topology)
+            (
+                entries,
+                lane_config,
+                lane_catalog,
+                dataspace_catalog,
+                commit_topology,
+            )
         };
 
         if entries.is_empty() {
@@ -652,7 +659,7 @@ impl TransactionGossiper {
                 lane_id: entry.routing.lane_id,
                 dataspace_id: entry.routing.dataspace_id,
             };
-            if let Err(reason) = validate_route(&lane_catalog, route) {
+            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1481,6 +1488,7 @@ impl TransactionGossiper {
 
         let nexus = self.state.nexus_snapshot();
         let lane_catalog = nexus.lane_catalog.clone();
+        let dataspace_catalog = nexus.dataspace_catalog.clone();
         let lane_config = nexus.lane_config.clone();
         let (max_clock_drift, tx_limits) = {
             let world_view = self.state.world_view();
@@ -1560,7 +1568,7 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(&lane_catalog, route) {
+            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -2104,6 +2112,7 @@ impl TransactionGossiper {
 
         let nexus = self.state.nexus_snapshot();
         let lane_catalog = nexus.lane_catalog.clone();
+        let dataspace_catalog = nexus.dataspace_catalog.clone();
         let lane_config = nexus.lane_config.clone();
         let (max_clock_drift, tx_limits) = {
             let world_view = self.state.world_view();
@@ -2170,7 +2179,7 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(&lane_catalog, route) {
+            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -2525,18 +2534,18 @@ fn decide_restricted_target_plan(
     }
 }
 
-fn validate_route(lane_catalog: &LaneCatalog, route: GossipRoute) -> Result<(), &'static str> {
-    let Some(lane) = lane_catalog
-        .lanes()
-        .iter()
-        .find(|lane| lane.id == route.lane_id)
-    else {
-        return Err("lane missing from catalog");
-    };
-    if lane.dataspace_id != route.dataspace_id {
-        return Err("route dataspace does not match lane catalog");
-    }
-    Ok(())
+fn validate_route(
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    route: GossipRoute,
+) -> Result<(), &'static str> {
+    resolve_routing_decision(
+        RoutingDecision::new(route.lane_id, route.dataspace_id),
+        lane_catalog,
+        dataspace_catalog,
+    )
+    .map(|_| ())
+    .map_err(|err| err.as_label())
 }
 
 fn dataspace_plane(lane_config: &LaneGeometry, dataspace_id: DataSpaceId) -> Option<GossipPlane> {
@@ -3295,13 +3304,10 @@ fn partition_gossip_batch(
             requeue.push(hash);
             continue;
         };
-        let Some(plan_len) = routing_plan
+        let plan_len = routing_plan
             .encoded_len_exact()
             .or_else(|| routing_plan.encoded_len_hint())
-        else {
-            requeue.push(hash);
-            continue;
-        };
+            .unwrap_or_else(|| routing_plan.encode().len());
         let Some(plan_entry_len) = ncore::len_prefix_len(plan_len).checked_add(plan_len) else {
             requeue.push(hash);
             continue;
@@ -4681,6 +4687,54 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
+    fn partition_preserves_native_amx_full_routing_plan() {
+        let (signed, accepted) = build_transaction("native-amx-gossip");
+        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
+        let first_participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
+        let second_participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8));
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                crate::queue::RouteLeg::new(
+                    first_participant,
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    second_participant,
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            usize::MAX,
+            GossipPlane::Public,
+            vec![GossipBatchEntry {
+                tx: accepted,
+                routing: coordinator,
+                routing_plan: plan.clone(),
+                payload: payload_for(&signed),
+            }],
+        );
+
+        assert!(partitioned.requeue.is_empty());
+        assert_eq!(partitioned.message.plans, vec![plan.clone()]);
+        let decoded = decode_gossip_message(&partitioned.message);
+        assert_eq!(decoded.plans, vec![plan]);
+        let RoutingPlan::NativeAmx(native_plan) = &decoded.plans[0] else {
+            panic!("decoded gossip plan should remain native AMX");
+        };
+        assert_eq!(
+            native_plan
+                .participants
+                .iter()
+                .map(|leg| leg.route)
+                .collect::<Vec<_>>(),
+            vec![first_participant, second_participant]
+        );
+    }
+
+    #[test]
     fn partition_respects_max_count() {
         let (tx_a_signed, tx_a_accepted) = build_transaction("a");
         let (tx_b_signed, tx_b_accepted) = build_transaction("b");
@@ -4738,11 +4792,15 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     #[test]
     fn validate_route_rejects_missing_lane() {
         let catalog = LaneCatalog::default();
+        let dataspace_catalog = DataSpaceCatalog::default();
         let route = GossipRoute {
             lane_id: LaneId::new(5),
             dataspace_id: DataSpaceId::new(7),
         };
-        assert!(validate_route(&catalog, route).is_err());
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, route),
+            Err("unknown_lane")
+        );
     }
 
     #[test]
@@ -4759,11 +4817,54 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![lane],
         )
         .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "lane-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(3),
+                alias: "route-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
         let route = GossipRoute {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::new(3),
         };
-        assert!(validate_route(&catalog, route).is_err());
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, route),
+            Err("lane_dataspace_mismatch")
+        );
+    }
+
+    #[test]
+    fn validate_route_rejects_missing_dataspace() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "dangling".to_string(),
+            visibility: LaneVisibility::Restricted,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let route = GossipRoute {
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(9),
+        };
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, route),
+            Err("unknown_dataspace")
+        );
     }
 
     #[test]
@@ -4780,11 +4881,18 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![lane],
         )
         .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(9),
+            alias: "beta-dataspace".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
         let route = GossipRoute {
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),
         };
-        assert!(validate_route(&catalog, route).is_ok());
+        assert_eq!(validate_route(&catalog, &dataspace_catalog, route), Ok(()));
     }
 
     #[test]
@@ -5636,7 +5744,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
+            nexus.enabled = false;
             nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
@@ -5646,14 +5754,19 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             nexus.dataspace_catalog = dataspace_catalog;
         }
 
-        let queue = Arc::new(Queue::test_with_router_for_routes(
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(state.nexus.read().dataspace_catalog.clone());
+        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
             QueueConfig::default(),
-            &TimeSource::new_system(),
+            tokio::sync::broadcast::Sender::new(1),
             Arc::new(FixedRouter {
                 lane: restricted_lane,
                 dataspace: restricted_dataspace,
             }),
-            &[(restricted_lane, restricted_dataspace)],
+            crate::queue::QueueLimits::default(),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
         ));
 
         let now = Instant::now();

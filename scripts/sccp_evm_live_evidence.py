@@ -884,7 +884,7 @@ def _route_canary_message_proof_event_summary(
             log.get("address"),
             label="route-canary log address",
         )
-    except RuntimeError:
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return None
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics:
@@ -896,7 +896,7 @@ def _route_canary_message_proof_event_summary(
             topics[0],
             label="route-canary log topic0",
         )
-    except RuntimeError:
+    except (SystemExit, RuntimeError, TypeError, ValueError):
         return None
     if log_address != bridge_address or topic0 != EVM_MESSAGE_PROOF_ACCEPTED_TOPIC:
         return None
@@ -1895,7 +1895,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     parser = evidence.build_parser()
     try:
         args = parser.parse_args([*_offline_args(summary), "--toml"])
-    except SystemExit:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "generated EVM destination TOML arguments are invalid"
         ) from None
@@ -2431,7 +2431,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -2457,11 +2457,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(render_offline_toml(summary))
             return 0
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

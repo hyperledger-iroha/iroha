@@ -555,7 +555,7 @@ BugWitness ==
     ~ActualProcessPrecommitAttempted("tally_final_error")
   ELSE TRUE
 
-SafetyFast ==
+BlockSyncSelectedQcCacheExactness ==
   /\ TopologyAndShape
   /\ LockedPrefilter
   /\ NonextendingPrefilter
@@ -563,6 +563,13 @@ SafetyFast ==
   /\ ProcessReject
   /\ LockUpdateAndCache
   /\ ValidationError
+
+BlockSyncSelectedQcCacheCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedQcCacheExactness
+
+SafetyFast ==
+  BlockSyncSelectedQcCacheExactness
 
 =============================================================================
 ====

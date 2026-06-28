@@ -4,8 +4,9 @@ use super::*;
 use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus,
-        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+        NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1, NativeAmxLegRecord, NativeAmxPhase,
+        NativeAmxReceipt, SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
+        SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
         SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
         SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
@@ -1858,6 +1859,95 @@ fn settlement_snapshot_value(
     json_object(vec![json_entry("dvp", dvp), json_entry("pvp", pvp)])
 }
 
+fn hash_with_prefix<H>(hash: H) -> String
+where
+    H: core::fmt::Display,
+{
+    format!("{hash}")
+}
+
+fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
+    match phase {
+        NativeAmxPhase::Prepare => "prepare",
+        NativeAmxPhase::Commit => "commit",
+    }
+}
+
+fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value {
+    json_object(vec![
+        json_entry("source_id", hex::encode(body.source_id)),
+        json_entry(
+            "tx_entrypoint_hash",
+            hash_with_prefix(body.tx_entrypoint_hash),
+        ),
+        json_entry("plan_digest", hash_with_prefix(body.plan_digest)),
+        json_entry("phase", native_amx_phase_label(body.phase)),
+        json_entry("coordinator_lane_id", body.coordinator_lane_id),
+        json_entry("coordinator_dataspace_id", body.coordinator_dataspace_id),
+        json_entry("participant_lane_id", body.participant_lane_id),
+        json_entry("participant_dataspace_id", body.participant_dataspace_id),
+        json_entry(
+            "planned_coordinator_block_height",
+            body.planned_coordinator_block_height,
+        ),
+    ])
+}
+
+fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV1) -> Value {
+    json_object(vec![
+        json_entry("body", native_amx_attestation_body_json(&qc.body)),
+        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
+        json_entry(
+            "validator_set_hash",
+            hash_with_prefix(qc.validator_set_hash),
+        ),
+        json_entry(
+            "validator_set",
+            Value::Array(
+                qc.validator_set
+                    .iter()
+                    .map(|peer| Value::from(peer.to_string()))
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "signers_bitmap",
+            Value::Array(qc.signers_bitmap.iter().copied().map(Value::from).collect()),
+        ),
+        json_entry(
+            "bls_aggregate_signature",
+            hex::encode(&qc.bls_aggregate_signature),
+        ),
+    ])
+}
+
+fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
+    json_object(vec![
+        json_entry("lane_id", leg.lane_id),
+        json_entry("dataspace_id", leg.dataspace_id),
+        json_entry(
+            "prepare_qc",
+            native_amx_attestation_qc_json(&leg.prepare_qc),
+        ),
+        json_entry("commit_qc", native_amx_attestation_qc_json(&leg.commit_qc)),
+    ])
+}
+
+fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
+    json_object(vec![
+        json_entry("version", receipt.version),
+        json_entry("source_id", hex::encode(receipt.source_id)),
+        json_entry("plan_digest", hash_with_prefix(receipt.plan_digest)),
+        json_entry("lane_id", receipt.lane_id),
+        json_entry("dataspace_id", receipt.dataspace_id),
+        json_entry("block_height", receipt.block_height),
+        json_entry(
+            "legs",
+            Value::Array(receipt.legs.iter().map(native_amx_leg_json).collect()),
+        ),
+    ])
+}
+
 fn nexus_fee_snapshot_value(fee: &sumeragi::status::NexusFeeSnapshot) -> Value {
     json_object(vec![
         json_entry("charged_total", fee.charged_total),
@@ -2847,6 +2937,87 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             })
             .collect(),
     );
+    let lane_settlement_commitments = Value::Array(
+        snap.lane_settlement_commitments
+            .iter()
+            .map(|entry| {
+                let receipts = Value::Array(
+                    entry
+                        .receipts
+                        .iter()
+                        .map(|receipt| {
+                            json_object(vec![
+                                json_entry("source_id", hex::encode(receipt.source_id)),
+                                json_entry(
+                                    "local_amount_micro",
+                                    receipt.local_amount_micro.to_string(),
+                                ),
+                                json_entry("xor_due_micro", receipt.xor_due_micro.to_string()),
+                                json_entry(
+                                    "xor_after_haircut_micro",
+                                    receipt.xor_after_haircut_micro.to_string(),
+                                ),
+                                json_entry(
+                                    "xor_variance_micro",
+                                    receipt.xor_variance_micro.to_string(),
+                                ),
+                                json_entry("timestamp_ms", receipt.timestamp_ms),
+                            ])
+                        })
+                        .collect(),
+                );
+                let native_amx_receipts = Value::Array(
+                    entry
+                        .native_amx_receipts
+                        .iter()
+                        .map(native_amx_receipt_json)
+                        .collect(),
+                );
+                let swap_metadata = entry
+                    .swap_metadata
+                    .as_ref()
+                    .map(|meta| {
+                        json_object(vec![
+                            json_entry("epsilon_bps", meta.epsilon_bps),
+                            json_entry("twap_window_seconds", meta.twap_window_seconds),
+                            json_entry(
+                                "liquidity_profile",
+                                Value::from(format!("{:?}", meta.liquidity_profile)),
+                            ),
+                            json_entry("twap_local_per_xor", meta.twap_local_per_xor.clone()),
+                            json_entry(
+                                "volatility_class",
+                                Value::from(format!("{:?}", meta.volatility_class)),
+                            ),
+                        ])
+                    })
+                    .unwrap_or(Value::Null);
+                json_object(vec![
+                    json_entry("block_height", entry.block_height),
+                    json_entry("lane_id", entry.lane_id),
+                    json_entry("dataspace_id", entry.dataspace_id),
+                    json_entry("tx_count", entry.tx_count),
+                    json_entry("total_local_micro", entry.total_local_micro.to_string()),
+                    json_entry("total_xor_due_micro", entry.total_xor_due_micro.to_string()),
+                    json_entry(
+                        "total_xor_after_haircut_micro",
+                        entry.total_xor_after_haircut_micro.to_string(),
+                    ),
+                    json_entry(
+                        "total_xor_variance_micro",
+                        entry.total_xor_variance_micro.to_string(),
+                    ),
+                    json_entry("swap_metadata", swap_metadata),
+                    json_entry("receipts", receipts),
+                    json_entry(
+                        "nexus_fee_receipts",
+                        crate::json_value(&entry.nexus_fee_receipts),
+                    ),
+                    json_entry("native_amx_receipts", native_amx_receipts),
+                ])
+            })
+            .collect(),
+    );
     let dataspace_commitments = Value::Array(
         snap.dataspace_commitments
             .iter()
@@ -3571,6 +3742,9 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("prf", prf),
         json_entry("membership", membership),
         json_entry("membership_mismatch", membership_mismatch),
+        json_entry("lane_commitments", lane_commitments),
+        json_entry("lane_settlement_commitments", lane_settlement_commitments),
+        json_entry("dataspace_commitments", dataspace_commitments),
         json_entry(
             "lane_governance_sealed_total",
             snap.lane_governance_sealed_total,
@@ -3626,10 +3800,26 @@ mod status_tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey};
     use iroha_data_model::{
+        block::consensus::{
+            LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
+            LaneVolatilityClass, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
+            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
+        },
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
         consensus::{ValidatorElectionOutcome, ValidatorElectionParameters, ValidatorTieBreak},
-        nexus::LaneId,
+        nexus::{DataSpaceId, LaneId},
+        peer::PeerId,
+        transaction::TransactionEntrypoint,
     };
     use iroha_primitives::numeric::Numeric;
+
+    fn checked_status_peer(seed: u8, context: &'static str) -> PeerId {
+        PeerId::new(
+            super::super::checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
+                .public_key()
+                .clone(),
+        )
+    }
 
     #[test]
     fn status_snapshot_json_includes_vrf_fields() {
@@ -3883,6 +4073,254 @@ mod status_tests {
                 .unwrap_or(false),
             "lane governance array missing"
         );
+    }
+
+    #[test]
+    fn status_snapshot_json_serializes_lane_settlement_commitments() {
+        let receipt = LaneSettlementReceipt {
+            source_id: [0xAB; 32],
+            local_amount_micro: 1_500u128,
+            xor_due_micro: 75_000u128,
+            xor_after_haircut_micro: 70_000u128,
+            xor_variance_micro: 5_000u128,
+            timestamp_ms: 1_700_000_000_000,
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: 42,
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(9),
+            tx_count: 2,
+            total_local_micro: 1_500u128,
+            total_xor_due_micro: 75_000u128,
+            total_xor_after_haircut_micro: 70_000u128,
+            total_xor_variance_micro: 5_000u128,
+            swap_metadata: Some(LaneSwapMetadata {
+                epsilon_bps: 25,
+                twap_window_seconds: 60,
+                liquidity_profile: LaneLiquidityProfile::Tier2,
+                twap_local_per_xor: "12.5".to_owned(),
+                volatility_class: LaneVolatilityClass::Stable,
+            }),
+            receipts: vec![receipt.clone()],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let snap = sumeragi::StatusSnapshot {
+            lane_settlement_commitments: vec![commitment.clone()],
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let entries = payload
+            .get("lane_settlement_commitments")
+            .and_then(Value::as_array)
+            .expect("lane settlement commitments array");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0]
+            .as_object()
+            .expect("lane settlement commitment object");
+        assert_eq!(
+            entry.get("block_height").and_then(Value::as_u64),
+            Some(commitment.block_height)
+        );
+        assert_eq!(entry.get("lane_id").and_then(Value::as_u64), Some(3));
+        assert_eq!(entry.get("dataspace_id").and_then(Value::as_u64), Some(9));
+        assert_eq!(
+            entry
+                .get("total_xor_variance_micro")
+                .and_then(Value::as_str),
+            Some(commitment.total_xor_variance_micro.to_string().as_str())
+        );
+
+        let metadata = entry
+            .get("swap_metadata")
+            .and_then(Value::as_object)
+            .expect("swap metadata object");
+        assert_eq!(
+            metadata.get("epsilon_bps").and_then(Value::as_u64),
+            Some(25)
+        );
+        assert_eq!(
+            metadata.get("liquidity_profile").and_then(Value::as_str),
+            Some("Tier2")
+        );
+
+        let receipts = entry
+            .get("receipts")
+            .and_then(Value::as_array)
+            .expect("receipts array");
+        assert_eq!(receipts.len(), 1);
+        let receipt_entry = receipts[0].as_object().expect("receipt object");
+        assert_eq!(
+            receipt_entry.get("source_id").and_then(Value::as_str),
+            Some(hex::encode(receipt.source_id).as_str())
+        );
+        assert_eq!(
+            receipt_entry
+                .get("xor_after_haircut_micro")
+                .and_then(Value::as_str),
+            Some(receipt.xor_after_haircut_micro.to_string().as_str())
+        );
+        assert!(
+            entry
+                .get("nexus_fee_receipts")
+                .and_then(Value::as_array)
+                .expect("nexus fee receipts array")
+                .is_empty()
+        );
+        assert!(
+            entry
+                .get("native_amx_receipts")
+                .and_then(Value::as_array)
+                .expect("native AMX receipts array")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_serializes_native_amx_receipts_in_lane_settlement_commitments() {
+        let source_id = [0xCE; 32];
+        let plan_digest = Hash::new(b"consensus-status-native-amx-plan");
+        let tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::prehashed([0x44; Hash::LENGTH]),
+        );
+        let coordinator_lane_id = LaneId::new(4);
+        let coordinator_dataspace_id = DataSpaceId::new(11);
+        let participant_lane_id = LaneId::new(5);
+        let participant_dataspace_id = DataSpaceId::new(12);
+        let validators = vec![
+            checked_status_peer(0xA1, "derive native AMX status fixture peer key 1"),
+            checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
+        ];
+        let validator_set_hash = HashOf::new(&validators);
+        let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
+            body: NativeAmxAttestationBodyV1 {
+                source_id,
+                tx_entrypoint_hash,
+                plan_digest,
+                phase,
+                coordinator_lane_id,
+                coordinator_dataspace_id,
+                participant_lane_id,
+                participant_dataspace_id,
+                planned_coordinator_block_height: 77,
+            },
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
+            validator_set: validators.clone(),
+            signers_bitmap: vec![0b0000_0011],
+            bls_aggregate_signature: vec![0xA5; 96],
+        };
+        let receipt = NativeAmxReceipt {
+            version: 1,
+            source_id,
+            plan_digest,
+            lane_id: coordinator_lane_id,
+            dataspace_id: coordinator_dataspace_id,
+            block_height: 77,
+            legs: vec![NativeAmxLegRecord {
+                lane_id: participant_lane_id,
+                dataspace_id: participant_dataspace_id,
+                prepare_qc: native_amx_qc(NativeAmxPhase::Prepare),
+                commit_qc: native_amx_qc(NativeAmxPhase::Commit),
+            }],
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: 77,
+            lane_id: coordinator_lane_id,
+            dataspace_id: coordinator_dataspace_id,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: vec![receipt],
+        };
+        let snap = sumeragi::StatusSnapshot {
+            lane_settlement_commitments: vec![commitment],
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let native = payload
+            .get("lane_settlement_commitments")
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(Value::as_object)
+            .and_then(|entry| entry.get("native_amx_receipts"))
+            .and_then(Value::as_array)
+            .and_then(|receipts| receipts.first())
+            .and_then(Value::as_object)
+            .expect("native AMX receipt object");
+        assert_eq!(native.get("version").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            native.get("source_id").and_then(Value::as_str),
+            Some(hex::encode(source_id).as_str())
+        );
+        assert_eq!(
+            native.get("plan_digest").and_then(Value::as_str),
+            Some(hash_with_prefix(plan_digest).as_str())
+        );
+        assert_eq!(
+            native.get("lane_id").and_then(Value::as_u64),
+            Some(u64::from(coordinator_lane_id))
+        );
+        assert_eq!(
+            native.get("dataspace_id").and_then(Value::as_u64),
+            Some(u64::from(coordinator_dataspace_id))
+        );
+
+        let leg = native
+            .get("legs")
+            .and_then(Value::as_array)
+            .and_then(|legs| legs.first())
+            .and_then(Value::as_object)
+            .expect("native AMX leg object");
+        assert_eq!(
+            leg.get("lane_id").and_then(Value::as_u64),
+            Some(u64::from(participant_lane_id))
+        );
+        let prepare_qc = leg
+            .get("prepare_qc")
+            .and_then(Value::as_object)
+            .expect("prepare QC object");
+        let prepare_body = prepare_qc
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("prepare body object");
+        assert_eq!(
+            prepare_body.get("phase").and_then(Value::as_str),
+            Some("prepare")
+        );
+        assert_eq!(
+            prepare_body
+                .get("tx_entrypoint_hash")
+                .and_then(Value::as_str),
+            Some(hash_with_prefix(tx_entrypoint_hash).as_str())
+        );
+        assert_eq!(
+            prepare_qc.get("validator_set_hash").and_then(Value::as_str),
+            Some(hash_with_prefix(validator_set_hash).as_str())
+        );
+        assert_eq!(
+            prepare_qc
+                .get("signers_bitmap")
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(Value::as_u64),
+            Some(0b0000_0011)
+        );
+        let commit_phase = leg
+            .get("commit_qc")
+            .and_then(Value::as_object)
+            .and_then(|qc| qc.get("body"))
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("phase"))
+            .and_then(Value::as_str);
+        assert_eq!(commit_phase, Some("commit"));
     }
 
     #[test]

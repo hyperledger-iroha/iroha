@@ -1,0 +1,38 @@
+# Example arguments for the SFM-3 reputation rollout evidence collection planner.
+# Run with:
+#   python3 scripts/run_sorafs_reputation_rollout_evidence.py \
+#     @scripts/examples/sorafs_reputation_rollout_collection.args.example \
+#     --dry-run
+#
+# Keep signing keys, bearer tokens, raw snapshots, proof bytes, and operator
+# secrets in runtime-only locations. This example stores only paths and
+# payload-free rollout summaries in the repository-local artifacts/ directory.
+
+--sorafs-cli-bin
+target/debug/sorafs_cli
+--torii-url
+https://validator.example.invalid
+--snapshot
+/runtime/sorafs/reputation/reputation-snapshot.to
+--provider-id
+provider-a
+--provider-proof
+provider-a=/runtime/sorafs/reputation/provider-a-proof.to
+--metrics-evidence
+/runtime/sorafs/reputation/reputation-metrics-canary.json
+--transport-evidence
+/runtime/sorafs/reputation/reputation-transport-canary.json
+--consumption-evidence
+/runtime/sorafs/reputation/reputation-consumption-canary.json
+--out-dir
+artifacts/sorafs/reputation/staged
+--summary-out
+artifacts/sorafs/reputation/staged/rollout-summary.json
+--watch-since
+0
+--watch-limit
+100
+--watch-max-polls
+1
+--watch-poll-interval-ms
+1000

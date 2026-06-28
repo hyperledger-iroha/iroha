@@ -309,9 +309,16 @@ BlockSyncLockedQcCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == BlockSyncLockedQcCoreSafety
+BlockSyncLockedQcExactness ==
+  BlockSyncLockedQcCoreSafety
 
-SafetyFast == BlockSyncLockedQcCoreSafety
+BlockSyncLockedQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncLockedQcExactness
+
+NoBugInvariant == BlockSyncLockedQcExactness
+
+SafetyFast == BlockSyncLockedQcExactness
 
 BugExtendsRejectsNoLock == NoBugInvariant
 BugExtendsAllowsSameViewMissingLockPayload == NoBugInvariant

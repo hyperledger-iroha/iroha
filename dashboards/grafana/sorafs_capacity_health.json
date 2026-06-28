@@ -663,6 +663,79 @@
         "overrides": []
       },
       "description": "Absolute gateway/orchestrator drift from billing egress bytes. Values over 10% for 10 minutes trigger SoraFSEgressCounterDrift."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Runtime Defaults and Appeals",
+      "id": 27,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "torii_sorafs_reserve_defaulted_providers",
+          "legendFormat": "defaulted providers",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_reserve_appeal_backlog",
+          "legendFormat": "open appeals",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Local reserve runtime defaults and open appeal backlog. Non-zero defaults and sustained appeal backlog are covered by reserve runtime alerts."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Runtime Chain Reconciliation",
+      "id": 28,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (status) (torii_sorafs_reserve_chain_reconciled_movements)",
+          "legendFormat": "{{status}} reconciled",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (status) (torii_sorafs_reserve_custody_movements)",
+          "legendFormat": "{{status}} custody",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Terminal reserve movement reconciliation counts alongside the local custody ledger."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Runtime Rate Limits / 5m",
+      "id": 29,
+      "datasource": "$datasource",
+      "targets": [
+        {
+          "expr": "sum by (route, reason) (increase(torii_sorafs_reserve_service_rate_limit_total[5m]))",
+          "legendFormat": "{{route}} {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Reserve service rate-limit activity visible from the Torii runtime metrics registry."
     }
   ]
 }

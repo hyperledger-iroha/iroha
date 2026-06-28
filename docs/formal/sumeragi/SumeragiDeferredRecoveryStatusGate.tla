@@ -160,6 +160,13 @@ Safety ==
   /\ ImplementationActions(ResetAfterRecordsClears) =
        SpecActions(ResetAfterRecordsClears)
 
+DeferredRecoveryStatusExactness ==
+  Safety
+
+DeferredRecoveryStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DeferredRecoveryStatusExactness
+
 BugResetEmptyKeepsDeferredQc ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

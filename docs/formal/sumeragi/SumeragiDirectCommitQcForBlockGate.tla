@@ -218,7 +218,14 @@ TypeInvariant ==
 DirectCommitQcForBlockMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DirectCommitQcForBlockMatchesSpec
+DirectCommitQcForBlockExactness ==
+  DirectCommitQcForBlockMatchesSpec
+
+DirectCommitQcForBlockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DirectCommitQcForBlockExactness
+
+SafetyFast == DirectCommitQcForBlockExactness
 
 CachedQcReturned ==
   Matches("cached_only")

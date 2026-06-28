@@ -1,0 +1,37 @@
+# Example:
+#   python3 scripts/run_sorafs_gateway_compliance_rollout_evidence.py \
+#     @scripts/examples/sorafs_gateway_compliance_rollout_collection.args.example \
+#     --dry-run
+
+--out-dir
+dist/sorafs-gateway-compliance-rollout-evidence
+--now-unix
+1800009000
+--max-evidence-age-secs
+86400
+--max-route-latency-ms
+1500
+--max-reload-latency-ms
+300000
+--min-gateways
+3
+--min-denylist-entries
+5
+--min-honey-probes
+4
+--feed-promotion-evidence
+/runtime/sorafs/gateway-compliance/feed-promotion-canary.json
+--gateway-reload-evidence
+/runtime/sorafs/gateway-compliance/gateway-reload-canary.json
+--enforcement-probe-evidence
+/runtime/sorafs/gateway-compliance/enforcement-probe-canary.json
+--honey-audit-evidence
+/runtime/sorafs/gateway-compliance/honey-audit-canary.json
+--appeal-override-evidence
+/runtime/sorafs/gateway-compliance/appeal-override-canary.json
+--transparency-publication-evidence
+/runtime/sorafs/gateway-compliance/transparency-publication-canary.json
+--observability-evidence
+/runtime/sorafs/gateway-compliance/observability-canary.json
+--governance-approval-evidence
+/runtime/sorafs/gateway-compliance/governance-approval.json

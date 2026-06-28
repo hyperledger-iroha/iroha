@@ -559,7 +559,7 @@ def _constant_word(
             label=f"TRON constant call {function_selector} ABI word",
             nonzero=False,
         )
-    except RuntimeError:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"TRON constant call {function_selector} returned non-hex data"
         ) from None
@@ -1555,7 +1555,7 @@ def _source_event_result_bytes_are_success(result_bytes: bytes) -> bool:
                 cursor,
                 label="source-event transaction result bytes",
             )
-        except RuntimeError:
+        except (SystemExit, RuntimeError, TypeError, ValueError):
             return False
         previous_field_number = field_number
         if field_number == 2 and value != 0:
@@ -3311,7 +3311,7 @@ def _source_event_transaction_summary(
                 log.get("address"),
                 label="source-event log address",
             )
-        except RuntimeError:
+        except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         topics = log.get("topics")
         if not isinstance(topics, list) or len(topics) != 2:
@@ -3334,7 +3334,7 @@ def _source_event_transaction_summary(
                 label="source-event log data",
                 nonzero=False,
             )
-        except RuntimeError:
+        except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         if event_data != b"":
             continue
@@ -3630,7 +3630,7 @@ def _route_canary_message_proof_event_summary(
             log.get("address"),
             label="route-canary log address",
         )
-    except RuntimeError:
+    except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
         return None
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics:
@@ -6247,7 +6247,7 @@ def render_offline_full_toml(summary: dict[str, Any]) -> str:
     offline_parser = evidence.build_parser()
     try:
         offline_args = offline_parser.parse_args(args)
-    except SystemExit:
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             "generated offline full TOML arguments are invalid"
         ) from None
@@ -7381,7 +7381,7 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 
 def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, SystemExit)):
         return fallback
     text = str(exc)
     if not text:
@@ -7412,11 +7412,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(render_offline_full_toml(summary))
             return 0
     except (
+        argparse.ArgumentTypeError,
         OSError,
+        SystemExit,
         RuntimeError,
         TypeError,
         ValueError,
-        argparse.ArgumentTypeError,
     ) as exc:
         detail = _cli_error_detail(
             exc,

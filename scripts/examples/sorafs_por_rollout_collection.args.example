@@ -1,0 +1,21 @@
+# Reviewed SF-9 PoR rollout evidence collection arguments.
+# The runner only verifies existing payload-free JSON artifacts; collect them
+# from the deployment with site-local commands before running this plan.
+# Run with:
+#   python3 scripts/run_sorafs_por_rollout_evidence.py \
+#     @scripts/examples/sorafs_por_rollout_collection.args.example \
+#     --dry-run
+--out-dir /var/tmp/sorafs/por-rollout
+--randomness-evidence /var/tmp/sorafs/por-rollout/randomness.json
+--scheduler-runtime-evidence /var/tmp/sorafs/por-rollout/scheduler-runtime.json
+--validator-replay-evidence /var/tmp/sorafs/por-rollout/validator-replay.json
+--reporting-archive-evidence /var/tmp/sorafs/por-rollout/reporting-archive.json
+--observability-evidence /var/tmp/sorafs/por-rollout/observability.json
+--governance-approval-evidence /var/tmp/sorafs/por-rollout/governance-approval.json
+--summary-out /var/tmp/sorafs/por-rollout/rollout-summary.json
+--max-evidence-age-secs 604800
+--max-route-latency-ms 1500
+--max-scheduler-lag-secs 900
+--max-report-latency-ms 3000
+--min-providers 3
+--min-challenges 3

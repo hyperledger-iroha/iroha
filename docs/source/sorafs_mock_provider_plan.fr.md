@@ -4,14 +4,9 @@ direction: ltr
 source: docs/source/sorafs_mock_provider_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a1194424dee1f8713a7bff272174d3afa76a72fdbb61ab2f6a76614cddcd614e
-source_last_modified: "2026-01-03T18:07:57.195739+00:00"
+source_hash: e61acfacaab4807efdab08301cdff2af88edefa47779b3a48c79ea7651d5649b
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS Mock Provider Harness Status
-summary: Implemented SF-6c deterministic multi-provider fixture harness and remaining service follow-ups.
 ---
 
 # SoraFS Mock Provider Harness Status

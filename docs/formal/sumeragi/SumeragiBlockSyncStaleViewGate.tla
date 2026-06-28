@@ -182,7 +182,14 @@ TypeInvariant ==
 StaleViewMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == StaleViewMatchesSpec
+BlockSyncStaleViewExactness ==
+  StaleViewMatchesSpec
+
+BlockSyncStaleViewCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncStaleViewExactness
+
+SafetyFast == BlockSyncStaleViewExactness
 
 FreshViewContinues ==
   Matches("fresh_view")

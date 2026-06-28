@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "fixture_family": "sorafs_hedging_billing",
+  "generator": "cargo run -p sorafs_manifest --bin generate_hedging_fixtures",
+  "validation_scope": "generated_bytes_required",
+  "fixtures": [
+    {
+      "name": "price_feed_primary_v1",
+      "kind": "price-feed",
+      "norito_path": "fixtures/sorafs_manifest/hedging/price_feed_primary_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/price_feed_primary_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --feed fixtures/sorafs_manifest/hedging/price_feed_primary_v1.to"
+    },
+    {
+      "name": "price_feed_secondary_v1",
+      "kind": "price-feed",
+      "norito_path": "fixtures/sorafs_manifest/hedging/price_feed_secondary_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/price_feed_secondary_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --feed fixtures/sorafs_manifest/hedging/price_feed_secondary_v1.to"
+    },
+    {
+      "name": "reference_price_decision_v1",
+      "kind": "reference-price-decision",
+      "norito_path": "fixtures/sorafs_manifest/hedging/reference_price_decision_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/reference_price_decision_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --decision fixtures/sorafs_manifest/hedging/reference_price_decision_v1.to"
+    },
+    {
+      "name": "billing_line_storage_v1",
+      "kind": "billing-line-item",
+      "norito_path": "fixtures/sorafs_manifest/hedging/billing_line_storage_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/billing_line_storage_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --line fixtures/sorafs_manifest/hedging/billing_line_storage_v1.to"
+    },
+    {
+      "name": "billing_line_egress_v1",
+      "kind": "billing-line-item",
+      "norito_path": "fixtures/sorafs_manifest/hedging/billing_line_egress_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/billing_line_egress_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --line fixtures/sorafs_manifest/hedging/billing_line_egress_v1.to"
+    },
+    {
+      "name": "billing_line_incentive_credit_v1",
+      "kind": "billing-line-item",
+      "norito_path": "fixtures/sorafs_manifest/hedging/billing_line_incentive_credit_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/billing_line_incentive_credit_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --line fixtures/sorafs_manifest/hedging/billing_line_incentive_credit_v1.to"
+    },
+    {
+      "name": "billing_statement_v1",
+      "kind": "billing-statement",
+      "norito_path": "fixtures/sorafs_manifest/hedging/billing_statement_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/billing_statement_v1.json",
+      "expected_status": "accepted",
+      "validation_command": "sorafs-validate hedging --statement fixtures/sorafs_manifest/hedging/billing_statement_v1.to"
+    },
+    {
+      "name": "stale_reference_price_decision_v1",
+      "kind": "reference-price-decision",
+      "norito_path": "fixtures/sorafs_manifest/hedging/negative/stale_reference_price_decision_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/negative/stale_reference_price_decision_v1.json",
+      "expected_status": "rejected",
+      "negative_case": "stale_feed",
+      "validation_command": "sorafs-validate hedging --decision fixtures/sorafs_manifest/hedging/negative/stale_reference_price_decision_v1.to"
+    },
+    {
+      "name": "line_usd_mismatch_statement_v1",
+      "kind": "billing-statement",
+      "norito_path": "fixtures/sorafs_manifest/hedging/negative/line_usd_mismatch_statement_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/negative/line_usd_mismatch_statement_v1.json",
+      "expected_status": "rejected",
+      "negative_case": "line_usd_mismatch",
+      "validation_command": "sorafs-validate hedging --statement fixtures/sorafs_manifest/hedging/negative/line_usd_mismatch_statement_v1.to"
+    },
+    {
+      "name": "tampered_totals_statement_v1",
+      "kind": "billing-statement",
+      "norito_path": "fixtures/sorafs_manifest/hedging/negative/tampered_totals_statement_v1.to",
+      "json_path": "fixtures/sorafs_manifest/hedging/negative/tampered_totals_statement_v1.json",
+      "expected_status": "rejected",
+      "negative_case": "totals_mismatch",
+      "validation_command": "sorafs-validate hedging --statement fixtures/sorafs_manifest/hedging/negative/tampered_totals_statement_v1.to"
+    }
+  ]
+}

@@ -215,6 +215,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+DaGateStatusExactness ==
+  Safety
+
+DaGateStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DaGateStatusExactness
+
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

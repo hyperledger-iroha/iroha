@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_commit_reveal_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 99453646976cda7047bcd6b3e84510751a5fd0af4cef2e59928f68661e9493c7
-source_last_modified: "2026-01-03T18:08:01.383456+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 3da47b337de51ecb453165a9297dd60eb72286d804343d8f698c961ec82bbf35
+source_last_modified: "2026-06-25T16:58:37+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # Commit-Reveal Voting Service
@@ -15,10 +15,22 @@ translation_last_reviewed: 2026-01-30
 
 SFM-4b4 has reusable commit/reveal and sortition data foundations in the
 ministry policy-jury module plus SoraFS-specific moderation ballot
-commit/reveal payloads in the SoraFS data model. The repository does not yet
-ship the SoraFS moderation voting contract, ballot orchestrator, juror CLI,
-challenge monitor, or runtime service needed to run appeal-panel ballots end to
-end.
+commit/reveal payloads in the SoraFS data model and a local `sorafs_node`
+ballot lifecycle runtime exposed through local Torii JSON endpoints. Accepted
+local ballot lifecycle events can also be materialized into the SoraFS
+Governance DAG filesystem publisher and optional signed runtime DAG. The
+repository does not yet ship the SoraFS moderation voting contract, durable
+ballot orchestrator, juror CLI, challenge monitor, or production service needed
+to run appeal-panel ballots end to end. The shared SFM-4b moderation-panel
+rollout evidence gate now validates a dedicated
+`sorafs.moderation_panel.commit_reveal_canary.v1` artifact for this boundary,
+including authenticated commit/reveal routes, digest recomputation, duplicate
+commit rejection, mismatched reveal rejection, late commit/reveal rejection,
+missed-quorum detection, no-show failover, juror penalty planning,
+deterministic tally replay, contested challenge coverage, governance event
+digest binding, event-lag limits, and absence of raw commit/reveal payloads.
+That gate blocks deployed promotion evidence; it does not replace the missing
+durable service or contract-backed workflow.
 
 ## Shipped Foundations
 
@@ -38,11 +50,29 @@ end.
   the context to `uphold`, `overturn`, `modify`, and `escalate` vote choices,
   reject blank case/policy/finance fields, reject zero evidence/roster hashes,
   and verify the reveal nonce and commitment digest.
+- `sorafs_node::ModerationBallotRuntime`, exposed through `NodeHandle`, accepts
+  ballot announcements, juror commitments, challenge-buffered reveals, and
+  deterministic quorum tallies with contested tie detection plus replayable
+  local events.
+- Torii exposes local moderation ballot endpoints for announcement, list/get,
+  commit, reveal, tally, and event backlog under
+  `/v1/sorafs/moderation/ballots*`. Mutating requests require canonical app
+  authentication, announcement requests require a `deposit_confirmation` object
+  that Torii confirms against the runtime native asset-lock ledger before local
+  ballot admission, and commit/reveal requests require the authenticated account
+  to match the canonical juror id in the payload. Ballot list/detail readbacks
+  bound embedded commit and reveal arrays with `limit` (default 50, max 500)
+  while preserving full counts and truncation metadata.
 - `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and
   `sorafs_node::FilesystemGovernancePublisher` publish local announcement,
   commit-accepted, reveal-accepted, and tally events into the local
   `publish-index.json`, CAR queue, and optional signed runtime DAG when a
   governance publisher is configured.
+- `scripts/check_sorafs_moderation_panel_rollout_evidence.py` validates
+  payload-free commit/reveal rollout evidence and rejects canaries that omit
+  duplicate-commit, mismatched-reveal, late-submission, missed-quorum,
+  no-show-failover, contested-challenge, deterministic-replay, or governance
+  digest-binding coverage.
 - Example policy-jury fixtures live in `docs/examples/ministry/`.
 
 These types currently model policy-jury choices (`approve`, `reject`,
@@ -54,8 +84,9 @@ outcomes.
 
 The production service still targets this flow:
 
-1. The moderation panel service announces a ballot with case id, policy
-   reference, panel roster hash, quorum rules, and commit/reveal deadlines.
+1. The moderation panel service announces a ballot with case id, confirmed
+   appeal-deposit custody, policy reference, panel roster hash, quorum rules,
+   and commit/reveal deadlines.
 2. Jurors submit signed commitment envelopes during the sealed phase.
 3. A challenge buffer allows roster or duplicate-commitment disputes before
    reveals open.
@@ -67,28 +98,37 @@ The production service still targets this flow:
 
 ## Remaining Production Gates
 
-- Implement the ballot lifecycle store and orchestrator for announcements,
-  commit windows, challenge buffers, reveal windows, tallying, retries, and
-  contested outcomes.
+- Persist or contract-back the local ballot lifecycle store and add the
+  production orchestrator for retries, no-show handling, challenge disputes, and
+  durable contested-outcome workflows.
 - Implement the on-chain contract or ledger workflow that records commitments,
   reveals, challenges, outcomes, and juror penalties.
 - Provide juror-facing CLI or portal commands for listing ballots, committing,
-  revealing, challenging, and exporting audit evidence.
+  revealing, challenging, and exporting audit evidence through the Torii API.
 - Extend Governance DAG publication beyond local lifecycle events to durable
   challenge/dispute records, contract-backed decisions, and public IPFS/IPNS
   rollout evidence.
 - Add end-to-end simulations with no-shows, duplicate commits, mismatched
   reveals, missed quorum, contested challenges, and successful decisions.
+- Collect a passing payload-free `commit_reveal` canary through the SFM-4b
+  rollout evidence gate after the durable service exists.
 
 ## Validation
 
 The current foundation is covered by policy-jury data-model tests:
 
 ```sh
+python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
+  @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
+  --require-kind commit_reveal
 cargo test -p iroha_data_model policy_jury
 cargo test -p iroha_data_model sorafs_moderation_ballot
+cargo test -p sorafs_node moderation_ballot
+cargo test -p sorafs_manifest moderation_ballot_event
+cargo test -p iroha_torii moderation_ballot --features app_api
+cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
 ```
 
-Add a dedicated `sorafs` moderation voting test suite when the runtime service
-lands. Until then, do not document `sorafs-juror` or SoraFS ballot service
-commands as shipped.
+Add CLI and end-to-end `sorafs` moderation voting suites when the production
+service lands. Until then, do not document `sorafs-juror` or SoraFS ballot
+service commands as shipped.

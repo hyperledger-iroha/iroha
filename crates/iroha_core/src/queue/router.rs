@@ -8,7 +8,9 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
+use iroha_config::parameters::actual::{
+    LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
@@ -55,7 +57,6 @@ use thiserror::Error;
 
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
-
 /// Routing decision returned by a [`LaneRouter`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RoutingDecision {
@@ -226,6 +227,22 @@ pub enum RoutingResolveError {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
+    /// routing rule lane {lane_id} claims autoscale ownership and cannot be an explicit rule target
+    #[error(
+        "routing rule lane {lane_id} claims autoscale ownership and cannot be an explicit rule target"
+    )]
+    AutoscaleOwnedRuleLane {
+        /// Lane selected by the matched routing rule.
+        lane_id: LaneId,
+    },
+    /// default lane {lane_id} claims autoscale ownership and cannot be the default route anchor
+    #[error(
+        "default lane {lane_id} claims autoscale ownership and cannot be the default route anchor"
+    )]
+    AutoscaleOwnedDefaultLane {
+        /// Lane selected by the default routing policy.
+        lane_id: LaneId,
+    },
     /// transaction mixes dataspace-scoped permission targets {first_dataspace_id} and {second_dataspace_id}
     #[error(
         "transaction mixes dataspace-scoped permission targets {first_dataspace_id} and {second_dataspace_id}"
@@ -246,6 +263,9 @@ pub enum RoutingResolveError {
         /// Conflicting dataspace-routed write target found in the transaction.
         second_dataspace_id: DataSpaceId,
     },
+    /// provided routing plan does not match the current Nexus routing policy
+    #[error("provided routing plan does not match the current Nexus routing policy")]
+    StaleRoutingPlan,
 }
 
 impl RoutingResolveError {
@@ -257,12 +277,15 @@ impl RoutingResolveError {
             Self::UnknownDataspace { .. } => "unknown_dataspace",
             Self::LaneDataspaceMismatch { .. } => "lane_dataspace_mismatch",
             Self::NoLaneForDataspace { .. } => "no_lane_for_dataspace",
+            Self::AutoscaleOwnedRuleLane { .. } => "autoscale_owned_rule_lane",
+            Self::AutoscaleOwnedDefaultLane { .. } => "autoscale_owned_default_lane",
             Self::ConflictingDataspaceScopedPermissions { .. } => {
                 "conflicting_dataspace_scoped_permissions"
             }
             Self::ConflictingTransactionDataspaceTargets { .. } => {
                 "conflicting_transaction_dataspace_targets"
             }
+            Self::StaleRoutingPlan => "stale_routing_plan",
         }
     }
 }
@@ -397,6 +420,16 @@ fn evaluate_policy_with_catalog_hint(
         return canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog)
             .unwrap_or_else(|_| RoutingDecision::new(policy.default_lane, dataspace_id));
     }
+    if matched_rule.is_none() && target_dataspace.is_none() {
+        return resolve_default_routing_decision(
+            policy,
+            lane_catalog,
+            dataspace_catalog,
+            Some(tx),
+            None,
+        )
+        .unwrap_or_else(|_| RoutingDecision::new(policy.default_lane, policy.default_dataspace));
+    }
     let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
     let dataspace_id = matched_rule
         .and_then(|rule| rule.dataspace)
@@ -445,6 +478,8 @@ pub fn evaluate_policy_with_catalog(
         target.coordinator_route,
         lane_catalog,
         dataspace_catalog,
+        Some(tx),
+        None,
     )
 }
 
@@ -488,6 +523,8 @@ pub fn evaluate_policy_plan_with_catalog(
         target,
         lane_catalog,
         dataspace_catalog,
+        Some(tx),
+        None,
     )
 }
 
@@ -563,6 +600,7 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
             account_id,
             world,
             ledger_time_ms,
+            None,
         );
     }
     let mut target = transaction_dataspace_routing_target_info_with_world(
@@ -587,6 +625,8 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         target.coordinator_route,
         lane_catalog,
         dataspace_catalog,
+        Some(tx),
+        None,
     )
 }
 
@@ -604,6 +644,7 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
         dataspace_catalog,
         tx,
         world,
+        None,
         None,
     )
 }
@@ -624,6 +665,25 @@ pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
         tx,
         world,
         Some(ledger_time_ms),
+        None,
+    )
+}
+
+/// Evaluate the active Nexus routing policy and resolve the full plan at a deterministic ledger time.
+pub fn evaluate_policy_plan_with_nexus_and_world_at<W: WorldReadOnly>(
+    nexus: &Nexus,
+    tx: &AcceptedTransaction<'_>,
+    world: &W,
+    ledger_time_ms: u64,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    evaluate_policy_plan_with_catalog_and_world_at_opt(
+        &nexus.routing_policy,
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+        tx,
+        world,
+        Some(ledger_time_ms),
+        Some(AutoscaleElasticRange::from_nexus(nexus)),
     )
 }
 
@@ -634,6 +694,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     tx: &AcceptedTransaction<'_>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     if let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
         tx,
@@ -661,6 +722,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
             account_id,
             world,
             ledger_time_ms,
+            autoscale_range,
         )
         .map(RoutingPlan::single);
     }
@@ -685,6 +747,8 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         target,
         lane_catalog,
         dataspace_catalog,
+        Some(tx),
+        autoscale_range,
     )
 }
 
@@ -1238,9 +1302,9 @@ fn merge_native_target_dataspace(
     reject_cross_dataspace: bool,
     conflict_kind: NativeDataspaceConflict,
 ) -> Result<(), RoutingResolveError> {
-    // TODO: Materialize native AMX descriptors for coordinator-routed native batches once
-    // per-dataspace prepare/commit records are wired into block receipts. The universal route
-    // currently gives those batches one deterministic StateTransaction commit boundary.
+    // Participant descriptors are collected on `TransactionDataspaceTarget::participants` and
+    // later committed through `RoutingPlan::NativeAmx` plus block execution-context receipts.
+    // This merge only decides whether the coordinator must fall back to the universal route.
     let Some(candidate) = candidate else {
         return Ok(());
     };
@@ -3233,7 +3297,7 @@ fn canonical_dataspace_route(
     let lane_id = lane_catalog
         .lanes()
         .iter()
-        .filter(|lane| lane.dataspace_id == dataspace_id)
+        .filter(|lane| is_canonical_dataspace_lane(lane, dataspace_id))
         .map(|lane| lane.id)
         .min()
         .or_else(|| legacy_single_lane_for_dataspace(dataspace_id, lane_catalog))
@@ -3241,6 +3305,155 @@ fn canonical_dataspace_route(
 
     resolve_routing_decision(
         RoutingDecision::new(lane_id, dataspace_id),
+        lane_catalog,
+        dataspace_catalog,
+    )
+}
+
+fn is_canonical_dataspace_lane(
+    lane: &iroha_data_model::nexus::LaneConfig,
+    dataspace_id: DataSpaceId,
+) -> bool {
+    lane.dataspace_id == dataspace_id && !lane.claims_autoscale_managed()
+}
+
+fn reject_autoscale_owned_rule_lane(
+    rule: &LaneRoutingRule,
+    lane_catalog: &LaneCatalog,
+) -> Result<(), RoutingResolveError> {
+    if lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| lane.id == rule.lane && lane.claims_autoscale_managed())
+    {
+        return Err(RoutingResolveError::AutoscaleOwnedRuleLane { lane_id: rule.lane });
+    }
+    Ok(())
+}
+
+fn is_autoscale_managed_elastic_lane(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
+    lane.is_autoscale_managed_elastic()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AutoscaleElasticRange {
+    min_lanes: u32,
+    max_lanes: u32,
+}
+
+impl AutoscaleElasticRange {
+    fn from_nexus(nexus: &iroha_config::parameters::actual::Nexus) -> Self {
+        let min_lanes = nexus.autoscale.min_lanes.get();
+        let mut max_lanes = min_lanes;
+        if nexus.enabled && nexus.autoscale.enabled {
+            let configured_max_lanes = nexus.autoscale.max_lanes.get();
+            let default_lane = nexus.routing_policy.default_lane.as_u32();
+            let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
+            if min_lanes <= configured_max_lanes
+                && configured_max_lanes <= cap
+                && (default_lane < min_lanes || default_lane >= configured_max_lanes)
+            {
+                max_lanes = configured_max_lanes;
+            }
+        }
+        Self {
+            min_lanes,
+            max_lanes,
+        }
+    }
+
+    const fn contains_lane(self, lane_id: LaneId) -> bool {
+        let lane = lane_id.as_u32();
+        lane >= self.min_lanes && lane < self.max_lanes
+    }
+}
+
+fn default_route_elastic_candidates(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    autoscale_range: Option<AutoscaleElasticRange>,
+) -> Vec<LaneId> {
+    let Some(default_lane) = lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == policy.default_lane)
+    else {
+        return Vec::new();
+    };
+    if default_lane.dataspace_id != policy.default_dataspace {
+        return Vec::new();
+    }
+
+    let Some(autoscale_range) = autoscale_range else {
+        return vec![policy.default_lane];
+    };
+
+    if lane_catalog.lanes().iter().any(|lane| {
+        lane.id != policy.default_lane
+            && autoscale_range.contains_lane(lane.id)
+            && (lane.dataspace_id != policy.default_dataspace
+                || !is_autoscale_managed_elastic_lane(lane))
+    }) {
+        return vec![policy.default_lane];
+    }
+
+    let mut candidates = vec![policy.default_lane];
+    candidates.extend(
+        lane_catalog
+            .lanes()
+            .iter()
+            .filter(|lane| {
+                lane.id != policy.default_lane
+                    && lane.dataspace_id == policy.default_dataspace
+                    && is_autoscale_managed_elastic_lane(lane)
+                    && autoscale_range.contains_lane(lane.id)
+            })
+            .map(|lane| lane.id),
+    );
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
+fn default_route_shard_index(tx: &AcceptedTransaction<'_>, lane_count: usize) -> usize {
+    let hash = tx.hash();
+    let mut bytes = [0_u8; core::mem::size_of::<u64>()];
+    bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+    let shard = u64::from_le_bytes(bytes);
+    (shard % lane_count as u64) as usize
+}
+
+fn resolve_default_routing_decision(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    tx: Option<&AcceptedTransaction<'_>>,
+    autoscale_range: Option<AutoscaleElasticRange>,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    if lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| lane.id == policy.default_lane && lane.claims_autoscale_managed())
+    {
+        return Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
+            lane_id: policy.default_lane,
+        });
+    }
+
+    if let Some(tx) = tx {
+        let candidates = default_route_elastic_candidates(policy, lane_catalog, autoscale_range);
+        if candidates.len() > 1 {
+            let lane_id = candidates[default_route_shard_index(tx, candidates.len())];
+            return resolve_routing_decision(
+                RoutingDecision::new(lane_id, policy.default_dataspace),
+                lane_catalog,
+                dataspace_catalog,
+            );
+        }
+    }
+
+    resolve_routing_decision(
+        RoutingDecision::new(policy.default_lane, policy.default_dataspace),
         lane_catalog,
         dataspace_catalog,
     )
@@ -3276,6 +3489,8 @@ fn resolve_policy_routing_plan(
     mut target: TransactionDataspaceTarget,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
+    tx: Option<&AcceptedTransaction<'_>>,
+    autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     add_smart_contract_deploy_policy_participant(&mut target, matched_rule);
 
@@ -3312,6 +3527,8 @@ fn resolve_policy_routing_plan(
         target.coordinator_route,
         lane_catalog,
         dataspace_catalog,
+        tx,
+        autoscale_range,
     )?;
     Ok(RoutingPlan::single(decision))
 }
@@ -3364,6 +3581,8 @@ fn resolve_policy_routing_decision(
     target_is_coordinator_route: bool,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
+    tx: Option<&AcceptedTransaction<'_>>,
+    autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     if target_is_coordinator_route && target_dataspace == Some(DataSpaceId::UNIVERSAL) {
         return canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog);
@@ -3371,6 +3590,7 @@ fn resolve_policy_routing_decision(
 
     if let Some(dataspace_id) = target_dataspace {
         if let Some(rule) = matched_rule {
+            reject_autoscale_owned_rule_lane(rule, lane_catalog)?;
             let decision = RoutingDecision::new(rule.lane, dataspace_id);
             if !lane_catalog.lanes().iter().any(|lane| lane.id == rule.lane) {
                 return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
@@ -3390,6 +3610,7 @@ fn resolve_policy_routing_decision(
     }
 
     if let Some(rule) = matched_rule {
+        reject_autoscale_owned_rule_lane(rule, lane_catalog)?;
         let decision = RoutingDecision::new(
             rule.lane,
             rule.dataspace.unwrap_or(policy.default_dataspace),
@@ -3397,11 +3618,7 @@ fn resolve_policy_routing_decision(
         return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
     }
 
-    resolve_routing_decision(
-        RoutingDecision::new(policy.default_lane, policy.default_dataspace),
-        lane_catalog,
-        dataspace_catalog,
-    )
+    resolve_default_routing_decision(policy, lane_catalog, dataspace_catalog, tx, autoscale_range)
 }
 
 fn evaluate_query_policy_with_view(
@@ -3445,6 +3662,8 @@ pub fn resolve_query_routing_decision(
             target_dataspace == Some(DataSpaceId::UNIVERSAL),
             lane_catalog,
             dataspace_catalog,
+            None,
+            Some(AutoscaleElasticRange::from_nexus(state_view.nexus())),
         );
     }
     let decision = evaluate_query_policy_with_view(policy, authority, state_view);
@@ -3458,6 +3677,7 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
     authority: &AccountId,
     world: &W,
     _ledger_time_ms: Option<u64>,
+    autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
     let matched_rule = policy
         .rules
@@ -3471,6 +3691,8 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
         target_dataspace == Some(DataSpaceId::UNIVERSAL),
         lane_catalog,
         dataspace_catalog,
+        None,
+        autoscale_range,
     )
 }
 
@@ -3540,7 +3762,11 @@ fn legacy_single_lane_for_dataspace(
     lane_catalog
         .lanes()
         .iter()
-        .find(|lane| lane.id == LaneId::SINGLE && lane.dataspace_id == DataSpaceId::UNIVERSAL)
+        .find(|lane| {
+            lane.id == LaneId::SINGLE
+                && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                && !lane.claims_autoscale_managed()
+        })
         .map(|lane| lane.id)
 }
 
@@ -4352,7 +4578,10 @@ impl LaneRouter for ConfigLaneRouter {
         tx: &AcceptedTransaction<'_>,
         state_view: &StateView<'_>,
     ) -> RoutingDecision {
-        evaluate_policy_with_view(&state_view.nexus().routing_policy, tx, state_view)
+        self.try_route_with_view(tx, state_view)
+            .unwrap_or_else(|_| {
+                evaluate_policy_with_view(&state_view.nexus().routing_policy, tx, state_view)
+            })
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
@@ -4424,6 +4653,8 @@ impl LaneRouter for ConfigLaneRouter {
             target.coordinator_route,
             self.lane_catalog.as_ref(),
             self.dataspace_catalog.as_ref(),
+            Some(tx),
+            None,
         )
     }
 
@@ -4481,6 +4712,8 @@ impl LaneRouter for ConfigLaneRouter {
             target,
             self.lane_catalog.as_ref(),
             self.dataspace_catalog.as_ref(),
+            Some(tx),
+            None,
         )
     }
 
@@ -4537,6 +4770,8 @@ impl LaneRouter for ConfigLaneRouter {
             target.coordinator_route,
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
+            Some(tx),
+            Some(AutoscaleElasticRange::from_nexus(nexus)),
         )
     }
 
@@ -4601,6 +4836,8 @@ impl LaneRouter for ConfigLaneRouter {
             target,
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
+            Some(tx),
+            Some(AutoscaleElasticRange::from_nexus(nexus)),
         )
     }
 
@@ -4619,15 +4856,15 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref()) {
             return Ok(None);
         }
-        if self.policy.rules.is_empty() {
-            let target = transaction_dataspace_routing_target(
-                tx,
-                Some(self.dataspace_catalog.as_ref()),
-                None,
-            )?;
-            if target.is_none() {
-                return Ok(None);
-            }
+        let target =
+            transaction_dataspace_routing_target(tx, Some(self.dataspace_catalog.as_ref()), None)?;
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .any(|rule| rule_matches(rule, tx, None));
+        if target.is_none() && !matched_rule {
+            return Ok(None);
         }
         if let Some(account_id) = account_permission_holder_routing_target(tx)
             && !self
@@ -4659,15 +4896,15 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref()) {
             return Ok(None);
         }
-        if self.policy.rules.is_empty() {
-            let target = transaction_dataspace_routing_target(
-                tx,
-                Some(self.dataspace_catalog.as_ref()),
-                None,
-            )?;
-            if target.is_none() {
-                return Ok(None);
-            }
+        let target =
+            transaction_dataspace_routing_target(tx, Some(self.dataspace_catalog.as_ref()), None)?;
+        let matched_rule = self
+            .policy
+            .rules
+            .iter()
+            .any(|rule| rule_matches(rule, tx, None));
+        if target.is_none() && !matched_rule {
+            return Ok(None);
         }
         if let Some(account_id) = account_permission_holder_routing_target(tx)
             && !self
@@ -4786,7 +5023,10 @@ mod tests {
             smart_contract_code::RegisterSmartContractBytes,
         },
         metadata::Metadata,
-        nexus::{LaneConfig, UniversalAccountId},
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneConfig, LaneVisibility,
+            UniversalAccountId,
+        },
         offline::OfflineNoteKeyCertificate,
         permission::Permission,
         prelude::*,
@@ -4940,6 +5180,47 @@ mod tests {
         LaneCatalog::new(lane_count, lanes).expect("valid lane catalog")
     }
 
+    fn lane_catalog_from_configs(lanes: Vec<LaneConfig>) -> LaneCatalog {
+        let max_lane = lanes.iter().map(|lane| lane.id.as_u32()).max().unwrap_or(0);
+        let lane_count =
+            std::num::NonZeroU32::new(max_lane + 1).expect("catalog requires nonzero lanes");
+        LaneCatalog::new(lane_count, lanes).expect("valid lane catalog")
+    }
+
+    fn default_lane_config() -> LaneConfig {
+        LaneConfig::default()
+    }
+
+    fn autoscale_elastic_lane_config(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        created_height: u64,
+    ) -> LaneConfig {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_string(),
+            created_height.to_string(),
+        );
+        LaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            metadata,
+            ..LaneConfig::default()
+        }
+    }
+
+    fn role_registration_instruction(authority: &AccountId, name: &str) -> InstructionBox {
+        let role_id = iroha_data_model::role::RoleId {
+            name: name.parse().expect("valid role name"),
+        };
+        InstructionBox::from(Register::role(iroha_data_model::role::Role::new(
+            role_id,
+            authority.clone(),
+        )))
+    }
+
     fn catalog_with_lanes(lanes: &[LaneId]) -> LaneCatalog {
         let entries: Vec<(LaneId, DataSpaceId)> = lanes
             .iter()
@@ -4962,9 +5243,24 @@ mod tests {
 
     fn install_router_nexus(state: &crate::state::State, router: &ConfigLaneRouter) {
         let mut nexus = state.nexus.write();
+        nexus.enabled = true;
         nexus.routing_policy = router.policy.as_ref().clone();
         nexus.dataspace_catalog = router.dataspace_catalog.as_ref().clone();
         nexus.lane_catalog = router.lane_catalog.as_ref().clone();
+    }
+
+    fn set_nexus_autoscale_range(
+        state: &crate::state::State,
+        enabled: bool,
+        min_lanes: u32,
+        max_lanes: u32,
+    ) {
+        let mut nexus = state.nexus.write();
+        nexus.autoscale.enabled = enabled;
+        nexus.autoscale.min_lanes =
+            std::num::NonZeroU32::new(min_lanes).expect("autoscale test min_lanes must be nonzero");
+        nexus.autoscale.max_lanes =
+            std::num::NonZeroU32::new(max_lanes).expect("autoscale test max_lanes must be nonzero");
     }
 
     fn dataspace_catalog(entries: &[(DataSpaceId, &str)]) -> DataSpaceCatalog {
@@ -5323,6 +5619,903 @@ mod tests {
     }
 
     #[test]
+    fn default_route_elastic_candidates_require_autoscale_metadata() {
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+
+        let valid = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7);
+        let mut bad_alias =
+            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 7);
+        bad_alias.alias = "lane-2".to_string();
+        let mut missing_height =
+            autoscale_elastic_lane_config(LaneId::new(3), DataSpaceId::UNIVERSAL, 7);
+        missing_height
+            .metadata
+            .remove(AUTOSCALE_META_CREATED_HEIGHT);
+        let mut zero_height =
+            autoscale_elastic_lane_config(LaneId::new(4), DataSpaceId::UNIVERSAL, 7);
+        zero_height
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "0".to_string());
+        let mut malformed_height =
+            autoscale_elastic_lane_config(LaneId::new(5), DataSpaceId::UNIVERSAL, 7);
+        malformed_height.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_string(),
+            "later".to_string(),
+        );
+        let other_dataspace = autoscale_elastic_lane_config(LaneId::new(6), DataSpaceId::new(9), 7);
+        let mut false_managed =
+            autoscale_elastic_lane_config(LaneId::new(7), DataSpaceId::UNIVERSAL, 7);
+        false_managed
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "TRUE".to_string());
+        let mut restricted_lane =
+            autoscale_elastic_lane_config(LaneId::new(8), DataSpaceId::UNIVERSAL, 7);
+        restricted_lane.visibility = LaneVisibility::Restricted;
+
+        let valid_lane_catalog = lane_catalog_from_configs(vec![default_lane_config(), valid]);
+
+        assert_eq!(
+            default_route_elastic_candidates(&policy, &valid_lane_catalog, None),
+            vec![LaneId::SINGLE]
+        );
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &valid_lane_catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 9,
+                }),
+            ),
+            vec![LaneId::SINGLE, LaneId::new(1)]
+        );
+
+        let corrupted_lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            bad_alias,
+            missing_height,
+            zero_height,
+            malformed_height,
+            other_dataspace,
+            false_managed,
+            restricted_lane,
+        ]);
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &corrupted_lane_catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 9,
+                }),
+            ),
+            vec![LaneId::SINGLE],
+            "corrupted lanes inside the active elastic range must fail closed to the base default lane"
+        );
+
+        let mismatched_default_catalog = lane_catalog_from_configs(vec![
+            LaneConfig {
+                dataspace_id: DataSpaceId::new(9),
+                ..default_lane_config()
+            },
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        assert!(
+            default_route_elastic_candidates(
+                &policy,
+                &mismatched_default_catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 8,
+                }),
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn default_route_elastic_candidates_apply_autoscale_range_when_available() {
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            autoscale_elastic_lane_config(LaneId::new(7), DataSpaceId::UNIVERSAL, 7),
+            autoscale_elastic_lane_config(LaneId::new(8), DataSpaceId::UNIVERSAL, 7),
+        ]);
+
+        assert_eq!(
+            default_route_elastic_candidates(&policy, &lane_catalog, None),
+            vec![LaneId::SINGLE]
+        );
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &lane_catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 1,
+                    max_lanes: 8,
+                }),
+            ),
+            vec![LaneId::SINGLE, LaneId::new(1), LaneId::new(7)]
+        );
+        assert_eq!(
+            default_route_elastic_candidates(
+                &policy,
+                &lane_catalog,
+                Some(AutoscaleElasticRange {
+                    min_lanes: 2,
+                    max_lanes: 7,
+                }),
+            ),
+            vec![LaneId::SINGLE]
+        );
+    }
+
+    #[test]
+    fn canonical_dataspace_route_ignores_autoscale_owned_lanes() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(9),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let mut malformed_autoscale_claim =
+            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 7);
+        malformed_autoscale_claim.alias = "lane-2".to_string();
+        let lane_catalog = lane_catalog_from_configs(vec![
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            malformed_autoscale_claim,
+            LaneConfig {
+                id: LaneId::new(9),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "base-default".to_string(),
+                ..LaneConfig::default()
+            },
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let expected = RoutingDecision::new(LaneId::new(9), DataSpaceId::UNIVERSAL);
+
+        assert_eq!(
+            canonical_dataspace_route(DataSpaceId::UNIVERSAL, &lane_catalog, &dataspace_catalog)
+                .expect("canonical universal route should use the non-autoscale base lane"),
+            expected
+        );
+
+        let router = ConfigLaneRouter::new(policy.clone(), dataspace_catalog, lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("canonical", "universal").expect("domain"),
+            )))],
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("catalog routing should ignore autoscale-owned canonical lanes"),
+            expected
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("live routing should ignore autoscale-owned canonical lanes"),
+            expected
+        );
+    }
+
+    #[test]
+    fn canonical_dataspace_route_fails_closed_with_only_autoscale_owned_lanes() {
+        let mut malformed_autoscale_claim =
+            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 7);
+        malformed_autoscale_claim
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "FALSE".to_string());
+        malformed_autoscale_claim.alias = "lane-2".to_string();
+        let lane_catalog = lane_catalog_from_configs(vec![
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            malformed_autoscale_claim,
+        ]);
+
+        assert_eq!(
+            canonical_dataspace_route(
+                DataSpaceId::UNIVERSAL,
+                &lane_catalog,
+                &DataSpaceCatalog::default()
+            ),
+            Err(RoutingResolveError::NoLaneForDataspace {
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            })
+        );
+    }
+
+    #[test]
+    fn default_route_shards_no_target_traffic_across_autoscaled_lanes() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router =
+            ConfigLaneRouter::new(policy.clone(), DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+
+        let mut lanes_seen = BTreeSet::new();
+        for idx in 0..256 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("elasticroute{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("default route should resolve with live catalog");
+            assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
+            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            let with_catalog = evaluate_policy_with_catalog(
+                &policy,
+                router.lane_catalog.as_ref(),
+                router.dataspace_catalog.as_ref(),
+                &tx,
+            )
+            .expect("default route should resolve with configured catalog");
+
+            assert_eq!(
+                with_catalog,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                "catalog-only default routing must not shard over autoscale lanes without live state"
+            );
+            assert_eq!(
+                router
+                    .try_route(&tx)
+                    .expect("catalog-only route should resolve to base default lane"),
+                with_catalog
+            );
+            assert_eq!(
+                router
+                    .try_route_plan(&tx)
+                    .expect("catalog-only route plan should resolve to base default lane"),
+                RoutingPlan::single(with_catalog)
+            );
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("state-free default-route check should be deterministic"),
+                None
+            );
+            assert_eq!(with_view.dataspace_id, DataSpaceId::UNIVERSAL);
+            lanes_seen.insert(with_view.lane_id);
+            if lanes_seen.len() == 2 {
+                break;
+            }
+        }
+
+        assert_eq!(lanes_seen, BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]));
+    }
+
+    #[test]
+    fn default_route_with_unmatched_rules_still_uses_live_autoscale_range() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(8),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("register::domain".to_string()),
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            LaneConfig {
+                id: LaneId::new(8),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "manual-domain-lane".to_string(),
+                ..LaneConfig::default()
+            },
+        ]);
+        let router =
+            ConfigLaneRouter::new(policy.clone(), DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+
+        let mut lanes_seen = BTreeSet::new();
+        for idx in 0..512 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("unmatchedruledefault{idx}"),
+                )],
+            );
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("state-free routing should be deterministic"),
+                None,
+                "unmatched rules must not make no-target default routing catalog-only"
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_without_state(&tx)
+                    .expect("state-free plan routing should be deterministic"),
+                None,
+                "unmatched rules must not make no-target default plans catalog-only"
+            );
+            assert_eq!(
+                evaluate_policy_with_catalog(
+                    &policy,
+                    router.lane_catalog.as_ref(),
+                    router.dataspace_catalog.as_ref(),
+                    &tx,
+                )
+                .expect("catalog-only default route should resolve"),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                "catalog-only routing remains pinned to the base default lane"
+            );
+
+            let with_state = router
+                .try_route_with_state(&tx, &state)
+                .expect("default route should resolve with live Nexus state");
+            assert_eq!(with_state.dataspace_id, DataSpaceId::UNIVERSAL);
+            assert_eq!(router.route_with_state(&tx, &state), with_state);
+            assert_eq!(
+                router
+                    .try_route_plan_with_state(&tx, &state)
+                    .expect("default route plan should resolve with live Nexus state"),
+                RoutingPlan::single(with_state)
+            );
+            lanes_seen.insert(with_state.lane_id);
+            if lanes_seen.len() == 2 {
+                break;
+            }
+        }
+
+        assert_eq!(
+            lanes_seen,
+            BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]),
+            "live default-route sharding must use the elastic lane even when unrelated rules exist"
+        );
+    }
+
+    #[test]
+    fn default_route_sharding_ignores_autoscale_lanes_outside_enabled_range() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            autoscale_elastic_lane_config(LaneId::new(8), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+
+        let mut lanes_seen = BTreeSet::new();
+        for idx in 0..512 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("rangedefault{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("default route should resolve with live catalog");
+            assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
+            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_ne!(with_view.lane_id, LaneId::new(8));
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .expect("default route plan should resolve with live catalog"),
+                RoutingPlan::single(with_view)
+            );
+            lanes_seen.insert(with_view.lane_id);
+            if lanes_seen.len() == 2 {
+                break;
+            }
+        }
+
+        assert_eq!(lanes_seen, BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]));
+    }
+
+    #[test]
+    fn default_route_sharding_fails_closed_when_elastic_range_contains_corruption() {
+        struct CorruptionCase {
+            name: &'static str,
+            lane: LaneConfig,
+        }
+
+        let mut malformed_managed =
+            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 7);
+        malformed_managed.alias = "malformed-elastic-lane".to_string();
+
+        let cases = [
+            CorruptionCase {
+                name: "manual-in-range",
+                lane: LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "manual-elastic-range".to_string(),
+                    ..LaneConfig::default()
+                },
+            },
+            CorruptionCase {
+                name: "malformed-managed-in-range",
+                lane: malformed_managed,
+            },
+            CorruptionCase {
+                name: "off-default-managed-in-range",
+                lane: autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::new(9), 7),
+            },
+        ];
+
+        for case in cases {
+            let (alice_id, alice_keypair) = gen_account_in("wonderland");
+            let policy = LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            };
+            let lane_catalog = lane_catalog_from_configs(vec![
+                default_lane_config(),
+                autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+                case.lane,
+            ]);
+            let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+            let state = blank_state();
+            install_router_nexus(&state, &router);
+            set_nexus_autoscale_range(&state, true, 1, 8);
+
+            for idx in 0..64 {
+                let tx = sample_transaction(
+                    &alice_id,
+                    alice_keypair.private_key(),
+                    vec![role_registration_instruction(
+                        &alice_id,
+                        &format!("{}{}", case.name.replace('-', ""), idx),
+                    )],
+                );
+                let with_view = router
+                    .try_route_with_view(&tx, &state.view())
+                    .unwrap_or_else(|err| {
+                        panic!("{}: default route should resolve: {err}", case.name)
+                    });
+                assert_eq!(
+                    with_view,
+                    RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    "{} corruption must keep default traffic on the base lane until repaired",
+                    case.name
+                );
+                assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
+                assert_eq!(router.route_with_state(&tx, &state), with_view);
+                assert_eq!(
+                    router
+                        .try_route_plan_with_view(&tx, &state.view())
+                        .unwrap_or_else(|err| panic!(
+                            "{}: default route plan should resolve: {err}",
+                            case.name
+                        )),
+                    RoutingPlan::single(with_view),
+                    "{} corruption must not keep sharding route plans over elastic lanes",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_route_sharding_ignores_managed_lanes_when_autoscale_disabled() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, false, 1, 8);
+
+        for idx in 0..64 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("disabledefault{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("default route should resolve with live catalog");
+            assert_eq!(router.route_with_view(&tx, &state.view()), with_view);
+            assert_eq!(router.route_with_state(&tx, &state), with_view);
+            assert_eq!(
+                with_view,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .expect("default route plan should resolve with live catalog"),
+                RoutingPlan::single(with_view)
+            );
+        }
+    }
+
+    #[test]
+    fn default_route_sharding_fails_closed_when_nexus_disabled() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+        state.nexus.write().enabled = false;
+
+        for idx in 0..64 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("nexusdisabledautoscale{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("default route should resolve when nexus is disabled");
+            assert_eq!(
+                with_view,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .expect("default route plan should resolve when nexus is disabled"),
+                RoutingPlan::single(with_view)
+            );
+        }
+    }
+
+    #[test]
+    fn default_route_sharding_fails_closed_when_default_lane_is_inside_autoscale_range() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(1),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            LaneConfig {
+                id: LaneId::new(1),
+                alias: "corrupt-default".to_string(),
+                ..LaneConfig::default()
+            },
+            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+
+        for idx in 0..64 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("defaultinrange{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("corrupt default route should still resolve to the default lane");
+            assert_eq!(
+                with_view,
+                RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .expect("corrupt default route plan should still resolve"),
+                RoutingPlan::single(with_view)
+            );
+        }
+    }
+
+    #[test]
+    fn default_route_sharding_fails_closed_when_autoscale_max_lanes_exceeds_cap() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(
+            &state,
+            true,
+            1,
+            iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES + 1,
+        );
+
+        for idx in 0..64 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("autoscalecap{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("default route should resolve when autoscale bounds are invalid");
+            assert_eq!(
+                with_view,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_view(&tx, &state.view())
+                    .expect("default route plan should resolve when autoscale bounds are invalid"),
+                RoutingPlan::single(with_view)
+            );
+        }
+    }
+
+    #[test]
+    fn default_route_sharding_fails_closed_when_autoscale_min_exceeds_max() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 4, 2);
+
+        for idx in 0..64 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("autoscaleinverted{idx}"),
+                )],
+            );
+            let with_view = router
+                .try_route_with_view(&tx, &state.view())
+                .expect("default route should resolve when autoscale bounds are inverted");
+            assert_eq!(
+                with_view,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+            );
+            assert_eq!(
+                router
+                    .try_route_plan_with_state(&tx, &state)
+                    .expect("default route plan should resolve when autoscale bounds are inverted"),
+                RoutingPlan::single(with_view)
+            );
+        }
+    }
+
+    #[test]
+    fn default_route_rejects_autoscale_owned_default_lane() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(1),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![role_registration_instruction(&alice_id, "autoscaledefault")],
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()),
+            Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(
+            router.try_route_plan(&tx),
+            Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(router.try_route_without_state(&tx), Ok(None));
+    }
+
+    #[test]
+    fn explicit_rule_overrides_autoscaled_default_sharding() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(2),
+                dataspace: None,
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("register::role".to_string()),
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+            LaneConfig {
+                id: LaneId::new(2),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "manual-role-lane".to_string(),
+                ..LaneConfig::default()
+            },
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+
+        for idx in 0..32 {
+            let tx = sample_transaction(
+                &alice_id,
+                alice_keypair.private_key(),
+                vec![role_registration_instruction(
+                    &alice_id,
+                    &format!("manualroute{idx}"),
+                )],
+            );
+            assert_eq!(
+                router
+                    .try_route_with_view(&tx, &state.view())
+                    .expect("explicit rule route should resolve"),
+                RoutingDecision::new(LaneId::new(2), DataSpaceId::UNIVERSAL)
+            );
+            assert_eq!(
+                router
+                    .route_without_state(&tx)
+                    .expect("explicit rule route should not need state"),
+                RoutingDecision::new(LaneId::new(2), DataSpaceId::UNIVERSAL)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_rule_rejects_autoscale_owned_rule_lane() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::UNIVERSAL),
+                matcher: LaneRoutingMatcher {
+                    account: None,
+                    instruction: Some("register::role".to_string()),
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
+        ]);
+        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        set_nexus_autoscale_range(&state, true, 1, 8);
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![role_registration_instruction(&alice_id, "autoscalerule")],
+        );
+
+        assert_eq!(
+            router.try_route(&tx),
+            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()),
+            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(
+            router.try_route_plan(&tx),
+            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(
+            router.try_route_without_state(&tx),
+            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
+                lane_id: LaneId::new(1),
+            })
+        );
+    }
+
+    #[test]
     fn resolve_policy_rejects_rule_dataspace_override_for_target() {
         use iroha_data_model::nexus::DataSpaceMetadata;
 
@@ -5363,6 +6556,8 @@ mod tests {
                 false,
                 &lane_catalog,
                 &dataspace_catalog,
+                None,
+                None,
             ),
             Err(RoutingResolveError::LaneDataspaceMismatch {
                 lane_id: LaneId::new(5),

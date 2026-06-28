@@ -31,7 +31,10 @@ use mv::storage::StorageReadOnly;
 use crate::{
     smartcontracts::Execute,
     smartcontracts::isi::domain::isi::ensure_controller_capabilities,
-    state::{StateTransaction, WorldReadOnly},
+    state::{
+        StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+    },
 };
 
 const DELIMITER: char = '/';
@@ -947,8 +950,8 @@ fn replace_account_id_in_public_lane(
     new: &AccountId,
 ) {
     let mut validator_updates = Vec::new();
-    for (key, _) in state_transaction.world.public_lane_validators.iter() {
-        if key.1 == *old {
+    for (key, record) in state_transaction.world.public_lane_validators.iter() {
+        if public_lane_validator_record_matches_key(key, record) && key.1 == *old {
             validator_updates.push((key.clone(), (key.0, new.clone())));
         }
     }
@@ -974,14 +977,19 @@ fn replace_account_id_in_public_lane(
         .map(|(key, _)| key.clone())
         .collect();
     for key in validator_keys {
-        if let Some(record) = state_transaction.world.public_lane_validators.get_mut(&key) {
+        if let Some(record) = state_transaction.world.public_lane_validators.get_mut(&key)
+            && public_lane_validator_record_matches_key(&key, record)
+        {
             replace_account_id(&mut record.validator, old, new);
             replace_account_id(&mut record.stake_account, old, new);
         }
     }
 
     let mut stake_updates = Vec::new();
-    for (key, _) in state_transaction.world.public_lane_stake_shares.iter() {
+    for (key, record) in state_transaction.world.public_lane_stake_shares.iter() {
+        if !public_lane_stake_share_matches_key(key, record) {
+            continue;
+        }
         if key.1 == *old || key.2 == *old {
             let new_validator = if key.1 == *old {
                 new.clone()
@@ -1018,7 +1026,9 @@ fn replace_account_id_in_public_lane(
         .map(|(key, _)| key.clone())
         .collect();
     for key in reward_keys {
-        if let Some(record) = state_transaction.world.public_lane_rewards.get_mut(&key) {
+        if let Some(record) = state_transaction.world.public_lane_rewards.get_mut(&key)
+            && public_lane_reward_record_matches_key(&key, record)
+        {
             record.asset = replace_account_id_in_asset_id(&record.asset, old, new);
             for share in &mut record.shares {
                 replace_account_id(&mut share.account, old, new);
@@ -4344,6 +4354,207 @@ mod tests {
         );
 
         let _ = domain_id;
+    }
+
+    #[test]
+    fn rekey_public_lane_validators_ignores_mismatched_rows() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-rekey-public-lane-validators"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let old_key = checked_keypair();
+        let old_account = new_account_id(&old_key);
+        let new_key = checked_keypair();
+        let new_account = new_account_id(&new_key);
+        let valid_lane = iroha_data_model::nexus::LaneId::new(8);
+        let malformed_lane = iroha_data_model::nexus::LaneId::new(9);
+        let active = iroha_data_model::nexus::PublicLaneValidatorStatus::Active;
+        let reward_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("multisig", "universal").expect("reward asset domain"),
+            "reward".parse().expect("reward asset name"),
+        );
+        let old_reward_asset = iroha_data_model::asset::AssetId::new(
+            reward_asset_definition.clone(),
+            old_account.clone(),
+        );
+        let new_reward_asset = iroha_data_model::asset::AssetId::new(
+            reward_asset_definition.clone(),
+            new_account.clone(),
+        );
+
+        state_transaction.world.public_lane_validators.insert(
+            (valid_lane, old_account.clone()),
+            iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id: valid_lane,
+                validator: old_account.clone(),
+                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                stake_account: old_account.clone(),
+                total_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+                self_stake: iroha_primitives::numeric::Numeric::new(1, 0),
+                metadata: Metadata::default(),
+                status: active.clone(),
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_validators.insert(
+            (malformed_lane, new_account.clone()),
+            iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id: malformed_lane,
+                validator: old_account.clone(),
+                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                stake_account: old_account.clone(),
+                total_stake: iroha_primitives::numeric::Numeric::new(2, 0),
+                self_stake: iroha_primitives::numeric::Numeric::new(2, 0),
+                metadata: Metadata::default(),
+                status: active,
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (valid_lane, old_account.clone(), old_account.clone()),
+            iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: valid_lane,
+                validator: old_account.clone(),
+                staker: old_account.clone(),
+                bonded: iroha_primitives::numeric::Numeric::new(3, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (malformed_lane, old_account.clone(), old_account.clone()),
+            iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: malformed_lane,
+                validator: new_account.clone(),
+                staker: old_account.clone(),
+                bonded: iroha_primitives::numeric::Numeric::new(4, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        state_transaction.world.public_lane_rewards.insert(
+            (valid_lane, 2),
+            iroha_data_model::nexus::PublicLaneRewardRecord {
+                lane_id: valid_lane,
+                epoch: 2,
+                asset: old_reward_asset.clone(),
+                total_reward: iroha_primitives::numeric::Numeric::new(5, 0),
+                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                    account: old_account.clone(),
+                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                    amount: iroha_primitives::numeric::Numeric::new(5, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        state_transaction.world.public_lane_rewards.insert(
+            (malformed_lane, 3),
+            iroha_data_model::nexus::PublicLaneRewardRecord {
+                lane_id: malformed_lane,
+                epoch: 4,
+                asset: old_reward_asset.clone(),
+                total_reward: iroha_primitives::numeric::Numeric::new(6, 0),
+                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                    account: old_account.clone(),
+                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                    amount: iroha_primitives::numeric::Numeric::new(6, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+
+        replace_account_id_in_public_lane(&mut state_transaction, &old_account, &new_account);
+
+        assert!(
+            state_transaction
+                .world
+                .public_lane_validators
+                .get(&(valid_lane, old_account.clone()))
+                .is_none(),
+            "matching validator row should move away from the old key"
+        );
+        let moved = state_transaction
+            .world
+            .public_lane_validators
+            .get(&(valid_lane, new_account.clone()))
+            .expect("matching validator row should move to the new key");
+        assert_eq!(moved.validator, new_account);
+        assert_eq!(moved.stake_account, new_account);
+
+        let malformed = state_transaction
+            .world
+            .public_lane_validators
+            .get(&(malformed_lane, moved.validator.clone()))
+            .expect("malformed row keyed by the new account should remain present");
+        assert_eq!(
+            malformed.validator, old_account,
+            "mismatched row must not be repaired into a live matching validator"
+        );
+        assert_eq!(malformed.stake_account, old_account);
+
+        assert!(
+            state_transaction
+                .world
+                .public_lane_stake_shares
+                .get(&(valid_lane, old_account.clone(), old_account.clone()))
+                .is_none(),
+            "matching stake-share row should move away from the old key"
+        );
+        let moved_share = state_transaction
+            .world
+            .public_lane_stake_shares
+            .get(&(valid_lane, new_account.clone(), new_account.clone()))
+            .expect("matching stake-share row should move to the new key");
+        assert_eq!(moved_share.validator, new_account);
+        assert_eq!(moved_share.staker, new_account);
+        let malformed_share = state_transaction
+            .world
+            .public_lane_stake_shares
+            .get(&(malformed_lane, old_account.clone(), old_account.clone()))
+            .expect("malformed stake-share row should remain on its old key");
+        assert_eq!(
+            malformed_share.validator, new_account,
+            "mismatched stake-share validator must not be rewritten through key repair"
+        );
+        assert_eq!(malformed_share.staker, old_account);
+        assert!(
+            state_transaction
+                .world
+                .public_lane_stake_shares
+                .get(&(malformed_lane, new_account.clone(), new_account.clone()))
+                .is_none(),
+            "malformed stake-share row must not be moved into a live matching key"
+        );
+
+        let moved_reward = state_transaction
+            .world
+            .public_lane_rewards
+            .get(&(valid_lane, 2))
+            .expect("matching reward row should remain present");
+        assert_eq!(moved_reward.asset, new_reward_asset);
+        assert_eq!(moved_reward.shares[0].account, new_account);
+        let malformed_reward = state_transaction
+            .world
+            .public_lane_rewards
+            .get(&(malformed_lane, 3))
+            .expect("malformed reward row should remain present");
+        assert_eq!(
+            malformed_reward.asset, old_reward_asset,
+            "mismatched reward row asset must not be rewritten"
+        );
+        assert_eq!(malformed_reward.shares[0].account, old_account);
     }
 
     #[test]

@@ -533,6 +533,10 @@ RoundViewHelpersExactness ==
   /\ RoundViewBumpExact
   /\ RoundViewPhaseExact
 
+RoundViewHelpersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RoundViewHelpersExactness
+
 SafetyFast ==
   RoundViewHelpersExactness
 

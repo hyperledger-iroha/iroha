@@ -231,6 +231,13 @@ Safety ==
   /\ ImplementationActions(ResetAfterRecordsClears) =
        SpecActions(ResetAfterRecordsClears)
 
+MissingQcLivenessStatusExactness ==
+  Safety
+
+MissingQcLivenessStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcLivenessStatusExactness
+
 BugResetEmptyKeepsCounters ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

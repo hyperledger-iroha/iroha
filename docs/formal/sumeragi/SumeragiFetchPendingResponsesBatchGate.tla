@@ -426,8 +426,15 @@ TypeInvariant ==
 FetchPendingResponsesBatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast ==
+FetchPendingResponsesBatchExactness ==
   FetchPendingResponsesBatchMatchesSpec
+
+FetchPendingResponsesBatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FetchPendingResponsesBatchExactness
+
+SafetyFast ==
+  FetchPendingResponsesBatchExactness
 
 EmptyPeerMapReturns ==
   Matches("empty_peers")

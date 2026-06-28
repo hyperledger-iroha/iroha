@@ -359,8 +359,15 @@ PendingBlockActiveForTipCoreSafety ==
   /\ ConsensusEvidenceIsRequired
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == PendingBlockActiveForTipCoreSafety
+PendingBlockActiveForTipExactness ==
+  PendingBlockActiveForTipCoreSafety
 
-SafetyFast == PendingBlockActiveForTipCoreSafety
+PendingBlockActiveForTipCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingBlockActiveForTipExactness
+
+NoBugInvariant == PendingBlockActiveForTipExactness
+
+SafetyFast == PendingBlockActiveForTipExactness
 
 ====

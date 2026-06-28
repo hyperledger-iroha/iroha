@@ -185,8 +185,13 @@ RbcStatusLookupMatchesSpec ==
        /\ ActualStaleKeysNonEmpty(c) = SpecStaleKeysNonEmpty(c)
        /\ ActualNextDue(c) = SpecNextDue(c)
 
-SafetyFast ==
-  RbcStatusLookupMatchesSpec
+RbcStatusLookupExactness == RbcStatusLookupMatchesSpec
+
+RbcStatusLookupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStatusLookupExactness
+
+SafetyFast == RbcStatusLookupExactness
 
 BugIsDeliveredAcceptsIncomplete ==
   ActualIsDelivered("delivered_incomplete_match") =

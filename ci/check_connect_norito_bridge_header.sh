@@ -56,11 +56,23 @@ privacy_declaration_pattern = re.compile(
     r'(?:int32_t|void)\s+'
     r'(iroha_privacy_[a-z0-9_]+)\s*\('
 )
+sorafs_reference_export_pattern = re.compile(
+    r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+    r'(connect_norito_sorafs_reference_[a-z0-9_]+)\s*\('
+)
+sorafs_reference_declaration_pattern = re.compile(
+    r'int32_t\s+'
+    r'(connect_norito_sorafs_reference_[a-z0-9_]+)\s*\('
+)
 
 rust_exports = set(recursive_export_pattern.findall(rust_text))
 header_declarations = set(recursive_declaration_pattern.findall(header_text))
 rust_privacy_exports = set(privacy_export_pattern.findall(rust_text))
 header_privacy_declarations = set(privacy_declaration_pattern.findall(header_text))
+rust_sorafs_reference_exports = set(sorafs_reference_export_pattern.findall(rust_text))
+header_sorafs_reference_declarations = set(
+    sorafs_reference_declaration_pattern.findall(header_text)
+)
 bridge_abi_export = re.search(
     r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(',
     rust_text,
@@ -188,6 +200,19 @@ required_privacy_ffi = {
     "iroha_privacy_verify_proof_v1",
     "iroha_privacy_free_buffer",
 }
+required_sorafs_reference_ffi = {
+    "connect_norito_sorafs_reference_validate_orderbook_json",
+    "connect_norito_sorafs_reference_validate_pop_json",
+    "connect_norito_sorafs_reference_validate_hedging_json",
+    "connect_norito_sorafs_reference_sign_orderbook_payload",
+    "connect_norito_sorafs_reference_build_signed_orderbook_order_request",
+    "connect_norito_sorafs_reference_build_signed_orderbook_order_cancel",
+    "connect_norito_sorafs_reference_build_signed_orderbook_settlement_receipt",
+    "connect_norito_sorafs_reference_validate_pdp_payload_json",
+    "connect_norito_sorafs_reference_validate_pdp_commitment_challenge_json",
+    "connect_norito_sorafs_reference_validate_pdp_challenge_proof_json",
+    "connect_norito_sorafs_reference_validate_pdp_bundle_json",
+}
 expected_privacy_signatures = {
     "iroha_privacy_capabilities_v1": (
         r"int32_t\s+iroha_privacy_capabilities_v1\s*\(\s*"
@@ -248,6 +273,18 @@ undeclared_privacy_exports = sorted(rust_privacy_exports - header_privacy_declar
 stale_privacy_header_declarations = sorted(
     header_privacy_declarations - rust_privacy_exports
 )
+missing_sorafs_reference_exports = sorted(
+    required_sorafs_reference_ffi - rust_sorafs_reference_exports
+)
+missing_sorafs_reference_header_declarations = sorted(
+    required_sorafs_reference_ffi - header_sorafs_reference_declarations
+)
+undeclared_sorafs_reference_exports = sorted(
+    rust_sorafs_reference_exports - header_sorafs_reference_declarations
+)
+stale_sorafs_reference_header_declarations = sorted(
+    header_sorafs_reference_declarations - rust_sorafs_reference_exports
+)
 
 errors = []
 if missing_exports:
@@ -295,6 +332,26 @@ if stale_privacy_header_declarations:
 for name, pattern in expected_privacy_signatures.items():
     if re.search(pattern, header_text) is None:
         errors.append(f"C header privacy declaration has wrong signature: {name}")
+if missing_sorafs_reference_exports:
+    errors.append(
+        "missing required Rust SoraFS reference exports: "
+        + ", ".join(missing_sorafs_reference_exports)
+    )
+if missing_sorafs_reference_header_declarations:
+    errors.append(
+        "missing required C header SoraFS reference declarations: "
+        + ", ".join(missing_sorafs_reference_header_declarations)
+    )
+if undeclared_sorafs_reference_exports:
+    errors.append(
+        "Rust SoraFS reference exports missing from C header: "
+        + ", ".join(undeclared_sorafs_reference_exports)
+    )
+if stale_sorafs_reference_header_declarations:
+    errors.append(
+        "C header SoraFS reference declarations missing Rust exports: "
+        + ", ".join(stale_sorafs_reference_header_declarations)
+    )
 if not bridge_abi_export:
     errors.append("missing Rust C export: connect_norito_bridge_abi_version")
 if not bridge_abi_declaration:
@@ -308,7 +365,8 @@ if errors:
 print(
     "connect_norito_bridge.h declares all "
     f"{len(required_abi6)} ABI-6 recursive spend symbols and "
-    f"{len(required_privacy_ffi)} privacy FFI symbols"
+    f"{len(required_privacy_ffi)} privacy FFI symbols and "
+    f"{len(required_sorafs_reference_ffi)} SoraFS reference symbols"
 )
 PY
 }

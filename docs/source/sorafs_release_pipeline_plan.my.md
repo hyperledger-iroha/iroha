@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_release_pipeline_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5cf9307516128252a10539647b7865bb134fd62bef96c73802c8f2a2ac94c472
-source_last_modified: "2026-01-05T09:28:12.088159+00:00"
+source_hash: dfabd1c93c1d4536051cc5975c70eba195bd72a9ff153ad6f972cc38a9162706
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CLI/SDK Release & Testing Pipeline
 summary: Current SF-6 release automation and QA surfaces.

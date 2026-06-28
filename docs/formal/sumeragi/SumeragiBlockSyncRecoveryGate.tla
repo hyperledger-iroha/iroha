@@ -381,6 +381,10 @@ BlockSyncRecoveryExactness ==
   /\ BlockSyncRecoveryCommitQcRepairExact
   /\ BlockSyncRecoveryInflightAndValidationExact
 
+BlockSyncRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncRecoveryExactness
+
 SafetyFast ==
   BlockSyncRecoveryExactness
 

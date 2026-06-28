@@ -190,6 +190,8 @@ mod block {
         },
         /// Block contained no executed effects; empty blocks cannot be committed
         EmptyBlock,
+        /// Deterministic autoscale lane lifecycle failed while preparing block commit
+        AutoscaleLaneLifecycle,
     }
 
     /// Batched update to the storage that can be reverted later
@@ -246,6 +248,16 @@ mod block {
         /// the expected height derived from the current storage state. These
         /// behaviours are illustrated in the release-mode tests.
         pub fn commit(self) -> Result<(), TransactionsBlockError> {
+            self.validate_commit()?;
+            self.commit_unchecked()
+        }
+
+        /// Validate that this block can be committed without mutating the storage.
+        ///
+        /// This lets callers perform other fallible commit preparation after the
+        /// transaction height has been proven acceptable, but before consuming the
+        /// transaction block.
+        pub(crate) fn validate_commit(&self) -> Result<(), TransactionsBlockError> {
             let previous_block = &self.latest_block_ref.load();
             let previous_block = previous_block.as_ref();
 
@@ -253,7 +265,7 @@ mod block {
             let addition = usize::from(!self.revert);
             let expected_current_height = previous_height + addition;
 
-            let Some(current_block) = self.current_block else {
+            let Some(current_block) = self.current_block.as_ref() else {
                 return Err(TransactionsBlockError::MissingInsertBlock);
             };
             let current_height = current_block.height.get();
@@ -271,6 +283,17 @@ mod block {
                     actual_current_height: current_height,
                 });
             }
+
+            Ok(())
+        }
+
+        fn commit_unchecked(self) -> Result<(), TransactionsBlockError> {
+            let previous_block = &self.latest_block_ref.load();
+            let previous_block = previous_block.as_ref();
+
+            let Some(current_block) = self.current_block else {
+                return Err(TransactionsBlockError::MissingInsertBlock);
+            };
 
             if self.revert {
                 // Rolling back the latest block must not drop historical entries from
@@ -643,6 +666,27 @@ mod tests {
             block.commit(),
             Err(TransactionsBlockError::MissingInsertBlock)
         );
+    }
+
+    #[test]
+    fn validate_commit_height_mismatch_does_not_mutate_storage() {
+        let [key] = get_keys();
+        let storage = TransactionsStorage::new();
+        let mut block = storage.block();
+        let wrong_height = NonZeroUsize::new(2).unwrap();
+
+        block.insert_block(HashSet::from([key]), wrong_height);
+
+        assert_eq!(
+            block.validate_commit(),
+            Err(TransactionsBlockError::HeightMismatch {
+                expected_current_height: 1,
+                actual_current_height: wrong_height.get(),
+            })
+        );
+        assert_eq!(storage.latest_height(), 0);
+        drop(block);
+        assert_eq!(storage.latest_height(), 0);
     }
 
     #[cfg(not(debug_assertions))]

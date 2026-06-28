@@ -4955,6 +4955,15 @@ pub struct SumeragiRbc {
     pub disk_store_max_bytes: u64,
 }
 
+/// Native AMX control-plane cache limits.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiNativeAmx {
+    /// Native AMX vote sessions retained while proposer collection is in progress.
+    pub session_cache_max: NonZeroUsize,
+    /// Exact attestation-body buckets retained per native AMX vote session.
+    pub session_body_bucket_max: NonZeroUsize,
+}
+
 impl SumeragiRbc {
     /// Effective RS16 data shards used by the runtime.
     ///
@@ -5087,6 +5096,8 @@ pub struct Sumeragi {
     pub gating: SumeragiGating,
     /// RBC (reliable broadcast) configuration.
     pub rbc: SumeragiRbc,
+    /// Native AMX control-plane cache limits.
+    pub native_amx: SumeragiNativeAmx,
     /// Finality/proof configuration.
     pub finality: SumeragiFinality,
     /// Consensus key-rotation configuration.
@@ -6919,6 +6930,8 @@ pub struct SorafsStorage {
     pub orderbook: SorafsOrderbook,
     /// Local SFM-4c privacy aggregate publication scheduler.
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
+    /// Local SFM-6 reserve lifecycle advancement scheduler.
+    pub reserve_lifecycle: SorafsReserveLifecycleSchedule,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
@@ -6947,6 +6960,17 @@ pub struct SorafsPrivacyAggregateSchedule {
     pub cycle_seconds: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
+}
+
+/// Local SFM-6 reserve lifecycle advancement scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsReserveLifecycleSchedule {
+    /// Whether config-backed lifecycle advancement is enabled.
+    pub enabled: bool,
+    /// Interval between lifecycle advancement ticks, in seconds.
+    pub interval_seconds: u64,
+    /// Delay before the first lifecycle advancement tick, in seconds.
+    pub initial_delay_seconds: u64,
 }
 
 /// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
@@ -6979,6 +7003,7 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsTokenConfig::default(),
             orderbook: SorafsOrderbook::default(),
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
+            reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
@@ -7004,6 +7029,17 @@ impl Default for SorafsPrivacyAggregateSchedule {
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl Default for SorafsReserveLifecycleSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::reserve_lifecycle::ENABLED,
+            interval_seconds: defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS,
+            initial_delay_seconds:
+                defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS,
         }
     }
 }

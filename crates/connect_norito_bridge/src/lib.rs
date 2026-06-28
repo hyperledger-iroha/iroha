@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -10622,8 +10622,8 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn bridge_abi_version_advertises_sorafs_orderbook_field_builders() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 10);
+    fn bridge_abi_version_advertises_sorafs_hedging_validation() {
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 12);
     }
 
     #[test]
@@ -21235,6 +21235,88 @@ fn java_sorafs_reference_validate_orderbook_payload_json(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_sorafs_reference_validate_pop_payload_json(
+    env: &mut jni::JNIEnv<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid PoP payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid PoP label bytes".to_owned())?;
+        let kind = u32::try_from(kind).map_err(|_| "kind must be non-negative".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_pop_json(
+                kind,
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe { java_sorafs_reference_buffer_to_array(env, buffer, "SoraFS PoP validation") }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sorafs_reference_validate_hedging_payload_json(
+    env: &mut jni::JNIEnv<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let payload_bytes = read_java_byte_array(env, &payload, "noritoBytes")
+            .ok_or_else(|| "invalid hedging payload bytes".to_owned())?;
+        let label_bytes = read_java_byte_array(env, &label, "label")
+            .ok_or_else(|| "invalid hedging label bytes".to_owned())?;
+        let kind = u32::try_from(kind).map_err(|_| "kind must be non-negative".to_owned())?;
+        let generated_at = java_sorafs_reference_generated_at(generated_at)?;
+        let buffer = unsafe {
+            sorafs_reference_ffi::sorafs_reference_validate_hedging_json(
+                kind,
+                payload_bytes.as_ptr(),
+                payload_bytes.len(),
+                label_bytes.as_ptr(),
+                label_bytes.len(),
+                generated_at,
+            )
+        };
+        unsafe { java_sorafs_reference_buffer_to_array(env, buffer, "SoraFS hedging validation") }
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_sign_orderbook_payload(
     env: &mut jni::JNIEnv<'_>,
     kind: jni::sys::jint,
@@ -24244,6 +24326,50 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsRefere
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidatePopPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pop_payload_json(&mut env, kind, payload, label, generated_at)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeValidateHedgingPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_hedging_payload_json(
+        &mut env,
+        kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_sorafs_SorafsReferenceValidators_nativeSignOrderbookPayload(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -24505,6 +24631,50 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     generated_at: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
     java_sorafs_reference_validate_orderbook_payload_json(
+        &mut env,
+        kind,
+        payload,
+        label,
+        generated_at,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidatePopPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_pop_payload_json(&mut env, kind, payload, label, generated_at)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsReferenceValidators_nativeValidateHedgingPayloadJson(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    payload: jni::objects::JByteArray<'_>,
+    label: jni::objects::JByteArray<'_>,
+    generated_at: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    java_sorafs_reference_validate_hedging_payload_json(
         &mut env,
         kind,
         payload,
@@ -27333,6 +27503,54 @@ pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_orderbook_json
 ) -> c_int {
     let buffer = unsafe {
         sorafs_reference_ffi::sorafs_reference_validate_orderbook_json(
+            kind,
+            bytes_ptr,
+            bytes_len as usize,
+            label_ptr,
+            label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_pop_json(
+    kind: u32,
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_pop_json(
+            kind,
+            bytes_ptr,
+            bytes_len as usize,
+            label_ptr,
+            label_len as usize,
+            generated_at,
+        )
+    };
+    unsafe { write_sorafs_reference_json_buffer(buffer, out_json_ptr, out_json_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_sorafs_reference_validate_hedging_json(
+    kind: u32,
+    bytes_ptr: *const c_uchar,
+    bytes_len: c_ulong,
+    label_ptr: *const c_uchar,
+    label_len: c_ulong,
+    generated_at: u64,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    let buffer = unsafe {
+        sorafs_reference_ffi::sorafs_reference_validate_hedging_json(
             kind,
             bytes_ptr,
             bytes_len as usize,
@@ -33919,6 +34137,88 @@ mod sorafs_tests {
             )
         };
         assert_eq!(rc, 0, "bridge validator call should succeed");
+        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_pop_validator_via_bridge_ffi() {
+        let payload = norito::to_bytes(&sorafs_manifest::PopEnrollmentRequestV1 {
+            version: sorafs_manifest::POP_ENROLLMENT_REQUEST_VERSION_V1,
+            request_id: [0x21; 32],
+            applicant_id: "alice@sora".to_owned(),
+            requested_class: sorafs_manifest::PopEligibilityClassV1::General,
+            requested_attributes: vec!["residency".to_owned()],
+            attestation_digest: [0x22; 32],
+            submitted_at_epoch: 100,
+            expires_at_epoch: 200,
+        })
+        .expect("encode PoP enrollment request");
+        let label = b"pop-enrollment-request.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_pop_json(
+                sorafs_reference_ffi::SORAFS_REFERENCE_POP_KIND_ENROLLMENT_REQUEST,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                label.as_ptr(),
+                label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge PoP validator call should succeed");
+        let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
+        assert_eq!(
+            outcome.get("status").and_then(JsonValue::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("code").and_then(JsonValue::as_str),
+            Some("SFS-OK-000")
+        );
+    }
+
+    #[test]
+    fn sorafs_reference_hedging_validator_via_bridge_ffi() {
+        let payload = norito::to_bytes(&sorafs_manifest::HedgingPriceFeedV1 {
+            version: sorafs_manifest::HEDGING_PRICE_FEED_VERSION_V1,
+            feed_id: "primary".to_owned(),
+            source: "primary-oracle".to_owned(),
+            observed_at_unix: 1_800,
+            xor_usd_micros: 2_000_000,
+            weight_bps: 5_000,
+            evidence_digest: [0x32; 32],
+            status: sorafs_manifest::HedgingFeedStatusV1::Ok,
+        })
+        .expect("encode hedging price feed");
+        let label = b"hedging-price-feed.to";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sorafs_reference_validate_hedging_json(
+                sorafs_reference_ffi::SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED,
+                payload.as_ptr(),
+                payload.len() as c_ulong,
+                label.as_ptr(),
+                label.len() as c_ulong,
+                123,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "bridge hedging validator call should succeed");
         let outcome = unsafe { take_bridge_json(out_ptr, out_len) };
         assert_eq!(
             outcome.get("status").and_then(JsonValue::as_str),

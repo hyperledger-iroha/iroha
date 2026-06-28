@@ -1,0 +1,39 @@
+# Example:
+#   python3 scripts/run_sorafs_appeal_finance_rollout_evidence.py \
+#     @scripts/examples/sorafs_appeal_finance_rollout_collection.args.example \
+#     --dry-run
+
+--out-dir
+dist/sorafs-appeal-finance-rollout-evidence
+--now-unix
+1800008000
+--max-canary-age-secs
+86400
+--max-dashboard-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-settlement-lag-secs
+900
+--min-peers
+4
+--pricing-config-evidence
+/runtime/sorafs/appeal-finance/pricing-config-canary.json
+--quote-api-evidence
+/runtime/sorafs/appeal-finance/quote-api-canary.json
+--deposit-lifecycle-evidence
+/runtime/sorafs/appeal-finance/deposit-lifecycle-canary.json
+--settlement-execution-evidence
+/runtime/sorafs/appeal-finance/settlement-execution-canary.json
+--settlement-submitter-evidence
+/runtime/sorafs/appeal-finance/settlement-submitter-canary.json
+--moderation-worker-evidence
+/runtime/sorafs/appeal-finance/moderation-worker-canary.json
+--governance-dag-publication-evidence
+/runtime/sorafs/appeal-finance/governance-dag-publication-canary.json
+--dashboard-metrics-evidence
+/runtime/sorafs/appeal-finance/dashboard-metrics-canary.json
+--multi-peer-reconciliation-evidence
+/runtime/sorafs/appeal-finance/multi-peer-reconciliation.json
+--governance-approval-evidence
+/runtime/sorafs/appeal-finance/governance-approval.json

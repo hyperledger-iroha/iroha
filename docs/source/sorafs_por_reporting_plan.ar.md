@@ -4,14 +4,9 @@ direction: rtl
 source: docs/source/sorafs_por_reporting_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c96a3056604ed92ad91220d1faf7db7a1aa33ebd1d96590cea969e6e9afdc7f0
-source_last_modified: "2026-01-03T18:08:01.825035+00:00"
-translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS PoR Validator CLI & Reporting
-summary: Reference for the SF-9b validator tooling and reporting surfaces.
+source_hash: 73fa71aec301252df338a91ec00c67a8e95a82056c8340ecc3855ed7a8199902
+source_last_modified: "2026-06-25T16:58:37+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # SoraFS PoR Validator CLI & Reporting
@@ -19,7 +14,7 @@ summary: Reference for the SF-9b validator tooling and reporting surfaces.
 ## CLI Enhancements
 
 - `sorafs_cli por status --manifest <digest>` — display the latest challenges and outcomes with optional filters.
-- `sorafs_cli por trigger --manifest <digest>` — trigger a manual challenge using a council-issued authorisation token.
+- `sorafs_cli por trigger --manifest <digest>` — build the legacy manual challenge request using a council-issued authorisation token; Torii returns the route retirement response until governed scheduler admission is available.
 - `sorafs_cli por export --out <path>` — export GovernanceLog PoR verdicts for offline audits.
 - `sorafs_cli por report --week <iso-week>` — render weekly health reports as Markdown or Norito JSON.
 
@@ -108,7 +103,7 @@ Generated: 2025-03-24 09:30:00 UTC
 ## Attachments
 - [JSON report](./por-weekly-2025-W12.json)
 - Governance DAG snapshot: `ipfs://sorafs-transparency/2025-W12/governance.car`
-```` 
+````
 
 Markdown reports link to the JSON artefact and the corresponding CAR snapshot from the transparency plan.
 
@@ -122,7 +117,8 @@ Manual PoR challenges carry governance risk and must be gated:
   by at least two governance signers.
 - **CLI flow.** Operator supplies the token via `--auth-token token.to`. The CLI verifies the signature
   locally, checks expiry, and ensures the targeted manifest/provider pair is authorised. If valid, the CLI
-  submits the challenge request to Torii, attaching the token for audit logging.
+  submits the legacy challenge request shape to Torii, which currently returns a fail-closed retirement
+  response instead of admitting a live manual challenge.
 - **On-chain audit.** Torii records the token hash and operator ID in the governance DAG so the transparency
   ledger reflects who initiated manual challenges. Unauthorized attempts are rejected with code
   `POR-CHAL-UNAUTH` and logged in `EvidenceAuditEventV1`.
@@ -147,6 +143,10 @@ PoR reporting feeds directly into the repair pipeline (`docs/source/sorafs_repai
 - Alerting ties into the repair automation metrics (`sorafs_repair_plan.md` §Telemetry), so
   any provider with repeated PoR failures triggers both a repair schedule and a governance
   alert.
+- Rollout evidence for reporting/archive handoff must carry the same
+  `seed_replay_digest_hex` as the randomness artifact that generated the
+  challenge set, so report archives cannot be mixed with replay evidence from a
+  different drand/VRF seed.
 
 Completion criteria:
 
@@ -154,3 +154,5 @@ Completion criteria:
 2. Manual challenge CLI requires valid tokens, logs audit entries, and rejects unauthorized attempts.
 3. Repair pipeline consumes the generated reports and automatically aligns tickets/status without
    manual intervention.
+4. Reporting/archive rollout evidence is payload-free and bound to the
+   randomness seed replay digest accepted by the SF-9 rollout gate.

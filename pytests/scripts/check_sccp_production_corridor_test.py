@@ -744,9 +744,12 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert r"^8\.0\.[1-9][0-9]*$" in script
     assert r"^8\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9_.-]*)?$" not in script
     assert 'dotnet_info_field_count "OS Architecture"' in script
+    assert 'dotnet_info_section_field_count "Host" "Architecture"' in script
+    assert 'dotnet_info_section_field_value "Host" "Architecture"' in script
     assert "exactly one OS Name and one OS Platform" in script
     assert "exactly one canonical Windows RID" in script
     assert "exactly one OS Architecture" in script
+    assert "exactly one Host Architecture" in script
     assert "dotnet_info_field_value" in script
     assert "substr(line, length(label) + 2)" in script
     assert "awk -F:" not in script
@@ -766,10 +769,53 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
     assert "empty TRX result" in script
     assert "SCCP .NET SDK TRX:" in script
     assert "SCCP .NET SDK TRX bytes:" in script
+    assert "dotnet_test_passed_count" in script
+    assert "requires exactly one canonical VSTest summary" in script
+    assert "requires VSTest summary to report Failed: 0, Skipped: 0, and Total == Passed" in script
+    assert "requires TRX UnitTestResult count to match VSTest passed-test count" in script
+    assert 'validate_dotnet_trx_content "$dotnet_trx_path" "$dotnet_passed_count"' in script
     assert "validate_dotnet_trx_content" in script
+    assert "SCCP_DOTNET_TRX_MAX_BYTES=16777216" in script
+    assert "requires TRX result to be at most" in script
+    assert "xml.etree.ElementTree" in script
     assert "Hyperledger.Iroha.Sdk.Tests.dll" in script
-    assert 'outcome="Passed"' in script
-    assert 'outcome="(Failed|NotExecuted|Error|Timeout|Aborted)"' in script
+    assert 'local_name(element.tag) == "UnitTestResult"' in script
+    assert 'result.attrib.get("outcome") != "Passed"' in script
+    assert "assembly_sccp_test_ids" in script
+    assert "assembly_sccp_execution_ids" in script
+    assert "sccp_test_id_to_names" in script
+    assert "sccp_execution_id_to_names" in script
+    assert "seen_unit_test_ids" in script
+    assert "seen_execution_ids" in script
+    assert "SCCP_TEST_NAME_RE" in script
+    assert r"(^|[.])Sccp[A-Za-z0-9_]*(?:$|[.])" in script
+    assert "ASCII_CONTROL_RE" in script
+    assert "is_canonical_trx_test_name" in script
+    assert "value == value.strip()" in script
+    assert "ASCII_CONTROL_RE.search(value) is None" in script
+    assert "has_sccp_test_name_token" in script
+    assert '"sccp" in value.lower()' not in script
+    assert '"adapterTypeName"' not in script
+    assert 'result.attrib.get("testId") in assembly_sccp_test_ids' in script
+    assert 'result.attrib.get("executionId") in assembly_sccp_execution_ids' in script
+    assert "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition" in script
+    assert "requires TRX UnitTestResult testName to match its SCCP test definition" in script
+    assert "requires unique TRX UnitTest id values" in script
+    assert "requires unique TRX Execution id values" in script
+    assert "requires TRX result to contain no DTD or entity declarations" in script
+    assert "requires TRX result to be well-formed XML" in script
+    assert "requires TRX root to be a VSTest TestRun" in script
+    assert (
+        "requires every TRX UnitTestResult to appear directly under the VSTest Results section"
+        in script
+    )
+    assert (
+        "requires every TRX UnitTest definition to appear directly under the VSTest TestDefinitions section"
+        in script
+    )
+    assert 'local_name(root.tag) != "TestRun"' in script
+    assert 'local_name(child.tag) == "Results"' in script
+    assert 'local_name(child.tag) == "TestDefinitions"' in script
     assert r"^[1-9][0-9]*$" in script
     direct_trx_path = (
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/"
@@ -1116,7 +1162,7 @@ esac
 def test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata(
     tmp_path: Path,
 ) -> None:
-    """Windows .NET evidence must reject missing RID and duplicate OS architecture."""
+    """Windows .NET evidence must reject ambiguous RID and architecture metadata."""
 
     cases = {
         "missing-rid": (
@@ -1137,6 +1183,18 @@ def test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architec
   RID:         win-x64
 """,
             "exactly one OS Architecture from dotnet --info",
+            "found: 2",
+        ),
+        "duplicate-host-architecture-fallback": (
+            """Host:
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  RID:         win-x64
+""",
+            "exactly one Host Architecture from dotnet --info when OS Architecture is absent",
             "found: 2",
         ),
     }
@@ -1275,13 +1333,38 @@ esac
         ), case_name
 
 
-def test_sccp_production_corridor_dotnet_phase_rejects_missing_os_architecture(
+def test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_fallback(
     tmp_path: Path,
 ) -> None:
-    """Windows .NET evidence must use OS Architecture, not Host fallback text."""
+    """Windows .NET evidence may use Host Architecture when OS Architecture is absent."""
 
+    tool_dir = tmp_path / "tools"
     dotnet_root = tmp_path / "dotnet-root"
+    bridge_target_dir = tmp_path / "bridge-target"
+    direct_trx_path = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "TestResults"
+        / "sccp-dotnet-sdk.trx"
+    )
+    tool_dir.mkdir()
     dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
     fake_dotnet = dotnet_root / "dotnet"
     fake_dotnet.write_text(
         """#!/usr/bin/env bash
@@ -1305,6 +1388,26 @@ Runtime Environment:
   RID:         win-x64
 EOF
     ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/TestResults
+    cat > tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx <<'EOF'
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult executionId="exec-sccp" testId="test-sccp" testName="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests.BuildsProof" outcome="Passed" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest id="test-sccp" name="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests.BuildsProof" storage="C:\\repo\\csharp\\tests\\Hyperledger.Iroha.Sdk.Tests\\bin\\Debug\\net8.0\\Hyperledger.Iroha.Sdk.Tests.dll">
+      <Execution id="exec-sccp" />
+      <TestMethod codeBase="C:\\repo\\csharp\\tests\\Hyperledger.Iroha.Sdk.Tests\\bin\\Debug\\net8.0\\Hyperledger.Iroha.Sdk.Tests.dll" className="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests" name="BuildsProof" />
+    </UnitTest>
+  </TestDefinitions>
+</TestRun>
+EOF
+    printf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\\n'
+    ;;
   *)
     printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
     exit 99
@@ -1316,22 +1419,31 @@ esac
     fake_dotnet.chmod(0o755)
     env = os.environ.copy()
     env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
 
-    completed = subprocess.run(
-        ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        direct_trx_path.unlink(missing_ok=True)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "SCCP .NET SDK Architecture: x64" in completed.stdout
+    assert "cargo build -p connect_norito_bridge" in completed.stdout
+    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" in completed.stdout
+    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" in completed.stdout
+    assert (
+        "SCCP .NET SDK TRX: "
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx"
+        in completed.stdout
     )
-
-    assert completed.returncode == 1
-    assert "exactly one OS Architecture from dotnet --info" in completed.stderr
-    assert "found: 0" in completed.stderr
-    assert "SCCP .NET SDK Architecture:" not in completed.stdout
-    assert "cargo build -p connect_norito_bridge" not in completed.stdout
-    assert "dotnet restore Hyperledger.Iroha.Sdk.sln" not in completed.stdout
-    assert "dotnet test tests/Hyperledger.Iroha.Sdk.Tests" not in completed.stdout
+    assert "SCCP .NET SDK TRX bytes:" in completed.stdout
 
 
 def test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values(
@@ -1677,6 +1789,303 @@ esac
     assert "SCCP .NET SDK TRX bytes:" not in completed.stdout
 
 
+def test_sccp_production_corridor_dotnet_phase_accepts_structured_trx(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must accept a real VSTest-shaped SCCP TRX."""
+
+    tool_dir = tmp_path / "tools"
+    dotnet_root = tmp_path / "dotnet-root"
+    bridge_target_dir = tmp_path / "bridge-target"
+    direct_trx_path = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "TestResults"
+        / "sccp-dotnet-sdk.trx"
+    )
+    tool_dir.mkdir(parents=True)
+    dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/TestResults
+    cat > tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx <<'EOF'
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult executionId="exec-sccp" testId="test-sccp" testName="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests.BuildsProof" outcome="Passed" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest id="test-sccp" name="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests.BuildsProof" storage="C:\\repo\\csharp\\tests\\Hyperledger.Iroha.Sdk.Tests\\bin\\Debug\\net8.0\\Hyperledger.Iroha.Sdk.Tests.dll">
+      <Execution id="exec-sccp" />
+      <TestMethod codeBase="C:\\repo\\csharp\\tests\\Hyperledger.Iroha.Sdk.Tests\\bin\\Debug\\net8.0\\Hyperledger.Iroha.Sdk.Tests.dll" className="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests" name="BuildsProof" />
+    </UnitTest>
+  </TestDefinitions>
+</TestRun>
+EOF
+    printf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        direct_trx_path.unlink(missing_ok=True)
+
+    assert completed.returncode == 0, completed.stderr
+    assert (
+        "SCCP .NET SDK TRX: "
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx"
+        in completed.stdout
+    )
+    assert "SCCP .NET SDK TRX bytes:" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("case_name", "summary_output", "expected_error"),
+    (
+        (
+            "missing-summary",
+            "No VSTest summary was emitted.\n",
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "duplicate-summary",
+            (
+                "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+                "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "failed-summary",
+            (
+                "Passed! - Failed: 1, Passed: 1, Skipped: 0, Total: 2, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "skipped-summary",
+            (
+                "Passed! - Failed: 0, Passed: 1, Skipped: 1, Total: 2, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "zero-passed-summary",
+            (
+                "Passed! - Failed: 0, Passed: 0, Skipped: 0, Total: 0, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "wrong-total-summary",
+            (
+                "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 2, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires VSTest summary to report Failed: 0, Skipped: 0, and Total == Passed",
+        ),
+        (
+            "wrong-assembly-summary",
+            (
+                "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, "
+                "Duration: 1 ms - Other.Tests.dll (net8.0)\n"
+            ),
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "tabbed-summary",
+            (
+                "Passed!\t- Failed: 0, Passed: 1, Skipped: 0, Total: 1, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires exactly one canonical VSTest summary",
+        ),
+        (
+            "trx-count-mismatch",
+            (
+                "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2, "
+                "Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\n"
+            ),
+            "requires TRX UnitTestResult count to match VSTest passed-test count",
+        ),
+    ),
+)
+def test_sccp_production_corridor_dotnet_phase_rejects_forged_vstest_summary(
+    tmp_path: Path,
+    case_name: str,
+    summary_output: str,
+    expected_error: str,
+) -> None:
+    """Windows .NET evidence must bind the VSTest summary to the TRX XML."""
+
+    tool_dir = tmp_path / case_name / "tools"
+    dotnet_root = tmp_path / case_name / "dotnet-root"
+    bridge_target_dir = tmp_path / case_name / "bridge-target"
+    direct_trx_path = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "TestResults"
+        / "sccp-dotnet-sdk.trx"
+    )
+    tool_dir.mkdir(parents=True)
+    dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/TestResults
+    cat > tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx <<'EOF'
+<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Results>
+    <UnitTestResult executionId="exec-sccp" testId="test-sccp" testName="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests.BuildsProof" outcome="Passed" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest id="test-sccp" name="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests.BuildsProof" storage="C:\\repo\\csharp\\tests\\Hyperledger.Iroha.Sdk.Tests\\bin\\Debug\\net8.0\\Hyperledger.Iroha.Sdk.Tests.dll">
+      <Execution id="exec-sccp" />
+      <TestMethod codeBase="C:\\repo\\csharp\\tests\\Hyperledger.Iroha.Sdk.Tests\\bin\\Debug\\net8.0\\Hyperledger.Iroha.Sdk.Tests.dll" className="Hyperledger.Iroha.Sdk.Tests.SccpEthereumMainnetTests" name="BuildsProof" />
+    </UnitTest>
+  </TestDefinitions>
+</TestRun>
+EOF
+    cat <<'EOF'
+{summary_output}EOF
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        direct_trx_path.unlink(missing_ok=True)
+
+    assert completed.returncode == 1, case_name
+    assert expected_error in completed.stderr, case_name
+    assert "SCCP .NET SDK TRX:" not in completed.stdout, case_name
+    assert "SCCP .NET SDK TRX bytes:" not in completed.stdout, case_name
+
+
 @pytest.mark.parametrize(
     ("case_name", "trx_payload", "expected_error"),
     (
@@ -1688,11 +2097,41 @@ esac
         (
             "wrong-assembly",
             (
-                '<TestRun><Results><UnitTestResult outcome="Passed" />'
+                '<TestRun><Results><UnitTestResult testName="SccpFake" outcome="Passed" />'
                 '</Results><TestDefinitions><UnitTest><TestMethod '
                 'codeBase="Other.Tests.dll" /></UnitTest></TestDefinitions></TestRun>\n'
             ),
             "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "non-vstest-root",
+            (
+                '<Envelope><Results><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest></TestDefinitions></Envelope>\n"
+            ),
+            "requires TRX root to be a VSTest TestRun",
+        ),
+        (
+            "unit-result-outside-results",
+            (
+                '<TestRun><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '<TestDefinitions><UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest></TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX UnitTestResult to appear directly under the VSTest Results section",
+        ),
+        (
+            "unit-definition-outside-testdefinitions",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '</Results><UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest></TestRun>\n"
+            ),
+            "requires every TRX UnitTest definition to appear directly under the VSTest TestDefinitions section",
         ),
         (
             "no-passed-result",
@@ -1706,7 +2145,7 @@ esac
         (
             "skipped-result",
             (
-                '<TestRun><Results><UnitTestResult outcome="NotExecuted" />'
+                '<TestRun><Results><UnitTestResult testName="SccpFake" outcome="NotExecuted" />'
                 '</Results><TestDefinitions><UnitTest><TestMethod '
                 'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
                 "</TestDefinitions></TestRun>\n"
@@ -1716,12 +2155,326 @@ esac
         (
             "failed-result",
             (
-                '<TestRun><Results><UnitTestResult outcome="Failed" />'
+                '<TestRun><Results><UnitTestResult testName="SccpFake" outcome="Failed" />'
                 '</Results><TestDefinitions><UnitTest><TestMethod '
                 'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
                 "</TestDefinitions></TestRun>\n"
             ),
             "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results",
+        ),
+        (
+            "single-quoted-failed-result",
+            (
+                "<TestRun><Results><UnitTestResult testName='SccpFake' outcome='Failed' />"
+                "</Results><TestDefinitions><UnitTest><TestMethod "
+                "codeBase='Hyperledger.Iroha.Sdk.Tests.dll' /></UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results",
+        ),
+        (
+            "comment-spoofed-assembly",
+            (
+                '<TestRun><!-- <TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /> -->'
+                '<Results><UnitTestResult testName="SccpFake" outcome="Passed" />'
+                "</Results></TestRun>\n"
+            ),
+            "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "arbitrary-attribute-spoofed-assembly",
+            (
+                '<TestRun><Fake codeBase="Hyperledger.Iroha.Sdk.Tests.dll" />'
+                '<Results><UnitTestResult testName="SccpFake" outcome="Passed" />'
+                "</Results></TestRun>\n"
+            ),
+            "requires TRX result to name Hyperledger.Iroha.Sdk.Tests.dll",
+        ),
+        (
+            "non-sccp-passed-result",
+            (
+                '<TestRun><Results><UnitTestResult testName="OtherTests.Passes" outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest><TestMethod '
+                'codeBase="Hyperledger.Iroha.Sdk.Tests.dll" /></UnitTest>'
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "unbound-sccp-result",
+            (
+                '<TestRun><Results><UnitTestResult testName="SccpFake" outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest id="other-test" name="OtherTests.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest></TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "wrong-assembly-sccp-definition",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Other.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                '<UnitTest id="other-test" name="OtherTests.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "duplicate-unit-test-id",
+            (
+                '<TestRun><Results><UnitTestResult testId="dup-test" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="dup-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                '<UnitTest id="dup-test" name="SccpOther.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires unique TRX UnitTest id values",
+        ),
+        (
+            "duplicate-execution-id",
+            (
+                '<TestRun><Results><UnitTestResult executionId="dup-exec" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-one" name="SccpFake.Passes">'
+                '<Execution id="dup-exec" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                '<UnitTest id="sccp-two" name="SccpOther.Passes">'
+                '<Execution id="dup-exec" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires unique TRX Execution id values",
+        ),
+        (
+            "embedded-sccp-substring",
+            (
+                '<TestRun><Results><UnitTestResult testId="not-sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="not-sccp-test" name="NotSccpEvidence.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.NotSccpEvidence" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "lowercase-sccp-token",
+            (
+                '<TestRun><Results><UnitTestResult testId="lowercase-sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="lowercase-sccp-test" name="sccpEvidence.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.sccpEvidence" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "adapter-type-name-sccp-spoof",
+            (
+                '<TestRun><Results><UnitTestResult testId="adapter-spoof" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="adapter-spoof" name="OtherTests.Passes" adapterTypeName="SccpFake">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.OtherTests" '
+                'adapterTypeName="SccpFake" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "execution-id-drift",
+            (
+                '<TestRun><Results><UnitTestResult executionId="wrong-exec" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<Execution id="right-exec" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "test-id-valid-execution-id-forged",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" executionId="wrong-exec" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<Execution id="right-exec" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "test-id-execution-id-cross-binding",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-one" executionId="exec-two" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-one" name="SccpOne.Passes">'
+                '<Execution id="exec-one" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                '<UnitTest id="sccp-two" name="SccpTwo.Passes">'
+                '<Execution id="exec-two" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX UnitTestResult testId and executionId to bind the same SCCP test definition",
+        ),
+        (
+            "test-id-result-name-mismatch",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="OtherTests.Passes" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX UnitTestResult testName to match its SCCP test definition",
+        ),
+        (
+            "execution-id-result-name-mismatch",
+            (
+                '<TestRun><Results><UnitTestResult executionId="exec-sccp" '
+                'testName="SccpOther.Passes" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<Execution id="exec-sccp" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX UnitTestResult testName to match its SCCP test definition",
+        ),
+        (
+            "method-only-result-name",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Passes" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX UnitTestResult testName to match its SCCP test definition",
+        ),
+        (
+            "padded-result-name",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="SccpFake.Passes " outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes ">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX UnitTestResult testName to match its SCCP test definition",
+        ),
+        (
+            "definition-trailing-space-token",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes ">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.OtherTests" '
+                'name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "mixed-sccp-and-non-sccp-results",
+            (
+                '<TestRun><Results>'
+                '<UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '<UnitTestResult testId="other-test" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                '<UnitTest id="other-test" name="OtherTests.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "mixed-sccp-and-unmapped-results",
+            (
+                '<TestRun><Results>'
+                '<UnitTestResult executionId="exec-sccp" outcome="Passed" />'
+                '<UnitTestResult executionId="exec-forged" outcome="Passed" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<Execution id="exec-sccp" />'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest>"
+                "</TestDefinitions></TestRun>\n"
+            ),
+            "requires every TRX test result to bind to a Hyperledger.Iroha.Sdk.Tests.dll SCCP test definition",
+        ),
+        (
+            "doctype-declaration",
+            (
+                '<!DOCTYPE TestRun [<!ELEMENT TestRun ANY>]>'
+                '<TestRun><Results><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" name="Passes" />'
+                "</UnitTest></TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no DTD or entity declarations",
+        ),
+        (
+            "entity-declaration",
+            (
+                '<!DOCTYPE TestRun [<!ENTITY forged "Hyperledger.Iroha.Sdk.Tests.dll">]>'
+                '<TestRun><Results><UnitTestResult testId="sccp-test" outcome="Passed" />'
+                '</Results><TestDefinitions><UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="&forged;" name="Passes" />'
+                "</UnitTest></TestDefinitions></TestRun>\n"
+            ),
+            "requires TRX result to contain no DTD or entity declarations",
+        ),
+        (
+            "malformed-xml",
+            '<TestRun><Results><UnitTestResult testName="SccpFake" outcome="Passed" /></Results>\n',
+            "requires TRX result to be well-formed XML",
         ),
     ),
 )
@@ -1823,6 +2576,109 @@ esac
     assert str(direct_trx_path) in completed.stderr, case_name
     assert "SCCP .NET SDK TRX:" not in completed.stdout, case_name
     assert "SCCP .NET SDK TRX bytes:" not in completed.stdout, case_name
+
+
+def test_sccp_production_corridor_dotnet_phase_rejects_oversized_trx_before_xml_parse(
+    tmp_path: Path,
+) -> None:
+    """Windows .NET evidence must cap TRX size before XML parsing."""
+
+    tool_dir = tmp_path / "oversized-trx" / "tools"
+    dotnet_root = tmp_path / "oversized-trx" / "dotnet-root"
+    bridge_target_dir = tmp_path / "oversized-trx" / "bridge-target"
+    direct_trx_path = (
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "TestResults"
+        / "sccp-dotnet-sdk.trx"
+    )
+    tool_dir.mkdir(parents=True)
+    dotnet_root.mkdir()
+    fake_cargo = tool_dir / "cargo"
+    fake_cargo.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "build -p connect_norito_bridge" ]]; then
+  printf 'unexpected fake cargo invocation: %s\\n' "$*" >&2
+  exit 99
+fi
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf 'fake bridge dll\\n' > "$CARGO_TARGET_DIR/debug/connect_norito_bridge.dll"
+""",
+        encoding="utf-8",
+    )
+    fake_cargo.chmod(0o755)
+    fake_dotnet = dotnet_root / "dotnet"
+    fake_dotnet.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  --version)
+    printf '8.0.101\\n'
+    ;;
+  --info)
+    cat <<'EOF'
+.NET SDK:
+ Version:           8.0.101
+
+Host:
+  Version:      8.0.1
+  Architecture: x64
+
+Runtime Environment:
+  OS Name:     Windows
+  OS Platform: Windows
+  OS Architecture: x64
+  RID:         win-x64
+EOF
+    ;;
+  restore)
+    exit 0
+    ;;
+  test)
+    mkdir -p tests/Hyperledger.Iroha.Sdk.Tests/TestResults
+    python3 - <<'PY'
+from pathlib import Path
+Path("tests/Hyperledger.Iroha.Sdk.Tests/TestResults/sccp-dotnet-sdk.trx").write_bytes(
+    b"A" * 16777217
+)
+PY
+    printf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Hyperledger.Iroha.Sdk.Tests.dll (net8.0)\\n'
+    ;;
+  *)
+    printf 'unexpected fake dotnet invocation: %s\\n' "$*" >&2
+    exit 99
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_dotnet.chmod(0o755)
+    env = os.environ.copy()
+    env["DOTNET_ROOT"] = str(dotnet_root)
+    env["SCCP_DOTNET_BRIDGE_TARGET_DIR"] = str(bridge_target_dir)
+    env["PATH"] = f"{tool_dir}{os.pathsep}{env['PATH']}"
+
+    try:
+        completed = subprocess.run(
+            ["bash", str(SCRIPT), "--phase", "dotnet-sdk"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    finally:
+        direct_trx_path.unlink(missing_ok=True)
+
+    assert completed.returncode == 1
+    assert "requires TRX result to be at most 16777216 bytes before XML parsing" in (
+        completed.stderr
+    )
+    assert "requires TRX result to be well-formed XML" not in completed.stderr
+    assert "SCCP .NET SDK TRX:" not in completed.stdout
+    assert "SCCP .NET SDK TRX bytes:" not in completed.stdout
 
 
 def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:

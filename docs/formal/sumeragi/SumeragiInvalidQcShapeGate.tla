@@ -148,8 +148,15 @@ InvalidQcShapeMatchesSpec ==
   /\ Matches(ViewZeroAloneNonempty)
   /\ Matches(ValidNonemptyNonzero)
 
-SafetyFast ==
+InvalidQcShapeExactness ==
   InvalidQcShapeMatchesSpec
+
+InvalidQcShapeCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ InvalidQcShapeExactness
+
+SafetyFast ==
+  InvalidQcShapeExactness
 
 BugEmptyBitmapNotDetected ==
   Matches(EmptyBitmapNonzero)

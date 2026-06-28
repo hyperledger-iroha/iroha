@@ -1,0 +1,39 @@
+# Example:
+#   python3 scripts/run_sorafs_reserve_rent_rollout_evidence.py \
+#     @scripts/examples/sorafs_reserve_rent_rollout_collection.args.example \
+#     --dry-run
+
+--out-dir
+dist/sorafs-reserve-rent-rollout-evidence
+--now-unix
+1800007000
+--max-ledger-age-secs
+604800
+--max-lifecycle-lag-secs
+900
+--max-route-latency-ms
+1500
+--max-bake-age-secs
+1209600
+--policy-config-evidence
+/runtime/sorafs/reserve/policy-config-canary.json
+--quote-matrix-evidence
+/runtime/sorafs/reserve/quote-matrix-canary.json
+--ledger-digest-evidence
+/runtime/sorafs/reserve/ledger-digest-canary.json
+--lifecycle-service-evidence
+/runtime/sorafs/reserve/lifecycle-service-canary.json
+--signed-routes-evidence
+/runtime/sorafs/reserve/signed-routes-canary.json
+--reserve-movement-evidence
+/runtime/sorafs/reserve/reserve-movement-canary.json
+--credit-line-evidence
+/runtime/sorafs/reserve/credit-line-canary.json
+--appeal-policy-evidence
+/runtime/sorafs/reserve/appeal-policy-canary.json
+--metrics-alerts-evidence
+/runtime/sorafs/reserve/metrics-alerts-canary.json
+--provider-bake-evidence
+/runtime/sorafs/reserve/provider-bake.json
+--governance-approval-evidence
+/runtime/sorafs/reserve/governance-approval.json

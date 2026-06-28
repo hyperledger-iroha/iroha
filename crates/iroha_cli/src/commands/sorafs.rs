@@ -39,8 +39,10 @@ use iroha::{
         SorafsModerationScreeningResultRequest, SorafsModerationScreeningResultsFilter,
         SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairStatusFilter,
         SorafsRepairWorkerClaimRequest, SorafsRepairWorkerCompleteRequest,
-        SorafsRepairWorkerFailRequest, SorafsReplicationListFilter, SorafsTokenOverrides,
-        SorafsTransparencyReadbackFilter,
+        SorafsRepairWorkerFailRequest, SorafsReplicationListFilter,
+        SorafsReserveAppealReadbackFilter, SorafsReserveCreditLineReadbackFilter,
+        SorafsReserveLifecyclePolicyReadbackFilter, SorafsReserveMovementReadbackFilter,
+        SorafsTokenOverrides, SorafsTransparencyReadbackFilter,
     },
     config::Config,
     http::{Response, StatusCode},
@@ -69,7 +71,7 @@ use norito::{
 };
 use rand::{
     CryptoRng, RngCore, SeedableRng,
-    rand_core::TryCryptoRng,
+    rand_core::{TryCryptoRng, TryRngCore},
     rngs::{OsRng, StdRng},
 };
 use reqwest::blocking::Client as BlockingHttpClient;
@@ -132,7 +134,8 @@ use iroha_data_model::{
         },
         pin_registry::StorageClass,
         reserve::{
-            ReserveDuration, ReserveLedgerProjection, ReservePolicyV1, ReserveQuote, ReserveTier,
+            ReserveDuration, ReserveLedgerProjection, ReserveLifecycleProjection,
+            ReserveLifecycleStage, ReservePolicyV1, ReserveQuote, ReserveTier,
         },
     },
     soranet::{
@@ -234,6 +237,26 @@ impl ReserveDurationArg {
             Self::Monthly => ReserveDuration::Monthly,
             Self::Quarterly => ReserveDuration::Quarterly,
             Self::Annual => ReserveDuration::Annual,
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ReserveCustodyStatusArg {
+    #[value(name = "submitted")]
+    Submitted,
+    #[value(name = "confirmed")]
+    Confirmed,
+    #[value(name = "rejected")]
+    Rejected,
+}
+
+impl ReserveCustodyStatusArg {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Confirmed => "confirmed",
+            Self::Rejected => "rejected",
         }
     }
 }
@@ -487,6 +510,32 @@ pub enum ReserveCommand {
     Quote(ReserveQuoteArgs),
     /// Convert a reserve quote into rent/reserve transfer instructions.
     Ledger(ReserveLedgerArgs),
+    /// Project reserve lifecycle stage and automatic credit draw state.
+    Lifecycle(ReserveLifecycleArgs),
+    /// Submit a signed local reserve top-up movement intent to Torii.
+    TopUp(ReserveMovementSubmitArgs),
+    /// Submit a signed local reserve withdrawal movement intent to Torii.
+    Withdraw(ReserveMovementSubmitArgs),
+    /// List signed visible local reserve movement records.
+    Movements(ReserveMovementsArgs),
+    /// Fetch signed visible local reserve balance status for one provider.
+    Status(ReserveStatusArgs),
+    /// Attach signed chain custody status evidence to a local reserve movement.
+    Custody(ReserveCustodyArgs),
+    /// List signed visible local reserve credit-line states.
+    CreditLines(ReserveCreditLinesArgs),
+    /// Fetch signed visible local reserve credit-line state for one provider.
+    CreditStatus(ReserveCreditStatusArgs),
+    /// Submit a signed local reserve lifecycle appeal.
+    AppealSubmit(ReserveAppealSubmitArgs),
+    /// List signed visible local reserve appeals.
+    Appeals(ReserveAppealsArgs),
+    /// Attach a signed decision to a local reserve appeal.
+    AppealDecide(ReserveAppealDecideArgs),
+    /// Submit a signed local reserve lifecycle policy update.
+    PolicyUpdate(ReservePolicyUpdateArgs),
+    /// Fetch signed local reserve lifecycle policy state.
+    Policy(ReservePolicyArgs),
 }
 
 impl Run for ReserveCommand {
@@ -494,6 +543,19 @@ impl Run for ReserveCommand {
         match self {
             Self::Quote(args) => args.run(context),
             Self::Ledger(args) => args.run(context),
+            Self::Lifecycle(args) => args.run(context),
+            Self::TopUp(args) => args.run_top_up(context),
+            Self::Withdraw(args) => args.run_withdrawal(context),
+            Self::Movements(args) => args.run(context),
+            Self::Status(args) => args.run(context),
+            Self::Custody(args) => args.run(context),
+            Self::CreditLines(args) => args.run(context),
+            Self::CreditStatus(args) => args.run(context),
+            Self::AppealSubmit(args) => args.run(context),
+            Self::Appeals(args) => args.run(context),
+            Self::AppealDecide(args) => args.run(context),
+            Self::PolicyUpdate(args) => args.run(context),
+            Self::Policy(args) => args.run(context),
         }
     }
 }
@@ -836,11 +898,11 @@ impl AppealsFinanceReportsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -862,11 +924,11 @@ impl AppealsFinanceWeeklyRollupsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -891,11 +953,11 @@ impl AppealsFinanceSettlementReceiptsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsAppealFinanceReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsAppealFinanceReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1013,11 +1075,11 @@ impl TransparencyCyclesListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1042,12 +1104,12 @@ impl TransparencyCyclesGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let cycle_id = required_trimmed_text(&self.cycle_id, "--cycle-id")?;
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &cycle_id, &filter)?;
+        let response = get(&client, &cycle_id, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1099,11 +1161,11 @@ impl TransparencyExplorerArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &filter)?;
+        let response = get(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1253,11 +1315,11 @@ impl TransparencyTokensArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &filter)?;
+        let response = get(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1817,11 +1879,11 @@ impl ModerationBallotsListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1849,13 +1911,13 @@ impl ModerationBallotsGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &str, &SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, &str, SorafsModerationBallotsFilter) -> Result<Response<Vec<u8>>>,
     {
         let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
         let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &case_id, &round_id, &filter)?;
+        let response = get(&client, &case_id, &round_id, filter)?;
         render_json_response(context, response)
     }
 }
@@ -1880,14 +1942,14 @@ impl ModerationBallotsEventsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationBallotEventsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationBallotEventsFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationBallotEventsFilter {
             since: self.since,
             limit: self.limit,
         };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -2256,11 +2318,11 @@ impl ModerationRegistryListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationModelRegistryFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationModelRegistryFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationModelRegistryFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -2365,11 +2427,11 @@ impl ModerationScreeningListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationScreeningResultsFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationScreeningResultsFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationScreeningResultsFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -2498,11 +2560,11 @@ impl ModerationQuarantineListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
     {
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = list(&client, &filter)?;
+        let response = list(&client, filter)?;
         render_json_response(context, response)
     }
 }
@@ -3066,12 +3128,12 @@ impl ModerationQuarantineOperatorPanelArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &quarantine_id, &filter)?;
+        let response = get(&client, &quarantine_id, filter)?;
         render_json_response(context, response)
     }
 }
@@ -3097,6 +3159,7 @@ impl Run for ModerationQuarantineBridgePlanArgs {
 
 const MODERATION_OPERATOR_SERVICE_DEFAULT_LISTEN: &str = "127.0.0.1:9201";
 const MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
+const MODERATION_OPERATOR_CSRF_HEADER: &str = "X-SoraFS-Operator-CSRF";
 
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineOperatorServeArgs {
@@ -3223,12 +3286,14 @@ impl ModerationQuarantineOperatorServeArgs {
         if self.max_body_bytes == 0 {
             return Err(eyre!("--max-body-bytes must be greater than zero"));
         }
+        let csrf_token = generate_moderation_operator_csrf_token()?;
         Ok(ModerationOperatorService {
             listen: self.listen.trim().to_string(),
             default_limit: self.limit,
             max_body_bytes: self.max_body_bytes,
             upstream,
             default_actor,
+            csrf_token,
             workflow_source,
         })
     }
@@ -3238,12 +3303,12 @@ impl ModerationQuarantineBridgePlanArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &str, &SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &str, SorafsModerationQuarantineFilter) -> Result<Response<Vec<u8>>>,
     {
         let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
         let filter = SorafsModerationQuarantineFilter { limit: self.limit };
         let client = context.client_from_config();
-        let response = get(&client, &quarantine_id, &filter)?;
+        let response = get(&client, &quarantine_id, filter)?;
         render_moderation_quarantine_bridge_plan_response(context, response, &quarantine_id)
     }
 }
@@ -4002,6 +4067,467 @@ impl ReserveLedgerArgs {
             &asset_definition,
         )?;
         context.print_data(&plan)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveLifecycleArgs {
+    /// Path to the reserve quote JSON (output of `sorafs reserve quote`).
+    #[arg(long = "quote", value_name = "PATH")]
+    pub quote_path: PathBuf,
+    /// Days since rent became due.
+    #[arg(long = "days-past-due", value_name = "DAYS", default_value_t = 0)]
+    pub days_past_due: u16,
+    /// Grace window before delinquency.
+    #[arg(long = "grace-days", value_name = "DAYS", default_value_t = 7)]
+    pub grace_period_days: u16,
+    /// Default threshold after the due date.
+    #[arg(long = "default-after-days", value_name = "DAYS", default_value_t = 30)]
+    pub default_after_days: u16,
+}
+
+impl ReserveLifecycleArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let quote_contents = fs::read_to_string(&self.quote_path).wrap_err_with(|| {
+            format!(
+                "failed to read reserve quote `{}`",
+                self.quote_path.display()
+            )
+        })?;
+        let quote_value: Value =
+            norito::json::from_str(&quote_contents).wrap_err("failed to parse reserve quote")?;
+        let quote = extract_reserve_quote(&quote_value)?;
+        let lifecycle = quote
+            .lifecycle_projection(
+                self.days_past_due,
+                self.grace_period_days,
+                self.default_after_days,
+            )
+            .wrap_err("failed to compute reserve lifecycle projection")?;
+        let value = build_reserve_lifecycle_value(&self.quote_path, &lifecycle)?;
+        context.print_data(&value)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveMovementSubmitArgs {
+    /// Hex-encoded provider identifier.
+    #[arg(long = "provider-id-hex", value_name = "HEX")]
+    provider_id_hex: String,
+    /// Provider account submitting the signed movement.
+    #[arg(long = "provider-account", value_name = "ACCOUNT_ID")]
+    provider_account: String,
+    /// Reserve escrow account for the provider.
+    #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
+    reserve_account: String,
+    /// Asset definition identifier used for the reserve transfer.
+    #[arg(long = "asset-definition", value_name = "AID")]
+    asset_definition: String,
+    /// Movement amount in XOR, up to 6 fractional digits.
+    #[arg(long = "amount", value_name = "XOR")]
+    amount: String,
+    /// Idempotency key for safe retries.
+    #[arg(long = "idempotency-key", value_name = "TEXT")]
+    idempotency_key: String,
+    /// Optional observation timestamp in Unix seconds.
+    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
+    observed_at_unix: Option<u64>,
+}
+
+impl ReserveMovementSubmitArgs {
+    fn run_top_up<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_reserve_top_up_json)
+    }
+
+    fn run_withdrawal<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_reserve_withdrawal_json)
+    }
+
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload = build_reserve_movement_request_value(context, self)?;
+        let body = norito::json::to_vec(&payload)
+            .wrap_err("failed to encode reserve movement request JSON")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &body)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveMovementsArgs {
+    /// Optional movement sequence to resume from.
+    #[arg(long = "since", value_name = "SEQUENCE")]
+    since: Option<u64>,
+    /// Maximum number of movement records to return.
+    #[arg(long = "limit", value_name = "COUNT")]
+    limit: Option<u32>,
+}
+
+impl Run for ReserveMovementsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_reserve_movements)
+    }
+}
+
+impl ReserveMovementsArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, SorafsReserveMovementReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsReserveMovementReadbackFilter {
+            since: self.since,
+            limit: self.limit,
+        };
+        let client = context.client_from_config();
+        let response = get(&client, filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveStatusArgs {
+    /// Hex-encoded provider identifier.
+    #[arg(long = "provider-id-hex", value_name = "HEX")]
+    provider_id_hex: String,
+}
+
+impl Run for ReserveStatusArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_reserve_balance)
+    }
+}
+
+impl ReserveStatusArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let provider_id_hex = normalize_hex_32_lower(&self.provider_id_hex, "--provider-id-hex")?;
+        let client = context.client_from_config();
+        let response = get(&client, &provider_id_hex)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveCreditLinesArgs {
+    /// Maximum number of credit-line states to return.
+    #[arg(long = "limit", value_name = "COUNT")]
+    limit: Option<u32>,
+}
+
+impl Run for ReserveCreditLinesArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_reserve_credit_lines)
+    }
+}
+
+impl ReserveCreditLinesArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, SorafsReserveCreditLineReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsReserveCreditLineReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveCreditStatusArgs {
+    /// Hex-encoded provider identifier.
+    #[arg(long = "provider-id-hex", value_name = "HEX")]
+    provider_id_hex: String,
+}
+
+impl Run for ReserveCreditStatusArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_reserve_credit_line)
+    }
+}
+
+impl ReserveCreditStatusArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let provider_id_hex = normalize_hex_32_lower(&self.provider_id_hex, "--provider-id-hex")?;
+        let client = context.client_from_config();
+        let response = get(&client, &provider_id_hex)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveCustodyArgs {
+    /// Hex-encoded reserve movement identifier.
+    #[arg(long = "movement-id-hex", value_name = "HEX")]
+    movement_id_hex: String,
+    /// Custody status to attach to the movement.
+    #[arg(long = "status", value_enum, value_name = "STATUS")]
+    status: ReserveCustodyStatusArg,
+    /// Hex-encoded chain transaction hash for the custody status.
+    #[arg(long = "tx-hash-hex", value_name = "HEX")]
+    tx_hash_hex: String,
+    /// Optional observation timestamp in Unix seconds.
+    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
+    observed_at_unix: Option<u64>,
+}
+
+impl Run for ReserveCustodyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_reserve_movement_custody_json)
+    }
+}
+
+impl ReserveCustodyArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let (movement_id_hex, payload) = build_reserve_movement_custody_value(self)?;
+        let body = norito::json::to_vec(&payload)
+            .wrap_err("failed to encode reserve movement custody JSON")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &movement_id_hex, &body)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveAppealSubmitArgs {
+    /// Hex-encoded provider identifier.
+    #[arg(long = "provider-id-hex", value_name = "HEX")]
+    provider_id_hex: String,
+    /// Provider account submitting the signed appeal.
+    #[arg(long = "provider-account", value_name = "ACCOUNT_ID")]
+    provider_account: String,
+    /// Requested lifecycle stage override.
+    #[arg(long = "requested-stage", value_enum, value_name = "STAGE")]
+    requested_stage: Option<ReserveLifecycleStageArg>,
+    /// Appeal reason to record.
+    #[arg(long = "reason", value_name = "TEXT")]
+    reason: String,
+    /// Optional payload-free evidence digest.
+    #[arg(long = "evidence-digest-hex", value_name = "HEX")]
+    evidence_digest_hex: Option<String>,
+    /// Idempotency key for safe retries.
+    #[arg(long = "idempotency-key", value_name = "TEXT")]
+    idempotency_key: String,
+    /// Optional observation timestamp in Unix seconds.
+    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
+    observed_at_unix: Option<u64>,
+}
+
+impl Run for ReserveAppealSubmitArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_reserve_appeal_json)
+    }
+}
+
+impl ReserveAppealSubmitArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload = build_reserve_appeal_request_value(context, self)?;
+        let body =
+            norito::json::to_vec(&payload).wrap_err("failed to encode reserve appeal JSON")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &body)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveAppealsArgs {
+    /// Maximum number of appeal records to return.
+    #[arg(long = "limit", value_name = "COUNT")]
+    limit: Option<u32>,
+}
+
+impl Run for ReserveAppealsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_reserve_appeals)
+    }
+}
+
+impl ReserveAppealsArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, SorafsReserveAppealReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsReserveAppealReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReserveAppealDecideArgs {
+    /// Hex-encoded reserve appeal identifier.
+    #[arg(long = "appeal-id-hex", value_name = "HEX")]
+    appeal_id_hex: String,
+    /// Final appeal decision status.
+    #[arg(long = "status", value_enum, value_name = "STATUS")]
+    status: ReserveAppealDecisionStatusArg,
+    /// Account signing the appeal decision.
+    #[arg(long = "decision-account", value_name = "ACCOUNT_ID")]
+    decision_account: String,
+    /// Decision rationale to record.
+    #[arg(long = "rationale", value_name = "TEXT")]
+    rationale: String,
+    /// Optional observation timestamp in Unix seconds.
+    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
+    observed_at_unix: Option<u64>,
+}
+
+impl Run for ReserveAppealDecideArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_reserve_appeal_decision_json)
+    }
+}
+
+impl ReserveAppealDecideArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let (appeal_id_hex, payload) = build_reserve_appeal_decision_value(context, self)?;
+        let body = norito::json::to_vec(&payload)
+            .wrap_err("failed to encode reserve appeal decision JSON")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &appeal_id_hex, &body)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReservePolicyUpdateArgs {
+    /// Account signing the policy update.
+    #[arg(long = "authority-account", value_name = "ACCOUNT_ID")]
+    authority_account: String,
+    /// Grace window before delinquency.
+    #[arg(long = "grace-days", value_name = "DAYS")]
+    grace_period_days: u16,
+    /// Default threshold after the due date.
+    #[arg(long = "default-after-days", value_name = "DAYS")]
+    default_after_days: u16,
+    /// Unix timestamp when the policy becomes effective.
+    #[arg(long = "effective-at-unix", value_name = "SECONDS")]
+    effective_at_unix: u64,
+    /// Policy update reason to record.
+    #[arg(long = "reason", value_name = "TEXT")]
+    reason: String,
+    /// Idempotency key for safe retries.
+    #[arg(long = "idempotency-key", value_name = "TEXT")]
+    idempotency_key: String,
+    /// Optional observation timestamp in Unix seconds.
+    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
+    observed_at_unix: Option<u64>,
+}
+
+impl Run for ReservePolicyUpdateArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_reserve_lifecycle_policy_json)
+    }
+}
+
+impl ReservePolicyUpdateArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
+    {
+        let payload = build_reserve_lifecycle_policy_value(context, self)?;
+        let body = norito::json::to_vec(&payload)
+            .wrap_err("failed to encode reserve lifecycle policy JSON")?;
+        let client = context.client_from_config();
+        let response = submit(&client, &body)?;
+        render_json_response_ok_or_accepted(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ReservePolicyArgs {
+    /// Maximum number of policy records to return.
+    #[arg(long = "limit", value_name = "COUNT")]
+    limit: Option<u32>,
+}
+
+impl Run for ReservePolicyArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_reserve_lifecycle_policy)
+    }
+}
+
+impl ReservePolicyArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, SorafsReserveLifecyclePolicyReadbackFilter) -> Result<Response<Vec<u8>>>,
+    {
+        let filter = SorafsReserveLifecyclePolicyReadbackFilter { limit: self.limit };
+        let client = context.client_from_config();
+        let response = get(&client, filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ReserveLifecycleStageArg {
+    /// Active reserve state.
+    Active,
+    /// Warning reserve state.
+    Warning,
+    /// Grace reserve state.
+    Grace,
+    /// Delinquent reserve state.
+    Delinquent,
+    /// Default reserve state.
+    Default,
+}
+
+impl ReserveLifecycleStageArg {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Warning => "warning",
+            Self::Grace => "grace",
+            Self::Delinquent => "delinquent",
+            Self::Default => "default",
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ReserveAppealDecisionStatusArg {
+    /// Accept the appeal.
+    Accepted,
+    /// Reject the appeal.
+    Rejected,
+}
+
+impl ReserveAppealDecisionStatusArg {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+        }
     }
 }
 
@@ -17149,6 +17675,14 @@ fn generate_nonce_hex(bytes: usize) -> Result<String> {
     generate_nonce_hex_with_rng(bytes, &mut OsRng)
 }
 
+fn generate_moderation_operator_csrf_token() -> Result<String> {
+    let mut token = [0_u8; 32];
+    OsRng
+        .try_fill_bytes(&mut token)
+        .map_err(|error| eyre!("SoraFS moderation operator CSRF token OS RNG failed: {error}"))?;
+    Ok(URL_SAFE_NO_PAD.encode(token))
+}
+
 fn generate_nonce_hex_with_rng<R: TryCryptoRng>(bytes: usize, rng: &mut R) -> Result<String> {
     let mut data = vec![0u8; bytes];
     rng.try_fill_bytes(&mut data)
@@ -18266,7 +18800,7 @@ trait ModerationOperatorWorkflowSource: Send + Sync {
     fn get_operator_panel(
         &self,
         quarantine_id_hex: &str,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>>;
 
     fn post_review(
@@ -18323,7 +18857,7 @@ impl ModerationOperatorWorkflowSource for Client {
     fn get_operator_panel(
         &self,
         quarantine_id_hex: &str,
-        filter: &SorafsModerationQuarantineFilter,
+        filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>> {
         self.get_sorafs_moderation_quarantine_operator_panel(quarantine_id_hex, filter)
     }
@@ -18374,6 +18908,7 @@ struct ModerationOperatorService {
     max_body_bytes: usize,
     upstream: String,
     default_actor: String,
+    csrf_token: String,
     workflow_source: Arc<dyn ModerationOperatorWorkflowSource>,
 }
 
@@ -18403,6 +18938,11 @@ impl ModerationOperatorService {
             "max_body_bytes".into(),
             Value::from(u64::try_from(self.max_body_bytes).unwrap_or(u64::MAX)),
         );
+        fields.insert(
+            "csrf_header".into(),
+            Value::from(MODERATION_OPERATOR_CSRF_HEADER),
+        );
+        fields.insert("csrf_token".into(), Value::from(self.csrf_token.clone()));
         fields.insert("payload_bytes_included".into(), Value::Bool(false));
         fields.insert(
             "routes".into(),
@@ -18509,6 +19049,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::Review { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18517,6 +19058,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::Release { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18525,6 +19067,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::AppealHandoff { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18533,6 +19076,7 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::AppealBallot { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
@@ -18541,12 +19085,47 @@ impl ModerationOperatorService {
             ModerationOperatorRoute::BallotTally { quarantine_id_hex } => {
                 if let Err(err) = moderation_operator_expect_method(request, "POST", true)
                     .and_then(|_| moderation_operator_reject_query(request.query))
+                    .and_then(|_| self.require_csrf_token(request))
                 {
                     return err.into_response();
                 }
                 self.ballot_tally_response(&quarantine_id_hex, request.body)
             }
         }
+    }
+
+    fn require_csrf_token(
+        &self,
+        request: &ModerationOperatorHttpRequest<'_>,
+    ) -> Result<(), ModerationOperatorRequestError> {
+        let mut values = request
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(MODERATION_OPERATOR_CSRF_HEADER))
+            .map(|(_, value)| *value);
+        let Some(value) = values.next() else {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "SoraFS moderation operator service mutation routes require `{MODERATION_OPERATOR_CSRF_HEADER}`"
+                ),
+            ));
+        };
+        if values.next().is_some() {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "SoraFS moderation operator service request must include only one `{MODERATION_OPERATOR_CSRF_HEADER}`"
+                ),
+            ));
+        }
+        if value != self.csrf_token {
+            return Err(ModerationOperatorRequestError::new(
+                StatusCode::FORBIDDEN,
+                "invalid SoraFS moderation operator service CSRF token",
+            ));
+        }
+        Ok(())
     }
 
     fn operator_panel_response(
@@ -18556,7 +19135,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18587,7 +19166,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18620,7 +19199,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18653,7 +19232,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18686,7 +19265,7 @@ impl ModerationOperatorService {
     ) -> ModerationOperatorHttpResponse {
         let response = match self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter { limit },
+            SorafsModerationQuarantineFilter { limit },
         ) {
             Ok(response) => response,
             Err(err) => {
@@ -18851,7 +19430,7 @@ impl ModerationOperatorService {
     ) -> Result<ModerationOperatorBallotTallyReference> {
         let response = self.workflow_source.get_operator_panel(
             quarantine_id_hex,
-            &SorafsModerationQuarantineFilter {
+            SorafsModerationQuarantineFilter {
                 limit: self.default_limit,
             },
         )?;
@@ -18865,10 +19444,16 @@ impl ModerationOperatorService {
     }
 
     fn browser_ui_response(&self) -> ModerationOperatorHttpResponse {
+        let html = MODERATION_OPERATOR_BROWSER_UI_HTML
+            .replace(
+                "__SORAFS_OPERATOR_CSRF_HEADER__",
+                MODERATION_OPERATOR_CSRF_HEADER,
+            )
+            .replace("__SORAFS_OPERATOR_CSRF_TOKEN__", &self.csrf_token);
         ModerationOperatorHttpResponse {
             status: StatusCode::OK,
             content_type: Self::HTML_CONTENT_TYPE,
-            body: MODERATION_OPERATOR_BROWSER_UI_HTML.as_bytes().to_vec(),
+            body: html.into_bytes(),
         }
     }
 }
@@ -19150,6 +19735,8 @@ pre {
 <script>
 const $ = (id) => document.getElementById(id);
 const buttons = Array.from(document.querySelectorAll("button"));
+const csrfHeader = "__SORAFS_OPERATOR_CSRF_HEADER__";
+const csrfToken = "__SORAFS_OPERATOR_CSRF_TOKEN__";
 
 function setStatus(text, kind) {
   const el = $("status");
@@ -19185,12 +19772,17 @@ function parsePayload(id) {
 }
 
 async function requestJson(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = {
+    "Accept": "application/json",
+    ...(options.body ? {"Content-Type": "application/json"} : {})
+  };
+  if (method !== "GET") {
+    headers[csrfHeader] = csrfToken;
+  }
   const response = await fetch(path, {
     ...options,
-    headers: {
-      "Accept": "application/json",
-      ...(options.body ? {"Content-Type": "application/json"} : {})
-    },
+    headers,
     cache: "no-store"
   });
   const text = await response.text();
@@ -19285,6 +19877,7 @@ struct ModerationOperatorHttpRequest<'a> {
     method: &'a str,
     path: &'a str,
     query: Option<&'a str>,
+    headers: Vec<(&'a str, &'a str)>,
     body: &'a [u8],
 }
 
@@ -19496,11 +20089,13 @@ fn moderation_operator_parse_http_request(
             "SoraFS moderation operator service request body is incomplete",
         ));
     }
+    let headers = moderation_operator_headers(header_text);
     let (path, query) = moderation_operator_split_target(target)?;
     Ok(ModerationOperatorHttpRequest {
         method,
         path,
         query,
+        headers,
         body: &raw[header_end..body_end],
     })
 }
@@ -19548,6 +20143,17 @@ fn moderation_operator_content_length(
         }
     }
     Ok(content_length.unwrap_or_default())
+}
+
+fn moderation_operator_headers(header_text: &str) -> Vec<(&str, &str)> {
+    header_text
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim(), value.trim()))
+        })
+        .collect()
 }
 
 fn moderation_operator_split_target(
@@ -19986,34 +20592,203 @@ fn moderation_operator_status_reason(status: StatusCode) -> &'static str {
     }
 }
 
+fn normalize_hex_32_lower(value: &str, flag: &str) -> Result<String> {
+    let trimmed = required_trimmed_text(value, flag)?;
+    let hex_value = trimmed.strip_prefix("0x").unwrap_or(&trimmed);
+    let bytes =
+        decode(hex_value).wrap_err_with(|| format!("{flag} must be a 32-byte hex string"))?;
+    if bytes.len() != 32 {
+        return Err(eyre!("{flag} must be a 32-byte hex string"));
+    }
+    Ok(encode(bytes))
+}
+
+fn build_reserve_movement_request_value<C: RunContext>(
+    context: &C,
+    args: &ReserveMovementSubmitArgs,
+) -> Result<Value> {
+    let provider_id_hex = normalize_hex_32_lower(&args.provider_id_hex, "--provider-id-hex")?;
+    let provider_account = crate::resolve_account_id(context, &args.provider_account)
+        .wrap_err("failed to resolve --provider-account")?;
+    let reserve_account = crate::resolve_account_id(context, &args.reserve_account)
+        .wrap_err("failed to resolve --reserve-account")?;
+    let asset_definition = AssetDefinitionId::parse_address_literal(&args.asset_definition)
+        .wrap_err("failed to parse --asset-definition")?;
+    let amount = parse_xor_amount_decimal_labeled(&args.amount, "reserve movement amount")?;
+    if amount.is_zero() {
+        return Err(eyre!("reserve movement amount must be greater than zero"));
+    }
+    let idempotency_key = required_trimmed_text(&args.idempotency_key, "--idempotency-key")?;
+
+    let mut root = Map::new();
+    root.insert("provider_id_hex".into(), Value::from(provider_id_hex));
+    root.insert(
+        "provider_account".into(),
+        Value::from(provider_account.to_string()),
+    );
+    root.insert(
+        "reserve_account".into(),
+        Value::from(reserve_account.to_string()),
+    );
+    root.insert(
+        "asset_definition_id".into(),
+        Value::from(asset_definition.to_string()),
+    );
+    root.insert(
+        "amount_micro_xor".into(),
+        Value::from(amount.as_micro().to_string()),
+    );
+    root.insert("idempotency_key".into(), Value::from(idempotency_key));
+    root.insert(
+        "observed_at_unix".into(),
+        args.observed_at_unix.map_or(Value::Null, Value::from),
+    );
+    Ok(Value::Object(root))
+}
+
+fn build_reserve_movement_custody_value(args: &ReserveCustodyArgs) -> Result<(String, Value)> {
+    let movement_id_hex = normalize_hex_32_lower(&args.movement_id_hex, "--movement-id-hex")?;
+    let tx_hash_hex = normalize_hex_32_lower(&args.tx_hash_hex, "--tx-hash-hex")?;
+    let mut root = Map::new();
+    root.insert("status".into(), Value::from(args.status.label()));
+    root.insert("tx_hash_hex".into(), Value::from(tx_hash_hex));
+    root.insert(
+        "observed_at_unix".into(),
+        args.observed_at_unix.map_or(Value::Null, Value::from),
+    );
+    Ok((movement_id_hex, Value::Object(root)))
+}
+
+fn build_reserve_appeal_request_value<C: RunContext>(
+    context: &C,
+    args: &ReserveAppealSubmitArgs,
+) -> Result<Value> {
+    let provider_id_hex = normalize_hex_32_lower(&args.provider_id_hex, "--provider-id-hex")?;
+    let provider_account = crate::resolve_account_id(context, &args.provider_account)
+        .wrap_err("failed to resolve --provider-account")?;
+    let reason = required_trimmed_text(&args.reason, "--reason")?;
+    let idempotency_key = required_trimmed_text(&args.idempotency_key, "--idempotency-key")?;
+    let evidence_digest_hex = args
+        .evidence_digest_hex
+        .as_deref()
+        .map(|digest| normalize_hex_32_lower(digest, "--evidence-digest-hex"))
+        .transpose()?;
+
+    let mut root = Map::new();
+    root.insert("provider_id_hex".into(), Value::from(provider_id_hex));
+    root.insert(
+        "provider_account".into(),
+        Value::from(provider_account.to_string()),
+    );
+    root.insert(
+        "requested_stage".into(),
+        args.requested_stage
+            .map_or(Value::Null, |stage| Value::from(stage.label())),
+    );
+    root.insert("reason".into(), Value::from(reason));
+    root.insert(
+        "evidence_digest_hex".into(),
+        evidence_digest_hex.map_or(Value::Null, Value::from),
+    );
+    root.insert("idempotency_key".into(), Value::from(idempotency_key));
+    root.insert(
+        "observed_at_unix".into(),
+        args.observed_at_unix.map_or(Value::Null, Value::from),
+    );
+    Ok(Value::Object(root))
+}
+
+fn build_reserve_appeal_decision_value<C: RunContext>(
+    context: &C,
+    args: &ReserveAppealDecideArgs,
+) -> Result<(String, Value)> {
+    let appeal_id_hex = normalize_hex_32_lower(&args.appeal_id_hex, "--appeal-id-hex")?;
+    let decision_account = crate::resolve_account_id(context, &args.decision_account)
+        .wrap_err("failed to resolve --decision-account")?;
+    let rationale = required_trimmed_text(&args.rationale, "--rationale")?;
+    let mut root = Map::new();
+    root.insert("status".into(), Value::from(args.status.label()));
+    root.insert(
+        "decision_account".into(),
+        Value::from(decision_account.to_string()),
+    );
+    root.insert("rationale".into(), Value::from(rationale));
+    root.insert(
+        "observed_at_unix".into(),
+        args.observed_at_unix.map_or(Value::Null, Value::from),
+    );
+    Ok((appeal_id_hex, Value::Object(root)))
+}
+
+fn build_reserve_lifecycle_policy_value<C: RunContext>(
+    context: &C,
+    args: &ReservePolicyUpdateArgs,
+) -> Result<Value> {
+    if args.grace_period_days >= args.default_after_days {
+        return Err(eyre!(
+            "--grace-days must be lower than --default-after-days for reserve lifecycle policy"
+        ));
+    }
+    let authority_account = crate::resolve_account_id(context, &args.authority_account)
+        .wrap_err("failed to resolve --authority-account")?;
+    let reason = required_trimmed_text(&args.reason, "--reason")?;
+    let idempotency_key = required_trimmed_text(&args.idempotency_key, "--idempotency-key")?;
+    let mut root = Map::new();
+    root.insert(
+        "authority_account".into(),
+        Value::from(authority_account.to_string()),
+    );
+    root.insert(
+        "grace_period_days".into(),
+        Value::from(u64::from(args.grace_period_days)),
+    );
+    root.insert(
+        "default_after_days".into(),
+        Value::from(u64::from(args.default_after_days)),
+    );
+    root.insert(
+        "effective_at_unix".into(),
+        Value::from(args.effective_at_unix),
+    );
+    root.insert("reason".into(), Value::from(reason));
+    root.insert("idempotency_key".into(), Value::from(idempotency_key));
+    root.insert(
+        "observed_at_unix".into(),
+        args.observed_at_unix.map_or(Value::Null, Value::from),
+    );
+    Ok(Value::Object(root))
+}
+
 fn parse_xor_amount_decimal(input: &str) -> Result<XorAmount> {
+    parse_xor_amount_decimal_labeled(input, "reserve balance")
+}
+
+fn parse_xor_amount_decimal_labeled(input: &str, label: &str) -> Result<XorAmount> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err(eyre!("reserve balance must not be empty"));
+        return Err(eyre!("{label} must not be empty"));
     }
     if trimmed.starts_with('-') {
-        return Err(eyre!("reserve balance must be non-negative"));
+        return Err(eyre!("{label} must be non-negative"));
     }
     let mut parts = trimmed.split('.');
     let whole_part = parts.next().unwrap_or("");
     let fractional_part = parts.next().unwrap_or("");
     if parts.next().is_some() {
-        return Err(eyre!(
-            "reserve balance may contain at most one decimal separator"
-        ));
+        return Err(eyre!("{label} may contain at most one decimal separator"));
     }
     if whole_part.is_empty() && fractional_part.is_empty() {
-        return Err(eyre!("reserve balance must contain digits"));
+        return Err(eyre!("{label} must contain digits"));
     }
     if !whole_part.chars().all(|c| c.is_ascii_digit()) {
-        return Err(eyre!("reserve balance contains invalid characters"));
+        return Err(eyre!("{label} contains invalid characters"));
     }
     if !fractional_part.chars().all(|c| c.is_ascii_digit()) {
-        return Err(eyre!("reserve balance fractional part is invalid"));
+        return Err(eyre!("{label} fractional part is invalid"));
     }
     if fractional_part.len() > 6 {
         return Err(eyre!(
-            "reserve balance supports up to six fractional digits (micro XOR precision)"
+            "{label} supports up to six fractional digits (micro XOR precision)"
         ));
     }
     let whole_value = if whole_part.is_empty() {
@@ -20036,10 +20811,10 @@ fn parse_xor_amount_decimal(input: &str) -> Result<XorAmount> {
     }
     let base = whole_value
         .checked_mul(MICRO_XOR_PER_XOR)
-        .ok_or_else(|| eyre!("reserve balance exceeds supported range"))?;
+        .ok_or_else(|| eyre!("{label} exceeds supported range"))?;
     let total = base
         .checked_add(fractional_value)
-        .ok_or_else(|| eyre!("reserve balance exceeds supported range"))?;
+        .ok_or_else(|| eyre!("{label} exceeds supported range"))?;
     Ok(XorAmount::from_micro(total))
 }
 
@@ -20182,6 +20957,17 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
     })
 }
 
+fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("reserve quote must be a JSON object"))?;
+    let quote_value = root
+        .get("quote")
+        .ok_or_else(|| eyre!("reserve quote missing `quote` block"))?;
+    norito::json::from_value(quote_value.clone())
+        .wrap_err("failed to parse reserve quote from quote artifact")
+}
+
 fn parse_optional_micro_amount(map: &Map, key: &str) -> Result<Option<XorAmount>> {
     map.get(key).map_or_else(
         || Ok(None),
@@ -20253,6 +21039,85 @@ fn build_reserve_ledger_plan(
     Ok(Value::Object(root))
 }
 
+fn build_reserve_lifecycle_value(
+    quote_path: &Path,
+    lifecycle: &ReserveLifecycleProjection,
+) -> Result<Value> {
+    let mut root = Map::new();
+    root.insert(
+        "quote_path".into(),
+        Value::from(quote_path.display().to_string()),
+    );
+    root.insert(
+        "stage".into(),
+        Value::from(reserve_lifecycle_stage_label(lifecycle.stage)),
+    );
+    root.insert(
+        "days_past_due".into(),
+        Value::Number(Number::from(u64::from(lifecycle.days_past_due))),
+    );
+    root.insert(
+        "grace_period_days".into(),
+        Value::Number(Number::from(u64::from(lifecycle.grace_period_days))),
+    );
+    root.insert(
+        "default_after_days".into(),
+        Value::Number(Number::from(u64::from(lifecycle.default_after_days))),
+    );
+    root.insert(
+        "rent_due_micro_xor".into(),
+        ledger_micro_value(lifecycle.rent_due),
+    );
+    root.insert(
+        "reserve_shortfall_micro_xor".into(),
+        ledger_micro_value(lifecycle.reserve_shortfall),
+    );
+    root.insert(
+        "top_up_shortfall_micro_xor".into(),
+        ledger_micro_value(lifecycle.top_up_shortfall),
+    );
+    root.insert(
+        "credit_draw_micro_xor".into(),
+        ledger_micro_value(lifecycle.credit_draw),
+    );
+    let available = lifecycle
+        .credit_available_after_draw
+        .map_or(Value::Null, ledger_micro_value);
+    root.insert("credit_available_after_draw_micro_xor".into(), available);
+    root.insert(
+        "credit_shortfall_micro_xor".into(),
+        ledger_micro_value(lifecycle.credit_shortfall),
+    );
+    root.insert(
+        "accrued_interest_micro_xor".into(),
+        ledger_micro_value(lifecycle.accrued_interest),
+    );
+    root.insert(
+        "total_due_after_credit_micro_xor".into(),
+        ledger_micro_value(lifecycle.total_due_after_credit),
+    );
+    root.insert(
+        "restrict_new_manifests".into(),
+        Value::from(lifecycle.restrict_new_manifests),
+    );
+    root.insert(
+        "disable_adverts".into(),
+        Value::from(lifecycle.disable_adverts),
+    );
+    root.insert(
+        "requires_governance_notification".into(),
+        Value::from(lifecycle.requires_governance_notification),
+    );
+    root.insert(
+        "requires_manual_credit_approval".into(),
+        Value::from(lifecycle.requires_manual_credit_approval),
+    );
+    let projection = norito::json::to_value(lifecycle)
+        .wrap_err("failed to serialize reserve lifecycle projection")?;
+    root.insert("lifecycle_projection".into(), projection);
+    Ok(Value::Object(root))
+}
+
 fn append_transfer_instruction(
     instructions: &mut Vec<Value>,
     source_account: &AccountId,
@@ -20310,6 +21175,16 @@ const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
         ReserveDuration::Monthly => "monthly",
         ReserveDuration::Quarterly => "quarterly",
         ReserveDuration::Annual => "annual",
+    }
+}
+
+const fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
+    match stage {
+        ReserveLifecycleStage::Active => "active",
+        ReserveLifecycleStage::Warning => "warning",
+        ReserveLifecycleStage::Grace => "grace",
+        ReserveLifecycleStage::Delinquent => "delinquent",
+        ReserveLifecycleStage::Default => "default",
     }
 }
 
@@ -20535,6 +21410,275 @@ mod tests {
         assert!(
             ledger_projection.contains_key("rent_due"),
             "ledger projection exposes rent_due amount: {ledger_projection:?}"
+        );
+    }
+
+    #[test]
+    fn reserve_lifecycle_builder_renders_stage_and_credit_fields() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                super::StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                XorAmount::zero(),
+            )
+            .expect("quote");
+        let lifecycle = quote
+            .lifecycle_projection(3, 7, 30)
+            .expect("lifecycle projection");
+        let value = build_reserve_lifecycle_value(Path::new("quote.json"), &lifecycle)
+            .expect("build lifecycle JSON");
+        let root = value
+            .as_object()
+            .expect("lifecycle payload should be a JSON object");
+
+        assert_eq!(root.get("stage").and_then(Value::as_str), Some("grace"));
+        assert_eq!(
+            root.get("credit_draw_micro_xor").and_then(Value::as_u64),
+            Some(120_000_000)
+        );
+        assert_eq!(
+            root.get("disable_adverts").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            root.get("lifecycle_projection").is_some(),
+            "full projection should be embedded"
+        );
+    }
+
+    #[test]
+    fn reserve_movement_builder_renders_signed_route_payload() {
+        let ctx = TestContext::new();
+        let provider_account = sample_account_literal("reserve-provider");
+        let reserve_account = sample_account_literal("reserve-escrow");
+        let asset_definition = xor_asset_id().to_string();
+        let args = ReserveMovementSubmitArgs {
+            provider_id_hex: format!("0x{}", "AB".repeat(32)),
+            provider_account: provider_account.clone(),
+            reserve_account: reserve_account.clone(),
+            asset_definition: asset_definition.clone(),
+            amount: "1.25".to_owned(),
+            idempotency_key: "provider-a-top-up-1".to_owned(),
+            observed_at_unix: Some(1_800_000_500),
+        };
+
+        let value =
+            build_reserve_movement_request_value(&ctx, &args).expect("movement request JSON");
+        let root = value
+            .as_object()
+            .expect("reserve movement payload should be an object");
+        assert_eq!(
+            root.get("provider_id_hex").and_then(Value::as_str),
+            Some("ab".repeat(32).as_str())
+        );
+        assert_eq!(
+            root.get("provider_account").and_then(Value::as_str),
+            Some(provider_account.as_str())
+        );
+        assert_eq!(
+            root.get("reserve_account").and_then(Value::as_str),
+            Some(reserve_account.as_str())
+        );
+        assert_eq!(
+            root.get("asset_definition_id").and_then(Value::as_str),
+            Some(asset_definition.as_str())
+        );
+        assert_eq!(
+            root.get("amount_micro_xor").and_then(Value::as_str),
+            Some("1250000")
+        );
+        assert_eq!(
+            root.get("idempotency_key").and_then(Value::as_str),
+            Some("provider-a-top-up-1")
+        );
+        assert_eq!(
+            root.get("observed_at_unix").and_then(Value::as_u64),
+            Some(1_800_000_500)
+        );
+    }
+
+    #[test]
+    fn reserve_movement_builder_rejects_zero_amount() {
+        let ctx = TestContext::new();
+        let account = sample_account_literal("reserve-provider");
+        let args = ReserveMovementSubmitArgs {
+            provider_id_hex: "11".repeat(32),
+            provider_account: account.clone(),
+            reserve_account: account,
+            asset_definition: xor_asset_id().to_string(),
+            amount: "0".to_owned(),
+            idempotency_key: "zero-amount".to_owned(),
+            observed_at_unix: None,
+        };
+
+        let err = build_reserve_movement_request_value(&ctx, &args)
+            .expect_err("zero movement amount should be rejected");
+        assert!(
+            err.to_string().contains("greater than zero"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn reserve_custody_builder_renders_signed_route_payload() {
+        let args = ReserveCustodyArgs {
+            movement_id_hex: format!("0x{}", "AB".repeat(32)),
+            status: ReserveCustodyStatusArg::Confirmed,
+            tx_hash_hex: format!("0x{}", "CD".repeat(32)),
+            observed_at_unix: Some(1_800_000_900),
+        };
+
+        let (movement_id_hex, value) =
+            build_reserve_movement_custody_value(&args).expect("custody request JSON");
+        assert_eq!(movement_id_hex, "ab".repeat(32));
+        let root = value
+            .as_object()
+            .expect("reserve custody payload should be an object");
+        assert_eq!(
+            root.get("status").and_then(Value::as_str),
+            Some("confirmed")
+        );
+        assert_eq!(
+            root.get("tx_hash_hex").and_then(Value::as_str),
+            Some("cd".repeat(32).as_str())
+        );
+        assert_eq!(
+            root.get("observed_at_unix").and_then(Value::as_u64),
+            Some(1_800_000_900)
+        );
+    }
+
+    #[test]
+    fn reserve_custody_builder_rejects_bad_hashes() {
+        let args = ReserveCustodyArgs {
+            movement_id_hex: "deadbeef".to_owned(),
+            status: ReserveCustodyStatusArg::Submitted,
+            tx_hash_hex: "22".repeat(32),
+            observed_at_unix: None,
+        };
+
+        let err = build_reserve_movement_custody_value(&args)
+            .expect_err("short movement id should be rejected");
+        assert!(
+            err.to_string().contains("--movement-id-hex"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn reserve_appeal_builder_renders_signed_route_payload() {
+        let ctx = TestContext::new();
+        let provider_account = sample_account_literal("reserve-provider");
+        let args = ReserveAppealSubmitArgs {
+            provider_id_hex: format!("0x{}", "AB".repeat(32)),
+            provider_account: provider_account.clone(),
+            requested_stage: Some(ReserveLifecycleStageArg::Grace),
+            reason: "provider supplied payment evidence".to_owned(),
+            evidence_digest_hex: Some(format!("0x{}", "CD".repeat(32))),
+            idempotency_key: "appeal-provider-a-1".to_owned(),
+            observed_at_unix: Some(1_800_001_000),
+        };
+
+        let value = build_reserve_appeal_request_value(&ctx, &args).expect("appeal request JSON");
+        let root = value
+            .as_object()
+            .expect("reserve appeal payload should be an object");
+        assert_eq!(
+            root.get("provider_id_hex").and_then(Value::as_str),
+            Some("ab".repeat(32).as_str())
+        );
+        assert_eq!(
+            root.get("provider_account").and_then(Value::as_str),
+            Some(provider_account.as_str())
+        );
+        assert_eq!(
+            root.get("requested_stage").and_then(Value::as_str),
+            Some("grace")
+        );
+        assert_eq!(
+            root.get("evidence_digest_hex").and_then(Value::as_str),
+            Some("cd".repeat(32).as_str())
+        );
+        assert_eq!(
+            root.get("observed_at_unix").and_then(Value::as_u64),
+            Some(1_800_001_000)
+        );
+    }
+
+    #[test]
+    fn reserve_appeal_decision_builder_renders_signed_route_payload() {
+        let ctx = TestContext::new();
+        let decision_account = sample_account_literal("reserve-authority");
+        let args = ReserveAppealDecideArgs {
+            appeal_id_hex: format!("0x{}", "EF".repeat(32)),
+            status: ReserveAppealDecisionStatusArg::Accepted,
+            decision_account: decision_account.clone(),
+            rationale: "evidence accepted".to_owned(),
+            observed_at_unix: Some(1_800_001_100),
+        };
+
+        let (appeal_id_hex, value) =
+            build_reserve_appeal_decision_value(&ctx, &args).expect("appeal decision JSON");
+        assert_eq!(appeal_id_hex, "ef".repeat(32));
+        let root = value
+            .as_object()
+            .expect("reserve appeal decision payload should be an object");
+        assert_eq!(root.get("status").and_then(Value::as_str), Some("accepted"));
+        assert_eq!(
+            root.get("decision_account").and_then(Value::as_str),
+            Some(decision_account.as_str())
+        );
+        assert_eq!(
+            root.get("rationale").and_then(Value::as_str),
+            Some("evidence accepted")
+        );
+    }
+
+    #[test]
+    fn reserve_lifecycle_policy_builder_renders_and_validates_windows() {
+        let ctx = TestContext::new();
+        let authority_account = sample_account_literal("reserve-authority");
+        let args = ReservePolicyUpdateArgs {
+            authority_account: authority_account.clone(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            effective_at_unix: 1_800_001_200,
+            reason: "initial staged policy".to_owned(),
+            idempotency_key: "policy-1".to_owned(),
+            observed_at_unix: Some(1_800_001_210),
+        };
+
+        let value =
+            build_reserve_lifecycle_policy_value(&ctx, &args).expect("lifecycle policy JSON");
+        let root = value
+            .as_object()
+            .expect("reserve lifecycle policy payload should be an object");
+        assert_eq!(
+            root.get("authority_account").and_then(Value::as_str),
+            Some(authority_account.as_str())
+        );
+        assert_eq!(
+            root.get("grace_period_days").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            root.get("default_after_days").and_then(Value::as_u64),
+            Some(30)
+        );
+
+        let invalid = ReservePolicyUpdateArgs {
+            grace_period_days: 30,
+            default_after_days: 30,
+            ..args
+        };
+        let err = build_reserve_lifecycle_policy_value(&ctx, &invalid)
+            .expect_err("invalid policy windows should fail");
+        assert!(
+            err.to_string().contains("--grace-days"),
+            "unexpected error: {err:?}"
         );
     }
 
@@ -24950,7 +26094,7 @@ mod tests {
         fn get_operator_panel(
             &self,
             quarantine_id_hex: &str,
-            filter: &SorafsModerationQuarantineFilter,
+            filter: SorafsModerationQuarantineFilter,
         ) -> Result<Response<Vec<u8>>> {
             assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
             assert_eq!(filter.limit, self.expected_limit);
@@ -25006,7 +26150,7 @@ mod tests {
         fn get_operator_panel(
             &self,
             _quarantine_id_hex: &str,
-            _filter: &SorafsModerationQuarantineFilter,
+            _filter: SorafsModerationQuarantineFilter,
         ) -> Result<Response<Vec<u8>>> {
             unreachable!("mutation fixture does not serve operator-panel reads")
         }
@@ -25102,7 +26246,7 @@ mod tests {
         fn get_operator_panel(
             &self,
             quarantine_id_hex: &str,
-            filter: &SorafsModerationQuarantineFilter,
+            filter: SorafsModerationQuarantineFilter,
         ) -> Result<Response<Vec<u8>>> {
             assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
             assert_eq!(filter.limit, self.expected_limit);
@@ -25168,6 +26312,31 @@ mod tests {
         service: &ModerationOperatorService,
         raw: String,
     ) -> ModerationOperatorHttpResponse {
+        handle_moderation_operator_raw_request_with_csrf(service, raw, true)
+    }
+
+    fn handle_moderation_operator_raw_request_without_csrf(
+        service: &ModerationOperatorService,
+        raw: String,
+    ) -> ModerationOperatorHttpResponse {
+        handle_moderation_operator_raw_request_with_csrf(service, raw, false)
+    }
+
+    fn handle_moderation_operator_raw_request_with_csrf(
+        service: &ModerationOperatorService,
+        mut raw: String,
+        include_csrf: bool,
+    ) -> ModerationOperatorHttpResponse {
+        if include_csrf && raw.starts_with("POST ") {
+            raw = raw.replacen(
+                "\r\n\r\n",
+                &format!(
+                    "\r\n{MODERATION_OPERATOR_CSRF_HEADER}: {}\r\n\r\n",
+                    service.csrf_token
+                ),
+                1,
+            );
+        }
         let raw = raw.into_bytes();
         let request = moderation_operator_parse_http_request(&raw, 1024).expect("HTTP request");
         service.handle_request(&request)
@@ -25813,6 +26982,8 @@ mod tests {
         assert!(body.contains("juror-notifications"));
         assert!(body.contains("commit-reveal-status"));
         assert!(body.contains("ballot-tally"));
+        assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
+        assert!(body.contains(&service.csrf_token));
         let http = String::from_utf8(response.to_http_bytes()).expect("HTTP response UTF-8");
         assert!(http.contains("Content-Type: text/html; charset=utf-8"));
         assert!(http.contains("X-Content-Type-Options: nosniff"));
@@ -25835,6 +27006,14 @@ mod tests {
             .get("routes")
             .and_then(Value::as_array)
             .expect("status routes");
+        assert_eq!(
+            value.get("csrf_header").and_then(Value::as_str),
+            Some(MODERATION_OPERATOR_CSRF_HEADER)
+        );
+        assert_eq!(
+            value.get("csrf_token").and_then(Value::as_str),
+            Some(service.csrf_token.as_str())
+        );
         assert!(
             routes
                 .iter()
@@ -25870,6 +27049,54 @@ mod tests {
             response.content_type,
             ModerationOperatorService::JSON_CONTENT_TYPE
         );
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_mutation_without_csrf_token() {
+        let quarantine_id = [0xA9_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "review",
+            StatusCode::ACCEPTED,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body = r#"{"notes":"missing token"}"#;
+        let response = handle_moderation_operator_raw_request_without_csrf(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
+    }
+
+    #[test]
+    fn moderation_operator_service_rejects_mutation_with_wrong_csrf_token() {
+        let quarantine_id = [0xAA_u8; 16];
+        let quarantine_id_hex = encode(quarantine_id);
+        let service = fixture_moderation_operator_mutation_service(
+            quarantine_id,
+            "review",
+            StatusCode::ACCEPTED,
+            norito::json!({ "status": "must_not_be_called" }),
+        );
+        let body = r#"{"notes":"wrong token"}"#;
+        let response = handle_moderation_operator_raw_request_without_csrf(
+            &service,
+            format!(
+                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\n{MODERATION_OPERATOR_CSRF_HEADER}: wrong\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+
+        assert_eq!(response.status, StatusCode::FORBIDDEN);
+        let body = String::from_utf8(response.body).expect("error body UTF-8");
+        assert!(body.contains("CSRF"));
     }
 
     #[test]

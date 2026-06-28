@@ -9736,6 +9736,7 @@ impl KagemushaRecursiveSpendRedeemRequestV1 {
     /// Returns [`KagemushaFoldError`] when the recursive bundle, final redeem
     /// proof, public amount, lineage witness, lineage verifier selection, or
     /// change commitment is malformed.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_lineage_witness_change_and_records(
         bundle: KagemushaRecursiveSpendBundleV1,
         recipient: AccountId,

@@ -148,10 +148,10 @@ fn validation_fee_policy(
         genesis_hash,
         policy_version: 1,
         previous_policy_hash: None,
-        fee_asset_definition_id: fee_asset,
-        fee_asset_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+        sbd_asset_id: fee_asset.to_string(),
+        sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
         fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
-        treasury_account_id: treasury,
+        treasury_account_id: treasury.to_string(),
         charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
         effective_from_height: 3,
         expires_after_height: Some(100),
@@ -184,6 +184,12 @@ fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistr
         active_policy_version: entry.policy_version,
         registered_policies: vec![entry],
     }
+}
+
+fn policy_treasury_account(policy: &ValidationFeePolicyV1) -> AccountId {
+    AccountId::parse_encoded(policy.treasury_account_id.as_str())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("policy treasury account id")
 }
 
 fn install_validation_fee_policy(
@@ -294,12 +300,8 @@ fn signed_transfer_with_metadata(
     include_fee: bool,
     metadata: Metadata,
 ) -> SignedTransaction {
-    let fee_instruction = include_fee.then(|| {
-        (
-            policy.fee_amount_numeric(),
-            policy.treasury_account_id.clone(),
-        )
-    });
+    let fee_instruction =
+        include_fee.then(|| (policy.fee_amount_numeric(), policy_treasury_account(policy)));
     signed_transfer_with_fee_instruction(
         state,
         user,
@@ -389,7 +391,7 @@ fn signed_batch_transfer_with_principal_amounts(
         ),
         TransferAssetBatchEntry::new(
             user.clone(),
-            policy.treasury_account_id.clone(),
+            policy_treasury_account(policy),
             fee_asset.clone(),
             Numeric::new(
                 2 * TEST_VALIDATION_FEE_MINOR_UNITS,
@@ -561,7 +563,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         Numeric::new(2, 0),
         Some((
             policy.fee_amount_numeric(),
-            policy.treasury_account_id.clone(),
+            policy_treasury_account(&policy),
         )),
         metadata_for_policy(&policy, 1),
     );
@@ -617,7 +619,7 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
                 TEST_VALIDATION_FEE_MINOR_UNITS + 1,
                 TEST_VALIDATION_FEE_ASSET_SCALE.into(),
             ),
-            policy.treasury_account_id.clone(),
+            policy_treasury_account(&policy),
         )),
         metadata_for_policy(&policy, 1),
     );

@@ -12980,6 +12980,13 @@ struct ProxyRoutingPlanMismatch {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn validate_proxy_routing_plan_hint(
+    expected_plan: ToriiRoutingPlanHintV1,
+) -> Result<RoutingPlan, iroha_core::torii_proxy::ToriiRoutingPlanHintError> {
+    expected_plan.try_into_routing_plan()
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_proxy_routing_plan(
     request_kind: &'static str,
     resolved_plan: RoutingPlan,
@@ -13215,6 +13222,45 @@ fn should_execute_incoming_torii_proxy_request_locally(
             should_execute_route_locally(app, routing_decision)
         }
     }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn validate_incoming_read_proxy_route(
+    app: &AppState,
+    routing_decision: RoutingDecision,
+    request_kind: &'static str,
+) -> Result<RoutingDecision, Response> {
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    iroha_core::queue::resolve_routing_decision(
+        routing_decision,
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+    )
+    .map_err(|error| {
+        iroha_logger::warn!(
+            request_kind,
+            lane = routing_decision.lane_id.as_u32(),
+            dataspace = routing_decision.dataspace_id.as_u64(),
+            %error,
+            "Torii proxy read route no longer resolves against receiver Nexus state"
+        );
+        let mut response = torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!(
+                "proxied {request_kind} route lane {} dataspace {} no longer resolves against receiver Nexus state: {error}",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+        );
+        insert_routing_headers(&mut response, routing_decision, "proxy");
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-route-unavailable-reason"),
+            HeaderValue::from_static("stale_route"),
+        );
+        response
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -17775,6 +17821,41 @@ mod torii_routed_read_tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn execute_account_history_single_route_preserves_index_metadata() {
+        let authority = routed_read_test_account(0x91);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+
+        let response = execute_torii_account_history_read_for_routes(
+            &app,
+            vec![route],
+            ToriiFanoutRouteScopeV1::AllDataspaces,
+            vec![authority.to_string()],
+            Some("limit=10&count_mode=exact".to_owned()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let json = response_json(response).await;
+        assert_eq!(
+            json.get("query_source").and_then(Value::as_str),
+            Some("account_history_index")
+        );
+        assert!(json.get("indexed_height").and_then(Value::as_u64).is_some());
+        assert!(
+            json.as_object()
+                .is_some_and(|object| object.contains_key("indexed_block_hash"))
+        );
+        assert_eq!(
+            json.get("count_mode").and_then(Value::as_str),
+            Some("exact")
+        );
+        assert_eq!(json.get("has_more").and_then(Value::as_bool), Some(false));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn collect_torii_list_json_payloads_starts_all_routes_concurrently() {
         let routes = [
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
@@ -19061,6 +19142,71 @@ mod torii_routed_read_tests {
             norito::json::from_slice(&body).expect("status payload");
         assert_eq!(payload.status.kind, "Applied");
         assert_eq!(payload.resolved_from, "state");
+    }
+
+    fn pipeline_status_hint_response(kind: &str) -> Response {
+        crate::utils::respond_with_format(
+            PipelineTransactionStatusResponse::new(
+                "abc".to_owned(),
+                PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: Some(7),
+                    rejection_reason: None,
+                },
+                "global".to_owned(),
+                "cache".to_owned(),
+            ),
+            ResponseFormat::Json,
+        )
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hint_ignores_non_terminal_successes() {
+        for kind in ["Queued", "Approved", "Committed"] {
+            let response = pipeline_status_hint_response(kind);
+
+            let hinted = pipeline_status_hinted_global_response(response)
+                .await
+                .expect("hint classifier should not fail");
+
+            assert!(
+                hinted.is_none(),
+                "global status must fan out instead of trusting hinted {kind} state"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hint_allows_terminal_successes() {
+        for kind in ["Applied", "Rejected", "Expired"] {
+            let response = pipeline_status_hint_response(kind);
+
+            let hinted = pipeline_status_hinted_global_response(response)
+                .await
+                .expect("hint classifier should not fail")
+                .expect("terminal hinted status may short-circuit");
+            let body = axum::body::to_bytes(hinted.into_body(), usize::MAX)
+                .await
+                .expect("hinted body should be readable");
+            let payload: PipelineTransactionStatusResponse =
+                norito::json::from_slice(&body).expect("status payload");
+
+            assert_eq!(payload.status.kind, kind);
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hint_ignores_malformed_success() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(br#"{"status":{"kind":"Queued"}"#.as_slice()))
+            .expect("malformed JSON response");
+
+        let hinted = pipeline_status_hinted_global_response(response)
+            .await
+            .expect("malformed hinted success should fall through to fanout");
+
+        assert!(hinted.is_none());
     }
 
     #[cfg(feature = "app_api")]
@@ -21858,6 +22004,30 @@ async fn execute_torii_account_history_read_for_resolved_routes(
     params.limit = Some(page_limit);
     let count_mode_label = account_history_count_mode_label(params.count_mode.as_deref());
     let routed_by = routed_by_for_routes(app, &routes);
+    if routes.len() == 1 {
+        let query_string = match encode_torii_proxy_query(&params) {
+            Ok(query_string) => query_string,
+            Err(error) => return error.into_response(),
+        };
+        let mut diagnostics = ToriiFanoutDiagnostics::default();
+        diagnostics.record_attempt();
+        let response = execute_torii_single_route_read(
+            app,
+            routes[0],
+            ToriiReadEndpointV1::AccountHistoryGet,
+            vec![account_id],
+            query_string,
+            Vec::new(),
+        )
+        .await;
+        if response.status().is_success() {
+            diagnostics.record_success();
+        } else {
+            diagnostics.record_skipped_response(&response);
+        }
+        return with_torii_fanout_headers(response, diagnostics);
+    }
+
     let (payloads, diagnostics) = match collect_torii_account_history_json_payloads(
         &routes,
         &params,
@@ -22358,7 +22528,7 @@ async fn execute_torii_account_history_read_for_routes(
         execute_torii_read_fanout_for_resolved_routes(
             app,
             routes,
-            ToriiReadFanoutMergeV1::List,
+            ToriiReadFanoutMergeV1::AccountHistory,
             ToriiReadEndpointV1::AccountHistoryGet,
             path_args,
             query_string,
@@ -22649,7 +22819,16 @@ async fn execute_incoming_torii_proxy_request(
         } => {
             let entrypoint_hash = transaction.hash();
             let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
-            let ingress_plan = RoutingPlan::from(expected_plan);
+            let ingress_plan = match validate_proxy_routing_plan_hint(expected_plan) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    return torii_proxy_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proxy_request",
+                        format!("invalid routing plan hint: {error}"),
+                    );
+                }
+            };
             match routing::accept_transaction_for_ingress(
                 app.chain_id.clone(),
                 app.state.clone(),
@@ -22775,6 +22954,14 @@ async fn execute_incoming_torii_proxy_request(
         ) {
             Ok(request) => {
                 let routing_decision: RoutingDecision = expected_route.into();
+                let routing_decision = match validate_incoming_read_proxy_route(
+                    app,
+                    routing_decision,
+                    "verified_query",
+                ) {
+                    Ok(route) => route,
+                    Err(response) => return response,
+                };
                 if !should_execute_incoming_torii_proxy_request_locally(
                     app,
                     &proxy_request_context.request,
@@ -22845,6 +23032,11 @@ async fn execute_incoming_torii_proxy_request(
         #[cfg(feature = "app_api")]
         ToriiProxyRequestKindV1::Read(read_request) => {
             let routing_decision: RoutingDecision = read_request.expected_route.into();
+            let routing_decision =
+                match validate_incoming_read_proxy_route(app, routing_decision, "read") {
+                    Ok(route) => route,
+                    Err(response) => return response,
+                };
             if !should_execute_incoming_torii_proxy_request_locally(
                 app,
                 &proxy_request_context.request,
@@ -29826,6 +30018,17 @@ async fn handler_post_sorafs_capacity_por_verdict(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_sorafs_por_trigger(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/sorafs/por/trigger").await?;
+    Ok(sorafs::api::manual_por_trigger_retired_response())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_get_sorafs_por_status(
     State(app): State<SharedAppState>,
     AxQuery(query): AxQuery<crate::routing::PorStatusQueryDto>,
@@ -34044,6 +34247,43 @@ fn execute_pipeline_status_local_read(
     Err(pipeline_status_not_found_error())
 }
 
+#[cfg(feature = "app_api")]
+fn pipeline_status_payload_is_terminal(payload: &PipelineTransactionStatusResponse) -> bool {
+    matches!(
+        payload.status.kind.as_str(),
+        "Applied" | "Rejected" | "Expired"
+    )
+}
+
+#[cfg(feature = "app_api")]
+async fn pipeline_status_hinted_global_response(
+    response: Response,
+) -> Result<Option<Response>, Response> {
+    if should_skip_singleton_routed_query_route_error(&response) {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Ok(Some(response));
+    }
+
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|error| {
+            torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_proxy_response",
+                format!("failed to read hinted pipeline status response: {error}"),
+            )
+        })?;
+    let is_terminal = norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes)
+        .map(|payload| pipeline_status_payload_is_terminal(&payload))
+        .unwrap_or(false);
+    let response = Response::from_parts(parts, Body::from(bytes));
+
+    Ok(is_terminal.then_some(response))
+}
+
 async fn handler_pipeline_transaction_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -34097,8 +34337,10 @@ async fn handler_pipeline_transaction_status(
                 Vec::new(),
             )
             .await;
-            if !should_skip_singleton_routed_query_route_error(&hinted) {
-                return Ok(hinted);
+            match pipeline_status_hinted_global_response(hinted).await {
+                Ok(Some(hinted)) => return Ok(hinted),
+                Ok(None) => {}
+                Err(response) => return Ok(response),
             }
         }
 
@@ -35293,6 +35535,64 @@ fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
 }
 
 #[cfg(feature = "app_api")]
+fn recipient_lookup_alias_is_public(app: &AppState, alias: &AccountAlias) -> bool {
+    torii_visible_account_read_routes(app, None)
+        .into_iter()
+        .any(|route| route.dataspace_id == alias.dataspace)
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_signed_alias_access_allowed(
+    app: &AppState,
+    caller: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    torii_visible_account_read_routes(app, Some(caller))
+        .into_iter()
+        .any(|route| route.dataspace_id == alias.dataspace)
+        || {
+            let state_view = app.state.view();
+            torii_authority_can_resolve_account_alias(state_view.world(), caller, alias)
+        }
+}
+
+#[cfg(feature = "app_api")]
+fn recipient_lookup_permission_gate_response(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+    alias: &AccountAlias,
+) -> Result<Option<AxResponse>, Error> {
+    if recipient_lookup_alias_is_public(app.as_ref(), alias) {
+        return Ok(None);
+    }
+
+    let visibility = torii_visibility_account_from_headers(
+        app,
+        headers,
+        method,
+        uri,
+        body,
+        "v1/retail/recipients/lookup",
+    )?;
+    let Some(caller) = visibility.caller() else {
+        return Ok(Some(torii_alias_permission_denied_response(
+            "recipient lookup requires canonical request signing for restricted aliases",
+        )));
+    };
+
+    if recipient_lookup_signed_alias_access_allowed(app.as_ref(), caller, alias) {
+        return Ok(None);
+    }
+
+    Ok(Some(torii_alias_permission_denied_response(
+        "caller lacks account-alias resolve permission for restricted recipient lookup",
+    )))
+}
+
+#[cfg(feature = "app_api")]
 fn recipient_lookup_response(
     resolved: bool,
     account_id: String,
@@ -35334,6 +35634,9 @@ fn recipient_lookup_unresolved_response(
 #[cfg(feature = "app_api")]
 async fn handler_retail_recipient_lookup(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
     let request: routing::RetailRecipientLookupRequestDto = norito::json::from_slice(body.as_ref())
@@ -35378,6 +35681,16 @@ async fn handler_retail_recipient_lookup(
             "recipient lookup is only available for hbl.sbp and ubl.sbp aliases",
         ));
     };
+    if let Some(response) = recipient_lookup_permission_gate_response(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        &alias_label,
+    )? {
+        return Ok(response);
+    }
 
     match resolve_alias_label_on_chain(&app, canonical_alias.clone(), &alias_label)? {
         Some((_, bound_account_id, _)) if bound_account_id == account_id => {}
@@ -38021,6 +38334,10 @@ impl Torii {
                     get(handler_get_sorafs_por_report),
                 )
                 .route(
+                    "/v1/sorafs/por/trigger",
+                    post(handler_post_sorafs_por_trigger),
+                )
+                .route(
                     "/v1/sorafs/capacity/por",
                     post(handler_post_sorafs_capacity_por),
                 )
@@ -38064,6 +38381,73 @@ impl Torii {
                 .route(
                     "/v1/sorafs/orderbook/events/ws",
                     get(sorafs::api::handle_get_sorafs_orderbook_events_ws),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle",
+                    post(sorafs::api::handle_post_sorafs_reserve_lifecycle_update)
+                        .get(sorafs::api::handle_get_sorafs_reserve_lifecycle_snapshot),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/providers/{provider_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_provider),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/policy",
+                    post(sorafs::api::handle_post_sorafs_reserve_lifecycle_policy)
+                        .get(sorafs::api::handle_get_sorafs_reserve_lifecycle_policy),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/advance",
+                    post(sorafs::api::handle_post_sorafs_reserve_lifecycle_advance),
+                )
+                .route(
+                    "/v1/sorafs/reserve/credit-lines",
+                    get(sorafs::api::handle_get_sorafs_reserve_credit_lines),
+                )
+                .route(
+                    "/v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_reserve_credit_line_provider),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/events",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/events/stream",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events_stream),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/events/ws",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events_ws),
+                )
+                .route(
+                    "/v1/sorafs/reserve/top-up",
+                    post(sorafs::api::handle_post_sorafs_reserve_top_up),
+                )
+                .route(
+                    "/v1/sorafs/reserve/withdraw",
+                    post(sorafs::api::handle_post_sorafs_reserve_withdrawal),
+                )
+                .route(
+                    "/v1/sorafs/reserve/movements",
+                    get(sorafs::api::handle_get_sorafs_reserve_movements),
+                )
+                .route(
+                    "/v1/sorafs/reserve/movements/{movement_id_hex}/custody",
+                    post(sorafs::api::handle_post_sorafs_reserve_movement_custody),
+                )
+                .route(
+                    "/v1/sorafs/reserve/balances/{provider_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_reserve_balance),
+                )
+                .route(
+                    "/v1/sorafs/reserve/appeals",
+                    post(sorafs::api::handle_post_sorafs_reserve_appeal)
+                        .get(sorafs::api::handle_get_sorafs_reserve_appeals),
+                )
+                .route(
+                    "/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision",
+                    post(sorafs::api::handle_post_sorafs_reserve_appeal_decision),
                 )
                 .route(
                     "/v1/sorafs/appeals/pricing/config",
@@ -41342,10 +41726,16 @@ impl Torii {
 
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
-        sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
-            app_state,
-            shutdown_signal.clone(),
-        );
+        {
+            sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
+            sorafs::api::spawn_sorafs_reserve_lifecycle_scheduler(
+                app_state,
+                shutdown_signal.clone(),
+            );
+        }
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
         let make = api_router.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -48175,6 +48565,49 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
+    fn validate_proxy_routing_plan_hint_rejects_forged_digest_and_roles() {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let native_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![iroha_core::queue::RouteLeg::new(
+                RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8)),
+                iroha_core::queue::RouteLegRole::Participant,
+            )],
+        );
+        let mut forged_digest = ToriiRoutingPlanHintV1::from(native_plan.clone());
+        let advertised = Hash::new(b"torii-submit-proxy-forged-native-amx-plan-digest");
+        let ToriiRoutingPlanHintV1::NativeAmx { plan_digest, .. } = &mut forged_digest else {
+            panic!("expected native AMX hint");
+        };
+        *plan_digest = advertised;
+
+        let err = super::validate_proxy_routing_plan_hint(forged_digest)
+            .expect_err("submit proxy must reject a forged Native AMX plan digest");
+        assert_eq!(
+            err,
+            iroha_core::torii_proxy::ToriiRoutingPlanHintError::native_amx_plan_digest_mismatch(
+                advertised,
+                native_plan.digest()
+            )
+        );
+
+        let role_err = super::validate_proxy_routing_plan_hint(ToriiRoutingPlanHintV1::Single(
+            iroha_core::torii_proxy::ToriiRouteLegHintV1 {
+                route: ToriiRouteHintV1::from(coordinator),
+                role: iroha_core::torii_proxy::ToriiRouteLegRoleV1::Participant,
+            },
+        ))
+        .expect_err("submit proxy must reject malformed coordinator leg roles");
+        assert_eq!(
+            role_err,
+            iroha_core::torii_proxy::ToriiRoutingPlanHintError::unexpected_coordinator_role(
+                iroha_core::torii_proxy::ToriiRouteLegRoleV1::Participant
+            )
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
     fn validate_proxy_routing_plan_rejects_receiver_recomputed_plan() {
         let ingress_hint = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
         let resolved_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
@@ -48193,6 +48626,55 @@ pub(crate) mod tests_runtime_handlers {
             err.receiver_digest,
             RoutingPlan::single(resolved_route).digest()
         );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn validate_proxy_routing_plan_rejects_native_amx_participant_drift() {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let shared_participant = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(7));
+        let ingress_participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8));
+        let receiver_participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8));
+        let ingress_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                iroha_core::queue::RouteLeg::new(
+                    shared_participant,
+                    iroha_core::queue::RouteLegRole::Participant,
+                ),
+                iroha_core::queue::RouteLeg::new(
+                    ingress_participant,
+                    iroha_core::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let resolved_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                iroha_core::queue::RouteLeg::new(
+                    shared_participant,
+                    iroha_core::queue::RouteLegRole::Participant,
+                ),
+                iroha_core::queue::RouteLeg::new(
+                    receiver_participant,
+                    iroha_core::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            ingress_plan.coordinator_route(),
+            resolved_plan.coordinator_route()
+        );
+        let err = super::validate_proxy_routing_plan(
+            "submit_transaction",
+            resolved_plan.clone(),
+            ingress_plan.clone(),
+        )
+        .expect_err("submit proxy must reject Native AMX participant drift");
+
+        assert_eq!(err.ingress_digest, ingress_plan.digest());
+        assert_eq!(err.receiver_digest, resolved_plan.digest());
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -57964,6 +58446,145 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    async fn incoming_read_proxy_response_for_route(
+        app: SharedAppState,
+        route: RoutingDecision,
+    ) -> Response {
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"incoming-read-proxy-stale-route"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
+                ToriiReadEndpointV1::AccountGet,
+                route,
+                vec![
+                    checked_torii_test_account_id(
+                        0x68,
+                        "derive stale-route proxied read account fixture key",
+                    )
+                    .to_string(),
+                ],
+                None,
+                Vec::new(),
+            )),
+        };
+
+        super::execute_incoming_torii_proxy_request(&app, request, None).await
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    async fn incoming_verified_query_proxy_response_for_route(
+        app: SharedAppState,
+        route: RoutingDecision,
+    ) -> Response {
+        let key_pair =
+            checked_torii_test_ed25519_keypair(0x69, "derive stale-route verified query key");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = request_for_test(
+            &authority,
+            iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
+        );
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"incoming-verified-query-proxy-stale-route"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: norito::to_bytes(&request)
+                    .expect("verified query request should encode"),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+
+        super::execute_incoming_torii_proxy_request(&app, request, None).await
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    fn assert_incoming_proxy_stale_route_rejection(response: &Response, route: RoutingDecision) {
+        let expected_lane = route.lane_id.as_u32().to_string();
+        let expected_dataspace = route.dataspace_id.as_u64().to_string();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-unavailable-reason")
+                .and_then(|value| value.to_str().ok()),
+            Some("stale_route")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-lane-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_lane.as_str())
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_dataspace.as_str())
+        );
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_read_proxy_rejects_retired_lane_hint() {
+        let app = mk_app_state_for_tests();
+        let route = RoutingDecision::new(LaneId::new(42), DataSpaceId::UNIVERSAL);
+
+        let response = incoming_read_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_read_proxy_rejects_lane_dataspace_mismatch_hint() {
+        let mut app = mk_app_state_for_tests();
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+
+        let response = incoming_read_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_verified_query_proxy_rejects_retired_lane_hint() {
+        let app = mk_app_state_for_tests();
+        let route = RoutingDecision::new(LaneId::new(43), DataSpaceId::UNIVERSAL);
+
+        let response = incoming_verified_query_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_verified_query_proxy_rejects_lane_dataspace_mismatch_hint() {
+        let mut app = mk_app_state_for_tests();
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+
+        let response = incoming_verified_query_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
@@ -63477,6 +64098,196 @@ mod tests {
         block
             .commit()
             .expect("commit should persist alias dataspace resolve permission");
+    }
+
+    fn recipient_lookup_sbp_dataspace_for_test() -> DataSpaceId {
+        DataSpaceId::new(20)
+    }
+
+    fn configure_recipient_lookup_sbp_dataspace_for_test(
+        app: &mut SharedAppState,
+        visibility: iroha_data_model::nexus::LaneVisibility,
+    ) {
+        let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
+        let sbp_lane = LaneId::new(1);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            std::num::NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: sbp_lane,
+                    dataspace_id: sbp_dataspace,
+                    alias: "sbp".to_owned(),
+                    visibility,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: sbp_dataspace,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..actual::Nexus::default()
+        };
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        let state_view = app_state.state.view();
+        app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_allows_unsigned_public_alias() {
+        let authority = checked_torii_test_account_id(
+            0x91,
+            "derive recipient lookup public target fixture key",
+        );
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Public,
+        );
+        bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: authority.to_string(),
+            alias_fqn: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode request");
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/lookup"
+                .parse()
+                .expect("recipient lookup uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("public lookup should reach route configuration")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("recipient_lookup_not_configured")
+        );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_rejects_unsigned_restricted_alias() {
+        let authority = checked_torii_test_account_id(
+            0x92,
+            "derive recipient lookup restricted target fixture key",
+        );
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: authority.to_string(),
+            alias_fqn: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode request");
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            axum::http::Method::POST,
+            "/v1/retail/recipients/lookup"
+                .parse()
+                .expect("recipient lookup uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("restricted lookup should return a permission response")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("permission_denied")
+        );
+    }
+
+    #[tokio::test]
+    async fn retail_recipient_lookup_allows_signed_alias_permission() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x93,
+            "derive recipient lookup permission caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x94,
+            "derive recipient lookup permission target fixture key",
+        );
+        let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::recipient-lookup-auth"));
+        let mut app = mk_app_state_for_tests_with_world(
+            world_with_target_and_caller_bound_to_dataspace(&target, &caller, uaid, sbp_dataspace),
+        );
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        bind_account_alias_for_test(&app, &target, "payee@hbl.sbp");
+        let alias = AccountAlias::from_literal(
+            "payee@hbl.sbp",
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("recipient alias should parse");
+        grant_alias_resolve_permissions(&app, &caller, &alias);
+
+        let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
+            account_id: target.to_string(),
+            alias_fqn: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/retail/recipients/lookup"
+            .parse()
+            .expect("recipient lookup uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
+        let response = handler_retail_recipient_lookup(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("permissioned lookup should reach route configuration")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("recipient_lookup_not_configured")
+        );
     }
 
     #[tokio::test]

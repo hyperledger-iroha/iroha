@@ -196,7 +196,7 @@ OutputsBindStoredView ==
     ImplementationAdvances(candidate) =>
       OutputView(candidate) = ImplementationNextView(candidate)
 
-Safety ==
+EngineViewAdvanceSaturationExactness ==
   /\ ViewMatchesSpec
   /\ AdvancementMatchesSpec
   /\ ViewNeverWraps
@@ -205,5 +205,11 @@ Safety ==
   /\ NonAdvancingValidationCallbacksStayPut
   /\ AdvancingInputsEmitBothOutputs
   /\ OutputsBindStoredView
+
+EngineViewAdvanceSaturationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineViewAdvanceSaturationExactness
+
+Safety == EngineViewAdvanceSaturationExactness
 
 ====

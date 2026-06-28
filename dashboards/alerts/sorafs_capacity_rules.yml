@@ -204,6 +204,66 @@ groups:
             Ledger digest (label={{ $labels.label }}) reported zero transfer instructions
             for at least 5 minutes. Re-run `sorafs reserve ledger` and confirm the CLI
             produced both rent and reserve transfers before publishing the digest.
+      - alert: SoraFSReserveRuntimeDefaults
+        expr: torii_sorafs_reserve_defaulted_providers > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reserve runtime reports defaulted providers"
+          description: |
+            The signed reserve runtime has reported at least one defaulted provider
+            for 5 minutes (value={{ printf "%.0f" $value }}). Pause new reserve
+            admissions for affected providers and reconcile lifecycle state before
+            automatic enforcement or slashing is applied.
+      - alert: SoraFSReserveRuntimeCreditShortfall
+        expr: sum(torii_sorafs_reserve_credit_shortfall_micro_xor) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reserve runtime reports uncovered credit shortfall"
+          description: |
+            Local reserve lifecycle projections show uncovered credit-line
+            shortfall for 5 minutes (micro-XOR={{ printf "%.0f" $value }}).
+            Review provider credit status and block settlement until the live
+            account mutation path or governance override clears the shortfall.
+      - alert: SoraFSReserveAppealBacklogHigh
+        expr: torii_sorafs_reserve_appeal_backlog > 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve appeal backlog above operator threshold"
+          description: |
+            More than 10 reserve appeals have remained open for 15 minutes
+            (value={{ printf "%.0f" $value }}). Add operator capacity or pause
+            automatic lifecycle escalation for affected providers until appeals
+            are reviewed.
+      - alert: SoraFSReserveMovementRejected
+        expr: torii_sorafs_reserve_chain_reconciled_movements{status="rejected"} > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve movement rejected during chain reconciliation"
+          description: |
+            At least one local reserve movement is terminally rejected on-chain
+            (value={{ printf "%.0f" $value }}). Reconcile the movement ledger,
+            provider balance, and reserve transfer evidence before accepting new
+            movements for the same reserve account.
+      - alert: SoraFSReserveServiceRateLimited
+        expr: sum by (route, reason) (increase(torii_sorafs_reserve_service_rate_limit_total[5m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reserve service rate limits are firing"
+          description: |
+            Reserve service route {{ $labels.route }} hit rate-limit reason
+            {{ $labels.reason }} in the last 5 minutes. Check caller behavior,
+            request signing, and route quotas before clients back off into
+            stale lifecycle or movement state.
       - alert: SoraFSCapacityReconciliationMismatch
         expr: (sum(sorafs_capacity_reconciliation_missing_total) > 0)
           or (sum(sorafs_capacity_reconciliation_overpaid_total) > 0)

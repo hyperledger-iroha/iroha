@@ -502,7 +502,15 @@ SelectedQuorumMatchesSpec ==
   /\ Matches("invalid_qc_block_quorum")
   /\ Matches("invalid_qc_checkpoint")
 
-SafetyFast == SelectedQuorumMatchesSpec
+BlockSyncSelectedQuorumExactness ==
+  SelectedQuorumMatchesSpec
+
+BlockSyncSelectedQuorumCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedQuorumExactness
+
+SafetyFast ==
+  BlockSyncSelectedQuorumExactness
 
 EvidenceQuorum ==
   /\ ActualQuorumInitial("qc_evidence_quorum") = SpecQuorumInitial("qc_evidence_quorum")

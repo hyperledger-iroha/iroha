@@ -5,7 +5,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
 use iroha_data_model::{
     block::consensus::{NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1, NativeAmxPhase},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
@@ -13,6 +13,8 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
+
+const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
 
 /// Native AMX session key scoped to one source transaction and routing plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
@@ -45,6 +47,47 @@ pub struct NativeAmxVoteV1 {
     pub bls_signature: Vec<u8>,
 }
 
+fn peer_uses_bls_normal(peer: &PeerId) -> bool {
+    peer.public_key()
+        .try_algorithm()
+        .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
+}
+
+impl NativeAmxVoteV1 {
+    /// Validate phase, transport signer binding, BLS-normal identity, and vote signature.
+    ///
+    /// This is the stateless ingress prefilter. Callers that know the current world state must
+    /// still verify that the signer has a live proof of possession at the planned block height.
+    ///
+    /// # Errors
+    /// Returns an error when the vote is carried by the wrong phase message, the authenticated
+    /// sender does not match the signer, the signer is not BLS-normal, or the BLS signature does
+    /// not verify against the canonical attestation preimage.
+    pub fn validate_ingress(
+        &self,
+        expected_phase: NativeAmxPhase,
+        sender: Option<&PeerId>,
+    ) -> Result<(), NativeAmxVoteIngressError> {
+        if self.body.phase != expected_phase {
+            return Err(NativeAmxVoteIngressError::PhaseMismatch {
+                expected: expected_phase,
+                actual: self.body.phase,
+            });
+        }
+        if let Some(sender) = sender
+            && sender != &self.signer
+        {
+            return Err(NativeAmxVoteIngressError::SenderMismatch);
+        }
+        if !peer_uses_bls_normal(&self.signer) {
+            return Err(NativeAmxVoteIngressError::SignerNotBlsNormal);
+        }
+        Signature::from_bytes(&self.bls_signature)
+            .verify(self.signer.public_key(), &self.body.signature_preimage())
+            .map_err(|_| NativeAmxVoteIngressError::InvalidSignature)
+    }
+}
+
 /// Native AMX control-plane request or vote.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum NativeAmxMessage {
@@ -56,6 +99,28 @@ pub enum NativeAmxMessage {
     CommitRequest(NativeAmxAttestationBodyV1),
     /// Participant validator commit vote.
     CommitVote(NativeAmxVoteV1),
+}
+
+/// Failure while validating a native AMX vote before session-cache insertion.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum NativeAmxVoteIngressError {
+    /// native AMX vote message phase does not match the embedded body phase
+    #[error("native AMX vote phase mismatch: expected {expected:?}, got {actual:?}")]
+    PhaseMismatch {
+        /// Phase implied by the received message variant.
+        expected: NativeAmxPhase,
+        /// Phase embedded in the signed attestation body.
+        actual: NativeAmxPhase,
+    },
+    /// native AMX vote was transported by a peer other than the signer
+    #[error("native AMX vote sender does not match signer")]
+    SenderMismatch,
+    /// native AMX vote signer is not a BLS-normal consensus identity
+    #[error("native AMX vote signer is not BLS-normal")]
+    SignerNotBlsNormal,
+    /// native AMX vote signature is missing, malformed, or invalid
+    #[error("native AMX vote signature is invalid")]
+    InvalidSignature,
 }
 
 /// Failure while adding a native AMX vote to the session cache.
@@ -84,6 +149,12 @@ pub enum NativeAmxQcBuildError {
     /// a vote signer appears more than once
     #[error("a vote signer appears more than once")]
     DuplicateSigner,
+    /// a vote signer is not a BLS-normal consensus identity
+    #[error("a vote signer is not BLS-normal")]
+    SignerNotBlsNormal,
+    /// an individual vote signature is missing, malformed, or invalid
+    #[error("an individual native AMX vote signature is invalid")]
+    InvalidSignature,
     /// the vote set does not satisfy the participant quorum
     #[error("native AMX vote quorum is not met")]
     QuorumNotMet,
@@ -127,6 +198,15 @@ pub fn aggregate_votes_to_qc(
         {
             return Err(NativeAmxQcBuildError::DuplicateSigner);
         }
+        if !peer_uses_bls_normal(&vote.signer) {
+            return Err(NativeAmxQcBuildError::SignerNotBlsNormal);
+        }
+        if Signature::from_bytes(&vote.bls_signature)
+            .verify(vote.signer.public_key(), &body.signature_preimage())
+            .is_err()
+        {
+            return Err(NativeAmxQcBuildError::InvalidSignature);
+        }
     }
 
     if indexed_signatures.len() < min_signers {
@@ -160,6 +240,7 @@ pub fn aggregate_votes_to_qc(
 
 #[derive(Default)]
 struct NativeAmxSession {
+    order: VecDeque<NativeAmxVoteBucket>,
     votes: BTreeMap<NativeAmxVoteBucket, BTreeMap<PeerId, NativeAmxVoteV1>>,
 }
 
@@ -175,11 +256,22 @@ impl NativeAmxVoteBucket {
 }
 
 impl NativeAmxSession {
-    fn insert_vote(&mut self, vote: NativeAmxVoteV1) -> Result<(), NativeAmxSessionError> {
-        let target = self
-            .votes
-            .entry(NativeAmxVoteBucket::from_body(&vote.body))
-            .or_default();
+    fn insert_vote(
+        &mut self,
+        vote: NativeAmxVoteV1,
+        max_body_buckets: NonZeroUsize,
+    ) -> Result<(), NativeAmxSessionError> {
+        let bucket = NativeAmxVoteBucket::from_body(&vote.body);
+        if !self.votes.contains_key(&bucket) {
+            while self.votes.len() >= max_body_buckets.get() {
+                let Some(oldest) = self.order.pop_front() else {
+                    break;
+                };
+                self.votes.remove(&oldest);
+            }
+            self.order.push_back(bucket);
+        }
+        let target = self.votes.entry(bucket).or_default();
         if target.contains_key(&vote.signer) {
             return Err(NativeAmxSessionError::DuplicateSigner);
         }
@@ -198,6 +290,7 @@ impl NativeAmxSession {
 /// Bounded cache of native AMX vote sessions keyed by source transaction and plan digest.
 pub struct NativeAmxSessionCache {
     max_sessions: NonZeroUsize,
+    max_body_buckets_per_session: NonZeroUsize,
     order: VecDeque<NativeAmxSessionKey>,
     sessions: BTreeMap<NativeAmxSessionKey, NativeAmxSession>,
 }
@@ -206,8 +299,21 @@ impl NativeAmxSessionCache {
     /// Create a bounded native AMX session cache.
     #[must_use]
     pub fn new(max_sessions: NonZeroUsize) -> Self {
+        Self::with_limits(
+            max_sessions,
+            NonZeroUsize::new(DEFAULT_SESSION_BODY_BUCKET_MAX).expect("default is non-zero"),
+        )
+    }
+
+    /// Create a bounded native AMX session cache with an exact-body cap per session.
+    #[must_use]
+    pub fn with_limits(
+        max_sessions: NonZeroUsize,
+        max_body_buckets_per_session: NonZeroUsize,
+    ) -> Self {
         Self {
             max_sessions,
+            max_body_buckets_per_session,
             order: VecDeque::new(),
             sessions: BTreeMap::new(),
         }
@@ -230,7 +336,10 @@ impl NativeAmxSessionCache {
             }
             self.order.push_back(key);
         }
-        self.sessions.entry(key).or_default().insert_vote(vote)
+        self.sessions
+            .entry(key)
+            .or_default()
+            .insert_vote(vote, self.max_body_buckets_per_session)
     }
 
     /// Return votes sorted deterministically by signer id for a session phase.
@@ -462,12 +571,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_cache_evicts_oldest_body_bucket_within_session() {
+        let mut cache = NativeAmxSessionCache::with_limits(
+            NonZeroUsize::new(4).expect("nonzero sessions"),
+            NonZeroUsize::new(2).expect("nonzero body buckets"),
+        );
+        let first = vote(NativeAmxPhase::Prepare);
+        let key = NativeAmxSessionKey::from_body(&first.body);
+        let mut second = first.clone();
+        second.body.planned_coordinator_block_height = 43;
+        let mut third = first.clone();
+        third.body.planned_coordinator_block_height = 44;
+
+        cache.insert_vote(first.clone()).expect("first vote");
+        cache.insert_vote(second.clone()).expect("second vote");
+        cache.insert_vote(third.clone()).expect("third vote");
+
+        assert!(
+            cache.sorted_votes_for_body(key, &first.body).is_empty(),
+            "oldest exact-body bucket should be evicted"
+        );
+        assert_eq!(cache.sorted_votes_for_body(key, &second.body), vec![second]);
+        assert_eq!(cache.sorted_votes_for_body(key, &third.body), vec![third]);
+        assert_eq!(cache.sorted_votes(key, NativeAmxPhase::Prepare).len(), 2);
+    }
+
     fn signed_vote(body: &NativeAmxAttestationBodyV1, keypair: &KeyPair) -> NativeAmxVoteV1 {
         NativeAmxVoteV1 {
             body: body.clone(),
             signer: PeerId::new(keypair.public_key().clone()),
             bls_signature: checked_bls_signature_payload(keypair, &body.signature_preimage()),
         }
+    }
+
+    #[test]
+    fn vote_ingress_validation_accepts_matching_signed_bls_vote() {
+        let keypair = checked_bls_keypair(0xE1);
+        let body = body(NativeAmxPhase::Prepare);
+        let vote = signed_vote(&body, &keypair);
+        let sender = vote.signer.clone();
+
+        assert_eq!(
+            vote.validate_ingress(NativeAmxPhase::Prepare, Some(&sender)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn vote_ingress_validation_rejects_phase_and_sender_mismatches() {
+        let keypair = checked_bls_keypair(0xE2);
+        let other_keypair = checked_bls_keypair(0xE3);
+        let body = body(NativeAmxPhase::Prepare);
+        let vote = signed_vote(&body, &keypair);
+        let sender = vote.signer.clone();
+        let other_sender = PeerId::new(other_keypair.public_key().clone());
+
+        assert_eq!(
+            vote.validate_ingress(NativeAmxPhase::Commit, Some(&sender)),
+            Err(NativeAmxVoteIngressError::PhaseMismatch {
+                expected: NativeAmxPhase::Commit,
+                actual: NativeAmxPhase::Prepare
+            })
+        );
+        assert_eq!(
+            vote.validate_ingress(NativeAmxPhase::Prepare, Some(&other_sender)),
+            Err(NativeAmxVoteIngressError::SenderMismatch)
+        );
+    }
+
+    #[test]
+    fn vote_ingress_validation_rejects_non_bls_and_bad_signatures() {
+        let ed25519_keypair = checked_random_ed25519_keypair();
+        let body = body(NativeAmxPhase::Commit);
+        let ed25519_signature =
+            Signature::try_new(ed25519_keypair.private_key(), &body.signature_preimage())
+                .expect("checked Ed25519 fixture signature")
+                .payload()
+                .to_vec();
+        let ed25519_vote = NativeAmxVoteV1 {
+            body,
+            signer: PeerId::new(ed25519_keypair.public_key().clone()),
+            bls_signature: ed25519_signature,
+        };
+
+        assert_eq!(
+            ed25519_vote.validate_ingress(NativeAmxPhase::Commit, None),
+            Err(NativeAmxVoteIngressError::SignerNotBlsNormal)
+        );
+
+        let bls_keypair = checked_bls_keypair(0xE4);
+        let mut bad_signature_vote = signed_vote(&body, &bls_keypair);
+        bad_signature_vote.bls_signature = vec![0_u8; 96];
+
+        assert_eq!(
+            bad_signature_vote.validate_ingress(NativeAmxPhase::Commit, None),
+            Err(NativeAmxVoteIngressError::InvalidSignature)
+        );
     }
 
     #[test]
@@ -543,6 +743,36 @@ mod tests {
                 1
             ),
             Err(NativeAmxQcBuildError::SignerNotInValidatorSet)
+        );
+
+        let ed25519_keypair = checked_random_ed25519_keypair();
+        let ed25519_signer = PeerId::new(ed25519_keypair.public_key().clone());
+        let ed25519_vote = NativeAmxVoteV1 {
+            body: body.clone(),
+            signer: ed25519_signer.clone(),
+            bls_signature: Signature::try_new(
+                ed25519_keypair.private_key(),
+                &body.signature_preimage(),
+            )
+            .expect("checked Ed25519 fixture signature")
+            .payload()
+            .to_vec(),
+        };
+        assert_eq!(
+            aggregate_votes_to_qc(body.clone(), vec![ed25519_signer], &[ed25519_vote], 1),
+            Err(NativeAmxQcBuildError::SignerNotBlsNormal)
+        );
+
+        let mut bad_signature_vote = vote.clone();
+        bad_signature_vote.bls_signature = vec![0_u8; 96];
+        assert_eq!(
+            aggregate_votes_to_qc(
+                body.clone(),
+                validator_set.clone(),
+                &[bad_signature_vote],
+                1
+            ),
+            Err(NativeAmxQcBuildError::InvalidSignature)
         );
 
         let mut wrong_body_vote = vote;

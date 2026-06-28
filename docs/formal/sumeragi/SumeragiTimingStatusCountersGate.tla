@@ -274,6 +274,13 @@ Safety ==
   /\ ImplementationActions(PrevoteResetAfterRecord) =
        SpecActions(PrevoteResetAfterRecord)
 
+TimingStatusCountersExactness ==
+  Safety
+
+TimingStatusCountersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ TimingStatusCountersExactness
+
 BugResetEmptyKeepsPacemaker ==
   ImplementationActions(PacemakerResetEmpty) =
     SpecActions(PacemakerResetEmpty)

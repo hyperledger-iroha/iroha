@@ -29,10 +29,15 @@ public final class SorafsReferenceValidatorsTests {
     assert !SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.isUserSignedPayload();
     assert SorafsPdpPayloadKind.COMMITMENT.bridgeCode() == 1;
     assert SorafsPdpPayloadKind.PROOF.bridgeCode() == 3;
+    assert SorafsPopPayloadKind.CREDENTIAL.bridgeCode() == 1;
+    assert SorafsPopPayloadKind.MEMBERSHIP_PROOF.bridgeCode() == 6;
+    assert SorafsPopPayloadKind.ISSUED_CREDENTIAL_BUNDLE.bridgeCode() == 7;
+    assert SorafsHedgingPayloadKind.PRICE_FEED.bridgeCode() == 1;
+    assert SorafsHedgingPayloadKind.BILLING_STATEMENT.bridgeCode() == 4;
     assert SorafsOrderbookSide.BID.bridgeCode() == 1;
     assert SorafsOrderbookTier.ARCHIVE.bridgeCode() == 3;
     assert SorafsOrderbookCancelReason.REPLACED.bridgeCode() == 4;
-    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 10;
+    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 12;
   }
 
   private static void rejectsGeneratedAtBeforeNativeDispatch() {
@@ -49,8 +54,8 @@ public final class SorafsReferenceValidatorsTests {
   private static void rejectsBlankLabelBeforeNativeDispatch() {
     boolean threw = false;
     try {
-      SorafsReferenceValidators.validatePdpPayloadJson(
-          SorafsPdpPayloadKind.PROOF, new byte[0], " ", 1L);
+      SorafsReferenceValidators.validateHedgingPayloadJson(
+          SorafsHedgingPayloadKind.PRICE_FEED, new byte[0], " ", 1L);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("label");
     }

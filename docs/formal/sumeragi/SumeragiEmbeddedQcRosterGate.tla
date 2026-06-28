@@ -271,8 +271,15 @@ TypeInvariant ==
 AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
 
-Safety ==
+EmbeddedQcRosterExactness ==
   AllCasesMatchSpec
+
+EmbeddedQcRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EmbeddedQcRosterExactness
+
+Safety ==
+  EmbeddedQcRosterExactness
 
 ValidPermissionedBootstraps ==
   Matches("valid_permissioned_active")

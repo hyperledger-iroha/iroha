@@ -1,0 +1,19 @@
+# Example arguments for the SF-12 Governance DAG rollout evidence gate.
+# Use runtime artifact locations; do not store secrets, raw DAG blocks, CAR
+# payloads, private keys, response bodies, signed transactions, or ledgers.
+--evidence-dir
+artifacts/sorafs/governance-dag/staged
+--summary-out
+artifacts/sorafs/governance-dag/staged/rollout-summary.json
+--max-evidence-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-pin-lag-secs
+1800
+--max-head-age-secs
+1800
+--min-blocks
+4
+--min-payload-kinds
+6

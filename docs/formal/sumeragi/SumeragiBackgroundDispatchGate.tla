@@ -228,7 +228,14 @@ TypeInvariant ==
 DispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DispatchMatchesSpec
+BackgroundDispatchExactness ==
+  DispatchMatchesSpec
+
+BackgroundDispatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BackgroundDispatchExactness
+
+SafetyFast == BackgroundDispatchExactness
 
 AllRequestsBlockingEligible ==
   \A c \in Cases: ActualAllowsBlocking(c) = TRUE

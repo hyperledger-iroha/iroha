@@ -315,6 +315,10 @@ PrefilterStatePreservationExactness ==
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
 
+PrefilterStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PrefilterStatePreservationExactness
+
 Safety ==
   PrefilterStatePreservationExactness
 

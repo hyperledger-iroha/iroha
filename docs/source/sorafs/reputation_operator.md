@@ -180,6 +180,42 @@ by default; pass `--max-polls=0` for continuous polling or a positive
 `--max-polls=N` for bounded repeated polls. Use `verify` for archived canonical
 snapshot and proof replay.
 
+Before promoting a deployed publisher to routing or incentive enforcement,
+collect the rollout evidence bundle with the helper:
+
+```bash
+python3 scripts/run_sorafs_reputation_rollout_evidence.py \
+  @scripts/examples/sorafs_reputation_rollout_evidence.args.example
+```
+
+Use `--dry-run` first to print the exact command plan without publishing or
+fetching anything. The helper publishes the canonical snapshot, reads the latest
+snapshot, fetches each required provider proof, replays archived proofs, watches
+bounded reputation events, and then invokes the rollout gate. Operators that
+already collected the artifacts separately can run the gate directly:
+
+```bash
+python3 scripts/check_sorafs_reputation_rollout_evidence.py \
+  --evidence publish=reputation-publish.json \
+  --evidence latest=reputation-latest.json \
+  --evidence provider=provider-a-reputation.json \
+  --evidence events=reputation-events.json \
+  --evidence verify=reputation-proof-replay.json \
+  --evidence metrics=reputation-metrics-canary.json \
+  --evidence transport=reputation-transport-canary.json \
+  --evidence consumption=reputation-consumption-canary.json \
+  --require-provider=provider-a \
+  --summary-out=reputation-rollout-summary.json
+```
+
+The gate fails closed unless the publish/latest/provider/event/proof artifacts
+refer to the same fresh snapshot, deployed metrics show bounded snapshot age and
+ingest lag, SSE and WebSocket delivery both observe snapshot events, and routing
+plus incentive smoke evidence proves the reputation score was consumed. The
+artifacts must stay payload-free: do not archive raw snapshot bytes, proof
+frames, HTTP response bodies, bearer tokens, or signing material in the rollout
+directory.
+
 SDK consumers can use the JavaScript and Python Torii client helpers instead
 of assembling reputation URLs by hand. Both SDKs expose latest snapshot,
 provider proof, historical snapshot, weights, event polling, and SSE stream

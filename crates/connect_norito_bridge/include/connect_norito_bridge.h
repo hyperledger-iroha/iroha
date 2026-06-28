@@ -32,6 +32,10 @@ extern "C" {
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_CHANNEL 4
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT 5
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT 6
+#define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED 1
+#define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_REFERENCE_PRICE_DECISION 2
+#define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_BILLING_LINE_ITEM 3
+#define CONNECT_NORITO_SORAFS_REFERENCE_HEDGING_KIND_BILLING_STATEMENT 4
 #define CONNECT_NORITO_SORAFS_ORDERBOOK_SIDE_BID 1
 #define CONNECT_NORITO_SORAFS_ORDERBOOK_SIDE_ASK 2
 #define CONNECT_NORITO_SORAFS_ORDERBOOK_TIER_HOT 1
@@ -668,6 +672,26 @@ int32_t connect_norito_sm2_compute_za(
 
 // ---------------- SoraFS helpers ----------------
 int32_t connect_norito_sorafs_reference_validate_orderbook_json(
+    uint32_t kind,
+    const uint8_t* bytes_ptr,
+    unsigned long bytes_len,
+    const uint8_t* label_ptr,
+    unsigned long label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
+int32_t connect_norito_sorafs_reference_validate_pop_json(
+    uint32_t kind,
+    const uint8_t* bytes_ptr,
+    unsigned long bytes_len,
+    const uint8_t* label_ptr,
+    unsigned long label_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    unsigned long* out_json_len);
+
+int32_t connect_norito_sorafs_reference_validate_hedging_json(
     uint32_t kind,
     const uint8_t* bytes_ptr,
     unsigned long bytes_len,

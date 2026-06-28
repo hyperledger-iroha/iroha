@@ -224,8 +224,15 @@ LocalPayloadAvailabilityCoreSafety ==
   /\ AbsentPayloadDoesNotCount
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == LocalPayloadAvailabilityCoreSafety
+LocalPayloadAvailabilityExactness ==
+  LocalPayloadAvailabilityCoreSafety
 
-SafetyFast == LocalPayloadAvailabilityCoreSafety
+LocalPayloadAvailabilityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LocalPayloadAvailabilityExactness
+
+NoBugInvariant == LocalPayloadAvailabilityExactness
+
+SafetyFast == LocalPayloadAvailabilityExactness
 
 ====

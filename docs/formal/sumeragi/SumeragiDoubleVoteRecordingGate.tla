@@ -337,7 +337,15 @@ DoubleVoteRecordingMatchesSpec ==
   /\ RecordMatches("record_cross_phase_new")
   /\ RecordMatches("record_commit_root_new")
 
-SafetyFast == DoubleVoteRecordingMatchesSpec
+DoubleVoteRecordingExactness ==
+  DoubleVoteRecordingMatchesSpec
+
+DoubleVoteRecordingCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DoubleVoteRecordingExactness
+
+SafetyFast ==
+  DoubleVoteRecordingExactness
 
 BugDetectHeightMismatchEmits ==
   DetectMatches("bare_height_mismatch")

@@ -335,8 +335,15 @@ PendingFastUnblockCoreSafety ==
   /\ AgeGateRequiresTimeout
   /\ LookupShapeMatchesShortCircuit
 
-NoBugInvariant == PendingFastUnblockCoreSafety
+PendingFastUnblockExactness ==
+  PendingFastUnblockCoreSafety
 
-SafetyFast == PendingFastUnblockCoreSafety
+PendingFastUnblockCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ PendingFastUnblockExactness
+
+NoBugInvariant == PendingFastUnblockExactness
+
+SafetyFast == PendingFastUnblockExactness
 
 ====

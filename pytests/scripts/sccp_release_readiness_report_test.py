@@ -1785,7 +1785,7 @@ def test_release_readiness_report_redacts_verifier_helper_failures(
         if name.endswith("_gate_inventory_errors") and callable(helper)
     )
 
-    def assert_redacted_helper_errors(secret: str) -> None:
+    def assert_redacted_helper_errors(secret: str, exception_name: str) -> None:
         assert len(gate_helpers) >= 70
         for name, helper in gate_helpers:
             errors = helper()
@@ -1797,27 +1797,39 @@ def test_release_readiness_report_redacts_verifier_helper_failures(
             assert "secret-token" not in rendered
             assert secret not in rendered
             assert "RuntimeError" not in rendered
+            assert "SystemExit" not in rendered
+            assert exception_name not in rendered
             assert "Traceback" not in rendered
 
-    def fail_loader():
-        raise RuntimeError("secret-token /tmp/operator/private/path")
+    for exception_type in (RuntimeError, SystemExit):
 
-    monkeypatch.setattr(report, "_load_release_bundle_verify_helpers", fail_loader)
-    assert_redacted_helper_errors("/tmp/operator")
+        def fail_loader(exception_type=exception_type):
+            raise exception_type(
+                f"secret-token {exception_type.__name__} /tmp/operator/private/path"
+            )
 
-    class FailingVerifier:
-        def __getattr__(self, _name):
-            def fail_helper(*_args, **_kwargs):
-                raise RuntimeError("secret-token delegated verifier helper detail")
+        monkeypatch.setattr(report, "_load_release_bundle_verify_helpers", fail_loader)
+        assert_redacted_helper_errors("/tmp/operator", exception_type.__name__)
 
-            return fail_helper
+        class FailingVerifier:
+            def __getattr__(self, _name):
+                def fail_helper(*_args, **_kwargs):
+                    raise exception_type(
+                        "secret-token delegated verifier helper "
+                        f"{exception_type.__name__} detail"
+                    )
 
-    monkeypatch.setattr(
-        report,
-        "_load_release_bundle_verify_helpers",
-        lambda: FailingVerifier(),
-    )
-    assert_redacted_helper_errors("delegated verifier helper detail")
+                return fail_helper
+
+        monkeypatch.setattr(
+            report,
+            "_load_release_bundle_verify_helpers",
+            lambda: FailingVerifier(),
+        )
+        assert_redacted_helper_errors(
+            "delegated verifier helper detail",
+            exception_type.__name__,
+        )
 
 
 def active_evm_live_chain_id(report):
@@ -6921,7 +6933,7 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "test_sccp_production_corridor_dotnet_phase_rejects_duplicate_rid",
         "test_sccp_production_corridor_dotnet_phase_rejects_ambiguous_rid_or_architecture_metadata",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_rid_values",
-        "test_sccp_production_corridor_dotnet_phase_rejects_missing_os_architecture",
+        "test_sccp_production_corridor_dotnet_phase_accepts_host_architecture_fallback",
         "test_sccp_production_corridor_dotnet_phase_rejects_noncanonical_architecture_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_colon_injected_info_values",
         "test_sccp_production_corridor_dotnet_phase_rejects_uppercase_architecture",
@@ -6948,6 +6960,7 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "substr(line, length(label) + 2)",
         "exactly one canonical Windows RID from dotnet --info",
         "exactly one OS Architecture from dotnet --info",
+        "exactly one Host Architecture from dotnet --info when OS Architecture is absent",
         "found: X64",
         "direct .NET TRX TestResults path must remain the only accepted path",
         "nested .NET TRX TestResults paths must remain rejected",
@@ -13948,8 +13961,53 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
     markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
 
     assert (
+        "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` "
+        "marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker "
+        "each emitted exactly once after the strict `dotnet test` command"
+    ) in markdown
+    assert (
         "full-matches the direct C# test project "
         "`TestResults/sccp-dotnet-sdk.trx` path"
+    ) in markdown
+    assert (
+        "direct VSTest-shaped TRX XML that is rooted at `TestRun`"
+        in markdown
+    )
+    assert "`UnitTestResult` rows directly under `Results`" in markdown
+    assert "`UnitTest` definitions directly under `TestDefinitions`" in markdown
+    assert "names `Hyperledger.Iroha.Sdk.Tests.dll`" in markdown
+    assert "is at most 16777216 bytes" in markdown
+    assert "contains no DTD or entity declarations" in markdown
+    assert "uses unique TRX `UnitTest` and `Execution` ids" in markdown
+    assert (
+        "contains exactly the VSTest passed-test count of `UnitTestResult` rows"
+        in markdown
+    )
+    assert (
+        "contains only `UnitTestResult` rows bound by `testId` or "
+        "`executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test "
+        "definitions whose names or classes contain an exact `Sccp...` test token"
+        in markdown
+    )
+    assert (
+        "when both TRX identifiers are present, `testId` and `executionId` "
+        "must bind the same SCCP test definition"
+        in markdown
+    )
+    assert (
+        "when present `UnitTestResult` `testName` must match the bound SCCP "
+        "test definition name and carry an exact `Sccp...` token"
+        in markdown
+    )
+    assert (
+        "SCCP TRX test definition/result names used for binding must be "
+        "unpadded and control-character-free"
+        in markdown
+    )
+    assert "contains at least one passed SCCP `UnitTestResult`" in markdown
+    assert (
+        "contains no failed, skipped, timed-out, or aborted SCCP "
+        "`UnitTestResult`"
     ) in markdown
     assert (
         "Canonical `.NET` SCCP marker lines must use a single literal space "
@@ -13974,6 +14032,75 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         "full-matches the C# test project "
         "`TestResults/sccp-dotnet-sdk.trx` path before release readiness can pass"
     ) not in markdown
+
+
+def test_release_readiness_report_markdown_pins_live_verifier_blockers(
+    tmp_path: Path,
+) -> None:
+    """Generated Required Release Evidence must keep live verifier blockers explicit."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    for marker, expected_marker in (
+        (
+            "Governed live deployment evidence for immutable destination "
+            "verifiers and source-chain verifier engines",
+            "Governed live deployment evidence",
+        ),
+        (
+            "offline placeholder or template-derived hashes keep the report blocked",
+            "offline placeholder or template-derived hashes keep the report blocked",
+        ),
+        (
+            "Required source-verifier evidence by lane:",
+            "Required source-verifier evidence by lane:",
+        ),
+    ):
+        assert marker in markdown
+        weakened = markdown.replace(marker, "source verifier deployment is pending")
+        errors = verifier._readiness_markdown_invariant_errors(readiness, weakened)
+        assert (
+            "readiness report Markdown Required Release Evidence section missing "
+            f"release evidence marker: {expected_marker}"
+        ) in errors
+
+    for lane_blocker in (
+        "Ethereum recursive source-adapter verifier deployment and remaining "
+        "beacon light-client update/state branches are not complete for the "
+        "SCCP inbound path",
+        "BSC recursive source-adapter verifier deployment is not complete for "
+        "the SCCP inbound path",
+        "Solana audited Tower replay, full-bank AccountsDB lattice, "
+        "bank/fork-choice, and source-adapter verifier deployment evidence is "
+        "not complete for the SCCP inbound path",
+        "TON governed full-light-client verifier deployment, canary, and "
+        "source-adapter deployment evidence are not complete for the SCCP "
+        "inbound path",
+        "TRON transaction-Merkle source-call verifier deployment is not "
+        "complete for the SCCP inbound path",
+    ):
+        assert lane_blocker in markdown
+        weakened = markdown.replace(
+            lane_blocker,
+            "source verifier deployment is pending",
+        )
+        errors = verifier._readiness_markdown_invariant_errors(readiness, weakened)
+        assert (
+            "readiness report Markdown Required Release Evidence section missing "
+            f"release evidence marker: {lane_blocker}"
+        ) in errors
 
 
 def test_release_readiness_report_required_evidence_items_are_unique(
@@ -14029,6 +14156,15 @@ def test_release_readiness_report_required_evidence_items_are_unique(
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
     assert "must not contain empty path-list segments" in required_evidence
+    assert (
+        "contains exactly the VSTest passed-test count of `UnitTestResult` rows"
+        in required_evidence
+    )
+    assert (
+        "when both TRX identifiers are present, `testId` and `executionId` "
+        "must bind the same SCCP test definition"
+        in required_evidence
+    )
 
 
 def test_release_readiness_report_markdown_rejects_malformed_top_level_status(
@@ -14686,6 +14822,30 @@ def test_release_readiness_report_markdown_names_unsupported_scope_note(
     assert report.SCCP_NOT_REMAINING_WORK_SCOPE_NOTE in markdown
 
 
+def test_release_readiness_report_markdown_names_live_deployment_placeholder_blocker(
+    tmp_path: Path,
+) -> None:
+    """Required Release Evidence must keep placeholder verifier hashes blocked."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
+
+    assert (
+        "offline placeholder or template-derived hashes keep the report blocked"
+        in markdown
+    )
+
+
 def test_release_readiness_report_preserves_malformed_crypto_evidence_values(
     tmp_path: Path,
 ) -> None:
@@ -15221,6 +15381,37 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         ), field
 
 
+def test_release_readiness_report_treats_missing_active_route_canary_blockers_as_empty(
+    tmp_path: Path,
+) -> None:
+    """The release checklist must treat missing canary blockers as empty."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    canary = active_lane["route_allowlist"]["route_canary"]
+    canary["blockers"] = []
+    canary.pop("blockers")
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    route_canary_item = item_by_id["live_route_canary_evidence"]
+
+    assert checklist["ready"] is True
+    assert route_canary_item["ready"] is True
+    assert route_canary_item["blockers"] == []
+
+
 def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding(
     tmp_path: Path,
 ) -> None:
@@ -15406,6 +15597,37 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
         assert checklist["ready"] is False, path
         assert route_item["ready"] is False, path
         assert any(expected_blocker in blocker for blocker in route_item["blockers"]), path
+
+
+def test_release_readiness_report_treats_missing_active_route_allowlist_blockers_as_empty(
+    tmp_path: Path,
+) -> None:
+    """The route checklist must treat missing copied blockers as empty."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    route_allowlist = active_lane["route_allowlist"]
+    route_allowlist["blockers"] = []
+    route_allowlist.pop("blockers")
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    route_item = item_by_id["route_allowlist_binding"]
+
+    assert checklist["ready"] is True
+    assert route_item["ready"] is True
+    assert route_item["blockers"] == []
 
 
 def test_release_readiness_report_blocks_malformed_active_governed_deployment_metadata(
@@ -15688,6 +15910,40 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             expected_blocker in blocker
             for blocker in deployment_item["blockers"]
         ), path
+
+
+def test_release_readiness_report_treats_missing_active_governed_blockers_as_empty(
+    tmp_path: Path,
+) -> None:
+    """The deployment checklist must treat missing copied blockers as empty."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    evidence_summary = report._load_evidence_summary([evidence])
+    native_status = report._native_evm_prover_bundle_status(
+        native_bundle,
+        evidence_summary,
+    )
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    destination_binding = active_lane["destination_binding"]
+    source_gate = active_lane["source_adapter_gate"]
+    destination_binding["blockers"] = []
+    source_gate["blockers"] = []
+    destination_binding.pop("blockers")
+    source_gate.pop("blockers")
+
+    checklist = report._active_launch_release_checklist(
+        evidence_summary,
+        native_status,
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+    deployment_item = item_by_id["governed_deployment_evidence"]
+
+    assert checklist["ready"] is True
+    assert deployment_item["ready"] is True
+    assert deployment_item["blockers"] == []
 
 
 def test_release_readiness_report_blocks_malformed_active_required_record_metadata(
@@ -16822,7 +17078,14 @@ def test_release_readiness_report_cli_redacts_top_level_exception_details(
         ("operator" + "\t" + "value", ("operator", "value")),
     )
 
-    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        report.argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         for sensitive_message, leaked_markers in sensitive_messages:
 
             def fail_build(
@@ -17706,6 +17969,8 @@ def test_release_readiness_report_public_path_helpers_reject_escape_forms() -> N
         "C:/tmp/release.md",
         r"evidence\secret.toml",
         "evidence//secret.toml",
+        "evidence/%2e%2e/secret.toml",
+        "evidence/secret-token-input.toml",
         ".",
     )
     for path in unsafe_paths:
@@ -17731,6 +17996,8 @@ def test_release_readiness_report_cli_rejects_escaping_input_paths_without_leaki
         "C:/tmp/release.md",
         r"evidence\secret.toml",
         "evidence//secret.toml",
+        "evidence/%2e%2e/secret.toml",
+        ".",
     ]
     monkeypatch.setattr(
         report,
@@ -17766,7 +18033,53 @@ def test_release_readiness_report_cli_rejects_escaping_input_paths_without_leaki
         ) in blockers
     assert "readiness report input_artifacts is invalid" in blockers
     for path in unsafe_paths:
-        assert path not in captured.out
+        if path == ".":
+            assert '"."' not in captured.out
+        else:
+            assert path not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_sensitive_input_paths_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must suppress copied input paths with sensitive markers."""
+
+    report = load_report_module()
+    sensitive_path = "evidence/secret-token-input.toml"
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "inputs": [sensitive_path],
+            "input_artifacts": [
+                {"path": sensitive_path, "bytes": 1, "sha256": "1" * 64}
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "inputs" not in payload
+    assert "input_artifacts" not in payload
+    assert (
+        "readiness report inputs must be a list of canonical strings"
+        in blockers
+    )
+    assert (
+        "readiness report input_artifacts[0] path must be a canonical public path"
+        in blockers
+    )
+    assert "readiness report input_artifacts is invalid" in blockers
+    assert "secret-token-input" not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -18848,6 +19161,110 @@ def test_release_readiness_report_public_crypto_rejects_source_gate_transcript_r
         "source_adapter_gate_audit_hashes.evm_source_gate_hash must not reuse "
         "route_canary_message_id"
     ) in errors
+
+
+def test_release_readiness_report_public_crypto_rejects_source_gate_template_replays_when_required_false_or_malformed() -> None:
+    """Public crypto source-gate template hashes must not hide behind flags."""
+
+    report = load_report_module()
+    all_lanes = report._load_all_lanes_module()
+    domain = report.ACTIVE_LAUNCH_DOMAIN
+    profile = all_lanes.LANE_PROFILES[domain]
+    template_hash = next(
+        iter(all_lanes._source_material_template_hashes(profile).values())
+    )
+    template_value = "0x" + template_hash.hex()
+    gate_field = report.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[domain]
+
+    cases = (
+        (
+            False,
+            "source_adapter_gate_required must be true for this domain",
+        ),
+        (
+            "true",
+            "source_adapter_gate_required must be boolean",
+        ),
+    )
+    for required, expected_flag_error in cases:
+        rows = public_crypto_rows_for_all_domains(report)
+        active_row = next(row for row in rows if row["domain"] == domain)
+        active_row["source_adapter_gate_required"] = required
+        active_row["source_adapter_gate_hash"] = template_value
+        active_row["source_adapter_gate_audit_hashes"][gate_field] = template_value
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+
+        assert (
+            f"readiness report cryptographic_evidence[0] {expected_flag_error}"
+        ) in errors
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            "source_adapter_gate_hash must be deployed gate evidence, "
+            "not built-in template material"
+        ) in errors
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            f"source_adapter_gate_audit_hashes {gate_field} must be deployed "
+            "audit evidence, not built-in template material"
+        ) in errors
+
+
+def test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_template_replay_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must suppress copied source-gate template crypto rows."""
+
+    report = load_report_module()
+    all_lanes = report._load_all_lanes_module()
+    domain = report.ACTIVE_LAUNCH_DOMAIN
+    profile = all_lanes.LANE_PROFILES[domain]
+    template_hash = next(
+        iter(all_lanes._source_material_template_hashes(profile).values())
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field = report.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[domain]
+    crypto_rows = public_crypto_rows_for_all_domains(report)
+    active_row = next(row for row in crypto_rows if row["domain"] == domain)
+    active_row["source_adapter_gate_required"] = "true"
+    active_row["source_adapter_gate_hash"] = forged_hash
+    active_row["source_adapter_gate_audit_hashes"][gate_field] = forged_hash
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "cryptographic_evidence": crypto_rows,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "cryptographic_evidence" not in payload
+    assert (
+        "readiness report cryptographic_evidence[0] "
+        "source_adapter_gate_required must be boolean"
+    ) in blockers
+    assert (
+        "readiness report cryptographic_evidence[0] "
+        "source_adapter_gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in blockers
+    assert (
+        "readiness report cryptographic_evidence[0] "
+        f"source_adapter_gate_audit_hashes {gate_field} must be deployed "
+        "audit evidence, not built-in template material"
+    ) in blockers
+    assert forged_hash not in captured.out
+    assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
 
 
 def test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_drift_without_leaking(
@@ -25953,6 +26370,71 @@ def test_release_readiness_report_rejects_extra_dotnet_success_before_test_comma
         "production corridor phase dotnet-sdk evidence artifact .NET success "
         "marker appears outside its required command window: SCCP .NET SDK TRX bytes:"
     ) in completed.stdout
+
+
+def test_release_readiness_report_rejects_duplicate_dotnet_success_after_test_command(
+    tmp_path: Path,
+) -> None:
+    """.NET success markers must not repeat inside the strict test command window."""
+
+    cases = (
+        ("passed-summary", "Passed!", "Passed!"),
+        ("trx-path", "SCCP .NET SDK TRX:", "SCCP .NET SDK TRX:"),
+        ("trx-bytes", "SCCP .NET SDK TRX bytes:", "SCCP .NET SDK TRX bytes:"),
+    )
+    for case_name, line_prefix, expected_marker in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        evidence, _ = write_complete_evidence(case_dir)
+        report = load_report_module()
+        lines = phase_successful_lines(report, "dotnet-sdk")
+        duplicate_index = next(
+            index for index, line in enumerate(lines) if line.startswith(line_prefix)
+        )
+        forged_lines = [
+            *lines[: duplicate_index + 1],
+            lines[duplicate_index],
+            *lines[duplicate_index + 1 :],
+        ]
+        corridor_log = case_dir / "forged-dotnet-sdk-duplicate.log"
+        corridor_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *forged_lines,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--require-phase-evidence",
+                "--phase-result",
+                "all=missing",
+                "--phase-result",
+                "dotnet-sdk=passed",
+                "--phase-evidence",
+                f"dotnet-sdk={corridor_log}",
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1, case_name
+        assert "Status: NOT READY" in completed.stdout, case_name
+        assert (
+            "production corridor phase dotnet-sdk evidence artifact success marker "
+            "appears more times than required command windows: "
+            f"{expected_marker}"
+        ) in completed.stdout, case_name
 
 
 def test_release_readiness_report_rejects_extra_dotnet_setup_markers_before_commands(

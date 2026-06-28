@@ -181,6 +181,13 @@ Safety ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
+RecoveryStatusCountersExactness ==
+  Safety
+
+RecoveryStatusCountersCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RecoveryStatusCountersExactness
+
 BugResetEmptyKeepsFetchTotal ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

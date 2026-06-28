@@ -345,7 +345,15 @@ TypeInvariant ==
 SnapshotRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == SnapshotRosterMatchesSpec
+BlockSyncSnapshotRosterExactness ==
+  SnapshotRosterMatchesSpec
+
+BlockSyncSnapshotRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSnapshotRosterExactness
+
+SafetyFast ==
+  BlockSyncSnapshotRosterExactness
 
 SnapshotSelectionUsesJournal ==
   Matches("snapshot_matching_stake")

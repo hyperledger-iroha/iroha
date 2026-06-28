@@ -5,13 +5,8 @@ source: docs/source/sorafs_orchestrator_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8584e9225df6ce386ba1ab8ac08362e22379a275fbb4c4e513ccff10d8b7d353
-source_last_modified: "2026-01-22T15:38:30.716877+00:00"
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS Multi-Source Fetch Orchestrator Specification
-summary: Canonical API, scoring model, and configuration knobs for the SF-6b multi-source fetch orchestrator.
 ---
 
 # 1. Purpose and Scope

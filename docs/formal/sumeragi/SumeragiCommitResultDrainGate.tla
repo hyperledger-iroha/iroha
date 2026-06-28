@@ -362,5 +362,12 @@ Safety ==
   /\ EmptyAndDisconnectedStopDrainLoop
   /\ NoReceiverDoesNothing
 
+CommitResultDrainExactness ==
+  Safety
+
+CommitResultDrainCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitResultDrainExactness
+
 =============================================================================
 ====

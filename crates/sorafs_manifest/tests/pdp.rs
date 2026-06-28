@@ -1,3 +1,5 @@
+//! PDP manifest structure and reference binding validation tests.
+
 use sorafs_manifest::{
     ChunkingProfileV1, ProfileId,
     pdp::{
@@ -5,6 +7,7 @@ use sorafs_manifest::{
         PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1, PdpCommitmentValidationError,
         PdpHotLeafProofV1, PdpProofLeafV1, PdpProofV1, PdpProofValidationError, PdpSampleV1,
     },
+    validate_pdp_challenge_proof_bytes,
 };
 
 fn sample_profile() -> ChunkingProfileV1 {
@@ -118,4 +121,87 @@ fn proof_missing_signature_fails() {
     proof.signature.clear();
     let err = proof.validate().expect_err("must fail");
     assert_eq!(err, PdpProofValidationError::MissingSignature);
+}
+
+#[test]
+fn proof_missing_segment_merkle_path_fails() {
+    let mut proof = sample_proof();
+    proof.proof_leaves[0].segment_merkle_path.clear();
+    let err = proof.validate().expect_err("must fail");
+    assert_eq!(
+        err,
+        PdpProofValidationError::MissingSegmentMerklePath { segment_index: 5 }
+    );
+}
+
+#[test]
+fn proof_missing_hot_leaf_merkle_path_fails() {
+    let mut proof = sample_proof();
+    proof.proof_leaves[0].hot_leaves[0].leaf_merkle_path.clear();
+    let err = proof.validate().expect_err("must fail");
+    assert_eq!(
+        err,
+        PdpProofValidationError::MissingLeafMerklePath { leaf_index: 0 }
+    );
+}
+
+#[test]
+fn challenge_proof_pair_rejects_late_proof() {
+    let challenge = sample_challenge();
+    let mut proof = sample_proof();
+    proof.issued_at_unix = challenge.response_deadline_unix + 1;
+
+    let outcome = validate_pair(&challenge, &proof);
+
+    assert_eq!(outcome.code, "SFS-POL-002");
+    assert!(!outcome.is_ok(), "{outcome:?}");
+}
+
+#[test]
+fn challenge_proof_pair_rejects_wrong_provider() {
+    let challenge = sample_challenge();
+    let mut proof = sample_proof();
+    proof.provider_id = [0x88; 32];
+
+    let outcome = validate_pair(&challenge, &proof);
+
+    assert_eq!(outcome.code, "SFS-PDP-001");
+    assert!(!outcome.is_ok(), "{outcome:?}");
+}
+
+#[test]
+fn challenge_proof_pair_rejects_wrong_manifest() {
+    let challenge = sample_challenge();
+    let mut proof = sample_proof();
+    proof.manifest_digest = [0x77; 32];
+
+    let outcome = validate_pair(&challenge, &proof);
+
+    assert_eq!(outcome.code, "SFS-PDP-001");
+    assert!(!outcome.is_ok(), "{outcome:?}");
+}
+
+#[test]
+fn challenge_proof_pair_rejects_bad_witness_path() {
+    let challenge = sample_challenge();
+    let mut proof = sample_proof();
+    proof.proof_leaves[0].segment_hash = [0x88; 32];
+
+    let outcome = validate_pair(&challenge, &proof);
+
+    assert_eq!(outcome.code, "SFS-PDP-001");
+    assert!(!outcome.is_ok(), "{outcome:?}");
+}
+
+fn validate_pair(
+    challenge: &PdpChallengeV1,
+    proof: &PdpProofV1,
+) -> sorafs_manifest::reference::ValidationOutcomeV1 {
+    validate_pdp_challenge_proof_bytes(
+        &norito::to_bytes(challenge).expect("challenge encodes"),
+        &norito::to_bytes(proof).expect("proof encodes"),
+        "challenge.to",
+        "proof.to",
+        123,
+    )
 }

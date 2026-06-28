@@ -274,7 +274,13 @@ RbcSessionReadyDeliverCoreSafety ==
   /\ DeliverFirstRecordsAndAdvances
   /\ DeliverReplaysAreImmutable
 
+RbcSessionReadyDeliverExactness == RbcSessionReadyDeliverCoreSafety
+
+RbcSessionReadyDeliverCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcSessionReadyDeliverExactness
+
 SafetyFast ==
-  RbcSessionReadyDeliverCoreSafety
+  RbcSessionReadyDeliverExactness
 
 ====

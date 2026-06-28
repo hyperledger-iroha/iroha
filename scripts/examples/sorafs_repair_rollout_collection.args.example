@@ -1,0 +1,33 @@
+# Example arguments for the SF-8b repair rollout evidence collection planner.
+# Supply reviewed, payload-free staged evidence paths. Run with:
+#   python3 scripts/run_sorafs_repair_rollout_evidence.py @scripts/examples/sorafs_repair_rollout_collection.args.example --dry-run
+--out-dir
+artifacts/sorafs/repair/staged
+--summary-out
+artifacts/sorafs/repair/staged/rollout-summary.json
+--max-evidence-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-event-lag-secs
+900
+--max-repair-latency-secs
+7200
+--min-auditors
+3
+--auditor-roster-evidence
+artifacts/sorafs/repair/staged/auditor-roster.json
+--failure-capture-evidence
+artifacts/sorafs/repair/staged/failure-capture.json
+--auditor-api-evidence
+artifacts/sorafs/repair/staged/auditor-api.json
+--worker-lifecycle-evidence
+artifacts/sorafs/repair/staged/worker-lifecycle.json
+--event-streams-evidence
+artifacts/sorafs/repair/staged/event-streams.json
+--governance-handoff-evidence
+artifacts/sorafs/repair/staged/governance-handoff.json
+--observability-evidence
+artifacts/sorafs/repair/staged/observability.json
+--governance-approval-evidence
+artifacts/sorafs/repair/staged/governance-approval.json

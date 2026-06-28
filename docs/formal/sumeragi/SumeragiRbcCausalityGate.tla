@@ -413,7 +413,7 @@ DuplicateDeliverDoesNotMutate ==
     /\ "record_deliver" \notin actions
     /\ "wake_commit_pipeline" \notin actions
 
-Safety ==
+RbcCausalityExactness ==
   /\ ActionsMatchSpec
   /\ AcceptedInitBindsEvidence
   /\ DroppedMessagesDoNotMutateSession
@@ -425,5 +425,11 @@ Safety ==
   /\ DeliverReadyBundleSeedsOnlyAfterValidation
   /\ DeliverWakeRequiresFirstDeliver
   /\ DuplicateDeliverDoesNotMutate
+
+RbcCausalityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcCausalityExactness
+
+Safety == RbcCausalityExactness
 
 ====

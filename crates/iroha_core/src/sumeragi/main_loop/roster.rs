@@ -15,7 +15,7 @@ use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
 
 use crate::{
-    state::{State, StateView, WorldReadOnly},
+    state::{State, StateView, WorldReadOnly, public_lane_validator_record_matches_key},
     sumeragi::{WsvEpochRosterAdapter, consensus::ValidatorIndex, epoch::EpochManager},
 };
 
@@ -388,6 +388,10 @@ pub(super) fn derive_active_topology_for_mode(
     consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
     let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    let active_lane_ids = view
+        .nexus
+        .enabled
+        .then(|| crate::state::nexus_active_lane_ids(&view.nexus));
     derive_active_topology_for_mode_from_world(
         view.world(),
         view.commit_topology().as_slice(),
@@ -395,6 +399,7 @@ pub(super) fn derive_active_topology_for_mode(
         trusted,
         me,
         consensus_mode,
+        active_lane_ids.as_ref(),
     )
 }
 
@@ -406,16 +411,23 @@ pub(super) fn derive_active_topology_for_mode_from_world(
     trusted: &iroha_config::parameters::actual::TrustedPeers,
     me: &PeerId,
     consensus_mode: ConsensusMode,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Vec<PeerId> {
     let use_commit = !commit_topology.is_empty();
     let next_height = height.saturating_add(1);
     if matches!(consensus_mode, ConsensusMode::Npos) {
         let topology_lane_ids = if use_commit {
-            crate::state::validator_lane_ids_for_peers(world, commit_topology.iter())
+            active_lane_scope(
+                crate::state::validator_lane_ids_for_peers(world, commit_topology.iter()),
+                active_lane_ids,
+            )
         } else {
             BTreeSet::new()
         };
-        let local_lane_ids = crate::state::validator_lane_ids_for_peer(world, me);
+        let local_lane_ids = active_lane_scope(
+            crate::state::validator_lane_ids_for_peer(world, me),
+            active_lane_ids,
+        );
         let (lane_scope, local_scope_fallback) = if topology_lane_ids.len() == 1 {
             (topology_lane_ids, false)
         } else if !local_lane_ids.is_empty() {
@@ -427,12 +439,17 @@ pub(super) fn derive_active_topology_for_mode_from_world(
         } else {
             (local_lane_ids, true)
         };
-        let all_active_roster = stake_active_validator_roster_from_world(world);
+        let all_active_roster =
+            stake_active_validator_roster_from_world_with_active_lanes(world, active_lane_ids);
         let active_roster = if lane_scope.is_empty() {
             all_active_roster
         } else {
             let local_lane_roster =
-                stake_active_validator_roster_for_lanes_from_world(world, &lane_scope);
+                stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
+                    world,
+                    &lane_scope,
+                    active_lane_ids,
+                );
             if local_scope_fallback
                 && local_lane_roster.len() <= 1
                 && all_active_roster.len() > local_lane_roster.len()
@@ -500,6 +517,16 @@ pub(super) fn derive_active_topology_for_mode_from_world(
     filter_roster_with_live_consensus_keys_at_height_world(world, roster, next_height)
 }
 
+fn active_lane_scope(
+    mut lane_ids: BTreeSet<LaneId>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> BTreeSet<LaneId> {
+    if let Some(active_lane_ids) = active_lane_ids {
+        lane_ids.retain(|lane_id| active_lane_ids.contains(lane_id));
+    }
+    lane_ids
+}
+
 #[cfg(test)]
 pub(super) fn derive_local_validator_index(
     view: &StateView<'_>,
@@ -543,6 +570,7 @@ pub(super) fn derive_local_validator_index_for_mode_from_world(
         trusted,
         me,
         consensus_mode,
+        None,
     );
     roster.iter().position(|peer| peer == me).and_then(|idx| {
         u32::try_from(idx)
@@ -551,28 +579,39 @@ pub(super) fn derive_local_validator_index_for_mode_from_world(
     })
 }
 
-/// Return stake-active validator peers advertised in world state (NPoS source roster).
-pub(super) fn stake_active_validator_roster_from_world(world: &impl WorldReadOnly) -> Vec<PeerId> {
-    stake_active_validator_roster_from_world_with_lane_scope(world, None)
+/// Return stake-active validator peers advertised in active Nexus lanes.
+pub(super) fn stake_active_validator_roster_from_world_with_active_lanes(
+    world: &impl WorldReadOnly,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Vec<PeerId> {
+    stake_active_validator_roster_from_world_with_lane_scope(world, None, active_lane_ids)
 }
 
-/// Return stake-active validator peers limited to the provided lane ids.
-pub(super) fn stake_active_validator_roster_for_lanes_from_world(
+/// Return stake-active validator peers limited to provided and active Nexus lanes.
+pub(super) fn stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
     world: &impl WorldReadOnly,
     lane_ids: &BTreeSet<LaneId>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Vec<PeerId> {
     if lane_ids.is_empty() {
-        return stake_active_validator_roster_from_world(world);
+        return stake_active_validator_roster_from_world_with_active_lanes(world, active_lane_ids);
     }
-    stake_active_validator_roster_from_world_with_lane_scope(world, Some(lane_ids))
+    stake_active_validator_roster_from_world_with_lane_scope(world, Some(lane_ids), active_lane_ids)
 }
 
 fn stake_active_validator_roster_from_world_with_lane_scope(
     world: &impl WorldReadOnly,
     lane_ids: Option<&BTreeSet<LaneId>>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Vec<PeerId> {
     let mut roster = BTreeSet::new();
-    for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+    for (key, record) in world.public_lane_validators().iter() {
+        if !public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
+        if active_lane_ids.is_some_and(|scope| !scope.contains(&record.lane_id)) {
+            continue;
+        }
         if lane_ids.is_some_and(|scope| !scope.contains(&record.lane_id)) {
             continue;
         }
@@ -1338,6 +1377,7 @@ mod tests {
             &trusted,
             &peers[0],
             mode,
+            None,
         );
         assert_eq!(actual, expected);
     }
@@ -1350,9 +1390,12 @@ mod tests {
 
         let keypair_active = checked_bls_keypair();
         let keypair_pending = checked_bls_keypair();
+        let keypair_mismatched = checked_bls_keypair();
         let account_active = AccountId::new(keypair_active.public_key().clone());
         let account_pending = AccountId::new(keypair_pending.public_key().clone());
+        let account_mismatched = AccountId::new(keypair_mismatched.public_key().clone());
         let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_mismatched = PeerId::new(keypair_mismatched.public_key().clone());
 
         {
             let mut block = state.world.public_lane_validators.block();
@@ -1388,9 +1431,25 @@ mod tests {
                     last_reward_epoch: None,
                 },
             );
+            block.insert(
+                (LaneId::new(3), account_mismatched.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: account_mismatched.clone(),
+                    peer_id: peer_mismatched.clone(),
+                    stake_account: account_mismatched,
+                    total_stake: Numeric::new(50, 0),
+                    self_stake: Numeric::new(50, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
             block.commit();
         }
-        seed_live_validator_consensus_keys(&state.world, [&keypair_active]);
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active, &keypair_mismatched]);
 
         let trusted = iroha_config::parameters::actual::TrustedPeers {
             myself: Peer::new(
@@ -1405,6 +1464,10 @@ mod tests {
             derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
 
         assert_eq!(roster, vec![peer_active]);
+        assert!(
+            !roster.contains(&peer_mismatched),
+            "mismatched key/record lane rows must not enter the NPoS active roster"
+        );
     }
 
     #[test]
@@ -1804,6 +1867,168 @@ mod tests {
             derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
 
         assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_ignores_stale_inactive_commit_lane_scope() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypair_active_a = checked_bls_keypair();
+        let keypair_active_b = checked_bls_keypair();
+        let keypair_stale = checked_bls_keypair();
+
+        let account_active_a = AccountId::new(keypair_active_a.public_key().clone());
+        let account_active_b = AccountId::new(keypair_active_b.public_key().clone());
+        let account_stale = AccountId::new(keypair_stale.public_key().clone());
+
+        let peer_active_a = PeerId::new(keypair_active_a.public_key().clone());
+        let peer_active_b = PeerId::new(keypair_active_b.public_key().clone());
+        let peer_stale = PeerId::new(keypair_stale.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(1), account_stale.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: account_stale.clone(),
+                    peer_id: peer_stale.clone(),
+                    stake_account: account_stale,
+                    total_stake: Numeric::new(50, 0),
+                    self_stake: Numeric::new(50, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Jailed("retired-lane".to_string()),
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            for (account, peer_id, stake) in [
+                (account_active_a, peer_active_a.clone(), Numeric::new(30, 0)),
+                (account_active_b, peer_active_b.clone(), Numeric::new(31, 0)),
+            ] {
+                block.insert(
+                    (LaneId::new(2), account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(2),
+                        validator: account.clone(),
+                        peer_id,
+                        stake_account: account,
+                        total_stake: stake.clone(),
+                        self_stake: stake,
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active_a, &keypair_active_b]);
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![peer_stale.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peer_stale, 12_300),
+            others: UniqueVec::new(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active_a, ConsensusMode::Npos);
+
+        assert_eq!(
+            roster,
+            canonicalize_roster(vec![peer_active_a, peer_active_b]),
+            "inactive commit-topology lane records must not pin NPoS recovery to a stale lane"
+        );
+    }
+
+    #[test]
+    fn active_topology_for_npos_ignores_active_unknown_lane_scope_when_nexus_enabled() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        state.nexus.write().enabled = true;
+
+        let keypair_active = checked_bls_keypair();
+        let keypair_stale = checked_bls_keypair();
+        let account_active = AccountId::new(keypair_active.public_key().clone());
+        let account_stale = AccountId::new(keypair_stale.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_stale = PeerId::new(keypair_stale.public_key().clone());
+        let unknown_lane = LaneId::new(42);
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::SINGLE, account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (unknown_lane, account_stale.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: unknown_lane,
+                    validator: account_stale.clone(),
+                    peer_id: peer_stale.clone(),
+                    stake_account: account_stale,
+                    total_stake: Numeric::new(10_000, 0),
+                    self_stake: Numeric::new(10_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+        seed_live_validator_consensus_keys(&state.world, [&keypair_active, &keypair_stale]);
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![peer_stale.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peer_active.clone(), 12_400),
+            others: vec![make_peer(peer_stale, 12_401)]
+                .into_iter()
+                .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
+
+        assert_eq!(
+            roster,
+            vec![peer_active],
+            "active records for lanes absent from enabled Nexus config must not pin NPoS recovery"
+        );
     }
 
     #[test]

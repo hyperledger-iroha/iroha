@@ -4168,6 +4168,17 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/por/trigger".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Manual PoR trigger retired.",
+            "Return a fail-closed retirement response for the legacy manual PoR trigger route. Submit governed PorChallengeV1 payloads through `/v1/sorafs/capacity/por-challenge` or the scheduler runtime instead.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/capacity/por".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
@@ -4959,7 +4970,7 @@ fn sorafs_paths() -> Map {
     let mut quarantine_object = json_get_operation(
         "SoraFS",
         "Read a local encrypted quarantine payload object.",
-        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+        "Read and decrypt one local SFM-4a quarantine payload object from the node-local encrypted object store. The endpoint verifies the object envelope, returns the payload as standard base64 for authorized operators, marks the response private/no-store with Vary over canonical auth headers, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
         "#/components/schemas/JsonValue",
         vec![string_path_param(
             "quarantine_id_hex",
@@ -6006,7 +6017,7 @@ fn sumeragi_paths() -> Map {
             "Sumeragi",
             "Fetch Sumeragi status.",
             "Return Sumeragi status snapshot.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/SumeragiStatusResponse",
             Vec::new(),
         )),
     );
@@ -8070,7 +8081,8 @@ fn retail_recipient_lookup_operation() -> Map {
         Value::String(
             "Verifies that the supplied alias is bound to the canonical account in Iroha, \
              then calls the configured bank Core API route for HBL or UBL and returns the \
-             normalized recipient confirmation."
+             normalized recipient confirmation. Public alias lookups are unsigned; restricted \
+             alias lookups require canonical request signing and alias-resolve permission."
                 .to_owned(),
         ),
     );
@@ -8089,6 +8101,13 @@ fn retail_recipient_lookup_operation() -> Map {
         "400".to_owned(),
         json_response(
             "Malformed request or unsupported FI alias scope.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Restricted recipient alias lookup requires canonical request signing and permission.",
             error_schema_reference(),
         ),
     );
@@ -9330,6 +9349,185 @@ fn openapi_schemas() -> Map {
             "type": "string",
             "pattern": "^hash:[0-9a-fA-F]{64}#[0-9a-fA-F]{4}$",
             "description": "Norito JSON hash string with checksum."
+        }),
+    );
+    schemas.insert(
+        "LaneSettlementReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["source_id", "local_amount_micro", "xor_due_micro", "xor_after_haircut_micro", "xor_variance_micro", "timestamp_ms"],
+            "additionalProperties": true,
+            "properties": {
+                "source_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Transaction-linked settlement receipt source id as 32-byte hex."
+                },
+                "local_amount_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "xor_due_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "xor_after_haircut_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "xor_variance_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "LaneSwapMetadata".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["epsilon_bps", "twap_window_seconds", "liquidity_profile", "twap_local_per_xor", "volatility_class"],
+            "additionalProperties": true,
+            "properties": {
+                "epsilon_bps": { "type": "integer", "format": "uint16", "minimum": 0 },
+                "twap_window_seconds": { "type": "integer", "format": "uint32", "minimum": 0 },
+                "liquidity_profile": { "type": "string" },
+                "twap_local_per_xor": { "type": "string" },
+                "volatility_class": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxAttestationBody".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "participant_lane_id", "participant_dataspace_id", "planned_coordinator_block_height"],
+            "additionalProperties": true,
+            "properties": {
+                "source_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Source transaction hash/id as 32-byte hex."
+                },
+                "tx_entrypoint_hash": { "$ref": "#/components/schemas/Hash" },
+                "plan_digest": { "$ref": "#/components/schemas/Hash" },
+                "phase": {
+                    "type": "string",
+                    "enum": ["prepare", "commit"],
+                    "description": "Native AMX phase certified by the participant committee."
+                },
+                "coordinator_lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "coordinator_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "participant_dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "planned_coordinator_block_height": { "type": "integer", "format": "uint64", "minimum": 0 }
+            }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxAttestationQc".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["body", "validator_set_hash_version", "validator_set_hash", "validator_set", "signers_bitmap", "bls_aggregate_signature"],
+            "additionalProperties": true,
+            "properties": {
+                "body": { "$ref": "#/components/schemas/NativeAmxAttestationBody" },
+                "validator_set_hash_version": { "type": "integer", "format": "uint16", "minimum": 0 },
+                "validator_set_hash": { "$ref": "#/components/schemas/Hash" },
+                "validator_set": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Ordered validator ids used to assemble the QC."
+                },
+                "signers_bitmap": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+                },
+                "bls_aggregate_signature": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]*$",
+                    "description": "BLS aggregate signature bytes encoded as hex."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxLegRecord".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"],
+            "additionalProperties": true,
+            "properties": {
+                "lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
+                "commit_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" }
+            }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "source_id", "plan_digest", "lane_id", "dataspace_id", "block_height", "legs"],
+            "additionalProperties": true,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "minimum": 0 },
+                "source_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Source transaction hash/id as 32-byte hex."
+                },
+                "plan_digest": { "$ref": "#/components/schemas/Hash" },
+                "lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "legs": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/NativeAmxLegRecord" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "LaneSettlementCommitment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["block_height", "lane_id", "dataspace_id", "tx_count", "total_local_micro", "total_xor_due_micro", "total_xor_after_haircut_micro", "total_xor_variance_micro", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
+            "additionalProperties": true,
+            "properties": {
+                "block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "lane_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_count": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "total_local_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "total_xor_due_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "total_xor_after_haircut_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "total_xor_variance_micro": { "type": "string", "pattern": "^[0-9]+$" },
+                "swap_metadata": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/LaneSwapMetadata" },
+                        { "type": "null" }
+                    ]
+                },
+                "receipts": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/LaneSettlementReceipt" }
+                },
+                "nexus_fee_receipts": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Versioned Nexus fee receipts encoded with their canonical Norito JSON shape."
+                },
+                "native_amx_receipts": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/NativeAmxReceipt" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiStatusResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["lane_settlement_commitments"],
+            "additionalProperties": true,
+            "properties": {
+                "lane_settlement_commitments": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
+                    "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers."
+                }
+            }
         }),
     );
     schemas.insert(
@@ -13289,6 +13487,7 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
+        assert!(paths.contains_key("/v1/sorafs/por/trigger"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));
@@ -14678,6 +14877,13 @@ mod tests {
             "RepoAgreementListResponse",
             "ApiVersionInfo",
             "PeerIdList",
+            "SumeragiStatusResponse",
+            "LaneSettlementCommitment",
+            "LaneSettlementReceipt",
+            "NativeAmxReceipt",
+            "NativeAmxLegRecord",
+            "NativeAmxAttestationQc",
+            "NativeAmxAttestationBody",
             "PrivateUploadedModelExecuteRequest",
             "PrivateUploadedModelExecuteResponse",
             "PrivateUploadedModelReceiptListResponse",
@@ -14685,6 +14891,158 @@ mod tests {
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
+    }
+
+    #[test]
+    fn generated_spec_documents_sumeragi_status_lane_settlement_receipts() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let status_schema_ref = paths
+            .get("/v1/sumeragi/status")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|operation| operation.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            status_schema_ref,
+            Some("#/components/schemas/SumeragiStatusResponse")
+        );
+
+        let schemas = doc
+            .get("components")
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("components schemas");
+        let status_properties = schemas
+            .get("SumeragiStatusResponse")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("status response properties");
+        assert_eq!(
+            status_properties
+                .get("lane_settlement_commitments")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/LaneSettlementCommitment")
+        );
+
+        let commitment_properties = schemas
+            .get("LaneSettlementCommitment")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("lane settlement commitment properties");
+        assert_eq!(
+            commitment_properties
+                .get("native_amx_receipts")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NativeAmxReceipt")
+        );
+        assert_eq!(
+            commitment_properties
+                .get("nexus_fee_receipts")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/JsonValue")
+        );
+
+        let receipt_properties = schemas
+            .get("NativeAmxReceipt")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("native AMX receipt properties");
+        assert_eq!(
+            receipt_properties
+                .get("legs")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NativeAmxLegRecord")
+        );
+
+        let leg_properties = schemas
+            .get("NativeAmxLegRecord")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("native AMX leg properties");
+        for qc_field in ["prepare_qc", "commit_qc"] {
+            assert_eq!(
+                leg_properties
+                    .get(qc_field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/NativeAmxAttestationQc"),
+                "{qc_field} should reference the QC schema"
+            );
+        }
+
+        let qc_properties = schemas
+            .get("NativeAmxAttestationQc")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("native AMX QC properties");
+        assert_eq!(
+            qc_properties
+                .get("body")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NativeAmxAttestationBody")
+        );
+
+        let body_phase = schemas
+            .get("NativeAmxAttestationBody")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("phase"))
+            .and_then(Value::as_object)
+            .expect("native AMX phase schema");
+        let phase_values = body_phase
+            .get("enum")
+            .and_then(Value::as_array)
+            .expect("native AMX phase enum");
+        assert!(
+            phase_values
+                .iter()
+                .any(|value| value.as_str() == Some("prepare"))
+        );
+        assert!(
+            phase_values
+                .iter()
+                .any(|value| value.as_str() == Some("commit"))
+        );
     }
 
     #[test]

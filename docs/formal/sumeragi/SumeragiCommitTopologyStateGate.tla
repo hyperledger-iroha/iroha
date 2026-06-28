@@ -309,7 +309,15 @@ TypeInvariant ==
 CommitTopologyStateMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
 
-SafetyFast == CommitTopologyStateMatchesSpec
+CommitTopologyStateExactness ==
+  CommitTopologyStateMatchesSpec
+
+CommitTopologyStateCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CommitTopologyStateExactness
+
+SafetyFast ==
+  CommitTopologyStateExactness
 
 BugRefreshSameOrderMutates ==
   ActualActions(RefreshSameOrderNoop) = SpecActions(RefreshSameOrderNoop)

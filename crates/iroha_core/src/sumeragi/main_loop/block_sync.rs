@@ -1991,16 +1991,28 @@ impl Actor {
         let sender = sender?;
         let roster = {
             let world = self.state.world_view();
-            let sender_lane_ids = crate::state::validator_lane_ids_for_peer(&world, sender);
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
+            let sender_lane_ids = crate::state::validator_lane_ids_for_peer(&world, sender)
+                .into_iter()
+                .filter(|lane_id| {
+                    active_lane_ids
+                        .as_ref()
+                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
+                })
+                .collect::<BTreeSet<_>>();
             if sender_lane_ids.is_empty() {
                 None
             } else {
                 let roster = super::roster::canonicalize_roster_for_mode(
                     super::roster::filter_roster_with_live_consensus_keys_at_height_world(
                         &world,
-                        super::roster::stake_active_validator_roster_for_lanes_from_world(
+                        super::roster::stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
                             &world,
                             &sender_lane_ids,
+                            active_lane_ids.as_ref(),
                         ),
                         block_height,
                     ),
@@ -6695,7 +6707,11 @@ impl Actor {
         });
         let validated_qc = candidate_qc.as_ref().and_then(|qc| {
             let world_view = self.state.world_view();
-            match validate_block_sync_qc(
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
+            match validate_block_sync_qc_with_active_lanes(
                 qc,
                 &topology,
                 &world_view,
@@ -6708,6 +6724,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 aggregate_ok,
+                active_lane_ids.as_ref(),
             ) {
                 Ok((signers, present_signers)) => {
                     cached_qc_tally = Some(QcSignerTally {
@@ -6769,7 +6786,11 @@ impl Actor {
             )
             .and_then(|qc| {
                 let world_view = self.state.world_view();
-                validate_block_sync_qc(
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                validate_block_sync_qc_with_active_lanes(
                     &qc,
                     &topology,
                     &world_view,
@@ -6782,6 +6803,7 @@ impl Actor {
                     mode_tag,
                     prf_seed,
                     Some(true),
+                    active_lane_ids.as_ref(),
                 )
                 .ok()
                 .map(|_| qc)
@@ -7445,6 +7467,10 @@ impl Actor {
                         }
                         BlockSyncSelectedQcProcessTallySource::Fresh => {
                             let world_view = self.state.world_view();
+                            let nexus = self.state.nexus_snapshot();
+                            let active_lane_ids = nexus
+                                .enabled
+                                .then(|| crate::state::nexus_active_lane_ids(&nexus));
                             tally_qc_against_block_signers(
                                 &qc,
                                 &topology,
@@ -7458,6 +7484,7 @@ impl Actor {
                                 mode_tag,
                                 prf_seed,
                                 None,
+                                active_lane_ids.as_ref(),
                             )
                         }
                     };
@@ -7868,6 +7895,10 @@ impl Actor {
         let qc_signers = qc_signer_count(&qc);
         let tally_result = {
             let world_view = self.state.world_view();
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             tally_qc_against_block_signers(
                 &qc,
                 topology,
@@ -7881,6 +7912,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 None,
+                active_lane_ids.as_ref(),
             )
         };
         match tally_result {
@@ -9340,6 +9372,10 @@ impl Actor {
                 }
             };
             let world_view = self.state.world_view();
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             tally_qc_against_block_signers(
                 &qc,
                 &topology,
@@ -9353,6 +9389,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 aggregate_ok,
+                active_lane_ids.as_ref(),
             )
         };
         let tally = match tally {

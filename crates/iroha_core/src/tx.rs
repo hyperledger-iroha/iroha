@@ -68,7 +68,7 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog_and_world_at,
+    queue::evaluate_policy_plan_with_nexus_and_world_at,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -3693,14 +3693,13 @@ impl StateBlock<'_> {
             Some(decision) => decision,
             None => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_with_catalog_and_world_at(
-                    &state_transaction.nexus.routing_policy,
-                    &state_transaction.nexus.lane_catalog,
-                    &state_transaction.nexus.dataspace_catalog,
+                evaluate_policy_plan_with_nexus_and_world_at(
+                    &state_transaction.nexus,
                     &accepted,
                     &state_transaction.world,
                     state_transaction.block_unix_timestamp_ms(),
                 )
+                .map(|plan| plan.coordinator_route())
                 .map_err(|err| {
                     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                         "transaction routing could not be resolved: {err}"
@@ -6017,11 +6016,12 @@ pub mod tests {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog,
-            DataSpaceId as TestDataSpaceId, JurisdictionSet, LaneCompliancePolicy,
-            LaneCompliancePolicyId, LaneComplianceRule, LaneId as TestLaneId,
-            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile,
-            LaneVisibility, ManifestVersion, ParticipantSelector,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
+            AuditControls, DataSpaceCatalog, DataSpaceId as TestDataSpaceId, JurisdictionSet,
+            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+            LaneConfig, LaneId as TestLaneId, LanePrivacyMerkleWitness, LanePrivacyProof,
+            LanePrivacyWitness, LaneStorageProfile, LaneVisibility, ManifestVersion,
+            ParticipantSelector,
         },
         permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
@@ -11363,6 +11363,268 @@ pub mod tests {
                 );
             }
             other => panic!("expected compliance rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_transaction_without_context_uses_live_autoscale_route() {
+        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
+
+        let chain: ChainId = "tx-live-autoscale-route".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        {
+            let mut elastic_lane = LaneConfig {
+                id: TestLaneId::new(1),
+                alias: "elastic-lane-1".to_string(),
+                dataspace_id: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+            elastic_lane
+                .metadata
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                    .expect("autoscale lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "base-lane".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("base-governance".to_string()),
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: Vec::new(),
+            },
+        );
+        statuses.insert(
+            TestLaneId::new(1),
+            LaneManifestStatus {
+                lane: TestLaneId::new(1),
+                alias: "elastic-lane-1".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: None,
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&manifests);
+
+        let mut selected = None;
+        for attempt in 0_u64..256 {
+            let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+            metadata.insert(
+                Name::from_str("route_attempt").expect("static metadata key"),
+                Json::new(attempt),
+            );
+            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                    minimal_ivm_program(1),
+                )))
+                .sign(keypair.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            let (catalog_only, live_plan) = {
+                let view = state.view();
+                let ledger_time_ms = 0;
+                let catalog_only = crate::queue::evaluate_policy_with_catalog_and_world_at(
+                    &view.nexus.routing_policy,
+                    &view.nexus.lane_catalog,
+                    &view.nexus.dataspace_catalog,
+                    &accepted,
+                    view.world(),
+                    ledger_time_ms,
+                )
+                .expect("catalog-only route resolves");
+                let live_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    &view.nexus,
+                    &accepted,
+                    view.world(),
+                    ledger_time_ms,
+                )
+                .expect("live autoscale route resolves");
+                (catalog_only, live_plan)
+            };
+            if catalog_only.lane_id == TestLaneId::SINGLE
+                && live_plan.coordinator_route().lane_id == TestLaneId::new(1)
+            {
+                selected = Some(tx);
+                break;
+            }
+        }
+        let tx = selected.expect("fixture should find a tx routed to elastic lane");
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        result.expect("live autoscale-routed transaction should bypass blocked base lane");
+    }
+
+    #[test]
+    fn validate_transaction_without_context_ignores_autoscale_when_nexus_disabled() {
+        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
+
+        let chain: ChainId = "tx-disabled-nexus-autoscale-route".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        {
+            let mut elastic_lane = LaneConfig {
+                id: TestLaneId::new(1),
+                alias: "elastic-lane-1".to_string(),
+                dataspace_id: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+            elastic_lane
+                .metadata
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                    .expect("autoscale lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "base-lane".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("base-governance".to_string()),
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: Vec::new(),
+            },
+        );
+        statuses.insert(
+            TestLaneId::new(1),
+            LaneManifestStatus {
+                lane: TestLaneId::new(1),
+                alias: "elastic-lane-1".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: None,
+                manifest_path: None,
+                governance_rules: None,
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&manifests);
+
+        let mut selected = None;
+        for attempt in 0_u64..256 {
+            let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+            metadata.insert(
+                Name::from_str("route_attempt").expect("static metadata key"),
+                Json::new(attempt),
+            );
+            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_metadata(metadata)
+                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                    minimal_ivm_program(1),
+                )))
+                .sign(keypair.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            let (enabled_plan, disabled_plan) = {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                drop(nexus);
+                let enabled_plan = {
+                    let view = state.view();
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        0,
+                    )
+                    .expect("enabled Nexus autoscale route resolves")
+                };
+                let mut nexus = state.nexus.write();
+                nexus.enabled = false;
+                drop(nexus);
+                let disabled_plan = {
+                    let view = state.view();
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        0,
+                    )
+                    .expect("disabled Nexus default route resolves")
+                };
+                (enabled_plan, disabled_plan)
+            };
+            if enabled_plan.coordinator_route().lane_id == TestLaneId::new(1)
+                && disabled_plan.coordinator_route().lane_id == TestLaneId::SINGLE
+            {
+                selected = Some(tx);
+                break;
+            }
+        }
+        let tx =
+            selected.expect("fixture should find a tx that would route to elastic when enabled");
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        state.nexus.write().enabled = false;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        match result.expect_err("disabled Nexus must keep autoscale traffic on blocked base lane") {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)) => {
+                assert!(
+                    message.contains("governance")
+                        || message.contains("base-governance")
+                        || message.contains("lane"),
+                    "expected blocked base-lane policy rejection, got {message}"
+                );
+            }
+            other => panic!("expected base-lane NotPermitted rejection, got {other:?}"),
         }
     }
 

@@ -104,7 +104,14 @@ TypeInvariant ==
 DetachedBlockBodyCommitQcMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == DetachedBlockBodyCommitQcMatchesSpec
+DetachedBlockBodyCommitQcExactness ==
+  DetachedBlockBodyCommitQcMatchesSpec
+
+DetachedBlockBodyCommitQcCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ DetachedBlockBodyCommitQcExactness
+
+SafetyFast == DetachedBlockBodyCommitQcExactness
 
 NoQcNoHandle ==
   Matches("no_qc")

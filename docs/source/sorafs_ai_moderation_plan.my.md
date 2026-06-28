@@ -5,7 +5,7 @@ source: docs/source/sorafs_ai_moderation_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 63d74155001c06a1e05f142f2aa73cb74adcd30bde192f5b4724da98c475cad0
-source_last_modified: "2025-12-29T18:16:36.132375+00:00"
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
 title: AI Moderation Runner Specification
 summary: Deterministic moderation committee design for the Ministry of Information (MINFO-1) deliverable.

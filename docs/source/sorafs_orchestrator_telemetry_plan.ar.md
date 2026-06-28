@@ -5,13 +5,8 @@ source: docs/source/sorafs_orchestrator_telemetry_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f697d58faa5c634516a58566671cae33538fff8de31422bc34e4e860c0e8dc13
-source_last_modified: "2026-01-03T18:07:57.023587+00:00"
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS Orchestrator Telemetry & Alerting Plan
-summary: Instrumentation, dashboards, and alert catalog for the multi-source fetch orchestrator.
 ---
 
 # SoraFS Orchestrator Telemetry & Alerting Plan

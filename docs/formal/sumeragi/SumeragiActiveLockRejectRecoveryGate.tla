@@ -297,6 +297,14 @@ NoBugInvariant ==
   /\ ViewChangeReportedOnlyForRotate
   /\ RejectedBranchNeverAdmitted
 
-SafetyFast == NoBugInvariant
+ActiveLockRejectRecoveryExactness ==
+  NoBugInvariant
+
+ActiveLockRejectRecoveryCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ActiveLockRejectRecoveryExactness
+
+SafetyFast ==
+  ActiveLockRejectRecoveryExactness
 
 ====

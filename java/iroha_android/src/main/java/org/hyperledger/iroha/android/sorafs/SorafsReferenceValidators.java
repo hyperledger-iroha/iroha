@@ -6,7 +6,7 @@ import java.util.Arrays;
 /** Thin JVM/JNI wrapper around the SoraFS reference validators in {@code connect_norito_bridge}. */
 public final class SorafsReferenceValidators {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 10;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 12;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private SorafsReferenceValidators() {}
@@ -43,6 +43,64 @@ public final class SorafsReferenceValidators {
             labelPayload,
             generatedAtUnix),
         "SoraFS orderbook validation");
+  }
+
+  public static String validatePopPayloadJson(
+      final SorafsPopPayloadKind kind, final byte[] noritoBytes) {
+    return validatePopPayloadJson(kind, noritoBytes, null, currentEpochSeconds());
+  }
+
+  public static String validatePopPayloadJson(
+      final SorafsPopPayloadKind kind, final byte[] noritoBytes, final String label) {
+    return validatePopPayloadJson(kind, noritoBytes, label, currentEpochSeconds());
+  }
+
+  public static String validatePopPayloadJson(
+      final SorafsPopPayloadKind kind,
+      final byte[] noritoBytes,
+      final String label,
+      final long generatedAtUnix) {
+    requireGeneratedAt(generatedAtUnix);
+    final SorafsPopPayloadKind selected = requireKind(kind, "kind");
+    final byte[] payload = requirePayload(noritoBytes, "noritoBytes");
+    final byte[] labelPayload = labelBytes(label, selected.defaultLabel());
+    requireNative();
+    return requireJsonOutput(
+        nativeValidatePopPayloadJson(
+            selected.bridgeCode(),
+            payload,
+            labelPayload,
+            generatedAtUnix),
+        "SoraFS PoP validation");
+  }
+
+  public static String validateHedgingPayloadJson(
+      final SorafsHedgingPayloadKind kind, final byte[] noritoBytes) {
+    return validateHedgingPayloadJson(kind, noritoBytes, null, currentEpochSeconds());
+  }
+
+  public static String validateHedgingPayloadJson(
+      final SorafsHedgingPayloadKind kind, final byte[] noritoBytes, final String label) {
+    return validateHedgingPayloadJson(kind, noritoBytes, label, currentEpochSeconds());
+  }
+
+  public static String validateHedgingPayloadJson(
+      final SorafsHedgingPayloadKind kind,
+      final byte[] noritoBytes,
+      final String label,
+      final long generatedAtUnix) {
+    requireGeneratedAt(generatedAtUnix);
+    final SorafsHedgingPayloadKind selected = requireKind(kind, "kind");
+    final byte[] payload = requirePayload(noritoBytes, "noritoBytes");
+    final byte[] labelPayload = labelBytes(label, selected.defaultLabel());
+    requireNative();
+    return requireJsonOutput(
+        nativeValidateHedgingPayloadJson(
+            selected.bridgeCode(),
+            payload,
+            labelPayload,
+            generatedAtUnix),
+        "SoraFS hedging validation");
   }
 
   public static byte[] signOrderbookPayload(
@@ -503,6 +561,12 @@ public final class SorafsReferenceValidators {
   private static native int nativeBridgeAbiVersion();
 
   private static native byte[] nativeValidateOrderbookPayloadJson(
+      int kind, byte[] payload, byte[] label, long generatedAtUnix);
+
+  private static native byte[] nativeValidatePopPayloadJson(
+      int kind, byte[] payload, byte[] label, long generatedAtUnix);
+
+  private static native byte[] nativeValidateHedgingPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
 
   private static native byte[] nativeSignOrderbookPayload(

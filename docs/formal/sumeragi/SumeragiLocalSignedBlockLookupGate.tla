@@ -446,8 +446,15 @@ LocalSignedBlockLookupCoreSafety ==
   /\ AbsentBlocksRemainMissing
   /\ LookupShapeMatchesPriority
 
-NoBugInvariant == LocalSignedBlockLookupCoreSafety
+LocalSignedBlockLookupExactness ==
+  LocalSignedBlockLookupCoreSafety
 
-SafetyFast == LocalSignedBlockLookupCoreSafety
+LocalSignedBlockLookupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LocalSignedBlockLookupExactness
+
+NoBugInvariant == LocalSignedBlockLookupExactness
+
+SafetyFast == LocalSignedBlockLookupExactness
 
 ====

@@ -286,4 +286,16 @@ LockedCertificateMatchesCurrentView ==
 CommittedHeightHasNoPendingFinality ==
   committedHeight => ~pendingFinality
 
+CertificateAdmissionExactness ==
+  /\ WrongContextCertificatesIgnored
+  /\ StalePrepareCommitCertificatesIgnored
+  /\ FutureHeightCertificatesIgnored
+  /\ CommittedHeightCertificatesIgnored
+  /\ LockedCertificateMatchesCurrentView
+  /\ CommittedHeightHasNoPendingFinality
+
+CertificateAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CertificateAdmissionExactness
+
 ====

@@ -2278,7 +2278,15 @@ def test_all_lanes_cli_redacts_top_level_exception_details(
 ):
     module = load_evidence_module()
 
-    for exception_type in (OSError, RuntimeError, TypeError, ValueError):
+    top_level_exception_types = (
+        module.argparse.ArgumentTypeError,
+        OSError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    )
+    for exception_type in top_level_exception_types:
 
         def fail_load(_paths, exception_type=exception_type):
             raise exception_type("secret-token /tmp/operator/private-path")
@@ -8877,6 +8885,196 @@ def test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_
     for forged_hash in (forged_material_hash, forged_deployment_hash):
         assert forged_hash not in captured.out
         assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_required_false(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active source-gate audit"]
+    template_hash = next(
+        iter(
+            module._source_material_template_hashes(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field, _audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_ETH
+    )
+    source_gate = eth_lane["source_adapter_gate"]
+    source_gate["required"] = False
+    source_gate["gate_hash"] = forged_hash
+    source_gate["audit_hashes"][gate_field] = forged_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: source adapter gate hash "
+        "must be deployed evidence, not built-in template material"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: source adapter gate audit hashes "
+        f"{gate_field} must be deployed evidence, not built-in template material"
+    ) in blockers
+    assert "operator pending active source-gate audit" not in captured.out
+    assert forged_hash not in captured.out
+    assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_required_malformed(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active source-gate audit"]
+    template_hash = next(
+        iter(
+            module._source_material_template_hashes(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field, _audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_ETH
+    )
+    source_gate = eth_lane["source_adapter_gate"]
+    source_gate["required"] = "true"
+    source_gate["gate_hash"] = forged_hash
+    source_gate["audit_hashes"][gate_field] = forged_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert (
+        f"all-lanes summary lanes[{eth_index}].source_adapter_gate.required "
+        "must be a boolean"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: source adapter gate hash "
+        "must be deployed evidence, not built-in template material"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: source adapter gate audit hashes "
+        f"{gate_field} must be deployed evidence, not built-in template material"
+    ) in blockers
+    assert "operator pending active source-gate audit" not in captured.out
+    assert forged_hash not in captured.out
+    assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_ready_malformed(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    eth_index, eth_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    eth_lane["production_ready"] = False
+    eth_lane["blockers"] = ["operator pending active source-gate audit"]
+    template_hash = next(
+        iter(
+            module._source_material_template_hashes(
+                module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+            ).values()
+        )
+    )
+    forged_hash = "0x" + template_hash.hex()
+    gate_field, _audit_fields = module._source_adapter_gate_requirements(
+        module.SCCP_DOMAIN_ETH
+    )
+    source_gate = eth_lane["source_adapter_gate"]
+    source_gate["required"] = True
+    source_gate["ready"] = "true"
+    source_gate["gate_hash"] = forged_hash
+    source_gate["audit_hashes"][gate_field] = forged_hash
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert (
+        f"all-lanes summary lanes[{eth_index}].source_adapter_gate.ready "
+        "must be a boolean"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: source adapter gate hash "
+        "must be deployed evidence, not built-in template material"
+    ) in blockers
+    assert (
+        f"all-lanes summary lanes[{eth_index}]: source adapter gate audit hashes "
+        f"{gate_field} must be deployed evidence, not built-in template material"
+    ) in blockers
+    assert "operator pending active source-gate audit" not in captured.out
+    assert forged_hash not in captured.out
+    assert forged_hash[2:] not in captured.out
     assert "Traceback" not in captured.err
 
 

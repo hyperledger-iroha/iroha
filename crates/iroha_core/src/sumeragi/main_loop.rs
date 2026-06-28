@@ -124,7 +124,7 @@ use super::{
     rbc_status,
     stake_snapshot::{
         CommitStakeSnapshot, commit_stake_snapshot_from_map, fallback_stake_for_world,
-        stake_map_from_world, stake_quorum_reached_for_snapshot,
+        stake_map_from_world_with_active_lanes, stake_quorum_reached_for_snapshot,
     },
     *,
 };
@@ -136,7 +136,7 @@ use crate::{
     kura::{BlockCount, Kura},
     native_amx::{
         NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey,
-        NativeAmxVoteV1, aggregate_votes_to_qc,
+        NativeAmxVoteIngressError, NativeAmxVoteV1, aggregate_votes_to_qc,
     },
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
@@ -263,8 +263,6 @@ const COMMIT_QC_ONLY_RETRY_FLOOR: Duration = Duration::from_secs(2);
 const COMMIT_QC_ONLY_RETRY_CEILING: Duration = Duration::from_secs(10);
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
-/// Bound native AMX vote sessions retained while proposer collection is in progress.
-const NATIVE_AMX_SESSION_CACHE_MAX: usize = 1024;
 /// Minimum interval between RBC DELIVER deferral log emissions per session.
 const RBC_DELIVER_DEFERRAL_LOG_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 
@@ -727,62 +725,69 @@ where
             gossip_hashes.push(tx_hash);
             continue;
         }
-        let routing_plan = if let Some(plan) = crate::queue::routing_ledger::get_plan(&tx_hash) {
-            plan
-        } else if let Some(plan) = match queue.route_plan_for_gossip_without_state(&accepted) {
-            Ok(plan) => plan,
-            Err(err) => {
-                warn!(
-                    tx = %tx_hash,
-                    reason = %err,
-                    reason_label = err.as_label(),
-                    "failed to resolve routing without state during requeue"
-                );
-                None
-            }
-        } {
-            plan
-        } else {
-            match queue.route_plan_for_gossip_with_state(&accepted, state) {
+        let (routing_plan, ledger_plan) =
+            if let Some(plan) = crate::queue::routing_ledger::get_plan(&tx_hash) {
+                let ledger_plan = plan.clone();
+                (plan, Some(ledger_plan))
+            } else if let Some(plan) = match queue.route_plan_for_gossip_without_state(&accepted) {
                 Ok(plan) => plan,
                 Err(err) => {
-                    failures = failures.saturating_add(1);
                     warn!(
                         tx = %tx_hash,
                         reason = %err,
                         reason_label = err.as_label(),
-                        "failed to resolve routing during requeue"
+                        "failed to resolve routing without state during requeue"
                     );
-                    continue;
+                    None
                 }
-            }
-        };
+            } {
+                (plan, None)
+            } else {
+                match queue.route_plan_for_gossip_with_state(&accepted, state) {
+                    Ok(plan) => (plan, None),
+                    Err(err) => {
+                        failures = failures.saturating_add(1);
+                        warn!(
+                            tx = %tx_hash,
+                            reason = %err,
+                            reason_label = err.as_label(),
+                            "failed to resolve routing during requeue"
+                        );
+                        continue;
+                    }
+                }
+            };
         match queue.push_requeued_with_routing_plan(accepted, routing_plan, state) {
             Ok(()) => {
                 requeued = requeued.saturating_add(1);
                 gossip_hashes.push(tx_hash);
             }
-            Err(push_err) => match push_err.err {
-                crate::queue::Error::IsInQueue => {
-                    duplicate_failures = duplicate_failures.saturating_add(1);
-                    trace!(
-                        tx = %tx_hash,
-                        "transaction already in queue during requeue; keeping pending block"
-                    );
-                    gossip_hashes.push(tx_hash);
+            Err(push_err) => {
+                if let Some(plan) = ledger_plan.as_ref() {
+                    crate::queue::routing_ledger::discard_plan_if_matches(&tx_hash, plan);
                 }
-                crate::queue::Error::InBlockchain => {
-                    duplicate_failures = duplicate_failures.saturating_add(1);
-                    trace!(
-                        tx = %tx_hash,
-                        "transaction already committed during requeue; skipping"
-                    );
+                match push_err.err {
+                    crate::queue::Error::IsInQueue => {
+                        duplicate_failures = duplicate_failures.saturating_add(1);
+                        trace!(
+                            tx = %tx_hash,
+                            "transaction already in queue during requeue; keeping pending block"
+                        );
+                        gossip_hashes.push(tx_hash);
+                    }
+                    crate::queue::Error::InBlockchain => {
+                        duplicate_failures = duplicate_failures.saturating_add(1);
+                        trace!(
+                            tx = %tx_hash,
+                            "transaction already committed during requeue; skipping"
+                        );
+                    }
+                    err => {
+                        failures = failures.saturating_add(1);
+                        warn!(?err, "failed to requeue transaction after commit failure");
+                    }
                 }
-                err => {
-                    failures = failures.saturating_add(1);
-                    warn!(?err, "failed to requeue transaction after commit failure");
-                }
-            },
+            }
         }
     }
     if !gossip_hashes.is_empty() {
@@ -837,6 +842,218 @@ fn drop_pending_block_and_requeue_skipping_known_committed(
 #[inline]
 fn drop_pending_after_requeue(failures: usize, _duplicate_failures: usize) -> bool {
     failures > 0
+}
+
+#[cfg(test)]
+mod requeue_block_transaction_tests {
+    use iroha_config::parameters::actual::{LaneRoutingPolicy, Queue as QueueConfig};
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        domain::DomainId,
+        isi::InstructionBox,
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog,
+            DataSpaceMetadata, LaneCatalog, LaneConfig,
+        },
+        prelude::{AccountId, Domain, Register, TransactionBuilder},
+    };
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::{
+        query::store::LiveQueryStore,
+        queue::{ConfigLaneRouter, LaneRouter, RoutingPlan},
+        state::World,
+    };
+
+    struct NativeAmxParticipantDriftFixture {
+        state: State,
+        signed_tx: SignedTransaction,
+        stale_plan: RoutingPlan,
+        current_plan: RoutingPlan,
+    }
+
+    fn checked_keypair() -> KeyPair {
+        KeyPair::try_random().expect("main-loop requeue fixture key generation should succeed")
+    }
+
+    fn native_amx_participant_drift_fixture() -> NativeAmxParticipantDriftFixture {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![],
+        };
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let stale_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    dataspace_id: first_dataspace,
+                    alias: "acme-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-primary".to_owned(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(3),
+                    dataspace_id: second_dataspace,
+                    alias: "bank-secondary".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let mut current_lanes = stale_lane_catalog.lanes().to_vec();
+        let stale_participant_lane = current_lanes
+            .iter_mut()
+            .find(|lane| lane.id == LaneId::new(2))
+            .expect("stale participant lane");
+        stale_participant_lane.alias = "elastic-lane-2".to_owned();
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        stale_participant_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "10".to_owned());
+        let current_lane_catalog = LaneCatalog::new(stale_lane_catalog.lane_count(), current_lanes)
+            .expect("current lane catalog");
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.routing_policy = policy.clone();
+            nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+        }
+
+        let key_pair = checked_keypair();
+        let signed_tx = TransactionBuilder::new(
+            ChainId::from("requeue-native-amx-participant-drift"),
+            AccountId::new(key_pair.public_key().clone()),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "acme").expect("domain id"),
+            ))),
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("treasury", "bank").expect("domain id"),
+            ))),
+        ])
+        .sign(key_pair.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed_tx.clone()));
+        let stale_plan = ConfigLaneRouter::new(
+            policy.clone(),
+            dataspace_catalog.clone(),
+            stale_lane_catalog,
+        )
+        .try_route_plan(&accepted)
+        .expect("stale Native AMX plan should resolve");
+        let current_plan = ConfigLaneRouter::new(policy, dataspace_catalog, current_lane_catalog)
+            .try_route_plan(&accepted)
+            .expect("current Native AMX plan should resolve");
+
+        NativeAmxParticipantDriftFixture {
+            state,
+            signed_tx,
+            stale_plan,
+            current_plan,
+        }
+    }
+
+    #[test]
+    fn requeue_block_transactions_discards_stale_native_amx_routing_ledger_plan() {
+        let time_source = TimeSource::new_system();
+        let queue = Queue::test(QueueConfig::default(), &time_source);
+        let fixture = native_amx_participant_drift_fixture();
+        let tx_hash = fixture.signed_tx.hash();
+        assert_eq!(
+            fixture.stale_plan.coordinator_route(),
+            fixture.current_plan.coordinator_route()
+        );
+        assert_ne!(fixture.stale_plan.digest(), fixture.current_plan.digest());
+
+        crate::queue::routing_ledger::record_plan(tx_hash, fixture.stale_plan.clone());
+        let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
+            &queue,
+            &fixture.state,
+            vec![TransactionEntrypoint::External(fixture.signed_tx.clone())],
+        );
+
+        assert_eq!(requeued, 0, "stale Native AMX plan must not requeue");
+        assert_eq!(failures, 1, "stale Native AMX plan is a hard failure");
+        assert_eq!(duplicate_failures, 0);
+        assert!(gossip_hashes.is_empty(), "failed requeue must not gossip");
+        assert_eq!(queue.queued_len(), 0);
+        assert!(!queue.contains_transaction_hash(tx_hash));
+        assert!(
+            crate::queue::routing_ledger::get_plan(&tx_hash).is_none(),
+            "stale full-plan hint must be discarded after rejection"
+        );
+        assert!(
+            crate::queue::routing_ledger::get(&tx_hash).is_none(),
+            "stale coordinator hint must be discarded with the full plan"
+        );
+
+        let (requeued, failures, duplicate_failures, gossip_hashes) = requeue_block_transactions(
+            &queue,
+            &fixture.state,
+            vec![TransactionEntrypoint::External(fixture.signed_tx.clone())],
+        );
+
+        assert_eq!(
+            requeued, 1,
+            "second requeue should recompute the current Native AMX plan"
+        );
+        assert_eq!(failures, 0);
+        assert_eq!(duplicate_failures, 0);
+        assert_eq!(gossip_hashes, vec![tx_hash]);
+        assert_eq!(queue.queued_len(), 1);
+        assert!(queue.contains_transaction_hash(tx_hash));
+        let recorded_plan = crate::queue::routing_ledger::get_plan(&tx_hash)
+            .expect("successful requeue records current routing plan");
+        assert_eq!(recorded_plan.digest(), fixture.current_plan.digest());
+
+        crate::queue::routing_ledger::discard_plan_if_matches(&tx_hash, &fixture.current_plan);
+        let _ = crate::queue::routing_ledger::take(&tx_hash);
+    }
 }
 
 #[derive(Debug)]
@@ -1426,6 +1643,7 @@ fn record_qc_validation_error(
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn validate_qc_with_evidence(
     vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
@@ -1443,7 +1661,7 @@ fn validate_qc_with_evidence(
     Result<QcValidationOutcome, QcValidationError>,
     Option<crate::sumeragi::consensus::Evidence>,
 ) {
-    match validate_qc_against_votes(
+    validate_qc_with_evidence_and_active_lanes(
         vote_log,
         qc,
         topology,
@@ -1455,6 +1673,41 @@ fn validate_qc_with_evidence(
         mode_tag,
         prf_seed,
         aggregate_ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_qc_with_evidence_and_active_lanes(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> (
+    Result<QcValidationOutcome, QcValidationError>,
+    Option<crate::sumeragi::consensus::Evidence>,
+) {
+    match validate_qc_against_votes_with_active_lanes(
+        vote_log,
+        qc,
+        topology,
+        world,
+        pops,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+        active_lane_ids,
     ) {
         Ok(outcome) => (Ok(outcome), None),
         Err(err) => (Err(err), qc_validation_error_to_evidence(qc, &err)),
@@ -1966,10 +2219,11 @@ pub(crate) fn validated_block_signers_from_world(
     Ok(signers)
 }
 
-fn resolve_stake_snapshot_for_roster(
+fn resolve_stake_snapshot_for_roster_with_active_lanes(
     stake_snapshot: Option<&CommitStakeSnapshot>,
     world: &impl WorldReadOnly,
     roster: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Option<CommitStakeSnapshot> {
     if let Some(snapshot) = stake_snapshot {
         if snapshot.matches_roster(roster) {
@@ -1980,7 +2234,7 @@ fn resolve_stake_snapshot_for_roster(
             "stake snapshot roster mismatch; recomputing"
         );
     }
-    CommitStakeSnapshot::from_roster(world, roster)
+    CommitStakeSnapshot::from_roster_with_active_lanes(world, roster, active_lane_ids)
 }
 
 fn resolve_stake_snapshot_for_roster_from_cache(
@@ -2042,7 +2296,7 @@ impl RosterValidationInputs {
         consensus_mode: ConsensusMode,
         stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> Self {
-        let stake_map = stake_map_from_world(world);
+        let stake_map = super::stake_snapshot::stake_map_from_world(world);
         let fallback_stake = fallback_stake_for_world(world);
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
@@ -2171,10 +2425,20 @@ struct RosterValidationCache {
 }
 
 impl RosterValidationCache {
+    #[cfg(test)]
     fn from_world(
         world: &impl WorldReadOnly,
         fallback_epoch_length: u64,
         fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+    ) -> Self {
+        Self::from_world_with_active_lanes(world, fallback_epoch_length, fallback_pops, None)
+    }
+
+    fn from_world_with_active_lanes(
+        world: &impl WorldReadOnly,
+        fallback_epoch_length: u64,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+        active_lane_ids: Option<&BTreeSet<LaneId>>,
     ) -> Self {
         let epoch_schedule =
             super::EpochScheduleSnapshot::from_world_with_fallback(world, fallback_epoch_length);
@@ -2190,7 +2454,7 @@ impl RosterValidationCache {
                 pops.entry(pk.clone()).or_insert_with(|| pop.clone());
             }
         }
-        let stake_map = stake_map_from_world(world);
+        let stake_map = stake_map_from_world_with_active_lanes(world, active_lane_ids);
         let fallback_stake = fallback_stake_for_world(world);
         Self {
             epoch_schedule,
@@ -2208,8 +2472,14 @@ impl RosterValidationCache {
         world: &impl WorldReadOnly,
         fallback_epoch_length: u64,
         fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+        active_lane_ids: Option<&BTreeSet<LaneId>>,
     ) {
-        *self = Self::from_world(world, fallback_epoch_length, fallback_pops);
+        *self = Self::from_world_with_active_lanes(
+            world,
+            fallback_epoch_length,
+            fallback_pops,
+            active_lane_ids,
+        );
     }
 
     fn expected_epoch(&self, height: u64, consensus_mode: ConsensusMode) -> u64 {
@@ -2320,6 +2590,39 @@ pub(crate) fn validate_block_sync_qc(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
+    validate_block_sync_qc_with_active_lanes(
+        qc,
+        topology,
+        world,
+        block_signers,
+        block_view,
+        pops,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_block_sync_qc_with_active_lanes(
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    block_view: u64,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
     let canonical_roster =
         roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
@@ -2369,9 +2672,12 @@ pub(crate) fn validate_block_sync_qc(
     }
     let resolved_snapshot = match consensus_mode {
         ConsensusMode::Permissioned => None,
-        ConsensusMode::Npos => {
-            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
-        }
+        ConsensusMode::Npos => resolve_stake_snapshot_for_roster_with_active_lanes(
+            stake_snapshot,
+            world,
+            canonical_topology.as_ref(),
+            active_lane_ids,
+        ),
     };
     match consensus_mode {
         ConsensusMode::Permissioned => {
@@ -2590,8 +2896,9 @@ fn tally_qc_against_block_signers(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Result<QcSignerTally, QcValidationError> {
-    let _ = validate_block_sync_qc(
+    let _ = validate_block_sync_qc_with_active_lanes(
         qc,
         topology,
         world,
@@ -2604,6 +2911,7 @@ fn tally_qc_against_block_signers(
         mode_tag,
         prf_seed,
         aggregate_ok,
+        active_lane_ids,
     )?;
     // Keep bitmap indices as-is so cached signers reproduce the QC bitmap correctly.
     let roster_len = topology.as_ref().len();
@@ -2638,6 +2946,7 @@ fn validate_new_view_qc_highest(
     Ok(highest)
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 fn validate_qc_against_votes(
@@ -2653,14 +2962,49 @@ fn validate_qc_against_votes(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<QcValidationOutcome, QcValidationError> {
+    validate_qc_against_votes_with_active_lanes(
+        vote_log,
+        qc,
+        topology,
+        world,
+        pops,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        aggregate_ok,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
+fn validate_qc_against_votes_with_active_lanes(
+    vote_log: &BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    qc: &crate::sumeragi::consensus::Qc,
+    topology: &super::network_topology::Topology,
+    world: &impl WorldReadOnly,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Result<QcValidationOutcome, QcValidationError> {
     let canonical_roster =
         roster::canonicalize_roster_for_mode(topology.as_ref().to_vec(), consensus_mode);
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let resolved_stake_snapshot = match consensus_mode {
         ConsensusMode::Permissioned => None,
-        ConsensusMode::Npos => {
-            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
-        }
+        ConsensusMode::Npos => resolve_stake_snapshot_for_roster_with_active_lanes(
+            stake_snapshot,
+            world,
+            canonical_topology.as_ref(),
+            active_lane_ids,
+        ),
     };
     validate_qc_against_votes_with_resolved_stake(
         vote_log,
@@ -3298,6 +3642,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::DuplicateTransactions
         | BlockValidationError::SccpCommitmentRootMismatch { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
+        | BlockValidationError::CommittedFragmentCountMismatch { .. }
         | BlockValidationError::TransactionAccept(_)
         | BlockValidationError::MerkleRootMismatch
         | BlockValidationError::SignatureVerification(_)
@@ -15788,6 +16133,10 @@ fn select_block_sync_roster(
             return filtered;
         }
 
+        let nexus = state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         let derived = roster::derive_active_topology_for_mode_from_world(
             &world,
             &commit_topology,
@@ -15795,6 +16144,7 @@ fn select_block_sync_roster(
             trusted,
             me,
             consensus_mode,
+            active_lane_ids.as_ref(),
         );
         if !derived.is_empty() {
             debug!(
@@ -16099,8 +16449,16 @@ impl Actor {
         let height = block.header().height().get();
         let view = block.header().view_change_index();
         let world = state.world_view();
-        let roster_cache =
-            RosterValidationCache::from_world(&world, fallback_epoch_length, fallback_pops);
+        let nexus = state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
+        let roster_cache = RosterValidationCache::from_world_with_active_lanes(
+            &world,
+            fallback_epoch_length,
+            fallback_pops,
+            active_lane_ids.as_ref(),
+        );
         let inputs = roster_cache.inputs_for_roster(roster, consensus_mode, None);
         let topology = super::network_topology::Topology::new(roster.to_vec());
         let block_signers = BTreeSet::new();
@@ -16111,7 +16469,7 @@ impl Actor {
                 candidate.height == height
                     && candidate.subject_block_hash == block.hash()
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
-                    && validate_block_sync_qc(
+                    && validate_block_sync_qc_with_active_lanes(
                         candidate,
                         &topology,
                         &world,
@@ -16124,6 +16482,7 @@ impl Actor {
                         mode_tag,
                         None,
                         None,
+                        active_lane_ids.as_ref(),
                     )
                     .is_ok()
             })
@@ -16165,7 +16524,7 @@ impl Actor {
         if cert.validator_set.as_slice() != roster {
             return None;
         }
-        if validate_block_sync_qc(
+        if validate_block_sync_qc_with_active_lanes(
             &cert,
             &topology,
             &world,
@@ -16178,6 +16537,7 @@ impl Actor {
             mode_tag,
             None,
             None,
+            active_lane_ids.as_ref(),
         )
         .is_err()
         {
@@ -16185,7 +16545,17 @@ impl Actor {
         }
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => Some(CommitStakeSnapshot::from_roster(&world, roster)?),
+            ConsensusMode::Npos => {
+                let nexus = state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                Some(CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    roster,
+                    active_lane_ids.as_ref(),
+                )?)
+            }
         };
         Some((cert, stake_snapshot))
     }
@@ -16230,6 +16600,10 @@ impl Actor {
         consensus_mode: ConsensusMode,
     ) -> Vec<PeerId> {
         if matches!(consensus_mode, ConsensusMode::Npos) {
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             return roster::derive_active_topology_for_mode_from_world(
                 world,
                 commit_topology,
@@ -16237,6 +16611,7 @@ impl Actor {
                 self.common_config.trusted_peers.value(),
                 self.common_config.peer.id(),
                 consensus_mode,
+                active_lane_ids.as_ref(),
             );
         }
         // Live consensus rounds must derive validator topology from committed chain state.
@@ -17066,11 +17441,19 @@ impl Actor {
         let pops = &self.roster_validation_cache.pops;
         let (result, evidence, fallback_tally, sync_err) = {
             let world = self.state.world_view();
+            let nexus = self.state.nexus_snapshot();
+            let active_lane_ids = nexus
+                .enabled
+                .then(|| crate::state::nexus_active_lane_ids(&nexus));
             let stake_snapshot = match consensus_mode {
                 ConsensusMode::Permissioned => None,
-                ConsensusMode::Npos => CommitStakeSnapshot::from_roster(&world, topology.as_ref()),
+                ConsensusMode::Npos => CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    topology.as_ref(),
+                    active_lane_ids.as_ref(),
+                ),
             };
-            let (result, evidence) = validate_qc_with_evidence(
+            let (result, evidence) = validate_qc_with_evidence_and_active_lanes(
                 &self.vote_log,
                 qc,
                 topology,
@@ -17082,6 +17465,7 @@ impl Actor {
                 mode_tag,
                 prf_seed,
                 None,
+                active_lane_ids.as_ref(),
             );
             let mut fallback_tally = None;
             let mut sync_err = None;
@@ -17099,6 +17483,7 @@ impl Actor {
                     mode_tag,
                     prf_seed,
                     None,
+                    active_lane_ids.as_ref(),
                 ) {
                     Ok(tally) => fallback_tally = Some(tally),
                     Err(err) => {
@@ -17433,7 +17818,15 @@ impl Actor {
             ConsensusMode::Permissioned => None,
             ConsensusMode::Npos => {
                 let world = self.state.world_view();
-                CommitStakeSnapshot::from_roster(&world, &roster)
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    &roster,
+                    active_lane_ids.as_ref(),
+                )
             }
         };
         self.state
@@ -20035,6 +20428,10 @@ impl Actor {
             startup_trace_started_at,
         );
 
+        let native_amx_sessions = NativeAmxSessionCache::with_limits(
+            config.native_amx.session_cache_max,
+            config.native_amx.session_body_bucket_max,
+        );
         let mut rbc_sessions = BTreeMap::new();
         let mut persisted_rbc_sessions = BTreeSet::new();
         let mut rbc_session_rosters = BTreeMap::new();
@@ -20303,17 +20700,27 @@ impl Actor {
         let roster_validation_cache = {
             let trusted_pops = &common_config.trusted_peers.value().pops;
             if let Some(initial_view) = initial_state_view {
-                RosterValidationCache::from_world(
+                let active_lane_ids = initial_view
+                    .nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&initial_view.nexus));
+                RosterValidationCache::from_world_with_active_lanes(
                     initial_view.world(),
                     config.npos.epoch_length_blocks,
                     Some(trusted_pops),
+                    active_lane_ids.as_ref(),
                 )
             } else {
                 let world = state.world.view();
-                let cache = RosterValidationCache::from_world(
+                let nexus = state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                let cache = RosterValidationCache::from_world_with_active_lanes(
                     &world,
                     config.npos.epoch_length_blocks,
                     Some(trusted_pops),
+                    active_lane_ids.as_ref(),
                 );
                 drop(world);
                 cache
@@ -20349,9 +20756,7 @@ impl Actor {
             kura,
             network,
             subsystems,
-            native_amx_sessions: NativeAmxSessionCache::new(
-                NonZeroUsize::new(NATIVE_AMX_SESSION_CACHE_MAX).unwrap_or(NonZeroUsize::MIN),
-            ),
+            native_amx_sessions,
             block_payload_dedup,
             frontier_block_sync_hint,
             peers_gossiper,
@@ -24641,8 +25046,11 @@ impl Actor {
             NativeAmxMessage::CommitRequest(body) => {
                 self.handle_native_amx_attestation_request(sender, body, NativeAmxPhase::Commit);
             }
-            NativeAmxMessage::PrepareVote(vote) | NativeAmxMessage::CommitVote(vote) => {
-                self.record_native_amx_vote(vote);
+            NativeAmxMessage::PrepareVote(vote) => {
+                self.record_native_amx_vote(vote, NativeAmxPhase::Prepare, Some(&sender));
+            }
+            NativeAmxMessage::CommitVote(vote) => {
+                self.record_native_amx_vote(vote, NativeAmxPhase::Commit, Some(&sender));
             }
         }
         Ok(())
@@ -24676,7 +25084,7 @@ impl Actor {
         for peer in validator_set {
             if peer == &local_peer {
                 if let Some(vote) = self.local_native_amx_vote(body, body.phase, None) {
-                    self.record_native_amx_vote(vote);
+                    self.record_native_amx_vote(vote, body.phase, None);
                 }
                 continue;
             }
@@ -24755,12 +25163,43 @@ impl Actor {
         })
     }
 
-    fn record_native_amx_vote(&mut self, vote: NativeAmxVoteV1) {
-        if !roster_member_allowed_bls(&vote.signer) {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                "dropping native AMX vote because signer is not BLS-normal"
-            );
+    fn record_native_amx_vote(
+        &mut self,
+        vote: NativeAmxVoteV1,
+        expected_phase: NativeAmxPhase,
+        sender: Option<&PeerId>,
+    ) {
+        if let Err(err) = vote.validate_ingress(expected_phase, sender) {
+            match err {
+                NativeAmxVoteIngressError::PhaseMismatch { expected, actual } => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        ?sender,
+                        ?expected,
+                        ?actual,
+                        "dropping native AMX vote because message phase does not match body"
+                    );
+                }
+                NativeAmxVoteIngressError::SenderMismatch => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        ?sender,
+                        "dropping native AMX vote because sender does not match signer"
+                    );
+                }
+                NativeAmxVoteIngressError::SignerNotBlsNormal => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        "dropping native AMX vote because signer is not BLS-normal"
+                    );
+                }
+                NativeAmxVoteIngressError::InvalidSignature => {
+                    iroha_logger::warn!(
+                        signer = %vote.signer,
+                        "dropping native AMX vote with invalid signature"
+                    );
+                }
+            }
             return;
         }
         {
@@ -24785,16 +25224,6 @@ impl Actor {
                 );
                 return;
             }
-        }
-        if let Err(err) = Signature::from_bytes(&vote.bls_signature)
-            .verify(vote.signer.public_key(), &vote.body.signature_preimage())
-        {
-            iroha_logger::warn!(
-                signer = %vote.signer,
-                ?err,
-                "dropping native AMX vote with invalid signature"
-            );
-            return;
         }
         let phase = vote.body.phase;
         let signer = vote.signer.clone();
@@ -36847,6 +37276,10 @@ impl Actor {
         let committed_height = self.committed_height_snapshot();
         let live_height = height.min(committed_height.saturating_add(1)).max(1);
         let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         let commit_topology = self.state.commit_topology_snapshot();
         let active_commit_topology = self.active_topology_with_genesis_fallback_from_world(
             &world,
@@ -36858,9 +37291,23 @@ impl Actor {
             BTreeSet::new()
         } else {
             crate::state::validator_lane_ids_for_peers(&world, active_commit_topology.iter())
+                .into_iter()
+                .filter(|lane_id| {
+                    active_lane_ids
+                        .as_ref()
+                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
+                })
+                .collect()
         };
         let local_lane_ids =
-            crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id());
+            crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id())
+                .into_iter()
+                .filter(|lane_id| {
+                    active_lane_ids
+                        .as_ref()
+                        .is_none_or(|active_lane_ids| active_lane_ids.contains(lane_id))
+                })
+                .collect();
         let candidates = match consensus_mode {
             ConsensusMode::Npos => {
                 let lane_scope = if topology_lane_ids.is_empty() {
@@ -36869,9 +37316,16 @@ impl Actor {
                     &topology_lane_ids
                 };
                 if lane_scope.is_empty() {
-                    roster::stake_active_validator_roster_from_world(&world)
+                    roster::stake_active_validator_roster_from_world_with_active_lanes(
+                        &world,
+                        active_lane_ids.as_ref(),
+                    )
                 } else {
-                    roster::stake_active_validator_roster_for_lanes_from_world(&world, lane_scope)
+                    roster::stake_active_validator_roster_for_lanes_from_world_with_active_lanes(
+                        &world,
+                        lane_scope,
+                        active_lane_ids.as_ref(),
+                    )
                 }
             }
             ConsensusMode::Permissioned => self.trusted_topology(),

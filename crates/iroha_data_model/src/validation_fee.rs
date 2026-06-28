@@ -8,11 +8,7 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    parameter::{CustomParameter, CustomParameterId},
-};
+use crate::parameter::{CustomParameter, CustomParameterId};
 
 /// Schema version for the initial validation-fee policy.
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
@@ -456,14 +452,14 @@ pub struct ValidationFeePolicyV1 {
     /// Previous policy hash for policy-chain validation.
     #[norito(default)]
     pub previous_policy_hash: Option<[u8; 32]>,
-    /// Asset definition charged by this policy.
-    pub fee_asset_definition_id: AssetDefinitionId,
-    /// Decimal scale used to interpret fee asset minor units.
-    pub fee_asset_scale: u8,
+    /// Concrete SBD asset definition charged by this policy.
+    pub sbd_asset_id: String,
+    /// Decimal scale used to interpret SBD minor units.
+    pub sbd_scale: u8,
     /// Fee amount in fee asset minor units.
     pub fee_minor_units: u64,
     /// Concrete validator treasury account.
-    pub treasury_account_id: AccountId,
+    pub treasury_account_id: String,
     /// Charging mode.
     pub charging_mode: ValidationFeeChargingMode,
     /// First height at which the policy is active.
@@ -547,11 +543,21 @@ impl ValidationFeePolicyV1 {
         if self.network_id.trim().is_empty() || self.network_id.trim() != self.network_id {
             return Some("validation-fee policy network id must be a non-empty trimmed string");
         }
-        if self.fee_asset_scale != VALIDATION_FEE_SBD_SCALE {
+        if self.sbd_asset_id.trim().is_empty() || self.sbd_asset_id.trim() != self.sbd_asset_id {
+            return Some("validation-fee policy SBD asset id must be a non-empty trimmed string");
+        }
+        if self.sbd_scale != VALIDATION_FEE_SBD_SCALE {
             return Some("validation-fee policy asset scale must be 2");
         }
         if self.fee_minor_units != VALIDATION_FEE_INITIAL_MINOR_UNITS {
             return Some("validation-fee policy amount must be 10 minor units");
+        }
+        if self.treasury_account_id.trim().is_empty()
+            || self.treasury_account_id.trim() != self.treasury_account_id
+        {
+            return Some(
+                "validation-fee policy treasury account id must be a non-empty trimmed string",
+            );
         }
         if self.governance_keyset_id.trim().is_empty()
             || self.governance_keyset_id.trim() != self.governance_keyset_id
@@ -593,7 +599,7 @@ impl ValidationFeePolicyV1 {
     /// Fee amount as a ledger [`Numeric`].
     #[must_use]
     pub fn fee_amount_numeric(&self) -> Numeric {
-        Numeric::new(self.fee_minor_units, u32::from(self.fee_asset_scale))
+        Numeric::new(self.fee_minor_units, u32::from(self.sbd_scale))
     }
 
     /// Domain-separated payload that governance keys sign.
@@ -726,7 +732,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
-    use crate::{domain::DomainId, name::Name};
+    use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name};
 
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_SBD_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = VALIDATION_FEE_INITIAL_MINOR_UNITS;
@@ -755,10 +761,10 @@ mod tests {
             genesis_hash: [7; 32],
             policy_version: 1,
             previous_policy_hash: None,
-            fee_asset_definition_id: fee_asset(),
-            fee_asset_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            sbd_asset_id: fee_asset().to_string(),
+            sbd_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
-            treasury_account_id: account(1),
+            treasury_account_id: account(1).to_string(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 10,
             expires_after_height: Some(100),
@@ -1066,7 +1072,7 @@ mod tests {
     #[test]
     fn policy_invariants_reject_wrong_fee_scale() {
         let mut policy = policy();
-        policy.fee_asset_scale = VALIDATION_FEE_SBD_SCALE + 1;
+        policy.sbd_scale = VALIDATION_FEE_SBD_SCALE + 1;
 
         assert_eq!(
             policy.policy_invariant_error(),

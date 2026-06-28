@@ -309,8 +309,13 @@ RbcStatusPersistenceMatchesSpec ==
   /\ \A c \in TempPathCases:
        ActualTempPath(c) = SpecTempPath(c)
 
-SafetyFast ==
-  RbcStatusPersistenceMatchesSpec
+RbcStatusPersistenceExactness == RbcStatusPersistenceMatchesSpec
+
+RbcStatusPersistenceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcStatusPersistenceExactness
+
+SafetyFast == RbcStatusPersistenceExactness
 
 BugReadPrefersTmpOverMain ==
   ActualReadResult("main_valid_tmp_valid") = SpecReadResult("main_valid_tmp_valid")

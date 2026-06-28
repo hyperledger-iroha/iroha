@@ -326,6 +326,10 @@ CertificateDispatchExactness ==
   /\ RejectedDispatchExact
   /\ NoCrossPhaseDispatch
 
+CertificateDispatchCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ CertificateDispatchExactness
+
 Safety ==
   CertificateDispatchExactness
 

@@ -24,7 +24,7 @@ use super::EpochScheduleSnapshot;
 use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::staking::{apply_slash_to_validator, max_slash_amount},
-    state::{State, WorldReadOnly, WorldTransaction},
+    state::{State, WorldReadOnly, WorldTransaction, public_lane_validator_record_matches_key},
     sumeragi::consensus::ValidatorIndex,
 };
 
@@ -79,7 +79,11 @@ impl<'a> PenaltyApplier<'a> {
         let world = self.state.world_view();
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
 
-        for ((lane_id, validator_id), record) in world.public_lane_validators().iter() {
+        for (key, record) in world.public_lane_validators().iter() {
+            if !public_lane_validator_record_matches_key(key, record) {
+                continue;
+            }
+            let (lane_id, validator_id) = key;
             candidates_map
                 .entry(record.peer_id.public_key().clone())
                 .or_default()
@@ -728,10 +732,11 @@ mod tests {
     use iroha_config::parameters::actual::{
         AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig,
         SumeragiBlock, SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc,
-        SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
-        SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
-        SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues,
-        SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiVNext, SumeragiWorker,
+        SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNativeAmx,
+        SumeragiNpos, SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides,
+        SumeragiNposVrf, SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence,
+        SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiVNext,
+        SumeragiWorker,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1014,6 +1019,12 @@ mod tests {
                 store_soft_bytes: 0,
                 disk_store_ttl: Duration::from_secs(0),
                 disk_store_max_bytes: 0,
+            },
+            native_amx: SumeragiNativeAmx {
+                session_cache_max:
+                    iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX,
+                session_body_bucket_max:
+                    iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX,
             },
             finality: SumeragiFinality {
                 proof_policy: ProofPolicy::Off,
@@ -3038,8 +3049,17 @@ mod tests {
         config.npos.reconfig.activation_lag_blocks = 0;
 
         let keypair = checked_keypair();
+        let mismatched_lane_keypair = checked_keypair();
+        let mismatched_validator_keypair = checked_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
+        let mismatched_lane_peer = PeerId::new(mismatched_lane_keypair.public_key().clone());
+        let mismatched_validator_peer =
+            PeerId::new(mismatched_validator_keypair.public_key().clone());
         let validator = AccountId::new(keypair.public_key().clone());
+        let mismatched_lane_validator =
+            AccountId::new(mismatched_lane_keypair.public_key().clone());
+        let mismatched_validator =
+            AccountId::new(mismatched_validator_keypair.public_key().clone());
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
@@ -3056,6 +3076,38 @@ mod tests {
         {
             let mut block = state.world.public_lane_validators.block();
             block.insert((record.lane_id, validator.clone()), record);
+            block.insert(
+                (LaneId::new(2), mismatched_lane_validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(3),
+                    validator: mismatched_lane_validator.clone(),
+                    peer_id: mismatched_lane_peer.clone(),
+                    stake_account: mismatched_lane_validator,
+                    total_stake: Numeric::new(200, 0),
+                    self_stake: Numeric::new(100, 0),
+                    metadata: iroha_data_model::metadata::Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(4), mismatched_validator.clone()),
+                iroha_data_model::nexus::PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: validator.clone(),
+                    peer_id: mismatched_validator_peer.clone(),
+                    stake_account: mismatched_validator,
+                    total_stake: Numeric::new(300, 0),
+                    self_stake: Numeric::new(150, 0),
+                    metadata: iroha_data_model::metadata::Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
             block.commit();
         }
 
@@ -3073,5 +3125,17 @@ mod tests {
             .expect("locator resolved");
         assert_eq!(locator.lane_id, LaneId::new(1));
         assert_eq!(locator.validator, validator);
+        assert!(
+            applier
+                .locate_validator_in_roster_cached(0, &[mismatched_lane_peer], &map)
+                .is_none(),
+            "mismatched key/record lane rows must not resolve to penalty locators"
+        );
+        assert!(
+            applier
+                .locate_validator_in_roster_cached(0, &[mismatched_validator_peer], &map)
+                .is_none(),
+            "mismatched key/record validator rows must not resolve to penalty locators"
+        );
     }
 }

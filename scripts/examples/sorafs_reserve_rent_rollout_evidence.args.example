@@ -1,0 +1,15 @@
+# Example arguments for the SFM-6 reserve/rent rollout evidence gate.
+# Use runtime artifact locations; do not store secrets, raw ledger payloads,
+# signed transactions, or response bodies in this file.
+--evidence-dir
+artifacts/sorafs/reserve-rent/staged
+--summary-out
+artifacts/sorafs/reserve-rent/staged/rollout-summary.json
+--max-ledger-age-secs
+604800
+--max-lifecycle-lag-secs
+900
+--max-route-latency-ms
+1500
+--max-bake-age-secs
+1209600

@@ -41,7 +41,7 @@ pub use staking::*;
 /// Declarative lane lifecycle changes (additions and retirements).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneLifecyclePlan {
-    /// Lane metadata to add or replace.
+    /// Lane metadata to add, or to replace when the same current lane is retired.
     pub additions: Vec<LaneConfig>,
     /// Lane identifiers to retire.
     pub retire: Vec<LaneId>,
@@ -307,6 +307,11 @@ impl From<DataSpaceId> for u64 {
     }
 }
 
+/// Metadata key marking a lane as created and owned by the deterministic autoscaler.
+pub const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
+/// Metadata key recording the block height where the autoscaler created the lane.
+pub const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
+
 /// Metadata describing an execution lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneConfig {
@@ -349,6 +354,35 @@ impl Default for LaneConfig {
             proof_scheme: DaProofScheme::default(),
             metadata: BTreeMap::new(),
         }
+    }
+}
+
+impl LaneConfig {
+    /// Return `true` when this lane uses the reserved autoscale ownership metadata key.
+    #[must_use]
+    pub fn claims_autoscale_managed(&self) -> bool {
+        self.metadata.contains_key(AUTOSCALE_META_MANAGED)
+    }
+
+    /// Parse the positive autoscale creation height marker, when present and valid.
+    #[must_use]
+    pub fn autoscale_created_height(&self) -> Option<u64> {
+        self.metadata
+            .get(AUTOSCALE_META_CREATED_HEIGHT)
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|height| *height > 0)
+    }
+
+    /// Return `true` when this lane is a valid deterministic autoscale elastic lane.
+    #[must_use]
+    pub fn is_autoscale_managed_elastic(&self) -> bool {
+        self.visibility == LaneVisibility::Public
+            && self
+                .metadata
+                .get(AUTOSCALE_META_MANAGED)
+                .is_some_and(|value| value == "true")
+            && self.alias == format!("elastic-lane-{}", self.id.as_u32())
+            && self.autoscale_created_height().is_some()
     }
 }
 
@@ -731,15 +765,34 @@ impl LaneCatalog {
     /// Apply a lifecycle plan, producing a new catalog with the requested additions and retirements.
     ///
     /// # Errors
-    /// Returns a [`LaneCatalogError`] when retirements reference unknown lanes or the resulting
-    /// catalog is invalid (empty, duplicate identifiers/aliases, or out-of-bounds ids).
+    /// Returns a [`LaneCatalogError`] when additions or retirements are duplicated, retirements
+    /// reference unknown lanes, or the resulting catalog is invalid (empty, duplicate
+    /// identifiers/aliases, or out-of-bounds ids).
     pub fn apply_lifecycle(&self, plan: &LaneLifecyclePlan) -> Result<Self, LaneCatalogError> {
-        let retire_set: BTreeSet<LaneId> = plan.retire.iter().copied().collect();
+        let mut retire_set = BTreeSet::new();
+        for retire_id in &plan.retire {
+            if !retire_set.insert(*retire_id) {
+                return Err(LaneCatalogError::DuplicateRetireLane(*retire_id));
+            }
+        }
         for retire_id in &retire_set {
-            let present = self.lanes.iter().any(|lane| lane.id == *retire_id)
-                || plan.additions.iter().any(|lane| lane.id == *retire_id);
+            let present = self.lanes.iter().any(|lane| lane.id == *retire_id);
             if !present {
                 return Err(LaneCatalogError::MissingLane(*retire_id));
+            }
+        }
+
+        let mut addition_ids = BTreeSet::new();
+        let mut addition_aliases = BTreeSet::new();
+        for addition in &plan.additions {
+            if addition.alias.trim().is_empty() {
+                return Err(LaneCatalogError::EmptyAlias(addition.id));
+            }
+            if !addition_ids.insert(addition.id) {
+                return Err(LaneCatalogError::DuplicateLaneId(addition.id));
+            }
+            if !addition_aliases.insert(addition.alias.as_str()) {
+                return Err(LaneCatalogError::DuplicateLaneAlias(addition.alias.clone()));
             }
         }
 
@@ -781,6 +834,9 @@ pub enum LaneCatalogError {
     /// Retire plan referenced a lane that does not exist.
     #[error("cannot retire unknown lane {0}")]
     MissingLane(LaneId),
+    /// Retire plan referenced the same lane more than once.
+    #[error("duplicate retire lane {0}")]
+    DuplicateRetireLane(LaneId),
     /// Alias was left blank.
     #[error("lane {0} has an empty alias")]
     EmptyAlias(LaneId),
@@ -1120,6 +1176,47 @@ mod tests {
     }
 
     #[test]
+    fn lane_config_identifies_only_valid_autoscale_managed_elastic_lanes() {
+        let mut lane = LaneConfig {
+            id: LaneId::new(3),
+            alias: "elastic-lane-3".into(),
+            ..LaneConfig::default()
+        };
+        assert!(!lane.claims_autoscale_managed());
+        assert!(!lane.is_autoscale_managed_elastic());
+
+        lane.metadata
+            .insert(AUTOSCALE_META_MANAGED.into(), "true".into());
+        lane.metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.into(), "42".into());
+        assert!(lane.claims_autoscale_managed());
+        assert_eq!(lane.autoscale_created_height(), Some(42));
+        assert!(lane.is_autoscale_managed_elastic());
+
+        let mut spoofed_value = lane.clone();
+        spoofed_value
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.into(), "TRUE".into());
+        assert!(spoofed_value.claims_autoscale_managed());
+        assert!(!spoofed_value.is_autoscale_managed_elastic());
+
+        let mut spoofed_alias = lane.clone();
+        spoofed_alias.alias = "renamed-elastic".into();
+        assert!(!spoofed_alias.is_autoscale_managed_elastic());
+
+        let mut zero_height = lane.clone();
+        zero_height
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.into(), "0".into());
+        assert_eq!(zero_height.autoscale_created_height(), None);
+        assert!(!zero_height.is_autoscale_managed_elastic());
+
+        let mut restricted = lane;
+        restricted.visibility = LaneVisibility::Restricted;
+        assert!(!restricted.is_autoscale_managed_elastic());
+    }
+
+    #[test]
     fn lane_lifecycle_plan_adds_and_retires() {
         let lane_count = NonZeroU32::new(2).expect("nonzero");
         let base = LaneCatalog::new(
@@ -1169,6 +1266,31 @@ mod tests {
             .expect_err("unknown retire must fail");
         assert!(matches!(err, LaneCatalogError::MissingLane(lane) if lane.as_u32() == 9));
 
+        let duplicate_retire = LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![LaneId::SINGLE, LaneId::SINGLE],
+        };
+        let err = base
+            .apply_lifecycle(&duplicate_retire)
+            .expect_err("duplicate retire must fail");
+        assert!(matches!(
+            err,
+            LaneCatalogError::DuplicateRetireLane(lane) if lane == LaneId::SINGLE
+        ));
+
+        let forged_present = LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: LaneId::new(9),
+                alias: "forged-present".into(),
+                ..LaneConfig::default()
+            }],
+            retire: vec![LaneId::new(9)],
+        };
+        let err = base
+            .apply_lifecycle(&forged_present)
+            .expect_err("addition must not satisfy retire precondition");
+        assert!(matches!(err, LaneCatalogError::MissingLane(lane) if lane.as_u32() == 9));
+
         let empty_plan = LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![LaneId::SINGLE],
@@ -1177,6 +1299,57 @@ mod tests {
             .apply_lifecycle(&empty_plan)
             .expect_err("empty catalog must be rejected");
         assert!(matches!(err, LaneCatalogError::EmptyCatalog));
+    }
+
+    #[test]
+    fn lane_lifecycle_rejects_duplicate_additions_before_merge() {
+        let base = LaneCatalog::default();
+
+        let duplicate_id = LaneLifecyclePlan {
+            additions: vec![
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "beta".into(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "gamma".into(),
+                    ..LaneConfig::default()
+                },
+            ],
+            retire: Vec::new(),
+        };
+        let err = base
+            .apply_lifecycle(&duplicate_id)
+            .expect_err("duplicate additions must fail before merge");
+        assert!(matches!(
+            err,
+            LaneCatalogError::DuplicateLaneId(lane) if lane == LaneId::new(1)
+        ));
+
+        let duplicate_alias = LaneLifecyclePlan {
+            additions: vec![
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "beta".into(),
+                    ..LaneConfig::default()
+                },
+                LaneConfig {
+                    id: LaneId::new(2),
+                    alias: "beta".into(),
+                    ..LaneConfig::default()
+                },
+            ],
+            retire: Vec::new(),
+        };
+        let err = base
+            .apply_lifecycle(&duplicate_alias)
+            .expect_err("duplicate addition aliases must fail before merge");
+        assert!(matches!(
+            err,
+            LaneCatalogError::DuplicateLaneAlias(alias) if alias == "beta"
+        ));
     }
 }
 

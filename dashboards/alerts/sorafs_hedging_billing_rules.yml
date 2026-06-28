@@ -1,0 +1,70 @@
+groups:
+  - name: sorafs-hedging-billing
+    interval: 1m
+    rules:
+      - alert: SoraFSHedgingPrimaryFeedStale
+        expr: max by (cluster, source) (torii_sorafs_hedging_feed_lag_seconds{source="primary"}) > 900
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS primary hedging feed is stale"
+          description: |
+            Primary XOR/USD feed {{ $labels.source }} in cluster {{ $labels.cluster }}
+            has stayed more than 15 minutes behind. Pause statement finalization
+            and verify the feed collector before publishing billing cycles.
+      - alert: SoraFSHedgingFeedDivergenceHigh
+        expr: max by (cluster) (torii_sorafs_hedging_feed_divergence_bps) > 500
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS hedging feed divergence is high"
+          description: |
+            XOR/USD feed divergence in cluster {{ $labels.cluster }} exceeded
+            500 bps. Keep automated hedge execution disabled and require
+            governance review before accepting the reference price.
+      - alert: SoraFSHedgingExposureDriftHigh
+        expr: max by (cluster, asset) (torii_sorafs_hedging_exposure_drift_bps) > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS hedging exposure drift is high"
+          description: |
+            Hedging exposure for {{ $labels.asset }} in cluster {{ $labels.cluster }}
+            has drifted more than 1000 bps from the governed target. Reconcile
+            inventory and freeze new hedge execution until limits are reviewed.
+      - alert: SoraFSBillingStatementFailures
+        expr: increase(torii_sorafs_billing_statement_failure_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS billing statement generation failed"
+          description: |
+            Billing statement generation failed for account type {{ $labels.account_type }}
+            in cluster {{ $labels.cluster }}. Check source ledger ingestion,
+            reference-price binding, and statement publisher health.
+      - alert: SoraFSBillingAcknowledgementBacklogHigh
+        expr: max by (cluster) (torii_sorafs_billing_statement_ack_backlog) > 100
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS billing acknowledgement backlog is high"
+          description: |
+            Billing acknowledgement backlog in cluster {{ $labels.cluster }}
+            has exceeded 100 statements for 30 minutes. Verify notification
+            delivery and client acknowledgement workers before rollout.
+      - alert: SoraFSBillingEscrowRunwayLow
+        expr: min by (cluster, account_type) (torii_sorafs_billing_escrow_runway_seconds) < 86400
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS billing escrow runway below one day"
+          description: |
+            {{ $labels.account_type }} escrow runway in cluster {{ $labels.cluster }}
+            is below one day. Trigger top-up or billing throttles before
+            statement settlement can no longer clear.

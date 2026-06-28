@@ -450,6 +450,10 @@ NativeAmxRoutingPlanExactness ==
   /\ NativeAmxRoutingReceiptExact
   /\ NativeAmxRoutingResolutionExact
 
+NativeAmxRoutingPlanCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NativeAmxRoutingPlanExactness
+
 Safety ==
   NativeAmxRoutingPlanExactness
 

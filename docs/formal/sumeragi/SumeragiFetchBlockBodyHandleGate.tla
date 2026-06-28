@@ -219,8 +219,15 @@ TypeInvariant ==
 FetchBlockBodyHandleMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast ==
+FetchBlockBodyHandleExactness ==
   FetchBlockBodyHandleMatchesSpec
+
+FetchBlockBodyHandleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FetchBlockBodyHandleExactness
+
+SafetyFast ==
+  FetchBlockBodyHandleExactness
 
 DeferredCanonicalNotDispatched ==
   Matches("exact_canonical_defer")

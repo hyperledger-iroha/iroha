@@ -366,7 +366,15 @@ TypeInvariant ==
 SelectedSignatureMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == SelectedSignatureMatchesSpec
+BlockSyncSelectedSignaturesExactness ==
+  SelectedSignatureMatchesSpec
+
+BlockSyncSelectedSignaturesCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncSelectedSignaturesExactness
+
+SafetyFast ==
+  BlockSyncSelectedSignaturesExactness
 
 CacheAndValidation ==
   Matches("cache_hit")

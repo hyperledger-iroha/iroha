@@ -328,7 +328,14 @@ TypeInvariant ==
 CommitConflictMatchesSpec ==
   \A c \in Cases: Matches(c)
 
-SafetyFast == CommitConflictMatchesSpec
+BlockSyncCommitConflictExactness ==
+  CommitConflictMatchesSpec
+
+BlockSyncCommitConflictCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockSyncCommitConflictExactness
+
+SafetyFast == BlockSyncCommitConflictExactness
 
 ZeroHeightSkips ==
   Matches("height_zero_skips")

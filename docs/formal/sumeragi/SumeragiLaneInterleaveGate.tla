@@ -134,8 +134,15 @@ LaneInterleaveMatchesSpec ==
   /\ \A c \in Cases:
        LaneCount(c) \in 0..3
 
-SafetyFast ==
+LaneInterleaveExactness ==
   LaneInterleaveMatchesSpec
+
+LaneInterleaveCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LaneInterleaveExactness
+
+SafetyFast ==
+  LaneInterleaveExactness
 
 BugEmptyAddsIndex ==
   ActualOrder("empty") = SpecOrder("empty")

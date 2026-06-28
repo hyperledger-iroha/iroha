@@ -895,6 +895,11 @@ fn minimal_config_snapshot() {
                         cycle_seconds: 604800,
                         publish_delay_seconds: 3600,
                     },
+                    reserve_lifecycle: SorafsReserveLifecycleSchedule {
+                        enabled: false,
+                        interval_seconds: 3600,
+                        initial_delay_seconds: 0,
+                    },
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signing_key_path: None,
@@ -1410,6 +1415,10 @@ fn minimal_config_snapshot() {
                     store_soft_bytes: 1610612736,
                     disk_store_ttl: 120s,
                     disk_store_max_bytes: 2147483648,
+                },
+                native_amx: SumeragiNativeAmx {
+                    session_cache_max: 1024,
+                    session_body_bucket_max: 256,
                 },
                 finality: SumeragiFinality {
                     proof_policy: Off,

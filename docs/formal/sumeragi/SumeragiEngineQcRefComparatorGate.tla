@@ -228,7 +228,7 @@ EqualOnlyForSameFields ==
 PhasePrecedesSubjectInPriority ==
   ImplCmp("h0v0_commit_a", "h0v0_prepare_b") = "gt"
 
-Safety ==
+EngineQcRefComparatorExactness ==
   /\ ComparatorMatchesSpec
   /\ ComparatorReturnsOnlyCmpValues
   /\ ReflexiveEq
@@ -241,5 +241,11 @@ Safety ==
   /\ SubjectTieBreaksWhenRankEqual
   /\ EqualOnlyForSameFields
   /\ PhasePrecedesSubjectInPriority
+
+EngineQcRefComparatorCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineQcRefComparatorExactness
+
+Safety == EngineQcRefComparatorExactness
 
 ====

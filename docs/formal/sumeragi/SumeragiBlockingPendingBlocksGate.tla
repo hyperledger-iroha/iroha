@@ -560,8 +560,15 @@ BlockingPendingBlocksCoreSafety ==
   /\ ProgressVoteAndQcEvidenceBlocks
   /\ ProgressRescheduleAndAgeWindow
 
-NoBugInvariant == BlockingPendingBlocksCoreSafety
+BlockingPendingBlocksExactness ==
+  BlockingPendingBlocksCoreSafety
 
-SafetyFast == BlockingPendingBlocksCoreSafety
+BlockingPendingBlocksCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ BlockingPendingBlocksExactness
+
+NoBugInvariant == BlockingPendingBlocksExactness
+
+SafetyFast == BlockingPendingBlocksExactness
 
 ====

@@ -226,6 +226,13 @@ Safety ==
   /\ ImplementationActions(ResetAfterRecordsClears) =
        SpecActions(ResetAfterRecordsClears)
 
+SidecarNoProposalStatusExactness ==
+  Safety
+
+SidecarNoProposalStatusCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SidecarNoProposalStatusExactness
+
 BugResetEmptyKeepsSidecar ==
   ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
 

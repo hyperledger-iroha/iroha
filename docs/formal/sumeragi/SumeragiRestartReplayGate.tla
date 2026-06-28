@@ -337,6 +337,10 @@ RestartReplayExactness ==
   /\ RestartReplayWriteBackExactness
   /\ RestartReplayCanonicalCheckpointExactness
 
+RestartReplayCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RestartReplayExactness
+
 Safety ==
   RestartReplayExactness
 

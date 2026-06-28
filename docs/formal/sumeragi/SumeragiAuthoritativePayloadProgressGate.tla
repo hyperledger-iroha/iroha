@@ -417,7 +417,7 @@ LookupShapeMatchesShortCircuit ==
   /\ \A c \in KuraBlockLoadedCases:
        CheckCommittedHash \in ImplementationActions(c)
 
-NoBugInvariant ==
+AuthoritativePayloadProgressCoreSafety ==
   /\ SourceMatchesSpec
   /\ ActionsMatchSpec
   /\ ValidPendingOwnersWin
@@ -429,6 +429,15 @@ NoBugInvariant ==
   /\ KuraMissesAndUncommittedBlocksStayMissing
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+AuthoritativePayloadProgressExactness ==
+  AuthoritativePayloadProgressCoreSafety
+
+AuthoritativePayloadProgressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ AuthoritativePayloadProgressExactness
+
+NoBugInvariant == AuthoritativePayloadProgressExactness
+
+SafetyFast == AuthoritativePayloadProgressExactness
 
 ====

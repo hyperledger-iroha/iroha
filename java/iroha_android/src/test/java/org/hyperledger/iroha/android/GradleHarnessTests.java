@@ -100,6 +100,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.sorafs.SorafsGatewayClientTests",
         "org.hyperledger.iroha.android.sorafs.SorafsGatewayFetchOptionsTests",
         "org.hyperledger.iroha.android.sorafs.SorafsManifestInstructionBuilderTests",
+        "org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests",
         "org.hyperledger.iroha.android.sorafs.SorafsRegisterPinManifestBuilderTests",
         "org.hyperledger.iroha.android.sorafs.SorafsReplicationInstructionBuilderTests",
         "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",

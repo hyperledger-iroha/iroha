@@ -885,6 +885,10 @@ FrontierSlotTrackerExactness ==
   /\ FrontierSlotCrossInvariantExact
   /\ FrontierSlotWrapperExact
 
+FrontierSlotTrackerCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ FrontierSlotTrackerExactness
+
 Safety ==
   FrontierSlotTrackerExactness
 

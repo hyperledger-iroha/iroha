@@ -219,8 +219,8 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::{self, Name},
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-        LaneStorageProfile, LaneVisibility, UniversalAccountId,
+        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+        LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
     peer::{Peer, PeerId},
     role::RoleId,
@@ -8785,6 +8785,9 @@ pub struct SumeragiAdvanced {
     /// RBC tuning overrides.
     #[config(nested)]
     pub rbc: SumeragiRbc,
+    /// Native AMX cache tuning overrides.
+    #[config(nested)]
+    pub native_amx: SumeragiNativeAmx,
     /// NPoS timeout overrides (derived from on-chain `SumeragiParameters.block_time_ms` when unset).
     #[config(nested)]
     pub npos: SumeragiAdvancedNpos,
@@ -9592,6 +9595,17 @@ pub struct SumeragiRbc {
     pub disk_store_max_bytes: u64,
 }
 
+/// User-level configuration container for native AMX control-plane cache limits.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiNativeAmx {
+    /// Native AMX vote sessions retained while proposer collection is in progress.
+    #[config(default = "defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX")]
+    pub session_cache_max: NonZeroUsize,
+    /// Exact attestation-body buckets retained per native AMX vote session.
+    #[config(default = "defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX")]
+    pub session_body_bucket_max: NonZeroUsize,
+}
+
 /// User-level configuration container for `SumeragiFinality`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiFinality {
@@ -10243,6 +10257,7 @@ impl Sumeragi {
             vnext,
             da: da_advanced,
             rbc,
+            native_amx,
             npos: npos_advanced,
         } = advanced;
 
@@ -11051,6 +11066,10 @@ impl Sumeragi {
                 store_soft_bytes: rbc.store_soft_bytes,
                 disk_store_ttl: std::time::Duration::from_millis(rbc.disk_store_ttl_ms),
                 disk_store_max_bytes: rbc.disk_store_max_bytes,
+            },
+            native_amx: actual::SumeragiNativeAmx {
+                session_cache_max: native_amx.session_cache_max,
+                session_body_bucket_max: native_amx.session_body_bucket_max,
             },
             finality: actual::SumeragiFinality {
                 proof_policy,
@@ -16397,34 +16416,32 @@ impl Autoscale {
             None
         });
 
-        let ratios_in_range = |value: f64| value.is_finite() && value > 0.0;
+        let ratios_in_range =
+            |value: f64| value.is_finite() && value > 0.0 && (value * 1_000.0).round() >= 1.0;
+        let ratio_permille = |value: f64| (value * 1_000.0).round();
         if !ratios_in_range(scale_out_latency_ratio) {
             invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.scale_out_latency_ratio must be finite and > 0"),
-            );
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_out_latency_ratio must be finite, > 0, and round to at least 1 permille",
+            ));
         }
         if !ratios_in_range(scale_in_latency_ratio) {
             invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.scale_in_latency_ratio must be finite and > 0"),
-            );
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_in_latency_ratio must be finite, > 0, and round to at least 1 permille",
+            ));
         }
         if !ratios_in_range(scale_out_utilization_ratio) {
             invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.scale_out_utilization_ratio must be finite and > 0"),
-            );
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_out_utilization_ratio must be finite, > 0, and round to at least 1 permille",
+            ));
         }
         if !ratios_in_range(scale_in_utilization_ratio) {
             invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.scale_in_utilization_ratio must be finite and > 0"),
-            );
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_in_utilization_ratio must be finite, > 0, and round to at least 1 permille",
+            ));
         }
 
         if let (Some(min), Some(max)) = (min_lanes, max_lanes) {
@@ -16449,11 +16466,28 @@ impl Autoscale {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                 "nexus.autoscale.scale_in_latency_ratio must be < scale_out_latency_ratio",
             ));
+        } else if ratios_in_range(scale_in_latency_ratio)
+            && ratios_in_range(scale_out_latency_ratio)
+            && ratio_permille(scale_in_latency_ratio) >= ratio_permille(scale_out_latency_ratio)
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_in_latency_ratio must round below scale_out_latency_ratio at permille precision",
+            ));
         }
         if scale_in_utilization_ratio >= scale_out_utilization_ratio {
             invalid = true;
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                 "nexus.autoscale.scale_in_utilization_ratio must be < scale_out_utilization_ratio",
+            ));
+        } else if ratios_in_range(scale_in_utilization_ratio)
+            && ratios_in_range(scale_out_utilization_ratio)
+            && ratio_permille(scale_in_utilization_ratio)
+                >= ratio_permille(scale_out_utilization_ratio)
+        {
+            invalid = true;
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.autoscale.scale_in_utilization_ratio must round below scale_out_utilization_ratio at permille precision",
             ));
         }
 
@@ -17116,6 +17150,13 @@ impl Nexus {
             );
             return None;
         }
+        if autoscale.enabled && !enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.autoscale.enabled requires nexus.enabled = true"),
+            );
+            return None;
+        }
         if lane_relay_emergency.enabled && !enabled {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -17152,6 +17193,32 @@ impl Nexus {
                 ),
             );
             return None;
+        }
+        if enabled && autoscale.enabled {
+            let min_lanes = autoscale.min_lanes.get();
+            let max_lanes = autoscale.max_lanes.get();
+            let mut reserved_range_error = false;
+            let default_lane = routing_policy.default_lane.as_u32();
+            if default_lane >= min_lanes && default_lane < max_lanes {
+                reserved_range_error = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.routing_policy.default_lane {} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes}); choose a base default lane outside the autoscale range",
+                    routing_policy.default_lane
+                )));
+            }
+            for lane in lane_catalog.lanes() {
+                let lane_id = lane.id.as_u32();
+                if lane_id >= min_lanes && lane_id < max_lanes && !lane.claims_autoscale_managed() {
+                    reserved_range_error = true;
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "nexus.lane_catalog lane {} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes}); move manual lanes outside the autoscale range",
+                        lane.id
+                    )));
+                }
+            }
+            if reserved_range_error {
+                return None;
+            }
         }
 
         Some(actual::Nexus {
@@ -17341,6 +17408,14 @@ impl Nexus {
                                 Report::new(ParseError::InvalidNexusConfig)
                                     .attach(format!("lane[{idx}] metadata key must not be empty")),
                             );
+                            lane_errors = true;
+                            None
+                        } else if key == AUTOSCALE_META_MANAGED {
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!(
+                                    "lane[{idx}] metadata key `{AUTOSCALE_META_MANAGED}` is reserved for the consensus autoscaler"
+                                ),
+                            ));
                             lane_errors = true;
                             None
                         } else {
@@ -22255,6 +22330,9 @@ pub struct SorafsStorage {
     /// Local SFM-4c privacy aggregate publication scheduler.
     #[config(nested)]
     pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
+    /// Local SFM-6 reserve lifecycle advancement scheduler.
+    #[config(nested)]
+    pub reserve_lifecycle: SorafsReserveLifecycleScheduleConfig,
     /// Authentication and rate limits for manifest pin submissions.
     #[config(nested)]
     pub pin: SorafsStoragePin,
@@ -22283,6 +22361,7 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
+            reserve_lifecycle: SorafsReserveLifecycleScheduleConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
@@ -22307,6 +22386,7 @@ impl SorafsStorage {
             stream_tokens: self.stream_tokens.parse(),
             orderbook: self.orderbook.parse(),
             privacy_aggregates: self.privacy_aggregates.parse(),
+            reserve_lifecycle: self.reserve_lifecycle.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
@@ -22375,6 +22455,41 @@ impl SorafsPrivacyAggregateScheduleConfig {
             enabled: self.enabled,
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
+        }
+    }
+}
+
+/// Local SFM-6 reserve lifecycle advancement scheduler.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsReserveLifecycleScheduleConfig {
+    /// Whether config-backed reserve lifecycle advancement is enabled.
+    #[config(default = "defaults::sorafs::storage::reserve_lifecycle::ENABLED")]
+    pub enabled: bool,
+    /// Interval between lifecycle advancement ticks, in seconds.
+    #[config(default = "defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS")]
+    pub interval_seconds: u64,
+    /// Delay before the first lifecycle advancement tick, in seconds.
+    #[config(default = "defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS")]
+    pub initial_delay_seconds: u64,
+}
+
+impl Default for SorafsReserveLifecycleScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::reserve_lifecycle::ENABLED,
+            interval_seconds: defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS,
+            initial_delay_seconds:
+                defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS,
+        }
+    }
+}
+
+impl SorafsReserveLifecycleScheduleConfig {
+    fn parse(self) -> actual::SorafsReserveLifecycleSchedule {
+        actual::SorafsReserveLifecycleSchedule {
+            enabled: self.enabled,
+            interval_seconds: self.interval_seconds.max(1),
+            initial_delay_seconds: self.initial_delay_seconds,
         }
     }
 }
@@ -24287,6 +24402,50 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
 
+    fn nexus_table_mut(table: &mut Table) -> &mut Table {
+        table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table")
+    }
+
+    fn set_valid_autoscale_defaults(nexus: &mut Table) {
+        let mut autoscale = Table::new();
+        autoscale.insert("enabled".into(), Value::Boolean(true));
+        autoscale.insert("min_lanes".into(), Value::Integer(1));
+        autoscale.insert("max_lanes".into(), Value::Integer(3));
+        autoscale.insert("target_block_ms".into(), Value::Integer(1_000));
+        autoscale.insert("scale_out_latency_ratio".into(), Value::Float(2.0));
+        autoscale.insert("scale_in_latency_ratio".into(), Value::Float(0.5));
+        autoscale.insert("scale_out_utilization_ratio".into(), Value::Float(0.8));
+        autoscale.insert("scale_in_utilization_ratio".into(), Value::Float(0.2));
+        autoscale.insert("scale_out_window_blocks".into(), Value::Integer(2));
+        autoscale.insert("scale_in_window_blocks".into(), Value::Integer(2));
+        autoscale.insert("cooldown_blocks".into(), Value::Integer(1));
+        autoscale.insert("per_lane_target_tps".into(), Value::Integer(100));
+        nexus.insert("autoscale".into(), Value::Table(autoscale));
+    }
+
+    fn set_lane_count(nexus: &mut Table, lane_count: i64) {
+        nexus.insert("lane_count".into(), Value::Integer(lane_count));
+    }
+
+    fn lane_descriptor(index: i64, alias: &str) -> Value {
+        let mut lane = Table::new();
+        lane.insert("index".into(), Value::Integer(index));
+        lane.insert("alias".into(), Value::String(alias.to_owned()));
+        lane.insert("metadata".into(), Value::Table(Table::new()));
+        Value::Table(lane)
+    }
+
+    fn routing_policy_table(default_lane: i64) -> Value {
+        let mut routing = Table::new();
+        routing.insert("default_lane".into(), Value::Integer(default_lane));
+        routing.insert("rules".into(), Value::Array(Vec::new()));
+        Value::Table(routing)
+    }
+
     fn checked_onboarding_authority_ed25519_key_fixture() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked onboarding authority Ed25519 key fixture")
@@ -24301,6 +24460,107 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("onboarding authority fixture key advertises a valid algorithm");
 
         assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_enabled_autoscale_when_nexus_disabled() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(false));
+        set_valid_autoscale_defaults(nexus);
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("autoscale cannot be enabled while Nexus is disabled");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("nexus.autoscale.enabled requires nexus.enabled = true"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_default_lane_inside_elastic_range() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                lane_descriptor(0, "default"),
+                lane_descriptor(1, "manual-one"),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+        nexus.insert("routing_policy".into(), routing_policy_table(1));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("default lane must stay outside the autoscale elastic range");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("nexus.routing_policy.default_lane 1 is inside reserved autoscale elastic lane id range [1, 3)"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_manual_lane_inside_elastic_range() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                lane_descriptor(0, "default"),
+                lane_descriptor(1, "manual-one"),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("manual lanes cannot occupy the autoscale elastic range");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "nexus.lane_catalog lane 1 is inside reserved autoscale elastic lane id range [1, 3)"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_reserved_managed_metadata() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        let mut default_lane = Table::new();
+        default_lane.insert("index".into(), Value::Integer(0));
+        default_lane.insert("alias".into(), Value::String("default".to_owned()));
+        let mut metadata = Table::new();
+        metadata.insert("autoscale.managed".into(), Value::String("true".to_owned()));
+        default_lane.insert("metadata".into(), Value::Table(metadata));
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                Value::Table(default_lane),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("operators must not set reserved autoscale metadata");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "metadata key `autoscale.managed` is reserved for the consensus autoscaler"
+            ),
+            "{report}"
+        );
     }
 
     #[test]
@@ -24428,6 +24688,27 @@ publish_delay_seconds = 17
         assert!(schedule.enabled);
         assert_eq!(schedule.cycle_seconds, 1);
         assert_eq!(schedule.publish_delay_seconds, 17);
+    }
+
+    #[test]
+    fn sorafs_storage_reserve_lifecycle_schedule_parses_and_clamps_interval() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.reserve_lifecycle]
+enabled = true
+interval_seconds = 0
+initial_delay_seconds = 17
+",
+        )
+        .expect("parse sorafs reserve lifecycle schedule");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let schedule = actual.torii.sorafs_storage.reserve_lifecycle;
+        assert!(schedule.enabled);
+        assert_eq!(schedule.interval_seconds, 1);
+        assert_eq!(schedule.initial_delay_seconds, 17);
     }
 
     #[test]

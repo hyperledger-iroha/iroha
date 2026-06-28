@@ -7753,6 +7753,42 @@ pub struct Metrics {
     pub torii_sorafs_orderbook_api_error_ratio: GaugeVec,
     /// Torii SoraFS orderbook escrow runway in seconds by provider.
     pub torii_sorafs_orderbook_escrow_runway_seconds: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS hedging XOR/USD reference price in micro-USD by cluster.
+    pub torii_sorafs_hedging_xor_usd_reference_price_micro_usd: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS hedging feed lag in seconds by cluster and source.
+    pub torii_sorafs_hedging_feed_lag_seconds: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS hedging feed divergence in basis points by cluster and source.
+    pub torii_sorafs_hedging_feed_divergence_bps: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS hedging exposure drift in basis points by cluster and asset.
+    pub torii_sorafs_hedging_exposure_drift_bps: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS billing statement generation counters by cluster and account type.
+    pub torii_sorafs_billing_statement_generation_total: IntCounterVec,
+    /// Torii SoraFS billing statement failure counters by cluster and account type.
+    pub torii_sorafs_billing_statement_failure_total: IntCounterVec,
+    /// Torii SoraFS billing statement acknowledgement backlog by cluster.
+    pub torii_sorafs_billing_statement_ack_backlog: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS billing escrow runway in seconds by cluster and account type.
+    pub torii_sorafs_billing_escrow_runway_seconds: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve providers grouped by lifecycle stage.
+    pub torii_sorafs_reserve_lifecycle_stage_providers: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve credit draw in micro-XOR per provider.
+    pub torii_sorafs_reserve_credit_draw_micro_xor: GaugeVec,
+    /// Torii SoraFS reserve credit shortfall in micro-XOR per provider.
+    pub torii_sorafs_reserve_credit_shortfall_micro_xor: GaugeVec,
+    /// Torii SoraFS reserve accrued interest in micro-XOR per provider.
+    pub torii_sorafs_reserve_accrued_interest_micro_xor: GaugeVec,
+    /// Torii SoraFS providers currently in default.
+    pub torii_sorafs_reserve_defaulted_providers: GenericGauge<AtomicU64>,
+    /// Torii SoraFS open reserve appeals awaiting decision.
+    pub torii_sorafs_reserve_appeal_backlog: GenericGauge<AtomicU64>,
+    /// Torii SoraFS reserve movements grouped by custody status.
+    pub torii_sorafs_reserve_custody_movements: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve movements reconciled with terminal chain custody evidence.
+    pub torii_sorafs_reserve_chain_reconciled_movements: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve service requests grouped by route and result.
+    pub torii_sorafs_reserve_service_requests_total: IntCounterVec,
+    /// Torii SoraFS reserve service rate-limit events grouped by route and reason.
+    pub torii_sorafs_reserve_service_rate_limit_total: IntCounterVec,
     /// SoraFS reputation ingest lag observed when a snapshot is published.
     pub sorafs_reputation_ingest_lag_seconds: GenericGauge<AtomicU64>,
     /// SoraFS reputation snapshot age observed when a snapshot is published.
@@ -12584,6 +12620,144 @@ impl Default for Metrics {
             &["provider"],
         )
         .expect("Infallible");
+        let torii_sorafs_hedging_xor_usd_reference_price_micro_usd = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
+                "SoraFS hedging XOR/USD reference price in micro-USD grouped by cluster",
+            ),
+            &["cluster"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_hedging_feed_lag_seconds = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_hedging_feed_lag_seconds",
+                "SoraFS hedging feed lag in seconds grouped by cluster and source",
+            ),
+            &["cluster", "source"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_hedging_feed_divergence_bps = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_hedging_feed_divergence_bps",
+                "SoraFS hedging feed divergence in basis points grouped by cluster and source",
+            ),
+            &["cluster", "source"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_hedging_exposure_drift_bps = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_hedging_exposure_drift_bps",
+                "SoraFS hedging exposure drift in basis points grouped by cluster and asset",
+            ),
+            &["cluster", "asset"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_billing_statement_generation_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_billing_statement_generation_total",
+                "SoraFS billing statement generation attempts grouped by cluster and account type",
+            ),
+            &["cluster", "account_type"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_billing_statement_failure_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_billing_statement_failure_total",
+                "SoraFS billing statement generation failures grouped by cluster and account type",
+            ),
+            &["cluster", "account_type"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_billing_statement_ack_backlog = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_billing_statement_ack_backlog",
+                "SoraFS billing statement acknowledgement backlog grouped by cluster",
+            ),
+            &["cluster"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_billing_escrow_runway_seconds = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_billing_escrow_runway_seconds",
+                "SoraFS billing escrow runway in seconds grouped by cluster and account type",
+            ),
+            &["cluster", "account_type"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_lifecycle_stage_providers = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_lifecycle_stage_providers",
+                "SoraFS reserve providers grouped by lifecycle stage",
+            ),
+            &["stage"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_credit_draw_micro_xor = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_credit_draw_micro_xor",
+                "SoraFS reserve credit draw in micro-XOR per provider",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_credit_shortfall_micro_xor = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_credit_shortfall_micro_xor",
+                "SoraFS reserve credit shortfall in micro-XOR per provider",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_accrued_interest_micro_xor = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_accrued_interest_micro_xor",
+                "SoraFS reserve accrued interest in micro-XOR per provider",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_defaulted_providers = GenericGauge::new(
+            "torii_sorafs_reserve_defaulted_providers",
+            "SoraFS reserve providers currently in default",
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_appeal_backlog = GenericGauge::new(
+            "torii_sorafs_reserve_appeal_backlog",
+            "Open SoraFS reserve appeals awaiting decision",
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_custody_movements = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_custody_movements",
+                "SoraFS reserve movements grouped by custody status",
+            ),
+            &["status"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_chain_reconciled_movements = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_chain_reconciled_movements",
+                "SoraFS reserve movements reconciled with terminal chain custody evidence",
+            ),
+            &["status"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_service_requests_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_service_requests_total",
+                "SoraFS reserve service requests grouped by route and result",
+            ),
+            &["route", "result"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_service_rate_limit_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_service_rate_limit_total",
+                "SoraFS reserve service rate-limit events grouped by route and reason",
+            ),
+            &["route", "reason"],
+        )
+        .expect("Infallible");
         let sorafs_reputation_ingest_lag_seconds = GenericGauge::new(
             "sorafs_reputation_ingest_lag_seconds",
             "SoraFS reputation ingest lag observed when a snapshot is accepted",
@@ -12754,6 +12928,27 @@ impl Default for Metrics {
         );
         register_guarded(&registry, &torii_sorafs_orderbook_api_error_ratio);
         register_guarded(&registry, &torii_sorafs_orderbook_escrow_runway_seconds);
+        register_guarded(
+            &registry,
+            &torii_sorafs_hedging_xor_usd_reference_price_micro_usd,
+        );
+        register_guarded(&registry, &torii_sorafs_hedging_feed_lag_seconds);
+        register_guarded(&registry, &torii_sorafs_hedging_feed_divergence_bps);
+        register_guarded(&registry, &torii_sorafs_hedging_exposure_drift_bps);
+        register_guarded(&registry, &torii_sorafs_billing_statement_generation_total);
+        register_guarded(&registry, &torii_sorafs_billing_statement_failure_total);
+        register_guarded(&registry, &torii_sorafs_billing_statement_ack_backlog);
+        register_guarded(&registry, &torii_sorafs_billing_escrow_runway_seconds);
+        register_guarded(&registry, &torii_sorafs_reserve_lifecycle_stage_providers);
+        register_guarded(&registry, &torii_sorafs_reserve_credit_draw_micro_xor);
+        register_guarded(&registry, &torii_sorafs_reserve_credit_shortfall_micro_xor);
+        register_guarded(&registry, &torii_sorafs_reserve_accrued_interest_micro_xor);
+        register_guarded(&registry, &torii_sorafs_reserve_defaulted_providers);
+        register_guarded(&registry, &torii_sorafs_reserve_appeal_backlog);
+        register_guarded(&registry, &torii_sorafs_reserve_custody_movements);
+        register_guarded(&registry, &torii_sorafs_reserve_chain_reconciled_movements);
+        register_guarded(&registry, &torii_sorafs_reserve_service_requests_total);
+        register_guarded(&registry, &torii_sorafs_reserve_service_rate_limit_total);
         register_guarded(&registry, &sorafs_reputation_ingest_lag_seconds);
         register_guarded(&registry, &sorafs_reputation_snapshot_age_seconds);
         register_guarded(&registry, &sorafs_reputation_snapshot_generated_at_unix);
@@ -15616,6 +15811,24 @@ impl Default for Metrics {
             torii_sorafs_orderbook_contract_mirror_divergence,
             torii_sorafs_orderbook_api_error_ratio,
             torii_sorafs_orderbook_escrow_runway_seconds,
+            torii_sorafs_hedging_xor_usd_reference_price_micro_usd,
+            torii_sorafs_hedging_feed_lag_seconds,
+            torii_sorafs_hedging_feed_divergence_bps,
+            torii_sorafs_hedging_exposure_drift_bps,
+            torii_sorafs_billing_statement_generation_total,
+            torii_sorafs_billing_statement_failure_total,
+            torii_sorafs_billing_statement_ack_backlog,
+            torii_sorafs_billing_escrow_runway_seconds,
+            torii_sorafs_reserve_lifecycle_stage_providers,
+            torii_sorafs_reserve_credit_draw_micro_xor,
+            torii_sorafs_reserve_credit_shortfall_micro_xor,
+            torii_sorafs_reserve_accrued_interest_micro_xor,
+            torii_sorafs_reserve_defaulted_providers,
+            torii_sorafs_reserve_appeal_backlog,
+            torii_sorafs_reserve_custody_movements,
+            torii_sorafs_reserve_chain_reconciled_movements,
+            torii_sorafs_reserve_service_requests_total,
+            torii_sorafs_reserve_service_rate_limit_total,
             sorafs_reputation_ingest_lag_seconds,
             sorafs_reputation_snapshot_age_seconds,
             sorafs_reputation_snapshot_generated_at_unix,
@@ -17140,6 +17353,154 @@ impl Metrics {
         self.torii_sorafs_orderbook_escrow_runway_seconds
             .with_label_values(&[provider])
             .set(seconds);
+    }
+
+    /// Set the latest SoraFS hedging XOR/USD reference price in micro-USD.
+    pub fn set_sorafs_hedging_reference_price_micro_usd(
+        &self,
+        cluster: &str,
+        price_micro_usd: u64,
+    ) {
+        self.torii_sorafs_hedging_xor_usd_reference_price_micro_usd
+            .with_label_values(&[cluster])
+            .set(price_micro_usd);
+    }
+
+    /// Set SoraFS hedging feed lag in seconds for one source.
+    pub fn set_sorafs_hedging_feed_lag_seconds(
+        &self,
+        cluster: &str,
+        source: &str,
+        lag_seconds: u64,
+    ) {
+        self.torii_sorafs_hedging_feed_lag_seconds
+            .with_label_values(&[cluster, source])
+            .set(lag_seconds);
+    }
+
+    /// Set SoraFS hedging feed divergence in basis points for one source.
+    pub fn set_sorafs_hedging_feed_divergence_bps(
+        &self,
+        cluster: &str,
+        source: &str,
+        divergence_bps: u64,
+    ) {
+        self.torii_sorafs_hedging_feed_divergence_bps
+            .with_label_values(&[cluster, source])
+            .set(divergence_bps);
+    }
+
+    /// Set SoraFS hedging exposure drift in basis points for one asset.
+    pub fn set_sorafs_hedging_exposure_drift_bps(
+        &self,
+        cluster: &str,
+        asset: &str,
+        drift_bps: u64,
+    ) {
+        self.torii_sorafs_hedging_exposure_drift_bps
+            .with_label_values(&[cluster, asset])
+            .set(drift_bps);
+    }
+
+    /// Record a SoraFS billing statement generation attempt.
+    pub fn record_sorafs_billing_statement_generation(
+        &self,
+        cluster: &str,
+        account_type: &str,
+        succeeded: bool,
+    ) {
+        self.torii_sorafs_billing_statement_generation_total
+            .with_label_values(&[cluster, account_type])
+            .inc();
+        if !succeeded {
+            self.torii_sorafs_billing_statement_failure_total
+                .with_label_values(&[cluster, account_type])
+                .inc();
+        }
+    }
+
+    /// Set SoraFS billing statement acknowledgement backlog for a cluster.
+    pub fn set_sorafs_billing_statement_ack_backlog(&self, cluster: &str, backlog: u64) {
+        self.torii_sorafs_billing_statement_ack_backlog
+            .with_label_values(&[cluster])
+            .set(backlog);
+    }
+
+    /// Set SoraFS billing escrow runway in seconds for one account type.
+    pub fn set_sorafs_billing_escrow_runway_seconds(
+        &self,
+        cluster: &str,
+        account_type: &str,
+        seconds: u64,
+    ) {
+        self.torii_sorafs_billing_escrow_runway_seconds
+            .with_label_values(&[cluster, account_type])
+            .set(seconds);
+    }
+
+    /// Record the latest SoraFS reserve runtime snapshot metrics.
+    pub fn record_sorafs_reserve_runtime_metrics(
+        &self,
+        lifecycle_stage_counts: &[(String, u64)],
+        credit_lines: &[(String, u128, u128, u128)],
+        defaulted_providers: u64,
+        open_appeals: u64,
+        custody_counts: &[(String, u64)],
+        chain_reconciled_counts: &[(String, u64)],
+    ) {
+        self.torii_sorafs_reserve_lifecycle_stage_providers.reset();
+        for (stage, count) in lifecycle_stage_counts {
+            self.torii_sorafs_reserve_lifecycle_stage_providers
+                .with_label_values(&[stage.as_str()])
+                .set(*count);
+        }
+
+        self.torii_sorafs_reserve_credit_draw_micro_xor.reset();
+        self.torii_sorafs_reserve_credit_shortfall_micro_xor.reset();
+        self.torii_sorafs_reserve_accrued_interest_micro_xor.reset();
+        for (provider_id, credit_draw, credit_shortfall, accrued_interest) in credit_lines {
+            self.torii_sorafs_reserve_credit_draw_micro_xor
+                .with_label_values(&[provider_id.as_str()])
+                .set(u128_to_f64(*credit_draw));
+            self.torii_sorafs_reserve_credit_shortfall_micro_xor
+                .with_label_values(&[provider_id.as_str()])
+                .set(u128_to_f64(*credit_shortfall));
+            self.torii_sorafs_reserve_accrued_interest_micro_xor
+                .with_label_values(&[provider_id.as_str()])
+                .set(u128_to_f64(*accrued_interest));
+        }
+
+        self.torii_sorafs_reserve_defaulted_providers
+            .set(defaulted_providers);
+        self.torii_sorafs_reserve_appeal_backlog.set(open_appeals);
+
+        self.torii_sorafs_reserve_custody_movements.reset();
+        for (status, count) in custody_counts {
+            self.torii_sorafs_reserve_custody_movements
+                .with_label_values(&[status.as_str()])
+                .set(*count);
+        }
+
+        self.torii_sorafs_reserve_chain_reconciled_movements.reset();
+        for (status, count) in chain_reconciled_counts {
+            self.torii_sorafs_reserve_chain_reconciled_movements
+                .with_label_values(&[status.as_str()])
+                .set(*count);
+        }
+    }
+
+    /// Record a SoraFS reserve service request outcome.
+    pub fn record_sorafs_reserve_service_request(&self, route: &str, result: &str) {
+        self.torii_sorafs_reserve_service_requests_total
+            .with_label_values(&[route, result])
+            .inc();
+    }
+
+    /// Increment a SoraFS reserve service rate-limit counter.
+    pub fn inc_sorafs_reserve_service_rate_limit(&self, route: &str, reason: &str) {
+        self.torii_sorafs_reserve_service_rate_limit_total
+            .with_label_values(&[route, reason])
+            .inc();
     }
 
     /// Record the latest accepted SoraFS reputation snapshot metrics.
@@ -19579,6 +19940,149 @@ mod test {
             assert!(
                 exported.contains(metric_name),
                 "missing orderbook metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_hedging_billing_metrics_used_by_dashboard_and_alerts() {
+        let metrics = Metrics::default();
+
+        metrics.set_sorafs_hedging_reference_price_micro_usd("localnet", 2_000_000);
+        metrics.set_sorafs_hedging_feed_lag_seconds("localnet", "primary", 120);
+        metrics.set_sorafs_hedging_feed_divergence_bps("localnet", "primary", 75);
+        metrics.set_sorafs_hedging_exposure_drift_bps("localnet", "xor", 250);
+        metrics.record_sorafs_billing_statement_generation("localnet", "provider", true);
+        metrics.record_sorafs_billing_statement_generation("localnet", "provider", false);
+        metrics.set_sorafs_billing_statement_ack_backlog("localnet", 9);
+        metrics.set_sorafs_billing_escrow_runway_seconds("localnet", "provider", 172_800);
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_hedging_xor_usd_reference_price_micro_usd
+                .with_label_values(&["localnet"])
+                .get(),
+            2_000_000
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_hedging_feed_lag_seconds
+                .with_label_values(&["localnet", "primary"])
+                .get(),
+            120
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_billing_statement_generation_total
+                .with_label_values(&["localnet", "provider"])
+                .get(),
+            2
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_billing_statement_failure_total
+                .with_label_values(&["localnet", "provider"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_billing_statement_ack_backlog
+                .with_label_values(&["localnet"])
+                .get(),
+            9
+        );
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_hedging_xor_usd_reference_price_micro_usd",
+            "torii_sorafs_hedging_feed_lag_seconds",
+            "torii_sorafs_hedging_feed_divergence_bps",
+            "torii_sorafs_hedging_exposure_drift_bps",
+            "torii_sorafs_billing_statement_generation_total",
+            "torii_sorafs_billing_statement_failure_total",
+            "torii_sorafs_billing_statement_ack_backlog",
+            "torii_sorafs_billing_escrow_runway_seconds",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing hedging/billing metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_sorafs_reserve_runtime_metrics() {
+        let metrics = Metrics::default();
+
+        metrics.record_sorafs_reserve_runtime_metrics(
+            &[("active".to_string(), 2), ("default".to_string(), 1)],
+            &[("provider-a".to_string(), 120_000_000, 5_000_000, 45_000)],
+            1,
+            3,
+            &[
+                ("intent_recorded".to_string(), 1),
+                ("confirmed".to_string(), 2),
+            ],
+            &[("confirmed".to_string(), 2)],
+        );
+        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
+        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_lifecycle_stage_providers
+                .with_label_values(&["active"])
+                .get(),
+            2
+        );
+        assert_eq!(metrics.torii_sorafs_reserve_defaulted_providers.get(), 1);
+        assert_eq!(metrics.torii_sorafs_reserve_appeal_backlog.get(), 3);
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_custody_movements
+                .with_label_values(&["confirmed"])
+                .get(),
+            2
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_chain_reconciled_movements
+                .with_label_values(&["confirmed"])
+                .get(),
+            2
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_requests_total
+                .with_label_values(&["top_up", "accepted"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_rate_limit_total
+                .with_label_values(&["top_up", "quota"])
+                .get(),
+            1
+        );
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_reserve_lifecycle_stage_providers",
+            "torii_sorafs_reserve_credit_draw_micro_xor",
+            "torii_sorafs_reserve_credit_shortfall_micro_xor",
+            "torii_sorafs_reserve_accrued_interest_micro_xor",
+            "torii_sorafs_reserve_defaulted_providers",
+            "torii_sorafs_reserve_appeal_backlog",
+            "torii_sorafs_reserve_custody_movements",
+            "torii_sorafs_reserve_chain_reconciled_movements",
+            "torii_sorafs_reserve_service_requests_total",
+            "torii_sorafs_reserve_service_rate_limit_total",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing reserve metric {metric_name} from export:\n{exported}"
             );
         }
     }
