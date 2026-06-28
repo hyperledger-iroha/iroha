@@ -18,7 +18,7 @@ use iroha::{
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
-            consensus::NativeAmxPhase,
+            consensus::{NativeAmxPhase, NativeAmxReceipt},
         },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
@@ -47,6 +47,7 @@ use iroha_test_network::{
     genesis_factory_with_post_topology, init_instruction_registry,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use norito::json::{self, Value as JsonValue};
 use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
@@ -397,7 +398,7 @@ async fn submit_and_wait_for_approval(
         .map_err(|err| eyre!("submit task join error: {err}"))?
         .map_err(|err| eyre!("failed to submit native AMX transaction: {err}"))?;
 
-    let outcome = timeout(STATUS_WAIT_TIMEOUT, async {
+    let outcome = match timeout(STATUS_WAIT_TIMEOUT, async {
         while let Some(next) = events.next().await {
             let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
                 continue;
@@ -418,7 +419,13 @@ async fn submit_and_wait_for_approval(
         Ok(None)
     })
     .await
-    .map_err(|_| eyre!("timed out waiting for transaction approval event"))??;
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            events.close().await;
+            return Ok(None);
+        }
+    };
 
     events.close().await;
     Ok(outcome)
@@ -457,7 +464,7 @@ async fn wait_for_block_with_entrypoint(
 fn assert_native_amx_execution_context(
     block: &SignedBlock,
     transaction: &SignedTransaction,
-) -> Result<()> {
+) -> Result<NativeAmxReceipt> {
     let entrypoint_hash = transaction.hash_as_entrypoint();
     let context_bundle = block
         .execution_context()
@@ -567,7 +574,7 @@ fn assert_native_amx_execution_context(
             "participant QCs should include signer evidence"
         );
     }
-    Ok(())
+    Ok(receipt.clone())
 }
 
 async fn wait_for_all_peers_to_observe_block(
@@ -588,6 +595,192 @@ async fn wait_for_all_peers_to_observe_block(
         );
     }
     Ok(())
+}
+
+async fn fetch_sumeragi_status_json(client: &Client) -> Result<JsonValue> {
+    let status_url = client.torii_url.join("v1/sumeragi/status")?;
+    let response = reqwest::Client::new()
+        .get(status_url)
+        .send()
+        .await
+        .wrap_err("fetch Sumeragi status")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .wrap_err("read Sumeragi status body")?;
+    ensure!(
+        status.is_success(),
+        "Sumeragi status request failed with status {status}: {body}"
+    );
+    json::from_str(&body).wrap_err("parse Sumeragi status JSON")
+}
+
+fn status_contains_native_amx_receipt(status: &JsonValue, receipt: &NativeAmxReceipt) -> bool {
+    let Some(commitments) = status
+        .get("lane_settlement_commitments")
+        .and_then(JsonValue::as_array)
+    else {
+        return false;
+    };
+    commitments.iter().any(|commitment| {
+        let Some(commitment) = commitment.as_object() else {
+            return false;
+        };
+        if commitment.get("block_height").and_then(JsonValue::as_u64) != Some(receipt.block_height)
+            || commitment.get("lane_id").and_then(JsonValue::as_u64)
+                != Some(u64::from(receipt.lane_id))
+            || commitment.get("dataspace_id").and_then(JsonValue::as_u64)
+                != Some(u64::from(receipt.dataspace_id))
+        {
+            return false;
+        }
+        let Some(native_receipts) = commitment
+            .get("native_amx_receipts")
+            .and_then(JsonValue::as_array)
+        else {
+            return false;
+        };
+        native_receipts.iter().any(|native| {
+            let Some(native) = native.as_object() else {
+                return false;
+            };
+            let source_id_is_hex = native
+                .get("source_id")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| {
+                    value.len() == Hash::LENGTH * 2
+                        && value.chars().all(|char| char.is_ascii_hexdigit())
+                });
+            let plan_digest_is_present = native
+                .get("plan_digest")
+                .and_then(JsonValue::as_str)
+                .is_some_and(|value| !value.is_empty());
+            if !source_id_is_hex
+                || !plan_digest_is_present
+                || native.get("block_height").and_then(JsonValue::as_u64)
+                    != Some(receipt.block_height)
+                || native.get("lane_id").and_then(JsonValue::as_u64)
+                    != Some(u64::from(receipt.lane_id))
+                || native.get("dataspace_id").and_then(JsonValue::as_u64)
+                    != Some(u64::from(receipt.dataspace_id))
+            {
+                return false;
+            }
+            let Some(legs) = native.get("legs").and_then(JsonValue::as_array) else {
+                return false;
+            };
+            receipt.legs.iter().all(|expected_leg| {
+                legs.iter().any(|leg| {
+                    let Some(leg) = leg.as_object() else {
+                        return false;
+                    };
+                    leg.get("lane_id").and_then(JsonValue::as_u64)
+                        == Some(u64::from(expected_leg.lane_id))
+                        && leg.get("dataspace_id").and_then(JsonValue::as_u64)
+                            == Some(u64::from(expected_leg.dataspace_id))
+                        && leg
+                            .get("prepare_qc")
+                            .and_then(JsonValue::as_object)
+                            .and_then(|qc| qc.get("body"))
+                            .and_then(JsonValue::as_object)
+                            .and_then(|body| body.get("phase"))
+                            .and_then(JsonValue::as_str)
+                            == Some("prepare")
+                        && leg
+                            .get("commit_qc")
+                            .and_then(JsonValue::as_object)
+                            .and_then(|qc| qc.get("body"))
+                            .and_then(JsonValue::as_object)
+                            .and_then(|body| body.get("phase"))
+                            .and_then(JsonValue::as_str)
+                            == Some("commit")
+                })
+            })
+        })
+    })
+}
+
+fn native_amx_status_summary(status: &JsonValue) -> String {
+    let Some(commitments) = status
+        .get("lane_settlement_commitments")
+        .and_then(JsonValue::as_array)
+    else {
+        return "lane_settlement_commitments missing".to_owned();
+    };
+    let native_total = commitments
+        .iter()
+        .filter_map(|commitment| {
+            commitment
+                .get("native_amx_receipts")
+                .and_then(JsonValue::as_array)
+        })
+        .map(|receipts| receipts.len())
+        .sum::<usize>();
+    let first = commitments
+        .first()
+        .map(|commitment| {
+            let native = commitment
+                .get("native_amx_receipts")
+                .and_then(JsonValue::as_array)
+                .and_then(|receipts| receipts.first());
+            let native_summary = native
+                .map(|receipt| {
+                    format!(
+                        " native_source={:?} native_plan={:?} native_height={:?} legs={}",
+                        receipt.get("source_id").and_then(JsonValue::as_str),
+                        receipt.get("plan_digest").and_then(JsonValue::as_str),
+                        receipt.get("block_height").and_then(JsonValue::as_u64),
+                        receipt
+                            .get("legs")
+                            .and_then(JsonValue::as_array)
+                            .map(|legs| legs.len())
+                            .unwrap_or(0)
+                    )
+                })
+                .unwrap_or_else(|| " native_receipts_empty".to_owned());
+            format!(
+                " first_block={:?} first_lane={:?} first_dataspace={:?}{native_summary}",
+                commitment.get("block_height").and_then(JsonValue::as_u64),
+                commitment.get("lane_id").and_then(JsonValue::as_u64),
+                commitment.get("dataspace_id").and_then(JsonValue::as_u64)
+            )
+        })
+        .unwrap_or_else(|| " no_first_commitment".to_owned());
+    format!(
+        "commitments={} native_receipts_total={}{}",
+        commitments.len(),
+        native_total,
+        first
+    )
+}
+
+async fn wait_for_status_native_amx_receipt(
+    client: &Client,
+    receipt: &NativeAmxReceipt,
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match fetch_sumeragi_status_json(client).await {
+            Ok(status) if status_contains_native_amx_receipt(&status, receipt) => return Ok(()),
+            Ok(status) => {
+                last_error = Some(format!(
+                    "status did not include expected native AMX receipt ({})",
+                    native_amx_status_summary(&status)
+                ));
+            }
+            Err(err) => last_error = Some(err.to_string()),
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|err| format!("; last status error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for native AMX receipt in Sumeragi status{suffix}"
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -636,9 +829,10 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
 
         let committed_block =
             wait_for_block_with_entrypoint(&submitter, entrypoint_hash, context).await?;
-        assert_native_amx_execution_context(&committed_block, &transaction)?;
+        let receipt = assert_native_amx_execution_context(&committed_block, &transaction)?;
         wait_for_all_peers_to_observe_block(&network, entrypoint_hash, committed_block.hash())
             .await?;
+        wait_for_status_native_amx_receipt(&submitter, &receipt, context).await?;
 
         submitter.submit::<InstructionBox>(
             Log::new(
@@ -718,7 +912,7 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
 
         match maybe_block {
             Ok(Ok(block)) => {
-                assert_native_amx_execution_context(&block, &transaction)?;
+                let _receipt = assert_native_amx_execution_context(&block, &transaction)?;
                 wait_for_all_peers_to_observe_block(&network, entrypoint_hash, block.hash())
                     .await?;
             }

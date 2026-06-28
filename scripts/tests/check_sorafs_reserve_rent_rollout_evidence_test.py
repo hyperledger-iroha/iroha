@@ -38,6 +38,7 @@ def with_reviewed_context(payload: dict) -> dict:
     payload = dict(payload)
     payload.setdefault("deployment_id", DEPLOYMENT_ID)
     payload.setdefault("environment", ENVIRONMENT)
+    payload.setdefault("deployment_context_reviewed", True)
     return payload
 
 
@@ -169,6 +170,20 @@ def reserve_movement() -> dict:
         "withdrawal_limits_enforced": True,
         "treasury_reconciliation_passed": True,
         "double_spend_rejected": True,
+        "chain_submission_count": 4,
+        "finality_poll_attempt_count": 4,
+        "live_chain_submission_verified": True,
+        "submitted_transaction_hash_readback_verified": True,
+        "automatic_finality_polling_verified": True,
+        "finality_poll_confirmed_status_verified": True,
+        "finality_poll_timeout_rejected": True,
+        "custody_status_route_present": True,
+        "submitted_custody_evidence_present": True,
+        "confirmed_custody_evidence_present": True,
+        "rejected_custody_reconciliation_passed": True,
+        "confirmed_balance_projection_verified": True,
+        "confirmed_withdrawal_underflow_rejected": True,
+        "chain_reconciled_readback_verified": True,
         "raw_transfer_included": False,
         "raw_instruction_included": False,
     })
@@ -187,6 +202,11 @@ def credit_line() -> dict:
         "apr_accrual_verified": True,
         "manual_approval_tier_blocked": True,
         "credit_shortfall_reported": True,
+        "live_account_mutation_verified": True,
+        "credit_line_account_state_readback_verified": True,
+        "credit_accrual_posted_to_account_state": True,
+        "manual_approval_tier_did_not_mutate_account": True,
+        "account_state_reconciliation_verified": True,
         "no_negative_balance": True,
         "unexpected_failure_count": 0,
         "raw_ledger_included": False,
@@ -222,10 +242,16 @@ def metrics_alerts(*, include_all_metrics: bool = True) -> dict:
         "sorafs_reserve_ledger_meets_underwriting",
         "sorafs_reserve_ledger_instruction_total",
         "sorafs_reserve_ledger_transfer_xor",
-        "sorafs_reserve_provider_balance_xor",
-        "sorafs_reserve_lifecycle_stage",
-        "sorafs_reserve_credit_line_draw_xor",
-        "sorafs_reserve_appeal_backlog_total",
+        "torii_sorafs_reserve_lifecycle_stage_providers",
+        "torii_sorafs_reserve_credit_draw_micro_xor",
+        "torii_sorafs_reserve_credit_shortfall_micro_xor",
+        "torii_sorafs_reserve_accrued_interest_micro_xor",
+        "torii_sorafs_reserve_defaulted_providers",
+        "torii_sorafs_reserve_appeal_backlog",
+        "torii_sorafs_reserve_custody_movements",
+        "torii_sorafs_reserve_chain_reconciled_movements",
+        "torii_sorafs_reserve_service_requests_total",
+        "torii_sorafs_reserve_service_rate_limit_total",
     ]
     if not include_all_metrics:
         metrics.pop()
@@ -260,6 +286,13 @@ def provider_bake(*, failure_count: int = 0) -> dict:
         "rent_cycle_count": 2,
         "top_up_cycle_count": 2,
         "appeal_cycle_count": 1,
+        "scheduler_config_bound": True,
+        "scheduled_lifecycle_canary_passed": True,
+        "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+        "scheduled_lifecycle_canary_tick_count": 2,
+        "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+        "scheduled_lifecycle_canary_gateway_sync_verified": True,
+        "scheduled_lifecycle_canary_orderbook_rejection_verified": True,
         "governance_packet_attached": True,
         "ledger_digest_attached": True,
         "dashboard_snapshot_attached": True,
@@ -282,6 +315,12 @@ def governance_approval() -> dict:
         "appeal_policy_present": True,
         "manual_override_policy_present": True,
         "provider_bake_accepted": True,
+        "governance_source_entries_published": True,
+        "downstream_compliance_policy_applied": True,
+        "downstream_compliance_consumer_count": 2,
+        "non_reserve_compliance_entries_preserved": True,
+        "governance_source_entry_handoff_verified": True,
+        "denylist_and_policy_consumers_consistent": True,
         "config_source": "iroha_config",
     })
 
@@ -422,6 +461,41 @@ def test_reserve_movement_must_match_valid_ledger_tuple(tmp_path: Path) -> None:
     ]
 
 
+def test_reserve_movement_requires_custody_finality_evidence(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reserve_movement()
+    payload["live_chain_submission_verified"] = False
+    payload["chain_submission_count"] = 1
+    payload["finality_poll_attempt_count"] = 1
+    payload.pop("automatic_finality_polling_verified")
+    payload["confirmed_custody_evidence_present"] = False
+    payload["confirmed_balance_projection_verified"] = False
+    payload.pop("chain_reconciled_readback_verified")
+    write_json(tmp_path / "reserve-movement.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["reserve_movement"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert "live_chain_submission_verified must be true" in artifact["errors"]
+    assert (
+        "chain_submission_count must cover every accepted_movement_count"
+        in artifact["errors"]
+    )
+    assert (
+        "finality_poll_attempt_count must cover every accepted_movement_count"
+        in artifact["errors"]
+    )
+    assert "automatic_finality_polling_verified must be true" in artifact["errors"]
+    assert "confirmed_custody_evidence_present must be true" in artifact["errors"]
+    assert "confirmed_balance_projection_verified must be true" in artifact["errors"]
+    assert "chain_reconciled_readback_verified must be true" in artifact["errors"]
+
+
 def test_ledger_bound_subset_requires_ledger_anchor(tmp_path: Path) -> None:
     write_json(tmp_path / "metrics-alerts.json", metrics_alerts())
     summary = tmp_path / "summary.json"
@@ -461,6 +535,30 @@ def test_unsigned_wrong_account_route_probe_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_credit_line_requires_live_account_mutation_evidence(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["live_account_mutation_verified"] = False
+    payload["credit_accrual_posted_to_account_state"] = False
+    payload.pop("credit_line_account_state_readback_verified")
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["credit_line"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert "live_account_mutation_verified must be true" in artifact["errors"]
+    assert "credit_accrual_posted_to_account_state must be true" in artifact["errors"]
+    assert (
+        "credit_line_account_state_readback_verified must be true"
+        in artifact["errors"]
+    )
+
+
 def test_provider_bake_failure_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "provider-bake.json", provider_bake(failure_count=1))
@@ -481,6 +579,71 @@ def test_provider_bake_completed_at_must_not_precede_started_at(tmp_path: Path) 
     artifact = payload["required"]["provider_bake"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "completed_at_unix must be >= started_at_unix" in artifact["errors"]
+
+
+def test_provider_bake_requires_scheduler_lifecycle_canary(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["scheduled_lifecycle_canary_passed"] = False
+    bake.pop("scheduled_lifecycle_canary_defaulted_provider_count")
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "scheduled_lifecycle_canary_passed must be true" in artifact["errors"]
+    assert (
+        "scheduled_lifecycle_canary_defaulted_provider_count must be a positive integer"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_scheduler_lifecycle_canary_must_be_fresh(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["scheduled_lifecycle_canary_last_tick_unix"] = (
+        bake["completed_at_unix"] - MODULE.DEFAULT_MAX_LIFECYCLE_LAG_SECS - 1
+    )
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "scheduled_lifecycle_canary_last_tick_unix must be within "
+        f"{MODULE.DEFAULT_MAX_LIFECYCLE_LAG_SECS} seconds of completed_at_unix"
+        in artifact["errors"]
+    )
+
+
+def test_governance_approval_requires_downstream_compliance_evidence(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["downstream_compliance_policy_applied"] = False
+    payload["downstream_compliance_consumer_count"] = 0
+    payload.pop("governance_source_entry_handoff_verified")
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "downstream_compliance_policy_applied must be true" in artifact["errors"]
+    assert (
+        "downstream_compliance_consumer_count must be a positive integer"
+        in artifact["errors"]
+    )
+    assert "governance_source_entry_handoff_verified must be true" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

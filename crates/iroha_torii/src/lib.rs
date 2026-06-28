@@ -38365,6 +38365,73 @@ impl Torii {
                     get(sorafs::api::handle_get_sorafs_orderbook_events_ws),
                 )
                 .route(
+                    "/v1/sorafs/reserve/lifecycle",
+                    post(sorafs::api::handle_post_sorafs_reserve_lifecycle_update)
+                        .get(sorafs::api::handle_get_sorafs_reserve_lifecycle_snapshot),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/providers/{provider_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_provider),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/policy",
+                    post(sorafs::api::handle_post_sorafs_reserve_lifecycle_policy)
+                        .get(sorafs::api::handle_get_sorafs_reserve_lifecycle_policy),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/advance",
+                    post(sorafs::api::handle_post_sorafs_reserve_lifecycle_advance),
+                )
+                .route(
+                    "/v1/sorafs/reserve/credit-lines",
+                    get(sorafs::api::handle_get_sorafs_reserve_credit_lines),
+                )
+                .route(
+                    "/v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_reserve_credit_line_provider),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/events",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/events/stream",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events_stream),
+                )
+                .route(
+                    "/v1/sorafs/reserve/lifecycle/events/ws",
+                    get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events_ws),
+                )
+                .route(
+                    "/v1/sorafs/reserve/top-up",
+                    post(sorafs::api::handle_post_sorafs_reserve_top_up),
+                )
+                .route(
+                    "/v1/sorafs/reserve/withdraw",
+                    post(sorafs::api::handle_post_sorafs_reserve_withdrawal),
+                )
+                .route(
+                    "/v1/sorafs/reserve/movements",
+                    get(sorafs::api::handle_get_sorafs_reserve_movements),
+                )
+                .route(
+                    "/v1/sorafs/reserve/movements/{movement_id_hex}/custody",
+                    post(sorafs::api::handle_post_sorafs_reserve_movement_custody),
+                )
+                .route(
+                    "/v1/sorafs/reserve/balances/{provider_id_hex}",
+                    get(sorafs::api::handle_get_sorafs_reserve_balance),
+                )
+                .route(
+                    "/v1/sorafs/reserve/appeals",
+                    post(sorafs::api::handle_post_sorafs_reserve_appeal)
+                        .get(sorafs::api::handle_get_sorafs_reserve_appeals),
+                )
+                .route(
+                    "/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision",
+                    post(sorafs::api::handle_post_sorafs_reserve_appeal_decision),
+                )
+                .route(
                     "/v1/sorafs/appeals/pricing/config",
                     get(sorafs::api::handle_get_sorafs_appeal_pricing_config),
                 )
@@ -41641,10 +41708,16 @@ impl Torii {
 
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
-        sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
-            app_state,
-            shutdown_signal.clone(),
-        );
+        {
+            sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
+            sorafs::api::spawn_sorafs_reserve_lifecycle_scheduler(
+                app_state,
+                shutdown_signal.clone(),
+            );
+        }
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
         let make = api_router.into_make_service_with_connect_info::<std::net::SocketAddr>();

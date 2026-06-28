@@ -55,6 +55,49 @@ PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES = frozenset(
 MAX_SENSITIVE_FIELD_DEPTH = 128
 
 
+def _require_error_list(errors: Any) -> list[str]:
+    """Return a mutable sensitivity error list or reject malformed sinks."""
+
+    if not isinstance(errors, list):
+        raise ValueError("sensitive field errors must be a list of strings")
+    for error in errors:
+        if not isinstance(error, str):
+            raise ValueError("sensitive field errors must be a list of strings")
+        if (
+            not error.strip()
+            or error != error.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in error)
+        ):
+            raise ValueError(
+                "sensitive field errors must contain non-empty canonical strings"
+            )
+    return errors
+
+
+def _require_diagnostic_string(
+    value: Any,
+    errors: list[str],
+    *,
+    label: str,
+    allow_empty: bool = False,
+) -> str | None:
+    """Return canonical diagnostic text or reject unsafe error fragments."""
+
+    if not isinstance(value, str):
+        errors.append(f"{label} must be a non-empty canonical string")
+        return None
+    if allow_empty and value == "":
+        return value
+    if (
+        not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        errors.append(f"{label} must be a non-empty canonical string")
+        return None
+    return value
+
+
 def normalize_sensitive_key(key: str) -> str:
     """Return a punctuation-insensitive key form for secret-field checks."""
 
@@ -65,16 +108,21 @@ def _key_forms(
     sensitive_keys: Any,
     errors: list[str],
 ) -> tuple[frozenset[str], frozenset[str]] | None:
-    if isinstance(sensitive_keys, (str, bytes, bytearray)) or not isinstance(
-        sensitive_keys,
-        Iterable,
+    if (
+        isinstance(sensitive_keys, (str, bytes, bytearray, Mapping))
+        or not isinstance(sensitive_keys, Iterable)
     ):
         errors.append("sensitive keys must be a sequence of strings")
         return None
     provided_keys: set[str] = set()
     for key in sensitive_keys:
-        if not isinstance(key, str) or not key:
-            errors.append("sensitive keys must be non-empty strings")
+        if (
+            not isinstance(key, str)
+            or not key.strip()
+            or key != key.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in key)
+        ):
+            errors.append("sensitive keys must be non-empty canonical strings")
             return None
         provided_keys.add(key.lower())
     exact_keys = frozenset(provided_keys) | COMMON_SENSITIVE_KEYS
@@ -193,15 +241,29 @@ def visit_sensitive_fields(
 ) -> None:
     """Reject sensitive fields and non-false payload-inclusion markers."""
 
-    key_forms = _key_forms(sensitive_keys, errors)
+    error_list = _require_error_list(errors)
+    root_path = _require_diagnostic_string(
+        path,
+        error_list,
+        label="sensitive field path",
+        allow_empty=True,
+    )
+    evidence_label_text = _require_diagnostic_string(
+        evidence_label,
+        error_list,
+        label="sensitive field evidence label",
+    )
+    if root_path is None or evidence_label_text is None:
+        return
+    key_forms = _key_forms(sensitive_keys, error_list)
     if key_forms is None:
         return
     exact_keys, normalized_keys = key_forms
     _visit_sensitive_fields(
         value,
-        path,
-        errors,
+        root_path,
+        error_list,
         exact_keys=exact_keys,
         normalized_keys=normalized_keys,
-        evidence_label=evidence_label,
+        evidence_label=evidence_label_text,
     )

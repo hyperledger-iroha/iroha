@@ -317,6 +317,56 @@ async fn nexus_lifecycle_rejects_duplicate_additions_without_mutating_catalog() 
 }
 
 #[tokio::test]
+async fn nexus_lifecycle_rejects_unknown_retire_without_mutating_catalog() {
+    let harness = build_app(true);
+    let body = r#"{"additions":[],"retire":[9]}"#;
+
+    let resp = post_lifecycle(&harness, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload.message.contains("cannot retire unknown lane 9"),
+        "expected unknown-retire error, got {:?}",
+        payload.message
+    );
+
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let valid_resp = post_lifecycle(&harness, valid_add).await;
+    assert_eq!(valid_resp.status(), StatusCode::ACCEPTED);
+    let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(2));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_unknown_dataspace_without_mutating_catalog() {
+    let harness = build_app(true);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":42,"alias":"unknown-dataspace","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+
+    let resp = post_lifecycle(&harness, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane lifecycle plan references unknown dataspace 42"),
+        "expected unknown-dataspace error, got {:?}",
+        payload.message
+    );
+
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let valid_resp = post_lifecycle(&harness, valid_add).await;
+    assert_eq!(valid_resp.status(), StatusCode::ACCEPTED);
+    let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(2));
+}
+
+#[tokio::test]
 async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;

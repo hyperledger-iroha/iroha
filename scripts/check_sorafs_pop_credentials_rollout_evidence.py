@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -168,6 +169,131 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "issuer_bundle": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "issuer_id",
+        "bundle_id_hex",
+        "root_digest_hex",
+        "revocation_list_digest_hex",
+        "credential_count",
+        "signed_credential_count",
+        "canonical_norito_verified",
+        "issuer_signature_verified",
+        "issuer_key_policy_verified",
+        "credential_payloads_included",
+        "holder_identities_included",
+    ),
+    "commitment_root": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "root_digest_hex",
+        "tree_version",
+        "published_at_unix",
+        "publisher_signature_verified",
+        "monotonic_tree_version",
+        "anchor_published",
+        "credential_leaves_included",
+    ),
+    "revocation_registry": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "revocation_list_digest_hex",
+        "revocation_list_version",
+        "published_at_unix",
+        "publisher_signature_verified",
+        "test_revocation_probe_passed",
+        "rollback_detected",
+        "revoked_nonces_included",
+        "revoked_nonce_count",
+    ),
+    "enrollment_portal": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "issuer_approval_required",
+        "renewal_flow_verified",
+        "rate_limit_configured",
+        "pii_fields_included",
+        "attestations_included",
+        "routes",
+    ),
+    "juror_client": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "synced_root_digest_hex",
+        "synced_revocation_list_digest_hex",
+        "credential_store_encrypted",
+        "revocation_sync_success",
+        "proof_generation_success",
+        "credential_rotation_dry_run_success",
+        "offline_export_encrypted",
+        "holder_identity_included",
+        "proof_payloads_included",
+    ),
+    "verifier_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "root_digest_hex",
+        "revocation_list_digest_hex",
+        "proof_probe_count",
+        "accepted_valid_proof_count",
+        "rejected_invalid_proof_count",
+        "expired_proof_rejected",
+        "revoked_proof_rejected",
+        "replay_nullifier_rejected",
+        "root_binding_verified",
+        "max_verify_latency_ms",
+        "max_service_lag_seconds",
+        "raw_proofs_included",
+        "holder_identity_disclosed",
+        "routes",
+    ),
+    "moderation_integration": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "root_digest_hex",
+        "revocation_list_digest_hex",
+        "pop_snapshot_digest_hex",
+        "sortition_probe_count",
+        "commit_reveal_probe_count",
+        "juror_pool_bound",
+        "moderation_case_binding_verified",
+        "duplicate_nullifier_rejected",
+        "observer_credentials_excluded",
+        "identity_payloads_included",
+        "credential_payloads_included",
+    ),
+    "metrics_alerts": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "root_digest_hex",
+        "revocation_list_digest_hex",
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "root_digest_hex",
+        "revocation_list_digest_hex",
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "issuer_key_policy_present",
+        "revocation_policy_present",
+        "retention_policy_present",
+        "manual_override_policy_present",
+        "zk_verifier_audit_passed",
+        "privacy_proof_system",
+        "config_" "source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -687,7 +813,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -701,7 +827,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

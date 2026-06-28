@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -114,6 +115,71 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "source_entry": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "source_batch_digest_hex",
+        "probe_count",
+        "passed_probe_count",
+        "source_entry_probe_count",
+        "payload_bytes_included",
+        "private_payloads_included",
+        "response_bodies_included",
+        "probes",
+    ),
+    "publication": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "source_batch_digest_hex",
+        "cycle_digest_hex",
+        "route_count",
+        "passed_route_count",
+        "cycle_detail_probe_count",
+        "publisher_identity_required",
+        "payload_bytes_included",
+        "publication_bodies_included",
+        "private_payloads_included",
+        "routes",
+    ),
+    "privacy_aggregate": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "cycle_digest_hex",
+        "probe_count",
+        "passed_probe_count",
+        "source_event_probe_count",
+        "publish_due_probe_count",
+        "payload_bytes_included",
+        "raw_metric_values_included",
+        "private_payloads_included",
+        "probes",
+    ),
+    "proof_token_issuance": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "cycle_digest_hex",
+        "probe_count",
+        "passed_probe_count",
+        "issuance_probe_count",
+        "payload_bytes_included",
+        "proof_token_frames_included",
+        "private_digest_keys_included",
+        "response_bodies_included",
+        "probes",
+    ),
+    "explorer": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "cycle_digest_hex",
+        "route_count",
+        "payload_bytes_included",
+        "private_digest_keys_included",
+        "routes",
+    ),
+}
 DEFAULT_REQUIRED_SOURCE_KINDS = (
     "gar-enforcement-receipt",
     "moderation-ballot-governance-event",
@@ -501,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded = expand_response_args(sys.argv[1:] if argv is None else argv, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded)
@@ -515,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     preflight_errors = validate_checker_preflight(args)

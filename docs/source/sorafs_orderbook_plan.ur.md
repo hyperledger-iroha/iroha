@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 965067d671c0c972601d966f5650ef9d1d55af613bbad4b713da98131c49ffa7
+source_hash: b85b568485fdf57ffb60772a5c62b5e0681a1f43433906cef4146e0e03806d8d
 source_last_modified: "2026-06-25T17:28:04+00:00"
 translation_last_reviewed: 2026-06-25
 ---

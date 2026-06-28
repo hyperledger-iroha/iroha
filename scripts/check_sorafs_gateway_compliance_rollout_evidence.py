@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_lines,
+    emit_checker_exception,
     render_and_write_checker_summary,
     validate_checker_preflight,
 )
@@ -562,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

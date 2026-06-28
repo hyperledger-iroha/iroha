@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -162,6 +163,103 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "provider_transport": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "provider_protocol_enabled",
+        "torii_pdp_fail_closed_guard_removed",
+        "challenge_fetch_verified",
+        "proof_submit_verified",
+        "deadline_headers_verified",
+        "provider_authz_enforced",
+        "proof_stream_pdp_enabled",
+        "response_bodies_included",
+    ),
+    "proof_generation": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "provider_count",
+        "challenge_count",
+        "proof_count",
+        "provider_signatures_verified",
+        "manifest_binding_verified",
+        "commitment_binding_verified",
+        "segment_merkle_paths_verified",
+        "hot_leaf_merkle_paths_verified",
+        "deadline_policy_verified",
+        "hardware_determinism_reviewed",
+        "max_proof_latency_ms",
+        "proof_summary_digest_hex",
+        "raw_challenge_bytes_included",
+        "raw_proof_bytes_included",
+    ),
+    "validator_replay": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "sorafs_validate_pdp_passed",
+        "commitment_challenge_binding_verified",
+        "challenge_proof_binding_verified",
+        "segment_coverage_verified",
+        "hot_leaf_coverage_verified",
+        "deadline_policy_verified",
+        "missing_merkle_path_negative_verified",
+        "expanded_negative_fixtures_committed",
+        "validation_outcome_schema_verified",
+        "pairs_replayed",
+        "proof_summary_digest_hex",
+        "validation_bundle_digest_hex",
+        "raw_challenge_bytes_included",
+        "raw_proof_bytes_included",
+    ),
+    "governance_repair": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "governance_dag_challenge_published",
+        "governance_dag_verdict_published",
+        "repair_handoff_verified",
+        "archive_retention_bound",
+        "slash_policy_bound",
+        "operator_export_verified",
+        "proof_summary_digest_hex",
+        "archive_summary_digest_hex",
+        "raw_export_included",
+        "raw_report_included",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "deadline_breach_alert_tested",
+        "proof_failure_alert_tested",
+        "repair_handoff_alert_tested",
+        "critical_alerts_firing",
+        "metrics",
+        "proof_summary_digest_hex",
+        "response_bodies_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "pdp_policy_bound",
+        "provider_roster_bound",
+        "repair_policy_bound",
+        "governance_dag_bound",
+        "proof_summary_digest_hex",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -511,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -525,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     options = ValidationOptions(
         now_unix=args.now_unix,

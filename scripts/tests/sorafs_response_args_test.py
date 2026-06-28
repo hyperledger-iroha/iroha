@@ -87,6 +87,15 @@ def test_raw_bytes_argument_container_fails_without_character_expansion() -> Non
         raise AssertionError("raw bytes arguments were expanded byte-wise")
 
 
+def test_raw_bytearray_argument_container_fails_without_byte_expansion() -> None:
+    try:
+        expand_response_args(bytearray(b"--dry-run"), EvidenceArgumentParser())
+    except ValueError as error:
+        assert "arguments must be a sequence of strings" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("raw bytearray arguments were expanded byte-wise")
+
+
 def test_mapping_argument_container_fails_without_key_expansion() -> None:
     try:
         expand_response_args({"--dry-run": "ignored"}, EvidenceArgumentParser())
@@ -94,6 +103,16 @@ def test_mapping_argument_container_fails_without_key_expansion() -> None:
         assert "arguments must be a sequence of strings" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("mapping arguments were expanded from keys")
+
+
+def test_malformed_direct_argument_text_fails_closed() -> None:
+    for value in ("", " --dry-run", "--dry-run ", "--dry\nrun"):
+        try:
+            expand_response_args([value], EvidenceArgumentParser())
+        except ValueError as error:
+            assert "argument must be a non-empty canonical string" in str(error)
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"malformed argument {value!r} was accepted")
 
 
 def test_recursive_response_file_fails(tmp_path: Path) -> None:
@@ -163,6 +182,33 @@ def test_response_file_stat_failure_is_stable_value_error(
         raise AssertionError("stat failure escaped response-file handling")
 
 
+def test_response_file_stat_failure_sanitizes_malformed_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args_file = tmp_path / "reviewed.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+    original_stat = Path.stat
+    bad_message = "argfile stat denied\nsecret"
+
+    def stat(self: Path, *args, **kwargs):
+        if self == args_file:
+            raise RuntimeError(bad_message)
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+
+    try:
+        expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == (
+            f"failed to stat @ARGFILE `{args_file}`: <non-canonical-error>"
+        )
+        assert bad_message not in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("malformed stat failure escaped response-file handling")
+
+
 def test_response_file_read_failure_is_stable_value_error(
     tmp_path: Path,
     monkeypatch,
@@ -185,6 +231,33 @@ def test_response_file_read_failure_is_stable_value_error(
         assert "argfile read denied" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("read failure escaped response-file handling")
+
+
+def test_response_file_read_failure_sanitizes_malformed_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args_file = tmp_path / "reviewed.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+    bad_message = "argfile read denied\nsecret"
+
+    def read_bytes(self: Path) -> bytes:
+        if self == args_file:
+            raise RuntimeError(bad_message)
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    try:
+        expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == (
+            f"failed to read @ARGFILE `{args_file}`: <non-canonical-error>"
+        )
+        assert bad_message not in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("malformed read failure escaped response-file handling")
 
 
 def test_response_file_non_utf8_bytes_fail_stably(tmp_path: Path) -> None:
@@ -210,6 +283,27 @@ def test_response_file_line_parse_error_identifies_file_and_line(tmp_path: Path)
         assert "No closing quotation" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed response-file line was accepted")
+
+
+def test_response_file_line_parse_error_sanitizes_malformed_error(
+    tmp_path: Path,
+) -> None:
+    class BrokenParser(EvidenceArgumentParser):
+        def convert_arg_line_to_args(self, arg_line: str):
+            raise ValueError("line parse denied\nsecret")
+
+    args_file = tmp_path / "broken.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+
+    try:
+        expand_response_args([f"@{args_file}"], BrokenParser())
+    except ValueError as error:
+        assert str(error) == (
+            f"@ARGFILE `{args_file}` line 1: <non-canonical-error>"
+        )
+        assert "line parse denied" not in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("malformed response-file line error leaked diagnostics")
 
 
 def test_response_file_parser_returning_scalar_line_args_fails_with_line(
@@ -250,6 +344,25 @@ def test_response_file_parser_returning_non_string_line_arg_fails_with_line(
         assert "argument `7` must be a string" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("non-string line argument was accepted")
+
+
+def test_response_file_parser_returning_malformed_line_arg_fails_with_line(
+    tmp_path: Path,
+) -> None:
+    class BrokenParser(EvidenceArgumentParser):
+        def convert_arg_line_to_args(self, arg_line: str):
+            return ["--dry-run", " bad"]
+
+    args_file = tmp_path / "broken-parser.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+
+    try:
+        expand_response_args([f"@{args_file}"], BrokenParser())
+    except ValueError as error:
+        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert "argument must be a non-empty canonical string" in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("malformed line argument was accepted")
 
 
 def test_convert_arg_line_to_args_rejects_non_string_line() -> None:

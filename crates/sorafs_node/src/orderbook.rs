@@ -97,6 +97,16 @@ pub enum OrderbookRuntimeError {
         /// Configured price tick in micro-XOR per GiB.
         tick_micro_xor: u64,
     },
+    /// The provider's current reserve lifecycle state disables new adverts.
+    #[error(
+        "reserve lifecycle stage `{stage}` disables orderbook adverts for provider `{provider_id_hex}`"
+    )]
+    ReserveLifecycleAdvertDisabled {
+        /// Hex-encoded provider identifier derived from the order owner account.
+        provider_id_hex: String,
+        /// Stable reserve lifecycle stage label that triggered advert disablement.
+        stage: String,
+    },
     /// The local orderbook lock was poisoned.
     #[error("orderbook state lock poisoned")]
     StateLockPoisoned,
@@ -141,6 +151,47 @@ pub struct OrderbookReceiptOutcome {
     pub settlement_receipt_count: usize,
     /// Number of settlement channels that remain open after the update.
     pub open_settlement_channel_count: usize,
+}
+
+/// Buyer-side settlement ledger totals derived from accepted orderbook receipts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderbookBuyerSettlementLedgerEntry {
+    /// Canonical buyer account bytes.
+    pub buyer_account: Vec<u8>,
+    /// Total micro-XOR debited from this buyer's local orderbook escrow.
+    pub debited_micro_xor: u128,
+    /// Micro-XOR still locked for this buyer across open or closing channels.
+    pub remaining_locked_micro_xor: u128,
+}
+
+/// Provider-side settlement ledger totals derived from accepted orderbook receipts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderbookProviderSettlementLedgerEntry {
+    /// Governance-controlled provider identifier.
+    pub provider_id: [u8; 32],
+    /// Total micro-XOR credited to this provider.
+    pub credited_micro_xor: u128,
+    /// Total micro-XOR retained as settlement fees for this provider's receipts.
+    pub fee_retained_micro_xor: u128,
+    /// Micro-XOR still locked for this provider across open or closing channels.
+    pub remaining_locked_micro_xor: u128,
+}
+
+/// Deterministic local settlement ledger derived from orderbook channels and receipts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderbookSettlementLedger {
+    /// Total micro-XOR debited from buyers.
+    pub total_buyer_debited_micro_xor: u128,
+    /// Total micro-XOR credited to providers.
+    pub total_provider_credited_micro_xor: u128,
+    /// Total micro-XOR retained as fees.
+    pub total_fee_retained_micro_xor: u128,
+    /// Total micro-XOR still locked across all local settlement channels.
+    pub total_remaining_locked_micro_xor: u128,
+    /// Buyer-side ledger rows sorted by account bytes.
+    pub buyers: Vec<OrderbookBuyerSettlementLedgerEntry>,
+    /// Provider-side ledger rows sorted by provider id.
+    pub providers: Vec<OrderbookProviderSettlementLedgerEntry>,
 }
 
 /// Event kind emitted by the local orderbook mirror.
@@ -196,6 +247,8 @@ pub struct OrderbookSnapshot {
     pub settlement_channels: Vec<SettlementChannelV1>,
     /// Settlement receipts accepted for local settlement channels.
     pub settlement_receipts: Vec<SettlementReceiptV1>,
+    /// Derived local escrow/debit/credit ledger summary.
+    pub settlement_ledger: OrderbookSettlementLedger,
     /// Order ids expired by local matching passes.
     pub expired_order_ids: Vec<[u8; 32]>,
 }
@@ -327,13 +380,25 @@ impl OrderbookRuntime {
                 .cmp(&rhs.sequence)
                 .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
         });
+        let settlement_channels = self
+            .settlement_channels
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let settlement_receipts = self
+            .settlement_receipts
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let settlement_ledger = settlement_ledger_from(&settlement_channels, &settlement_receipts);
         OrderbookSnapshot {
             next_sequence: self.next_sequence,
             generated_at_unix,
             open_orders,
             trades: self.trades.clone(),
-            settlement_channels: self.settlement_channels.values().cloned().collect(),
-            settlement_receipts: self.settlement_receipts.values().cloned().collect(),
+            settlement_channels,
+            settlement_receipts,
+            settlement_ledger,
             expired_order_ids: self.expired_order_ids.clone(),
         }
     }
@@ -480,6 +545,99 @@ fn nonzero_digest(mut digest: [u8; 32]) -> [u8; 32] {
 
 fn byte_ranges_overlap(existing: &SettlementReceiptV1, candidate: &SettlementReceiptV1) -> bool {
     existing.range.start < candidate.range.end && candidate.range.start < existing.range.end
+}
+
+#[derive(Debug, Default)]
+struct BuyerLedgerTotals {
+    debited_micro_xor: u128,
+    remaining_locked_micro_xor: u128,
+}
+
+#[derive(Debug, Default)]
+struct ProviderLedgerTotals {
+    credited_micro_xor: u128,
+    fee_retained_micro_xor: u128,
+    remaining_locked_micro_xor: u128,
+}
+
+fn settlement_ledger_from(
+    settlement_channels: &[SettlementChannelV1],
+    settlement_receipts: &[SettlementReceiptV1],
+) -> OrderbookSettlementLedger {
+    let mut channel_index = BTreeMap::<[u8; 32], (&Vec<u8>, [u8; 32])>::new();
+    let mut buyer_totals = BTreeMap::<Vec<u8>, BuyerLedgerTotals>::new();
+    let mut provider_totals = BTreeMap::<[u8; 32], ProviderLedgerTotals>::new();
+    let mut total_remaining_locked_micro_xor = 0u128;
+
+    for channel in settlement_channels {
+        channel_index.insert(
+            channel.channel_id,
+            (&channel.buyer_account, channel.provider_id),
+        );
+        let locked = channel.xor_locked.as_micro();
+        total_remaining_locked_micro_xor = total_remaining_locked_micro_xor.saturating_add(locked);
+        let buyer_entry = buyer_totals
+            .entry(channel.buyer_account.clone())
+            .or_default();
+        buyer_entry.remaining_locked_micro_xor = buyer_entry
+            .remaining_locked_micro_xor
+            .saturating_add(locked);
+        let provider_entry = provider_totals.entry(channel.provider_id).or_default();
+        provider_entry.remaining_locked_micro_xor = provider_entry
+            .remaining_locked_micro_xor
+            .saturating_add(locked);
+    }
+
+    let mut total_buyer_debited_micro_xor = 0u128;
+    let mut total_provider_credited_micro_xor = 0u128;
+    let mut total_fee_retained_micro_xor = 0u128;
+    for receipt in settlement_receipts {
+        let Some((buyer_account, provider_id)) = channel_index.get(&receipt.channel_id) else {
+            continue;
+        };
+        let debited = receipt.xor_debited.as_micro();
+        let credited = receipt.provider_credit.as_micro();
+        let fee = receipt.fee_amount.as_micro();
+        total_buyer_debited_micro_xor = total_buyer_debited_micro_xor.saturating_add(debited);
+        total_provider_credited_micro_xor =
+            total_provider_credited_micro_xor.saturating_add(credited);
+        total_fee_retained_micro_xor = total_fee_retained_micro_xor.saturating_add(fee);
+        let buyer_entry = buyer_totals.entry((*buyer_account).clone()).or_default();
+        buyer_entry.debited_micro_xor = buyer_entry.debited_micro_xor.saturating_add(debited);
+        let provider_entry = provider_totals.entry(*provider_id).or_default();
+        provider_entry.credited_micro_xor =
+            provider_entry.credited_micro_xor.saturating_add(credited);
+        provider_entry.fee_retained_micro_xor =
+            provider_entry.fee_retained_micro_xor.saturating_add(fee);
+    }
+
+    OrderbookSettlementLedger {
+        total_buyer_debited_micro_xor,
+        total_provider_credited_micro_xor,
+        total_fee_retained_micro_xor,
+        total_remaining_locked_micro_xor,
+        buyers: buyer_totals
+            .into_iter()
+            .map(
+                |(buyer_account, totals)| OrderbookBuyerSettlementLedgerEntry {
+                    buyer_account,
+                    debited_micro_xor: totals.debited_micro_xor,
+                    remaining_locked_micro_xor: totals.remaining_locked_micro_xor,
+                },
+            )
+            .collect(),
+        providers: provider_totals
+            .into_iter()
+            .map(
+                |(provider_id, totals)| OrderbookProviderSettlementLedgerEntry {
+                    provider_id,
+                    credited_micro_xor: totals.credited_micro_xor,
+                    fee_retained_micro_xor: totals.fee_retained_micro_xor,
+                    remaining_locked_micro_xor: totals.remaining_locked_micro_xor,
+                },
+            )
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -716,7 +874,31 @@ mod tests {
             outcome.updated_channel.remaining_bytes,
             channel.remaining_bytes - BYTES_PER_GIB
         );
-        assert_eq!(runtime.snapshot(1_800_000_020).settlement_receipts.len(), 1);
+        let snapshot = runtime.snapshot(1_800_000_020);
+        assert_eq!(snapshot.settlement_receipts.len(), 1);
+        assert_eq!(
+            snapshot.settlement_ledger.total_buyer_debited_micro_xor,
+            100
+        );
+        assert_eq!(
+            snapshot.settlement_ledger.total_provider_credited_micro_xor,
+            90
+        );
+        assert_eq!(snapshot.settlement_ledger.total_fee_retained_micro_xor, 10);
+        assert_eq!(
+            snapshot.settlement_ledger.total_remaining_locked_micro_xor,
+            outcome.updated_channel.xor_locked.as_micro()
+        );
+        assert_eq!(snapshot.settlement_ledger.buyers.len(), 1);
+        assert_eq!(
+            snapshot.settlement_ledger.buyers[0].buyer_account,
+            b"buyer".to_vec()
+        );
+        assert_eq!(snapshot.settlement_ledger.providers.len(), 1);
+        assert_eq!(
+            snapshot.settlement_ledger.providers[0].provider_id,
+            channel.provider_id
+        );
 
         let overlapping = receipt(8, &channel, 512, BYTES_PER_GIB + 512, 1_800_000_011, 100);
         assert!(matches!(

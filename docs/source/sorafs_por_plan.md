@@ -26,7 +26,10 @@ by the operator. `scripts/check_sorafs_por_rollout_evidence.py` now provides
 the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
 randomness, validator, reporting, archive, observability, and governance
 promotion packets, and `scripts/run_sorafs_por_rollout_evidence.py` provides
-the matching reviewed collection planner/runner. The gate now also requires
+the matching reviewed collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
+planner includes the checker-backed `evidence_contract` map in dry-run output
+for the selected required kinds. The gate now also requires
 scheduler runtime, validator replay, reporting/archive, observability, and
 governance approval artifacts to carry a `seed_replay_digest_hex` matching a
 valid randomness artifact in the same evidence bundle. Seed-replay mismatches
@@ -317,7 +320,8 @@ Implemented locally:
 - `generate_por_fixtures` and `sorafs-validate por` reference validation.
 - Fail-closed SF-9 rollout evidence gate, collection planner, operator argfile
   templates, and focused tests, including cross-artifact seed replay digest
-  binding with per-artifact summary invalidation.
+  binding with per-artifact summary invalidation and dry-run export of the
+  checker-backed evidence contract.
 
 Remaining production gates:
 - Archive a live drand/VRF/auditor run showing deterministic challenge

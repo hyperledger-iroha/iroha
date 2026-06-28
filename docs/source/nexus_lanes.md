@@ -110,22 +110,49 @@ LaneConfigEntry {
 
 - Torii REST/gRPC endpoints accept an optional `lane_id`; absence resolves via
   `nexus.routing_policy.default_lane` / `default_dataspace`.
-- Lane relay admission fails closed when the lane id is absent, when the relay
-  dataspace does not match the active lane catalog, or when the dataspace is not
-  present in the active dataspace catalog. Missing dataspaces are reported
-  separately from invalid validator rosters so operators can distinguish catalog
-  drift from quorum shortages.
+- Lane relay admission fails closed when the lane id is absent from the
+  authoritative lane catalog, when the derived runtime geometry is missing or
+  disagrees with the catalog dataspace, when the relay dataspace does not match
+  that active lane binding, or when the dataspace is not present in the active
+  dataspace catalog. `State::record_lane_relay`, verified lane relay
+  registration, and lane-relay emergency override registration all use this
+  catalog + geometry + dataspace agreement before accepting lane-scoped state.
+  Missing dataspaces are reported separately from invalid validator rosters so
+  operators can distinguish catalog drift from quorum shortages.
+- `FindLaneRelayEnvelopeByRef` and runtime relay-cache hydration read verified
+  relay records through the canonical `LaneRelayEnvelopeRef::relay_state_key()`
+  and reject decoded records whose embedded `relay_ref` does not exactly match
+  the requested or scanned key, so malformed contract state cannot spoof a
+  different lane, dataspace, height, or settlement hash under a valid key.
+- Merge-ledger commit validation and Space Directory-derived AXT policy snapshot
+  derivation use the same active-lane agreement. A stale derived geometry entry
+  cannot make a retired or removed lane merge-active, cannot select a target
+  lane for AXT handle policy, and cannot populate cached AXT policy state when
+  the authoritative catalog no longer contains that lane.
+- DA commitment admission, DA pin-intent admission, Torii DA ingest proof-scheme
+  resolution, Torii DA proof-policy endpoints, and block proof-policy hash
+  validation are likewise derived from active catalog-backed Nexus lanes. Stale
+  runtime geometry entries, removed catalog lanes, missing dataspaces, or
+  proof/confidential-policy drift cannot make a retired lane acceptable for DA
+  commitments, pin intents, ingest receipts, or block header proof-policy
+  hashes.
+- Torii DA commitment and pin-intent list/prove endpoints apply the same
+  active-lane filter before exposing query results. List responses omit records
+  whose lane is no longer present in the authoritative lane catalog, and
+  targeted prove requests for stale runtime-only lanes return no proof even if
+  old DA indexes still contain matching rows.
 - Authoritative lane validator resolution also requires the lane to be present
-  in the active derived lane config and its dataspace to exist in the active
-  dataspace catalog. Stale manifest bindings or `Active` public-lane validator
-  records for retired, rebound, unknown, or malformed lanes are ignored by lane
-  relay, block sync, Torii proxy authority checks, and the global NPoS epoch
-  stake snapshot. When Nexus is enabled, live NPoS active-topology and
-  roster-unavailability recovery selection also intersect validator-derived
-  lane scopes with the active lane/dataspace catalogs. State-backed commit
-  stake snapshot construction and roster-validation caches apply the same
-  active-lane filter to stake weights, so a larger stale stake record from a
-  retired or unknown lane cannot override the weight from a valid active lane.
+  in the active lane catalog, to have matching derived runtime geometry, and
+  to bind a dataspace present in the active dataspace catalog. Stale manifest
+  bindings or `Active` public-lane validator records for retired, rebound,
+  unknown, geometry-only, or malformed lanes are ignored by lane relay, block
+  sync, Torii proxy authority checks, and the global NPoS epoch stake snapshot.
+  When Nexus is enabled, live NPoS active-topology and roster-unavailability
+  recovery selection also intersect validator-derived lane scopes with the
+  active lane/dataspace catalogs. State-backed commit stake snapshot
+  construction and roster-validation caches apply the same active-lane filter
+  to stake weights, so a larger stale stake record from a retired, geometry-only,
+  or unknown lane cannot override the weight from a valid active lane.
   State-backed QC and block-sync validation fallback paths use that filtered
   snapshot recomputation too, so a missing cached snapshot cannot revive stale
   unknown-lane stake during quorum checks. Live NPoS commit quorum status,
@@ -159,26 +186,37 @@ LaneConfigEntry {
   `StateBlock` and published to committed Nexus state and lane storage geometry
   only during `StateBlock::commit()` after transaction-height validation, so a
   transaction-height validation failure cannot publish a lane addition,
-  retirement, runtime reset, or cooldown marker. DA commitment, shard/receipt
-  cursor, confidential-compute receipt, and pin-intent indexes prepared while
-  applying a block are staged on the same side of commit validation, so those
-  runtime and world indexes cannot leak from a block whose height later fails
-  commit validation. Commit also applies the fallible autoscale lifecycle
-  preparation before publishing those staged DA indexes, so a storage failure
-  while reconciling elastic-lane geometry cannot partially publish DA runtime,
-  query state, or block-local WSV cleanup for an uncommitted block. Lane
-  lifecycle and config-swap retirements use the same storage preflight barrier:
-  a failed Kura or tiered retire preflight preserves the committed WSV rows that
-  would otherwise be reset for the retiring lane. Lane-geometry reconciliation
-  dry-runs both Kura block/merge storage and tiered-state snapshot geometry
-  before either backend is mutated, and then prepares tiered-state storage
-  before Kura block/merge storage is provisioned, so a Kura path conflict,
-  tiered path conflict, occupied relabel target, retired archive-root conflict,
-  or invalid tiered cold root aborts lane creation/relabel/retirement before
-  the other storage backend creates new lane artifacts. The same commit boundary
-  applies to deterministic autoscale scale-out and scale-in, including staged DA
-  indexes in the block: a Kura or tiered conflict for a new or retiring elastic
-  lane aborts before tiered artifacts or DA runtime/query indexes are published.
+  retirement, runtime reset, or cooldown marker. Autoscale commit is serialized
+  across transaction-height validation, lane storage reconciliation, and final
+  publication: it first performs side-effect-free validation, then reconciles
+  lane storage geometry outside the state writer lock, and only then publishes
+  the committed Nexus catalog/runtime state under the writer lock. Manual lane
+  lifecycle uses the same lock order: fallible Kura/tiered geometry
+  reconciliation runs before writer-locked catalog publication, and world-backed
+  cleanup for reset lanes runs after both the lifecycle storage lock and writer
+  lock are released, so concurrent commits cannot deadlock by holding world
+  storage while waiting on lifecycle storage. DA commitment, shard/receipt
+  cursor, confidential-compute
+  receipt, and pin-intent indexes prepared while applying a block are staged on
+  the same side of commit validation, so those runtime and world indexes cannot
+  leak from a block whose height later fails commit validation. Commit also
+  applies the fallible autoscale lifecycle preparation before publishing those
+  staged DA indexes, so a storage failure while reconciling elastic-lane
+  geometry cannot partially publish DA runtime, query state, or block-local WSV
+  cleanup for an uncommitted block. Lane lifecycle and config-swap retirements
+  use the same storage preflight barrier: a failed Kura or tiered retire
+  preflight preserves the committed WSV rows that would otherwise be reset for
+  the retiring lane.
+  Lane-geometry reconciliation dry-runs both Kura block/merge storage and
+  tiered-state snapshot geometry before either backend is mutated, and then
+  prepares tiered-state storage before Kura block/merge storage is provisioned,
+  so a Kura path conflict, tiered path conflict, occupied relabel target,
+  retired archive-root conflict, or invalid tiered cold root aborts lane
+  creation/relabel/retirement before the other storage backend creates new lane
+  artifacts. The same commit boundary applies to deterministic autoscale
+  scale-out and scale-in, including staged DA indexes in the block: a Kura or
+  tiered conflict for a new or retiring elastic lane aborts before tiered
+  artifacts or DA runtime/query indexes are published.
   Catalog-only routing without a live Nexus state view does not shard over
   elastic lanes; it keeps ordinary no-target traffic on the configured base
   default lane until live autoscale enablement and bounds are available.

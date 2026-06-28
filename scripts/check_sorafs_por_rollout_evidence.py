@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -173,6 +174,103 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "randomness": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "drand_round_verified",
+        "drand_signature_verified",
+        "drand_round_fresh",
+        "vrf_proofs_verified",
+        "provider_manifest_binding_verified",
+        "deterministic_seed_replay_verified",
+        "forced_challenge_policy_verified",
+        "provider_count",
+        "challenge_count",
+        "seed_replay_digest_hex",
+        "raw_randomness_included",
+        "raw_vrf_included",
+    ),
+    "scheduler_runtime": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "scheduler_runtime_enabled",
+        "norito_snapshot_persisted",
+        "governance_dag_challenge_published",
+        "repair_handoff_verified",
+        "ingestion_backlog_bounded",
+        "duplicate_samples_within_budget",
+        "seed_replay_digest_hex",
+        "max_scheduler_lag_seconds",
+        "response_bodies_included",
+    ),
+    "validator_replay": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "sorafs_validate_por_passed",
+        "challenge_proof_binding_verified",
+        "sample_coverage_verified",
+        "deadline_policy_verified",
+        "merkle_replay_verified",
+        "validation_outcome_schema_verified",
+        "pairs_replayed",
+        "seed_replay_digest_hex",
+        "validation_bundle_digest_hex",
+        "raw_challenge_bytes_included",
+        "raw_proof_bytes_included",
+    ),
+    "reporting_archive": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "weekly_report_generated",
+        "status_export_verified",
+        "governance_archive_handoff_verified",
+        "archive_retention_bound",
+        "operator_archive_decision_recorded",
+        "manual_trigger_route_decided",
+        "manual_trigger_route_state",
+        "report_latency_ms",
+        "seed_replay_digest_hex",
+        "report_digest_hex",
+        "raw_report_included",
+        "raw_export_included",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "forced_challenge_alert_tested",
+        "ingest_backlog_alert_tested",
+        "critical_alerts_firing",
+        "metrics",
+        "seed_replay_digest_hex",
+        "response_bodies_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "por_policy_bound",
+        "auditor_roster_bound",
+        "archive_policy_bound",
+        "governance_dag_bound",
+        "seed_replay_digest_hex",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -539,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -553,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

@@ -929,6 +929,39 @@ fn sorafs_reserve_lifecycle_projects_credit_draw() {
 }
 
 #[test]
+fn sorafs_reserve_help_lists_movement_commands() {
+    let output = command()
+        .args(["app", "sorafs", "reserve", "--help"])
+        .output()
+        .expect("execute sorafs reserve help");
+    assert!(
+        output.status.success(),
+        "reserve help failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "top-up",
+        "withdraw",
+        "movements",
+        "status",
+        "custody",
+        "credit-lines",
+        "credit-status",
+        "appeal-submit",
+        "appeals",
+        "appeal-decide",
+        "policy-update",
+        "policy",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "reserve help did not include `{expected}`:\n{stdout}"
+        );
+    }
+}
+
+#[test]
 fn da_get_help_is_accessible() {
     expect_subcommand_help(
         &["app", "da", "get", "--help"],

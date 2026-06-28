@@ -14,16 +14,23 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from check_sorafs_reputation_rollout_evidence import SUMMARY_SCHEMA  # noqa: E402
+from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
+    DEFAULT_REQUIRED_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
+    KIND_BY_NAME,
+    SUMMARY_SCHEMA,
+)
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
+    emit_runner_exception,
     run_command_plan,
     require_existing_files,
     require_runner_non_negative_int,
@@ -72,7 +79,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         try:
             provider_id, path = split_provider_proof_spec(spec)
         except ValueError as error:
-            errors.append(str(error))
+            errors.append(error_diagnostic_label(error))
             continue
         if provider_id in proof_specs:
             errors.append(f"duplicate --provider-proof for `{provider_id}`")
@@ -87,7 +94,13 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors.append(f"--provider-proof supplied for unrequested provider `{provider_id}`")
 
     errors.extend(require_existing_files([args.snapshot], "--snapshot", seen=seen_input_files))
-    errors.extend(require_existing_files(proof_specs.values(), "--provider-proof", seen=seen_input_files))
+    errors.extend(
+        require_existing_files(
+            list(proof_specs.values()),
+            "--provider-proof",
+            seen=seen_input_files,
+        )
+    )
     errors.extend(require_existing_files([args.metrics_evidence], "--metrics-evidence", seen=seen_input_files))
     errors.extend(require_existing_files([args.transport_evidence], "--transport-evidence", seen=seen_input_files))
     errors.extend(require_existing_files([args.consumption_evidence], "--consumption-evidence", seen=seen_input_files))
@@ -215,6 +228,13 @@ def plan_json(plan: Sequence[CommandPlan]) -> dict[str, object]:
     return {
         "schema": "sorafs.reputation.rollout_evidence_collection_plan.v1",
         "verifier_summary_schema": SUMMARY_SCHEMA,
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in DEFAULT_REQUIRED_KINDS
+        },
         "steps": [
             {
                 "label": step.label,
@@ -308,7 +328,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         raise SystemExit(2) from error
     return parser.parse_args(expanded_args)
 

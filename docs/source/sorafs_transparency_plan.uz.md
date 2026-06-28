@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7180a3e8fda0ce3cbf42bca6393fcd52dbe7ef100a6e6fe23b520010fdb5776a
+source_hash: 1b3a52b360818291e0a6e4876a6a9372cbe80ec8856504fc4bb7c5823943a1de
 source_last_modified: "2026-06-25T17:05:30+00:00"
 translation_last_reviewed: 2026-06-25
 title: Transparency Dashboards & Enforcement Receipts

@@ -299,8 +299,10 @@ moderation ledger publication service described by the original plan.
   privacy aggregate, proof-token issuance, and explorer evidence must match a
   source-bound publication `cycle_digest_hex`; publication cycles that fail
   source-entry binding do not anchor downstream rollout evidence. The checker
-  supports shell-style `@ARGFILE` inputs for direct replay of reviewed artifact
-  directories.
+  exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`,
+  so dry-run collection plans and downstream automation can inspect the exact
+  evidence contract before live collection. It supports shell-style `@ARGFILE`
+  inputs for direct replay of reviewed artifact directories.
 - `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL
   --out-dir DIR ...` is the operator harness for collecting the required
   source-entry, privacy aggregate, proof-token issuance, publication, and
@@ -312,7 +314,8 @@ moderation ledger publication service described by the original plan.
   before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
   operator inputs, requires a reviewed `--deployment-id` plus `--environment`,
   stamps that context onto generated canary artifacts before verification, and
-  `--dry-run` emits the command plan without contacting live services.
+  `--dry-run` emits the command plan plus the checker-backed
+  `evidence_contract` field map without contacting live services.
   `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
   documents the required source-entry kinds, aggregate probes, proof-token
   issuance probe, cycle id, Torii URL, and runtime-only client-config path

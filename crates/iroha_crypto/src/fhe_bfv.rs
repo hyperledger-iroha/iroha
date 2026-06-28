@@ -15226,6 +15226,7 @@ fn validate_bfv_full_bootstrap_release_audit_report_contains_hash_v1(
     )))
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_release_audit_body_binds_proof_profile_obligations_v1(
     body: &[u8],
     artifact_label: &str,
@@ -17543,6 +17544,7 @@ fn validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -27776,10 +27778,6 @@ fn validate_bfv_full_bootstrap_proof_key_commitment_profile_digests_v1(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "proof-key layout validation intentionally checks every public-input field explicitly"
-)]
 fn validate_bfv_full_bootstrap_proof_key_public_input_layout_v1(
     key: &BfvFullBootstrapProofKeyV1,
 ) -> Result<(), BfvError> {
@@ -28132,14 +28130,14 @@ fn validate_bfv_full_bootstrap_canonical_bytes_label(
         )));
     }
     validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, value)?;
-    if value.first().is_some_and(|byte| byte.is_ascii_whitespace())
-        || value.last().is_some_and(|byte| byte.is_ascii_whitespace())
+    if value.first().is_some_and(u8::is_ascii_whitespace)
+        || value.last().is_some_and(u8::is_ascii_whitespace)
     {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must be canonical without surrounding whitespace"
         )));
     }
-    if !value.iter().all(|byte| byte.is_ascii_graphic()) {
+    if !value.iter().all(u8::is_ascii_graphic) {
         return Err(BfvError::InvalidParameters(format!(
             "{label} must contain only printable ASCII bytes without whitespace"
         )));

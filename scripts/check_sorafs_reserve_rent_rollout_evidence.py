@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -115,10 +116,16 @@ REQUIRED_METRICS = (
     "sorafs_reserve_ledger_meets_underwriting",
     "sorafs_reserve_ledger_instruction_total",
     "sorafs_reserve_ledger_transfer_xor",
-    "sorafs_reserve_provider_balance_xor",
-    "sorafs_reserve_lifecycle_stage",
-    "sorafs_reserve_credit_line_draw_xor",
-    "sorafs_reserve_appeal_backlog_total",
+    "torii_sorafs_reserve_lifecycle_stage_providers",
+    "torii_sorafs_reserve_credit_draw_micro_xor",
+    "torii_sorafs_reserve_credit_shortfall_micro_xor",
+    "torii_sorafs_reserve_accrued_interest_micro_xor",
+    "torii_sorafs_reserve_defaulted_providers",
+    "torii_sorafs_reserve_appeal_backlog",
+    "torii_sorafs_reserve_custody_movements",
+    "torii_sorafs_reserve_chain_reconciled_movements",
+    "torii_sorafs_reserve_service_requests_total",
+    "torii_sorafs_reserve_service_rate_limit_total",
 )
 
 SENSITIVE_KEYS = {
@@ -179,6 +186,209 @@ LEDGER_BOUND_KINDS = (
     "provider_bake",
     "governance_approval",
 )
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "policy_config": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "policy_version",
+        "config_source",
+        "governance_approved",
+        "tier_count",
+        "storage_class_count",
+        "duration_count",
+        "credit_line_caps_present",
+        "apr_policy_present",
+        "policy_payload_included",
+    ),
+    "quote_matrix": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "matrix_digest_hex",
+        "policy_digest_hex",
+        "scenario_count",
+        "passed_scenario_count",
+        "storage_classes",
+        "tiers",
+        "durations",
+        "quote_payloads_included",
+    ),
+    "ledger_digest": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "generated_at_unix",
+        "ledger_count",
+        "instruction_count",
+        "rent_transfer_present",
+        "reserve_top_up_transfer_present",
+        "instruction_hashes_verified",
+        "ledger_projection_verified",
+        "raw_ledger_included",
+        "raw_transfer_instructions_included",
+    ),
+    "lifecycle_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "max_lifecycle_lag_seconds",
+        "persisted_stage_count",
+        "stage_transition_replay_passed",
+        "governance_event_emitted",
+        "manual_override_audited",
+        "response_bodies_included",
+    ),
+    "signed_routes": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "max_route_latency_ms",
+        "replay_attack_rejected",
+        "unsigned_request_rejected",
+        "wrong_account_rejected",
+        "response_bodies_included",
+    ),
+    "reserve_movement": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "movement_count",
+        "accepted_movement_count",
+        "failed_movement_count",
+        "unexpected_failure_count",
+        "rent_settlement_present",
+        "reserve_top_up_present",
+        "withdrawal_limits_enforced",
+        "treasury_reconciliation_passed",
+        "double_spend_rejected",
+        "chain_submission_count",
+        "finality_poll_attempt_count",
+        "live_chain_submission_verified",
+        "submitted_transaction_hash_readback_verified",
+        "automatic_finality_polling_verified",
+        "finality_poll_confirmed_status_verified",
+        "finality_poll_timeout_rejected",
+        "custody_status_route_present",
+        "submitted_custody_evidence_present",
+        "confirmed_custody_evidence_present",
+        "rejected_custody_reconciliation_passed",
+        "confirmed_balance_projection_verified",
+        "confirmed_withdrawal_underflow_rejected",
+        "chain_reconciled_readback_verified",
+        "raw_transfer_included",
+        "raw_instruction_included",
+    ),
+    "credit_line": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "credit_line_mutation_count",
+        "accrual_cycle_count",
+        "credit_draw_cap_enforced",
+        "apr_accrual_verified",
+        "manual_approval_tier_blocked",
+        "credit_shortfall_reported",
+        "live_account_mutation_verified",
+        "credit_line_account_state_readback_verified",
+        "credit_accrual_posted_to_account_state",
+        "manual_approval_tier_did_not_mutate_account",
+        "account_state_reconciliation_verified",
+        "no_negative_balance",
+        "unexpected_failure_count",
+        "raw_ledger_included",
+    ),
+    "appeal_policy": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "appeal_probe_count",
+        "approved_appeal_count",
+        "rejected_appeal_count",
+        "appeal_route_present",
+        "policy_update_route_present",
+        "governance_recorded",
+        "operator_role_enforced",
+        "unauthorized_appeal_rejected",
+        "policy_digest_bound",
+        "appeal_payloads_included",
+    ),
+    "metrics_alerts": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "provider_bake": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "bake_id",
+        "started_at_unix",
+        "completed_at_unix",
+        "provider_count",
+        "completed_provider_count",
+        "failure_count",
+        "rent_cycle_count",
+        "top_up_cycle_count",
+        "appeal_cycle_count",
+        "scheduler_config_bound",
+        "scheduled_lifecycle_canary_passed",
+        "scheduled_lifecycle_canary_last_tick_unix",
+        "scheduled_lifecycle_canary_tick_count",
+        "scheduled_lifecycle_canary_defaulted_provider_count",
+        "scheduled_lifecycle_canary_gateway_sync_verified",
+        "scheduled_lifecycle_canary_orderbook_rejection_verified",
+        "governance_packet_attached",
+        "ledger_digest_attached",
+        "dashboard_snapshot_attached",
+        "payloads_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "policy_digest_hex",
+        "matrix_digest_hex",
+        "ledger_digest_hex",
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "reserve_movement_policy_present",
+        "credit_line_policy_present",
+        "appeal_policy_present",
+        "manual_override_policy_present",
+        "provider_bake_accepted",
+        "governance_source_entries_published",
+        "downstream_compliance_policy_applied",
+        "downstream_compliance_consumer_count",
+        "non_reserve_compliance_entries_preserved",
+        "governance_source_entry_handoff_verified",
+        "denylist_and_policy_consumers_consistent",
+        "config_source",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -363,7 +573,9 @@ def validate_signed_routes(
 
 def validate_reserve_movement(payload: dict[str, Any], errors: list[str]) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
-    require_count_equal(payload, "movement_count", "accepted_movement_count", errors)
+    accepted_movement_count = require_count_equal(
+        payload, "movement_count", "accepted_movement_count", errors
+    )
     require_zero_count(payload, "failed_movement_count", errors)
     require_zero_count(payload, "unexpected_failure_count", errors)
     require_bool_true(payload, "rent_settlement_present", errors)
@@ -371,6 +583,41 @@ def validate_reserve_movement(payload: dict[str, Any], errors: list[str]) -> Non
     require_bool_true(payload, "withdrawal_limits_enforced", errors)
     require_bool_true(payload, "treasury_reconciliation_passed", errors)
     require_bool_true(payload, "double_spend_rejected", errors)
+    chain_submission_count = require_positive_int(
+        payload, "chain_submission_count", errors
+    )
+    finality_poll_attempt_count = require_positive_int(
+        payload, "finality_poll_attempt_count", errors
+    )
+    require_minimum_value(
+        chain_submission_count,
+        "chain_submission_count",
+        accepted_movement_count,
+        errors,
+        message="chain_submission_count must cover every accepted_movement_count",
+    )
+    require_minimum_value(
+        finality_poll_attempt_count,
+        "finality_poll_attempt_count",
+        accepted_movement_count,
+        errors,
+        message=(
+            "finality_poll_attempt_count must cover every "
+            "accepted_movement_count"
+        ),
+    )
+    require_bool_true(payload, "live_chain_submission_verified", errors)
+    require_bool_true(payload, "submitted_transaction_hash_readback_verified", errors)
+    require_bool_true(payload, "automatic_finality_polling_verified", errors)
+    require_bool_true(payload, "finality_poll_confirmed_status_verified", errors)
+    require_bool_true(payload, "finality_poll_timeout_rejected", errors)
+    require_bool_true(payload, "custody_status_route_present", errors)
+    require_bool_true(payload, "submitted_custody_evidence_present", errors)
+    require_bool_true(payload, "confirmed_custody_evidence_present", errors)
+    require_bool_true(payload, "rejected_custody_reconciliation_passed", errors)
+    require_bool_true(payload, "confirmed_balance_projection_verified", errors)
+    require_bool_true(payload, "confirmed_withdrawal_underflow_rejected", errors)
+    require_bool_true(payload, "chain_reconciled_readback_verified", errors)
     require_false(payload, "raw_transfer_included", errors)
     require_false(payload, "raw_instruction_included", errors)
 
@@ -383,6 +630,11 @@ def validate_credit_line(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "apr_accrual_verified", errors)
     require_bool_true(payload, "manual_approval_tier_blocked", errors)
     require_bool_true(payload, "credit_shortfall_reported", errors)
+    require_bool_true(payload, "live_account_mutation_verified", errors)
+    require_bool_true(payload, "credit_line_account_state_readback_verified", errors)
+    require_bool_true(payload, "credit_accrual_posted_to_account_state", errors)
+    require_bool_true(payload, "manual_approval_tier_did_not_mutate_account", errors)
+    require_bool_true(payload, "account_state_reconciliation_verified", errors)
     require_bool_true(payload, "no_negative_balance", errors)
     require_zero_count(payload, "unexpected_failure_count", errors)
     require_false(payload, "raw_ledger_included", errors)
@@ -450,11 +702,41 @@ def validate_provider_bake(
             errors,
             message="completed_at_unix must be >= started_at_unix",
         )
+    scheduled_tick_at = require_recent_timestamp(
+        payload,
+        "scheduled_lifecycle_canary_last_tick_unix",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=options.max_bake_age_secs,
+    )
+    if completed_at and scheduled_tick_at:
+        require_minimum_value(
+            completed_at,
+            "completed_at_unix",
+            scheduled_tick_at,
+            errors,
+            message=(
+                "completed_at_unix must be >= "
+                "scheduled_lifecycle_canary_last_tick_unix"
+            ),
+        )
+        scheduler_lag_secs = completed_at - scheduled_tick_at
+        if scheduler_lag_secs > options.max_lifecycle_lag_secs:
+            errors.append(
+                "scheduled_lifecycle_canary_last_tick_unix must be within "
+                f"{options.max_lifecycle_lag_secs} seconds of completed_at_unix"
+            )
     require_count_equal(payload, "provider_count", "completed_provider_count", errors)
     require_zero_count(payload, "failure_count", errors)
     require_positive_int(payload, "rent_cycle_count", errors)
     require_positive_int(payload, "top_up_cycle_count", errors)
     require_positive_int(payload, "appeal_cycle_count", errors)
+    require_bool_true(payload, "scheduler_config_bound", errors)
+    require_bool_true(payload, "scheduled_lifecycle_canary_passed", errors)
+    require_positive_int(payload, "scheduled_lifecycle_canary_tick_count", errors)
+    require_positive_int(payload, "scheduled_lifecycle_canary_defaulted_provider_count", errors)
+    require_bool_true(payload, "scheduled_lifecycle_canary_gateway_sync_verified", errors)
+    require_bool_true(payload, "scheduled_lifecycle_canary_orderbook_rejection_verified", errors)
     require_bool_true(payload, "governance_packet_attached", errors)
     require_bool_true(payload, "ledger_digest_attached", errors)
     require_bool_true(payload, "dashboard_snapshot_attached", errors)
@@ -469,6 +751,12 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_bool_true(payload, "appeal_policy_present", errors)
     require_bool_true(payload, "manual_override_policy_present", errors)
     require_bool_true(payload, "provider_bake_accepted", errors)
+    require_bool_true(payload, "governance_source_entries_published", errors)
+    require_bool_true(payload, "downstream_compliance_policy_applied", errors)
+    require_positive_int(payload, "downstream_compliance_consumer_count", errors)
+    require_bool_true(payload, "non_reserve_compliance_entries_preserved", errors)
+    require_bool_true(payload, "governance_source_entry_handoff_verified", errors)
+    require_bool_true(payload, "denylist_and_policy_consumers_consistent", errors)
     require_policy_digest(payload, errors)
 
 
@@ -822,7 +1110,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -836,7 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

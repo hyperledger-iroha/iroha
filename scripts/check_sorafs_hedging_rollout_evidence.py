@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -171,6 +172,115 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "feed_collector": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "feed_count",
+        "accepted_feed_count",
+        "primary_feed_present",
+        "secondary_feed_present",
+        "rejected_feed_count",
+        "stale_feed_count",
+        "feed_lag_seconds",
+        "payload_bytes_included",
+        "response_bodies_included",
+    ),
+    "reference_price": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "decision_id_hex",
+        "feed_quorum_met",
+        "signed_payload_verified",
+        "reference_price_micro_usd",
+        "feed_count",
+        "accepted_feed_count",
+        "rejected_feed_count",
+        "stale_feed_count",
+        "divergence_bps",
+        "decision_lag_seconds",
+        "payload_bytes_included",
+    ),
+    "billing_cycle": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "cycle_id",
+        "cycle_index",
+        "staged_cycle",
+        "generated_at_unix",
+        "statement_count",
+        "signed_statement_count",
+        "line_item_count",
+        "total_micro_xor",
+        "total_usd_micro",
+        "reference_price_bound",
+        "reference_decision_id_hex",
+        "line_item_root_hex",
+        "statement_bundle_digest_hex",
+        "reconciliation_digest_hex",
+        "acknowledgement_required",
+        "statement_bodies_included",
+        "raw_financial_records_included",
+        "statement_digests_hex",
+    ),
+    "statement_publication": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "statement_bundle_digest_hex",
+        "reconciliation_digest_hex",
+        "route_count",
+        "passed_route_count",
+        "acknowledgement_probe_count",
+        "routes",
+        "response_bodies_included",
+    ),
+    "reconciliation": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "statement_bundle_digest_hex",
+        "reconciliation_digest_hex",
+        "source_count",
+        "sources",
+        "line_item_count",
+        "reconciled_line_item_count",
+        "mismatch_count",
+        "unmatched_event_count",
+        "raw_financial_records_included",
+    ),
+    "metrics_alerts": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "statement_bundle_digest_hex",
+        "reconciliation_digest_hex",
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "native_bridge_release": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "bridge_abi_version",
+        "artifact_count",
+        "artifact_hashes_verified",
+        "sdk_wrappers_verified",
+        "artifacts",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "statement_bundle_digest_hex",
+        "reconciliation_digest_hex",
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "manual_override_policy_present",
+        "treasury_limits_present",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -635,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded = expand_response_args(sys.argv[1:] if argv is None else argv, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded)
@@ -649,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

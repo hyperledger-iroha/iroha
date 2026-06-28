@@ -149,8 +149,13 @@ def test_malformed_sensitive_key_configuration_fails_closed() -> None:
     cases = (
         "payload",
         b"payload",
+        bytearray(b"payload"),
+        {"payload": True},
         ("payload", 7),
         ("payload", ""),
+        ("payload", " private_key"),
+        ("payload", "private_key "),
+        ("payload", "private\nkey"),
     )
 
     for sensitive_keys in cases:
@@ -163,8 +168,74 @@ def test_malformed_sensitive_key_configuration_fails_closed() -> None:
         )
         assert errors in (
             ["sensitive keys must be a sequence of strings"],
-            ["sensitive keys must be non-empty strings"],
+            ["sensitive keys must be non-empty canonical strings"],
         )
+
+
+def test_sensitive_scan_rejects_malformed_error_container() -> None:
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            visit_sensitive_fields(
+                {"privateKey": "runtime-only-private-key"},
+                "",
+                errors,
+                sensitive_keys={"private_key"},
+            )
+        except ValueError as error:
+            assert "sensitive field errors must be a list of strings" in str(error)
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_sensitive_scan_rejects_malformed_existing_error_text() -> None:
+    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+        try:
+            visit_sensitive_fields(
+                {"privateKey": "runtime-only-private-key"},
+                "",
+                errors,
+                sensitive_keys={"private_key"},
+            )
+        except ValueError as error:
+            assert (
+                "sensitive field errors must contain non-empty canonical strings"
+                in str(error)
+            )
+        else:
+            raise AssertionError(f"accepted malformed error text {errors!r}")
+
+
+def test_sensitive_scan_rejects_malformed_path_before_payload_scan() -> None:
+    for path in (" root", "root ", "root\nchild", 7):
+        errors: list[str] = []
+
+        visit_sensitive_fields(
+            {"privateKey": "runtime-only-private-key"},
+            path,
+            errors,
+            sensitive_keys={"private_key"},
+        )
+
+        assert errors == [
+            "sensitive field path must be a non-empty canonical string"
+        ]
+
+
+def test_sensitive_scan_rejects_malformed_evidence_label_before_payload_scan() -> None:
+    for evidence_label in ("", " rollout", "rollout ", "rollout\nevidence", 7):
+        errors: list[str] = []
+
+        visit_sensitive_fields(
+            {"privateKey": "runtime-only-private-key"},
+            "",
+            errors,
+            sensitive_keys={"private_key"},
+            evidence_label=evidence_label,
+        )
+
+        assert errors == [
+            "sensitive field evidence label must be a non-empty canonical string"
+        ]
 
 
 def test_overly_deep_sensitive_scan_fails_closed_without_recursion_error() -> None:

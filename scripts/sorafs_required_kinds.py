@@ -6,13 +6,26 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+def _is_canonical_kind_name(value: str) -> bool:
+    return (
+        bool(value)
+        and value == value.strip()
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+
+
 def _validate_allowed_kinds(allowed_kinds: Any) -> Mapping[str, object]:
     """Return allowed kind mapping or reject malformed registries."""
 
     if not isinstance(allowed_kinds, Mapping):
         raise ValueError("allowed required evidence kinds must be a mapping")
-    if not all(isinstance(kind, str) and kind for kind in allowed_kinds):
-        raise ValueError("allowed required evidence kind names must be non-empty strings")
+    if not all(
+        isinstance(kind, str) and _is_canonical_kind_name(kind)
+        for kind in allowed_kinds
+    ):
+        raise ValueError(
+            "allowed required evidence kind names must be non-empty canonical strings"
+        )
     return allowed_kinds
 
 
@@ -30,9 +43,9 @@ def _validate_default_required(
         raise ValueError("default required evidence kinds must be a sequence")
     defaults: list[str] = []
     for candidate in default_required:
-        if not isinstance(candidate, str) or not candidate:
+        if not isinstance(candidate, str) or not _is_canonical_kind_name(candidate):
             raise ValueError(
-                "default required evidence kind names must be non-empty strings"
+                "default required evidence kind names must be non-empty canonical strings"
             )
         if candidate not in allowed_kinds:
             raise ValueError(f"unknown default required evidence kind `{candidate}`")
@@ -66,9 +79,11 @@ def parse_required_kinds(
             raise ValueError("--require-kind values must be strings")
         names = raw.split(",")
         for name in names:
-            candidate = name.strip()
-            if not candidate:
-                raise ValueError("--require-kind entries must be non-empty")
+            candidate = name
+            if not _is_canonical_kind_name(candidate):
+                raise ValueError(
+                    "--require-kind entries must be non-empty canonical strings"
+                )
             if candidate not in allowed:
                 raise ValueError(f"unknown required evidence kind `{candidate}`")
             if candidate in required:

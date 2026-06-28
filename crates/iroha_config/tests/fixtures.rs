@@ -894,6 +894,11 @@ fn minimal_config_snapshot() {
                         cycle_seconds: 604800,
                         publish_delay_seconds: 3600,
                     },
+                    reserve_lifecycle: SorafsReserveLifecycleSchedule {
+                        enabled: false,
+                        interval_seconds: 3600,
+                        initial_delay_seconds: 0,
+                    },
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signing_key_path: None,

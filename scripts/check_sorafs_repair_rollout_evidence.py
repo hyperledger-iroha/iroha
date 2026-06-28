@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -181,6 +182,116 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "auditor_roster": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "roster_published",
+        "roster_signature_verified",
+        "sf9_coordinator_bound",
+        "runbook_published",
+        "auditor_notifications_configured",
+        "auditor_count",
+        "roster_digest_hex",
+        "raw_roster_included",
+    ),
+    "failure_capture": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "failure_sources",
+        "por_history_replayed",
+        "potr_receipt_replayed",
+        "coordinator_event_verified",
+        "merkle_or_receipt_inclusion_verified",
+        "object_storage_retention_bound",
+        "failure_event_count",
+        "evidence_bundle_digest_hex",
+        "raw_evidence_included",
+    ),
+    "auditor_api": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "roster_digest_hex",
+        "routes",
+        "signed_auditor_envelope_required",
+        "nonce_replay_rejected",
+        "legacy_raw_payload_rejected",
+        "per_auditor_rate_limit_enforced",
+        "response_bodies_included",
+    ),
+    "worker_lifecycle": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "roster_digest_hex",
+        "evidence_bundle_digest_hex",
+        "routes",
+        "statuses_observed",
+        "worker_permission_enforced",
+        "lease_heartbeat_enforced",
+        "idempotency_enforced",
+        "norito_snapshot_persisted",
+        "gc_protection_verified",
+        "repair_latency_seconds",
+        "raw_repair_payloads_included",
+    ),
+    "event_streams": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "roster_digest_hex",
+        "evidence_bundle_digest_hex",
+        "routes",
+        "backlog_replay_verified",
+        "sse_delivery_verified",
+        "websocket_delivery_verified",
+        "event_lag_seconds",
+        "response_bodies_included",
+    ),
+    "governance_handoff": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "roster_digest_hex",
+        "evidence_bundle_digest_hex",
+        "slash_proposal_generated",
+        "governance_dag_published",
+        "escalation_policy_enforced",
+        "appeal_window_enforced",
+        "reserve_rent_handoff_verified",
+        "transparency_publication_verified",
+        "reputation_handoff_verified",
+        "handoff_targets",
+        "handoff_digest_hex",
+        "raw_ledger_included",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "repair_policy_bound",
+        "auditor_roster_bound",
+        "roster_digest_hex",
+        "slash_policy_bound",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -577,7 +688,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -591,7 +702,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

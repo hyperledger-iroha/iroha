@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -178,6 +179,115 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "ingest_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "daemonized",
+        "payload_validation_enabled",
+        "publisher_signature_verified",
+        "dedupe_by_digest_enabled",
+        "quarantine_invalid_blocks",
+        "source_count",
+        "payload_kinds",
+        "payload_bytes_included",
+    ),
+    "publisher_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "dag_builder_daemonized",
+        "ipfs_cluster_pinning_enabled",
+        "ipns_head_publication_enabled",
+        "signed_head_verified",
+        "parent_chain_verified",
+        "car_segments_pinned",
+        "public_head_cid_hex",
+        "pin_lag_seconds",
+        "head_age_seconds",
+        "block_count",
+        "payload_kind_count",
+        "raw_head_included",
+        "raw_car_included",
+    ),
+    "mirror_datastore": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "public_head_cid_hex",
+        "rocksdb_ipld_enabled",
+        "query_service_enabled",
+        "mirror_index_verified",
+        "head_lookup_verified",
+        "block_lookup_verified",
+        "node_lookup_verified",
+        "digest_lookup_verified",
+        "mirror_drift_detected",
+        "missing_block_count",
+        "raw_blocks_included",
+    ),
+    "operator_recovery": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "public_head_cid_hex",
+        "live_head_fetch_verified",
+        "public_checkpoint_published",
+        "checkpoint_recovery_verified",
+        "public_recovery_cli_verified",
+        "recovered_head_matches_public_head",
+        "checkpoint_digest_hex",
+        "raw_checkpoint_included",
+    ),
+    "dashboard_api": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "public_head_cid_hex",
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "runtime_ipfs_backed",
+        "response_bodies_included",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "public_head_cid_hex",
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "ipfs_ipns_metrics_present",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "ipfs_ipns_e2e": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "public_head_cid_hex",
+        "local_ipfs_backed_tests_passed",
+        "public_head_resolved",
+        "block_replay_verified",
+        "duplicate_payload_rejected",
+        "invalid_parent_quarantined",
+        "pinning_outage_tested",
+        "publisher_key_failure_tested",
+        "block_count",
+        "payload_kind_count",
+        "raw_blocks_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "public_head_cid_hex",
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "publisher_keys_governed",
+        "ipns_name_governed",
+        "mirror_retention_policy_bound",
+        "emergency_pause_tested",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -552,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -566,7 +676,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

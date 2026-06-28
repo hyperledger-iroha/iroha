@@ -5551,7 +5551,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
+            nexus.enabled = false;
             nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
@@ -5561,14 +5561,19 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             nexus.dataspace_catalog = dataspace_catalog;
         }
 
-        let queue = Arc::new(Queue::test_with_router_for_routes(
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(state.nexus.read().dataspace_catalog.clone());
+        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
             QueueConfig::default(),
-            &TimeSource::new_system(),
+            tokio::sync::broadcast::Sender::new(1),
             Arc::new(FixedRouter {
                 lane: restricted_lane,
                 dataspace: restricted_dataspace,
             }),
-            &[(restricted_lane, restricted_dataspace)],
+            crate::queue::QueueLimits::default(),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
         ));
 
         let now = Instant::now();

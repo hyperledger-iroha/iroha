@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -150,6 +151,97 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "multi_provider_probe": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "tiers_observed",
+        "gateway_receipts_captured",
+        "range_fetch_verified",
+        "deadline_headers_verified",
+        "proof_stream_replay_verified",
+        "trace_correlation_verified",
+        "provider_count",
+        "receipt_count",
+        "max_hot_latency_ms",
+        "max_warm_latency_ms",
+        "receipt_summary_digest_hex",
+        "raw_receipts_included",
+        "fetch_transcripts_included",
+    ),
+    "receipt_validation": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "sorafs_validate_potr_passed",
+        "schema_version_verified",
+        "range_bounds_verified",
+        "timestamp_ordering_verified",
+        "deadline_policy_verified",
+        "gateway_signature_verified",
+        "provider_signature_policy_enforced",
+        "provider_pq_keys_governed",
+        "ml_dsa_provider_signature_verified",
+        "receipts_validated",
+        "receipt_summary_digest_hex",
+        "validation_bundle_digest_hex",
+        "raw_receipt_bytes_included",
+    ),
+    "proof_stream": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "manifest_filter_verified",
+        "provider_filter_verified",
+        "tier_filter_verified",
+        "replay_window_bounded",
+        "invalid_receipts_suppressed",
+        "receipt_summary_digest_hex",
+        "response_bodies_included",
+    ),
+    "reputation_integration": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "reputation_pipeline_consumed_receipts",
+        "success_ratio_updated",
+        "latency_percentiles_updated",
+        "degradation_alert_linked",
+        "reputation_weight_governed",
+        "missed_deadline_penalty_bound",
+        "receipt_summary_digest_hex",
+        "stats_digest_hex",
+        "raw_reputation_inputs_included",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "deadline_breach_alert_tested",
+        "critical_alerts_firing",
+        "metrics",
+        "receipt_summary_digest_hex",
+        "response_bodies_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "potr_policy_bound",
+        "pq_key_roster_bound",
+        "reputation_weight_bound",
+        "governance_dag_bound",
+        "receipt_summary_digest_hex",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -491,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -505,7 +597,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

@@ -37,6 +37,14 @@ assets.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
   expose XOR fee receipt totals for nightly reconciliation exports.
+- The same status payload exposes `nexus_fee_receipts` and
+  `native_amx_receipts` as structured settlement-commitment arrays. Native AMX
+  receipts include their participant legs, prepare/commit QC bodies, validator
+  sets, signer bitmaps, and aggregate signature bytes so audit consumers do not
+  need to decode opaque commitment payloads just to inspect cross-dataspace
+  settlement evidence. The OpenAPI spec names this surface as
+  `SumeragiStatusResponse` -> `LaneSettlementCommitment` ->
+  `NativeAmxReceipt` for SDK generators.
 - A new `total_xor_variance_micro` counter tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters

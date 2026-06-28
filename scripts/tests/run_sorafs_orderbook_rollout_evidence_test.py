@@ -104,6 +104,33 @@ def test_dry_run_prints_complete_orderbook_rollout_plan(tmp_path: Path, capsys) 
     assert plan["external_evidence"]["contract_surface"] == [
         str(tmp_path / "payloads" / "contract-surface.json")
     ]
+    assert plan["evidence_contract"]["contract_surface"]["schema"] == (
+        "sorafs.orderbook.contract_surface_canary.v1"
+    )
+    assert (
+        "contract_digest_hex"
+        in plan["evidence_contract"]["contract_surface"]["required_payload_fields"]
+    )
+    assert (
+        "routes"
+        in plan["evidence_contract"]["api_gateway"]["required_payload_fields"]
+    )
+    assert (
+        "streams"
+        in plan["evidence_contract"]["event_streams"]["required_payload_fields"]
+    )
+    assert (
+        "languages"
+        in plan["evidence_contract"]["sdk_release"]["required_payload_fields"]
+    )
+    assert (
+        "contract_mirror_reconciliation_passed"
+        in plan["evidence_contract"]["reconciliation"]["required_payload_fields"]
+    )
+    assert (
+        "iroha_config_bound"
+        in plan["evidence_contract"]["governance_approval"]["required_payload_fields"]
+    )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_orderbook_rollout_evidence.py" in verifier[1]
@@ -126,6 +153,7 @@ def test_response_file_dry_run_prints_complete_orderbook_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["matcher_service"]
+    assert "matcher_service" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_orderbook_plan(
@@ -188,6 +216,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["contract_surface"]
+    assert list(plan["evidence_contract"]) == ["contract_surface"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "contract_surface" in verifier

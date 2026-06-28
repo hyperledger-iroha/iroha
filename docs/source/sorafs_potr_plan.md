@@ -19,7 +19,10 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > `scripts/check_sorafs_potr_rollout_evidence.py` now provides the fail-closed
 > SF-14 rollout evidence gate, and
 > `scripts/run_sorafs_potr_rollout_evidence.py` provides the reviewed
-> collection planner/runner.
+> collection planner/runner. The checker exports its required top-level
+> payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
+> checker-backed `evidence_contract` map in dry-run output for the selected
+> required kinds.
 
 ## Workflow
 1. Orchestrator/gateway issues a timed retrieval request with
@@ -138,7 +141,9 @@ alerts, receipt summary digest drift across validation/proof-stream/reputation/
 observability/governance artifacts, and governance packets not bound to
 `iroha_config`. Receipt summary binding failures are recorded on the offending
 artifact before required-kind validity is computed, so the JSON summary matches
-the fail-closed process result.
+the fail-closed process result. The collection planner exposes those exact
+required payload fields through `--dry-run` before contacting live PoTR
+services.
 
 The rollout evidence scripts have focused Python coverage in:
 
