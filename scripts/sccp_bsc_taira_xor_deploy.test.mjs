@@ -775,6 +775,42 @@ const routeManifest = (overrides = {}) => {
   };
 };
 
+const burnRecordVkTemplate = (overrides = {}) => ({
+  backend: "halo2/ipa",
+  name: "taira_bsc_xor_burn_record_v1",
+  version: 1,
+  circuit_id: "ivm-execution-v1",
+  public_inputs_schema_hex: HASH_11,
+  curve: "pallas",
+  gas_schedule_id: "halo2_default",
+  vk_len: 4,
+  max_proof_bytes: 8_388_608,
+  commitment_hex: HASH_22,
+  vk_bytes: "AQIDBA==",
+  status: "Active",
+  ...overrides,
+});
+
+const burnRecordVkRegistryEntry = (overrides = {}) => {
+  const template = burnRecordVkTemplate(overrides.template);
+  return {
+    id: {
+      backend: template.backend,
+      name: template.name,
+    },
+    record: {
+      status: template.status,
+      circuit_id: template.circuit_id,
+      commitment: template.commitment_hex.slice(2),
+      public_inputs_schema_hash: template.public_inputs_schema_hex.slice(2),
+      vk_len: template.vk_len,
+      key: { bytes_b64: template.vk_bytes },
+      ...overrides.record,
+    },
+    ...overrides.entry,
+  };
+};
+
 const tairaBurnRecordContract = (overrides = {}) => ({
   schema: "iroha-sccp-taira-xor-burn-record-contract/v1",
   route_id: "taira_bsc_xor",
@@ -859,6 +895,7 @@ async function withRouteManifestPublishHarness(callback, options = {}) {
   const envName = "SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY";
   const previousPrivateKey = process.env[envName];
   const statusResponses = [...(options.statusResponses ?? [])];
+  const vkRegistryResponses = [...(options.vkRegistryResponses ?? [[]])];
   const calls = {
     buildTransaction: [],
     fetch: [],
@@ -926,6 +963,14 @@ async function withRouteManifestPublishHarness(callback, options = {}) {
           headers: { "content-type": "application/json" },
         },
       );
+    }
+    if (String(url).startsWith("https://taira.sora.org/v1/zk/vk")) {
+      assert.equal(init.method ?? "GET", "GET");
+      const body = vkRegistryResponses.shift() ?? [];
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
     if (
       String(url).startsWith(
@@ -2437,6 +2482,139 @@ test("BSC publish-route-manifest supports explicit gas limit and rejects invalid
     assert.equal(calls.buildTransaction.length, 1);
     assert.equal(calls.fetch.length, 1);
   });
+});
+
+test("BSC publish-burn-record-vk submits a locally signed transaction with gas metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-vk-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const templatePath = join(dir, "burn-record-vk.template.json");
+  const out = join(dir, "burn-record-vk.register-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    templatePath,
+    `${JSON.stringify(burnRecordVkTemplate(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(async ({ calls, privateKeyEnv }) => {
+    const result = await main([
+      "publish-burn-record-vk",
+      "--route-manifest",
+      manifestPath,
+      "--vk-template",
+      templatePath,
+      "--out",
+      out,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+      "--private-key-env",
+      privateKeyEnv,
+      "--gas-limit",
+      "3000000",
+      "--wait-for-commit",
+      "false",
+    ]);
+    const artifact = JSON.parse(await readFile(out, "utf8"));
+
+    assert.equal(result.ok, true);
+    assert.equal(result.submitted, true);
+    assert.equal(result.gasLimit, 3_000_000);
+    assert.equal(result.gasAssetId, "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
+    assert.equal(result.hash, `0x${"11".repeat(32)}`);
+    assert.equal(result.submittedHash, `0x${"11".repeat(32)}`);
+    assert.equal(artifact.submission.hash, `0x${"11".repeat(32)}`);
+    assert.equal(artifact.submission.submittedHash, `0x${"11".repeat(32)}`);
+    assert.equal(artifact.submission.gasLimit, 3_000_000);
+    assert.equal(
+      artifact.submission.gasAssetId,
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    );
+    assert.equal(calls.buildTransaction.length, 1);
+    assert.equal(
+      calls.buildTransaction[0].authority,
+      TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+    );
+    assert.equal(calls.buildTransaction[0].metadata.gas_limit, 3_000_000);
+    assert.equal(
+      calls.buildTransaction[0].metadata.gas_asset_id,
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    );
+    assert.equal(
+      calls.buildTransaction[0].metadata.action,
+      "publish_burn_record_vk",
+    );
+    assert.equal(calls.buildTransaction[0].metadata.routeId, "taira_bsc_xor");
+    assert.equal(calls.buildTransaction[0].metadata.assetKey, "xor");
+    assert.ok(
+      calls.fetch.some(
+        (call) =>
+          call.url === "https://taira.sora.org/v1/pipeline/transactions",
+      ),
+    );
+    assert.equal(
+      calls.fetch.some((call) => call.url.includes("/v1/zk/vk/register")),
+      false,
+    );
+    assert.equal(Object.hasOwn(artifact.submission, "appApiPath"), false);
+    assert.equal(Object.hasOwn(artifact.submission, "httpStatus"), false);
+    assert.doesNotMatch(
+      JSON.stringify(artifact),
+      /private[_-]?key|mnemonic|seed|SCCP_TAIRA_ROUTE_MANIFEST_TEST_PRIVATE_KEY/iu,
+    );
+  });
+});
+
+test("BSC publish-burn-record-vk verifies registry readback after Applied raw submission", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-publish-vk-applied-"));
+  const manifestPath = join(dir, "route.manifest.json");
+  const templatePath = join(dir, "burn-record-vk.template.json");
+  const out = join(dir, "burn-record-vk.register-isi.json");
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
+  await writeFile(
+    templatePath,
+    `${JSON.stringify(burnRecordVkTemplate(), null, 2)}\n`,
+  );
+
+  await withRouteManifestPublishHarness(
+    async ({ privateKeyEnv }) => {
+      const result = await main([
+        "publish-burn-record-vk",
+        "--route-manifest",
+        manifestPath,
+        "--vk-template",
+        templatePath,
+        "--out",
+        out,
+        "--submit",
+        "true",
+        "--authority",
+        TAIRA_ROUTE_MANIFEST_MANAGER_AUTHORITY,
+        "--private-key-env",
+        privateKeyEnv,
+        "--commit-timeout-ms",
+        "1000",
+      ]);
+      const artifact = JSON.parse(await readFile(out, "utf8"));
+
+      assert.equal(result.ok, true);
+      assert.equal(result.statusKind, "Applied");
+      assert.equal(artifact.submission.statusKind, "Applied");
+      assert.equal(
+        artifact.submission.registryReadback.id.name,
+        "taira_bsc_xor_burn_record_v1",
+      );
+    },
+    {
+      vkRegistryResponses: [[], [burnRecordVkRegistryEntry()]],
+    },
+  );
 });
 
 test("BSC route-manifest command builds production-ready manifests only with bound native and post-deploy evidence", async () => {

@@ -14791,7 +14791,7 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
   }
   const platformByEnumKey = {
     EvmContractCall: "evm_contract_call",
-    EvmGroth16ContractCall: "evm_contract_call",
+    EvmGroth16ContractCall: "evm_groth16_contract_call",
     TronContractCall: "tron_contract_call",
     SolanaProgramInstruction: "solana_program_instruction",
     TonInternalMessage: "ton_internal_message",
@@ -14809,10 +14809,19 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
 
 function normalizeSccpPlatformSubmissionPayload(value, context) {
   const record = normalizeSccpPlatformSubmissionPayloadRecord(value, context);
-  const platform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const rawPlatform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const platform =
+    {
+      EvmContractCall: "evm_contract_call",
+      EvmGroth16ContractCall: "evm_groth16_contract_call",
+      TronContractCall: "tron_contract_call",
+      SolanaProgramInstruction: "solana_program_instruction",
+      TonInternalMessage: "ton_internal_message",
+    }[rawPlatform] ?? rawPlatform;
   const payload = ensureRecord(record.payload, `${context}.payload`);
   switch (platform) {
     case "evm_contract_call":
+    case "evm_groth16_contract_call":
     case "tron_contract_call":
       return {
         kind: platform,
@@ -15178,6 +15187,46 @@ function normalizeSccpProofManifest(value, context) {
   };
 }
 
+function normalizeSccpGroth16ProofSummary(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    platformPayload: requireNonEmptyString(record.platform_payload, `${context}.platform_payload`),
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    proofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.proof_len_bytes,
+      `${context}.proof_len_bytes`,
+      { allowZero: false },
+    ),
+    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_word_count,
+      `${context}.public_input_word_count`,
+      { allowZero: false },
+    ),
+    groth16PublicSignalCount: ToriiClient._normalizeUnsignedInteger(
+      record.groth16_public_signal_count,
+      `${context}.groth16_public_signal_count`,
+      { allowZero: false },
+    ),
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    sourceDomain: ToriiClient._normalizeUnsignedInteger(
+      record.source_domain,
+      `${context}.source_domain`,
+      { allowZero: true },
+    ),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    destinationBindingKey: requireNonEmptyString(
+      record.destination_binding_key,
+      `${context}.destination_binding_key`,
+    ),
+    destinationBindingHash: normalizeHex32String(
+      record.destination_binding_hash,
+      `${context}.destination_binding_hash`,
+    ),
+  };
+}
+
 function normalizeSccpMessageTransparentProofArtifact(payload) {
   const context = "sccp message proof artifact response";
   const record = ensureRecord(payload, context);
@@ -15260,6 +15309,14 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
             record.proof_envelope_summary,
             `${context}.proof_envelope_summary`,
           ),
+    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
+      ? {}
+      : {
+          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
+            record.groth16_proof_summary,
+            `${context}.groth16_proof_summary`,
+          ),
+        }),
     submissionPackage: normalizeSccpCounterpartySubmissionPackage(
       record.submission_package,
       `${context}.submission_package`,
@@ -15386,6 +15443,14 @@ function normalizeSccpCounterpartyProofJob(payload) {
             record.proof_envelope_summary,
             `${context}.proof_envelope_summary`,
           ),
+    ...(record.groth16_proof_summary === undefined || record.groth16_proof_summary === null
+      ? {}
+      : {
+          groth16ProofSummary: normalizeSccpGroth16ProofSummary(
+            record.groth16_proof_summary,
+            `${context}.groth16_proof_summary`,
+          ),
+        }),
     submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
       record.submission_template,
       `${context}.submission_template`,
