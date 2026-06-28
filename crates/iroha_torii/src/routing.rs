@@ -34000,6 +34000,7 @@ async fn execute_contract_bundle_request(
     telemetry: MaybeTelemetry,
     req: DeployContractBundleDto,
     dry_run: bool,
+    deploy_wait_timeout_override: Option<Duration>,
 ) -> Result<DeployContractBundleReceiptDto> {
     let planned = plan_contract_bundle(&chain_id, &kura, &state, &req, dry_run)?;
     if dry_run {
@@ -34083,7 +34084,8 @@ async fn execute_contract_bundle_request(
             receipt.contracts[index] = response;
             persist_contract_bundle_receipt(&receipt)?;
 
-            let deploy_wait_timeout = contract_bundle_deploy_wait_timeout();
+            let deploy_wait_timeout =
+                deploy_wait_timeout_override.unwrap_or_else(contract_bundle_deploy_wait_timeout);
             if deploy_wait_timeout.is_zero() {
                 persist_contract_bundle_receipt(&receipt)?;
                 return Ok(receipt);
@@ -34284,9 +34286,10 @@ pub async fn handle_post_contract_deploy_bundle(
     dry_run: bool,
     NoritoJson(req): NoritoJson<DeployContractBundleDto>,
 ) -> Result<impl IntoResponse> {
-    let response =
-        execute_contract_bundle_request(chain_id, kura, queue, state, telemetry, req, dry_run)
-            .await?;
+    let response = execute_contract_bundle_request(
+        chain_id, kura, queue, state, telemetry, req, dry_run, None,
+    )
+    .await?;
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -34336,6 +34339,7 @@ pub async fn handle_post_contract_deploy(
         telemetry,
         wrap_single_contract_deploy_request(req),
         false,
+        Some(Duration::ZERO),
     )
     .await?;
     let response = single_contract_deploy_receipt_json(&receipt)?;
@@ -34743,6 +34747,7 @@ mod contract_bundle_tests {
             MaybeTelemetry::disabled(),
             request,
             true,
+            None,
         )
         .await
         .expect("dry-run receipt");
@@ -34787,6 +34792,7 @@ mod contract_bundle_tests {
             MaybeTelemetry::disabled(),
             request,
             false,
+            None,
         )
         .await
         .expect("resume receipt");
@@ -37855,6 +37861,22 @@ mod deploy_tests {
         );
         assert_eq!(
             v.get("status").and_then(norito::json::Value::as_str),
+            Some("submitted")
+        );
+        let completed_stages = v
+            .get("completed_stages")
+            .and_then(norito::json::Value::as_array)
+            .expect("completed stages array")
+            .iter()
+            .filter_map(norito::json::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(completed_stages, vec!["plan"]);
+        assert_eq!(
+            v.get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("status"))
+                .and_then(norito::json::Value::as_str),
             Some("submitted")
         );
         let ch = v
@@ -88170,6 +88192,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
+    normalize_status_block_visibility(&mut status);
     if !nexus_enabled {
         status.strip_nexus();
     } else if let Some(policy) = nexus_routing_policy {
@@ -88230,6 +88253,18 @@ pub async fn handle_status(
             }
         }
     }
+}
+
+#[cfg(feature = "telemetry")]
+fn normalize_status_block_visibility(status: &mut Status) {
+    let Some(sumeragi) = status.sumeragi.as_ref() else {
+        return;
+    };
+    let finality_height = sumeragi.commit_qc_height;
+    if finality_height <= status.blocks {
+        return;
+    }
+    status.blocks = finality_height;
 }
 
 #[cfg(feature = "telemetry")]
@@ -88574,6 +88609,27 @@ mod tests {
             status_value_by_path(&status, "sorafs_micropayments/feed/credits/outstanding").unwrap();
         assert_eq!(outstanding, json_value(&7u128));
         assert!(status_value_by_path(&status, "sorafs_micropayments/unknown").is_none());
+    }
+
+    #[test]
+    fn status_block_visibility_falls_back_to_sumeragi_commit_height() {
+        let metrics = Metrics::default();
+        let mut status = Status::from(&metrics);
+        status.blocks = 0;
+        status.blocks_non_empty = 0;
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_274;
+        sumeragi.highest_qc_height = 4_275;
+        sumeragi.locked_qc_height = 4_273;
+
+        super::normalize_status_block_visibility(&mut status);
+
+        assert_eq!(status.blocks, 4_274);
+        assert_eq!(status.blocks_non_empty, 0);
+
+        status.blocks = 4_273;
+        super::normalize_status_block_visibility(&mut status);
+        assert_eq!(status.blocks, 4_274);
     }
 
     #[cfg(feature = "app_api")]

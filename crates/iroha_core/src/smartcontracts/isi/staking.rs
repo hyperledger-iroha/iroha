@@ -1584,7 +1584,7 @@ pub(crate) fn apply_slash_to_validator(
         .get(&validator_key)
         .map(|record| {
             ensure_public_lane_validator_record_matches_key(&validator_key, record)?;
-            Ok(record.stake_account.clone())
+            Ok::<_, Error>(record.stake_account.clone())
         })
         .transpose()?
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
@@ -3599,7 +3599,7 @@ mod tests {
         .expect_err("mismatched validator row must not receive rewards");
 
         assert!(
-            matches!(err, Error::InvariantViolation(msg) if msg.contains("not active")),
+            matches!(err, Error::InvariantViolation(ref msg) if msg.contains("not active")),
             "unexpected error: {err:?}"
         );
         assert!(

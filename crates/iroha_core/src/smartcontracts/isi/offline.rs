@@ -1,7 +1,6 @@
 //! Offline note instruction execution.
 
 use super::prelude::*;
-#[cfg(test)]
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use std::{
     collections::{BTreeSet, HashSet},
@@ -13,43 +12,33 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{
     account::AccountId,
-    asset::{AssetDefinitionId, AssetId, definition::ConfidentialPolicyMode},
+    asset::{
+        AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId,
+        definition::ConfidentialPolicyMode,
+    },
     confidential::ConfidentialStatus,
-    isi::{
-        error::InstructionExecutionError,
-        offline::{
-            KagemushaTransfer, RedeemKagemushaRecursive, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy,
-        },
-    },
-    name::Name,
-    offline::{
-        OFFLINE_REJECTION_REASON_PREFIX, OfflineAndroidAppAttestationPolicy,
-        OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
-        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
-        OfflineNoteKeyCertificate,
-    },
-    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    zk::{BackendTag, OpenVerifyEnvelope},
-};
-#[cfg(test)]
-use iroha_data_model::{
-    asset::{AssetBalancePolicy, AssetBalanceScope},
     events::data::prelude::{
         OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,
     },
     isi::{
-        error::MathError,
-        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
+        error::{InstructionExecutionError, MathError},
+        offline::{
+            AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemKagemushaRecursive,
+            RedeemOfflineNote, RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+        },
     },
+    name::Name,
     offline::{
-        OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OfflineNoteAuditOutputClaim,
-        OfflineNoteIssuedClaim, OfflineNoteRecursiveProof,
+        OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OFFLINE_REJECTION_REASON_PREFIX,
+        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
+        OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
+        OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
+        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
         offline_note_recursive_public_inputs_schema_hash,
     },
-    proof::ProofBox,
+    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     query::error::FindError,
-    zk::StarkFriOpenProofV1,
+    zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
 use iroha_primitives::numeric::Numeric;
 use p256::PublicKey as P256PublicKey;
@@ -75,7 +64,6 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     InstructionExecutionError::InvariantViolation(boxed)
 }
 
-#[cfg(test)]
 fn resolve_offline_escrow_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     definition: &AssetDefinitionId,
@@ -142,7 +130,6 @@ pub(crate) fn is_offline_escrow_source_asset(
     Ok(false)
 }
 
-#[cfg(test)]
 fn ensure_distinct_offline_escrow_account(
     escrow_account: &AccountId,
     participant_account: &AccountId,
@@ -161,7 +148,6 @@ fn ensure_distinct_offline_escrow_account(
     Ok(())
 }
 
-#[cfg(test)]
 fn canonical_offline_note_asset_id(
     state_transaction: &StateTransaction<'_, '_>,
     asset: &AssetId,
@@ -194,7 +180,6 @@ fn canonical_offline_note_asset_id(
     ))
 }
 
-#[cfg(test)]
 fn offline_note_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountId) -> AssetId {
     AssetId::with_scope(
         source_asset.definition().clone(),
@@ -203,7 +188,6 @@ fn offline_note_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountI
     )
 }
 
-#[cfg(test)]
 fn withdraw_numeric_asset_exact(
     state_transaction: &mut StateTransaction<'_, '_>,
     id: &AssetId,
@@ -240,7 +224,6 @@ fn withdraw_numeric_asset_exact(
     Ok(())
 }
 
-#[cfg(test)]
 fn deposit_numeric_asset_exact(
     state_transaction: &mut StateTransaction<'_, '_>,
     id: &AssetId,
@@ -269,7 +252,6 @@ fn deposit_numeric_asset_exact(
     Ok(())
 }
 
-#[cfg(test)]
 fn reserve_offline_note_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset: &AssetId,
@@ -305,7 +287,6 @@ fn reserve_offline_note_escrow(
     Ok(())
 }
 
-#[cfg(test)]
 fn credit_from_offline_note_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset: &AssetId,
@@ -365,25 +346,15 @@ fn credit_from_offline_note_escrow(
 pub mod isi {
     use super::*;
 
-    #[cfg(test)]
     const OFFLINE_NOTE_VERIFIER_NAMESPACE: &str = "offline_note";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_ISSUE_DOMAIN: &str = "offline-note-issued-note";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_KEY_CERTIFICATE_DOMAIN: &str = "offline-note-issued-key-certificate";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_ISSUED_CLAIM_DOMAIN: &str = "offline-note-issued-claim";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_SPENT_CLAIM_DOMAIN: &str = "offline-note-spent-claim";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_NULLIFIER_DOMAIN: &str = "offline-note-spent-nullifier";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_AUDIT_TOKEN_DOMAIN: &str = "offline-note-audit-token";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_AUDIT_RECORD_DOMAIN: &str = "offline-note-audit-record";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_AUDIT_NULLIFIER_DOMAIN: &str = "offline-note-audit-nullifier";
-    #[cfg(test)]
     const OFFLINE_NOTE_REPLAY_AUDIT_OUTPUT_DOMAIN: &str = "offline-note-audit-output";
     const OFFLINE_NOTE_ATTESTED_CERTIFICATE_DOMAIN: &str = "offline-note-attested-key-certificate";
     const OFFLINE_NOTE_ATTESTATION_CHALLENGE_DOMAIN: &str = "offline-note-attestation-challenge";
@@ -2201,7 +2172,6 @@ pub mod isi {
         })
     }
 
-    #[cfg(test)]
     fn offline_note_public_instances_from_envelope(
         proof: &ProofBox,
         envelope: &OpenVerifyEnvelope,
@@ -2242,7 +2212,6 @@ pub mod isi {
         }
     }
 
-    #[cfg(test)]
     fn offline_note_resolve_verifier(
         proof: &OfflineNoteRecursiveProof,
         state_transaction: &StateTransaction<'_, '_>,
@@ -2462,7 +2431,6 @@ pub mod isi {
         Ok((record, vk_box, envelope))
     }
 
-    #[cfg(test)]
     fn verify_offline_note_recursive_proof(
         proof: &OfflineNoteRecursiveProof,
         expected_public_inputs_hash: &Hash,
@@ -2513,12 +2481,10 @@ pub mod isi {
         Hash::new(&preimage)
     }
 
-    #[cfg(test)]
     fn offline_note_issue_key(note_commitment: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_ISSUE_DOMAIN, note_commitment)
     }
 
-    #[cfg(test)]
     fn offline_note_key_certificate_key(certificate_payload_hash: &Hash) -> Hash {
         offline_note_replay_key(
             OFFLINE_NOTE_REPLAY_KEY_CERTIFICATE_DOMAIN,
@@ -2526,37 +2492,30 @@ pub mod isi {
         )
     }
 
-    #[cfg(test)]
     fn offline_note_issued_claim_key(claim_hash: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_ISSUED_CLAIM_DOMAIN, claim_hash)
     }
 
-    #[cfg(test)]
     fn offline_note_spent_claim_key(claim_hash: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_SPENT_CLAIM_DOMAIN, claim_hash)
     }
 
-    #[cfg(test)]
     fn offline_note_nullifier_key(nullifier: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_NULLIFIER_DOMAIN, nullifier)
     }
 
-    #[cfg(test)]
     fn offline_note_audit_token_key(token_id: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_TOKEN_DOMAIN, token_id)
     }
 
-    #[cfg(test)]
     fn offline_note_audit_record_key(public_inputs_hash: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_RECORD_DOMAIN, public_inputs_hash)
     }
 
-    #[cfg(test)]
     fn offline_note_audit_nullifier_key(nullifier: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_NULLIFIER_DOMAIN, nullifier)
     }
 
-    #[cfg(test)]
     fn offline_note_audit_output_key(output_commitment: &Hash) -> Hash {
         offline_note_replay_key(OFFLINE_NOTE_REPLAY_AUDIT_OUTPUT_DOMAIN, output_commitment)
     }
@@ -2584,7 +2543,6 @@ pub mod isi {
         hash.as_ref().iter().all(|byte| *byte == 0)
     }
 
-    #[cfg(test)]
     fn ensure_unique_hashes(
         hashes: &[Hash],
         label: &'static str,
@@ -2599,7 +2557,6 @@ pub mod isi {
         Ok(())
     }
 
-    #[cfg(test)]
     fn ensure_disjoint_hashes(
         left: &[Hash],
         right: &[Hash],
@@ -2657,7 +2614,6 @@ pub mod isi {
         Ok(())
     }
 
-    #[cfg(test)]
     fn ensure_offline_audit_output_claim_count(
         output_commitments_len: usize,
         output_claims_len: usize,
@@ -2671,7 +2627,6 @@ pub mod isi {
         Ok(())
     }
 
-    #[cfg(test)]
     fn ensure_offline_audit_output_claim_binding(
         output_commitments: &[Hash],
         output_claims: &[OfflineNoteAuditOutputClaim],
@@ -2688,7 +2643,6 @@ pub mod isi {
         Ok(())
     }
 
-    #[cfg(test)]
     fn ensure_offline_audit_input_claim_anchor(
         input_claims: &[OfflineNoteIssuedClaim],
         certificate_payload_hash: &Hash,
@@ -2704,7 +2658,6 @@ pub mod isi {
         Ok(())
     }
 
-    #[cfg(test)]
     fn ensure_offline_audit_conserves_asset_amounts(
         input_claims: &[OfflineNoteIssuedClaim],
         output_claims: &[OfflineNoteAuditOutputClaim],
@@ -2798,7 +2751,6 @@ pub mod isi {
         }
     }
 
-    #[cfg(test)]
     fn ensure_can_issue_offline_note(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
@@ -2814,7 +2766,6 @@ pub mod isi {
         }
     }
 
-    #[cfg(test)]
     fn ensure_offline_note_certificate_signature(
         certificate: &OfflineNoteKeyCertificate,
         issuer: &AccountId,
@@ -2843,7 +2794,6 @@ pub mod isi {
             })
     }
 
-    #[cfg(test)]
     fn ensure_offline_note_certificate_authorized(
         certificate: &OfflineNoteKeyCertificate,
         issuer: &AccountId,
@@ -4252,7 +4202,6 @@ pub mod isi {
         })
     }
 
-    #[cfg(test)]
     fn offline_note_issued_claim_hash(claim: OfflineNoteIssuedClaim) -> Result<Hash, Error> {
         claim.claim_hash().map_err(|err| {
             labeled_invariant(
@@ -4364,7 +4313,6 @@ pub mod isi {
         }
     }
 
-    #[cfg(test)]
     impl Execute for IssueOfflineNote {
         fn execute(
             self,
@@ -4470,7 +4418,6 @@ pub mod isi {
         }
     }
 
-    #[cfg(test)]
     impl Execute for RedeemOfflineNote {
         fn execute(
             self,
@@ -4631,7 +4578,6 @@ pub mod isi {
         }
     }
 
-    #[cfg(test)]
     impl Execute for AuditOfflineNote {
         fn execute(
             self,
