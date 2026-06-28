@@ -1631,11 +1631,6 @@ impl PublicKeyCompact {
         let algorithm = self.try_algorithm()?;
         PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
     }
-
-    fn try_from_full(public_key: &PublicKeyFull) -> Result<Self, ParseError> {
-        let payload = public_key.try_payload()?;
-        Ok(Self::new(public_key.algorithm(), payload.as_ref()))
-    }
 }
 
 impl From<PublicKeyFull> for PublicKeyCompact {
@@ -4168,7 +4163,7 @@ mod tests {
             .try_to_bytes()
             .expect("generated public key must be well-formed");
         let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-        let compact = PublicKeyCompact::try_from_full(&full).expect("checked compact conversion");
+        let compact = PublicKeyCompact::from(full);
 
         assert_eq!(compact.try_algorithm().expect("algorithm tag"), algorithm);
         assert_eq!(compact.try_payload().expect("payload"), payload);

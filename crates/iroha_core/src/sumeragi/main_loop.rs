@@ -25546,8 +25546,6 @@ impl Actor {
                     error = %err,
                     "dropping invalid lane relay envelope"
                 );
-                // Still surface the envelope to status for operator visibility (it will be rejected).
-                super::status::push_lane_relay_envelope(envelope);
             }
         }
         Ok(())

@@ -92,7 +92,7 @@ pub(crate) fn verifying_key_to_processed_bytes(vk: &VerifyingKey) -> Vec<u8> {
 
 /// Return the standard processed proving-key serialization while consuming the key.
 pub(crate) fn proving_key_into_processed_bytes(pk: ProvingKey) -> Vec<u8> {
-    pk.into_bytes(SerdeFormat::Processed)
+    pk.to_bytes(SerdeFormat::Processed)
 }
 
 /// Return the standard processed proving-key serialization.

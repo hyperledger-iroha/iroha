@@ -7075,6 +7075,34 @@ async fn merge_committee_signatures_commit_merge_entry() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rejected_lane_relay_does_not_enter_rebroadcast_snapshot() {
+    let _guard = crate::sumeragi::status::lane_relay_test_guard();
+    crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let signers = [&harness.key_pairs[0]];
+    let (_, mode_tag, _) = actor.consensus_context_for_height(1);
+    let envelope = sample_lane_relay_envelope(
+        1,
+        LaneId::new(0),
+        &actor.chain_id,
+        mode_tag,
+        &signers,
+        0b0000_0001,
+    );
+
+    actor
+        .on_lane_relay_message(super::LaneRelayMessage::Envelope(envelope))
+        .expect("rejected lane relay is handled");
+
+    assert!(
+        crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty(),
+        "rejected relays must not be retained in the rebroadcastable status snapshot"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn merge_committee_accepts_remote_signature() {
     let mut harness = test_actor_harness(2).await;
     let actor = &mut harness.actor;
