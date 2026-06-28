@@ -11,7 +11,11 @@ object OfflineJsonParser {
     fun parseOfflineReadiness(payload: ByteArray): OfflineReadiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        rejectRemovedKagemushaAbi7ReadinessFields(obj)
+        val offlineKagemushaAbi7 = asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
+        val offlineKagemushaAbi7Artifacts =
+            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
+        val offlineKagemushaAbi7CircuitId =
+            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
         return OfflineReadiness(
             asOptionalBoolean(obj["offline_note"], false),
             asOptionalBoolean(obj["offline_one_use_keys"], false),
@@ -19,24 +23,29 @@ object OfflineJsonParser {
             asOptionalBoolean(obj["offline_fountain_qr"], false),
             asOptionalBoolean(obj["offline_sync_optional"], false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asBoolean(
+            asBooleanOrDefault(
                 obj["offline_kagemusha_recursive_compact_available"],
+                offlineKagemushaAbi7,
                 "offline_kagemusha_recursive_compact_available",
             ),
-            asPresentReadinessString(
+            asPresentReadinessStringOrFallback(
                 obj["offline_kagemusha_recursive_compact_mode"],
+                obj["offline_kagemusha_abi7_mode"],
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            asPresentReadinessInt(
+            asPresentReadinessIntOrFallback(
                 obj["offline_kagemusha_recursive_compact_required_native_bridge_abi_version"],
+                obj["offline_kagemusha_abi7_bridge_abi_version"],
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             ),
-            asPresentReadinessString(
+            asPresentReadinessStringOrFallback(
                 obj["offline_kagemusha_recursive_compact_circuit_id"],
+                offlineKagemushaAbi7CircuitId,
                 "offline_kagemusha_recursive_compact_circuit_id",
             ),
-            asBoolean(
+            asBooleanOrDefault(
                 obj["offline_kagemusha_recursive_compact_artifacts_available"],
+                offlineKagemushaAbi7Artifacts,
                 "offline_kagemusha_recursive_compact_artifacts_available",
             ),
         )
@@ -46,47 +55,40 @@ object OfflineJsonParser {
     fun parseOfflineV2Readiness(payload: ByteArray): OfflineV2Readiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        rejectRemovedKagemushaAbi7ReadinessFields(obj)
+        val offlineKagemushaAbi7 = asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
+        val offlineKagemushaAbi7Artifacts =
+            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
+        val offlineKagemushaAbi7CircuitId =
+            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
         return OfflineV2Readiness(
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asBoolean(
+            asBooleanOrDefault(
                 obj["offline_kagemusha_recursive_compact_available"],
+                offlineKagemushaAbi7,
                 "offline_kagemusha_recursive_compact_available",
             ),
-            asPresentReadinessString(
+            asPresentReadinessStringOrFallback(
                 obj["offline_kagemusha_recursive_compact_mode"],
+                obj["offline_kagemusha_abi7_mode"],
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            asPresentReadinessInt(
+            asPresentReadinessIntOrFallback(
                 obj["offline_kagemusha_recursive_compact_required_native_bridge_abi_version"],
+                obj["offline_kagemusha_abi7_bridge_abi_version"],
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             ),
-            asPresentReadinessString(
+            asPresentReadinessStringOrFallback(
                 obj["offline_kagemusha_recursive_compact_circuit_id"],
+                offlineKagemushaAbi7CircuitId,
                 "offline_kagemusha_recursive_compact_circuit_id",
             ),
-            asBoolean(
+            asBooleanOrDefault(
                 obj["offline_kagemusha_recursive_compact_artifacts_available"],
+                offlineKagemushaAbi7Artifacts,
                 "offline_kagemusha_recursive_compact_artifacts_available",
             ),
         )
     }
-
-    private fun rejectRemovedKagemushaAbi7ReadinessFields(obj: Map<String, Any>) {
-        for (field in removedKagemushaAbi7ReadinessFields) {
-            check(!obj.containsKey(field)) {
-                "$field is not supported; use offline_kagemusha_recursive_compact_*"
-            }
-        }
-    }
-
-    private val removedKagemushaAbi7ReadinessFields = setOf(
-        "offline_kagemusha_abi7",
-        "offline_kagemusha_abi7_mode",
-        "offline_kagemusha_abi7_bridge_abi_version",
-        "offline_kagemusha_abi7_circuit_id",
-        "offline_kagemusha_abi7_artifacts",
-    )
 
     /** Returns a canonical JSON string for the provided payload (keys sorted). */
     @JvmStatic
@@ -443,6 +445,10 @@ object OfflineJsonParser {
         return value
     }
 
+    private fun asPresentReadinessStringOrFallback(value: Any?, fallback: Any?, path: String): String {
+        return asPresentReadinessString(value ?: fallback, path)
+    }
+
     private fun asPresentReadinessInt(value: Any?, path: String): Int {
         if (value is String) {
             check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact integer string" }
@@ -464,6 +470,10 @@ object OfflineJsonParser {
         return parsed.toInt()
     }
 
+    private fun asPresentReadinessIntOrFallback(value: Any?, fallback: Any?, path: String): Int {
+        return asPresentReadinessInt(value ?: fallback, path)
+    }
+
     private fun asLong(value: Any?, path: String): Long {
         return JsonNumbers.asLong(value, path)
     }
@@ -471,6 +481,10 @@ object OfflineJsonParser {
     private fun asBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
         return value
+    }
+
+    private fun asBooleanOrDefault(value: Any?, defaultValue: Boolean, path: String): Boolean {
+        return if (value == null) defaultValue else asBoolean(value, path)
     }
 
     private fun asOptionalBoolean(value: Any?, default: Boolean): Boolean {

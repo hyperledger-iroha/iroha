@@ -47,13 +47,13 @@ class OfflineToriiClientV2ReadinessTest {
     }
 
     @Test
-    fun readinessRejectsRemovedAbi7Aliases() {
-        for ((field, message) in removedAbi7ReadinessFieldCases()) {
-            assertReadinessFails(
-                canonicalReadinessBody(extra = """"$field": true,"""),
-                message,
-            )
-        }
+    fun readinessParsesAbi7Aliases() {
+        val readiness = readinessFromBody(abi7AliasReadinessBody())
+        assertEquals(true, readiness.offlineKagemushaRecursiveCompactAvailable)
+        assertEquals("recursive_compact_v1", readiness.offlineKagemushaRecursiveCompactMode)
+        assertEquals(7, readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion)
+        assertEquals("kagemusha-recursive-compact-v1", readiness.offlineKagemushaRecursiveCompactCircuitId)
+        assertEquals(true, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
     }
 
     @Test
@@ -96,19 +96,6 @@ class OfflineToriiClientV2ReadinessTest {
             "offline_kagemusha_recursive_compact_artifacts_available must be a boolean",
     )
 
-    private fun removedAbi7ReadinessFieldCases(): List<Pair<String, String>> = listOf(
-        "offline_kagemusha_abi7" to
-            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_mode" to
-            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_bridge_abi_version" to
-            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_circuit_id" to
-            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
-        "offline_kagemusha_abi7_artifacts" to
-            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
-    )
-
     private fun canonicalReadinessBody(
         extra: String = "",
         compactAvailable: String = "true",
@@ -125,6 +112,17 @@ class OfflineToriiClientV2ReadinessTest {
           "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": $compactBridge,
           "offline_kagemusha_recursive_compact_circuit_id": $compactCircuit,
           "offline_kagemusha_recursive_compact_artifacts_available": $compactArtifacts
+        }
+    """.trimIndent()
+
+    private fun abi7AliasReadinessBody(): String = """
+        {
+          "offline_telemetry": true,
+          "offline_kagemusha_abi7": true,
+          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
+          "offline_kagemusha_abi7_bridge_abi_version": 7,
+          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
+          "offline_kagemusha_abi7_artifacts": true
         }
     """.trimIndent()
 
