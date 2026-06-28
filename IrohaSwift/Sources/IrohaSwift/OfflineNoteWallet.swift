@@ -4,6 +4,8 @@ import CryptoKit
 import Security
 #endif
 
+/// Archived classic Offline Note wallet/model helpers retained for compatibility
+/// fixtures; production offline payments use Kagemusha.
 public enum OfflineNoteWalletNoteState: String, Sendable {
     case spendable
     case receivePending
@@ -554,6 +556,8 @@ public enum OfflineNoteReceiveRequestCodecError: Error, LocalizedError, Equatabl
     }
 }
 
+/// Archived classic Offline Note receive-request codec retained for
+/// compatibility fixtures; production offline payments use Kagemusha.
 public enum OfflineNoteReceiveRequestCodec {
     public static let type = "offline_receive_request"
     public static let textPrefix = "wallet-offline-bearer-cash-receive:"
@@ -786,6 +790,8 @@ public enum OfflineNotePaymentTokenCodecError: Error, LocalizedError, Equatable 
     }
 }
 
+/// Archived classic Offline Note payment-token codec retained for compatibility
+/// fixtures; production offline payments use Kagemusha.
 public enum OfflineNotePaymentTokenCodec {
     public static let type = "offline_payment_token"
     public static let textPrefix = "wallet-offline-bearer-cash-payment:"

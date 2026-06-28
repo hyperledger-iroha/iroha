@@ -27,7 +27,10 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-/** Native Java implementation of Iroha Offline Note canonical Norito encodings. */
+/**
+ * Archived classic Offline Note model/codec helpers retained for compatibility
+ * fixtures; production offline payments use Kagemusha.
+ */
 public final class OfflineNote {
   public static final String KEY_CERTIFICATE_PAYLOAD_DOMAIN =
       "iroha:offline-note:key-certificate-payload";

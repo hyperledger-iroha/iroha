@@ -102,8 +102,10 @@ and completed history lives in [`status.md`](./status.md).
   prover output before use. Swift, Kotlin/JVM, and Android Java wallet runtime
   tests now also force audit/redeem verifier rejection and assert no spend,
   redeem reservation, or defund submission is recorded after rejection.
-  Remaining cleanup is to archive historical model/codec helpers in the mobile
-  SDKs that are still needed only for compatibility fixtures.
+  Historical mobile model/codec helpers that remain for fixture and local-record
+  compatibility are now archived with explicit Kagemusha-production labels, and
+  the SDK parity guard plus workflow path filter pin those labels so classic
+  Offline Note helpers cannot be mistaken for active payment surfaces.
 - Snapshot-backed node restarts now target hash-journal validation for
   historical blocks, keeping full Kura block-body loads only for suffix replay
   and the existing latest-tip rollback repair path.
@@ -456,18 +458,16 @@ and completed history lives in [`status.md`](./status.md).
   prover/verifier gate, so `recursiveSpendCompactPaymentTokenFromBundle(...)`
   probes and requires only the ABI-7 compact projection symbol.
   The SDK parity guard and workflow-routed negative controls must continue pinning those surfaces. Production-readiness negative controls also mutate the
-  Rust data-model, JavaScript, Python, Swift, Kotlin/JVM, and Java Android
-  selectors back to the legacy recursive-spend fallback while leaving C# as a
-  Windows-machine TODO, so ABI-7 compact availability remains the protected
-  production default for editable SDKs. The production-readiness guard self-audits its
+  Rust data-model, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#
+  selectors back to the legacy recursive-spend fallback, so ABI-7 compact
+  availability remains the protected production default for editable SDKs. The
+  production-readiness guard self-audits its
   negative-control handler list against the PR workflow and workflow
   requirements, including duplicate detection, so new hardening modes are not
   left unrouted or repeated. Release-bundle `--verify-existing` must also keep
   nested lineage/compact artifact entries and lineage proof-log entries bound
   to freshly recomputed bundle-relative paths, SHA-256 digests, and byte sizes
   before generic manifest drift can be used as a fallback.
-  TODO(C# Windows): promote the C# preferred-mode selector to the same
-  ABI-7 compact-first policy and certify it on a Windows host.
 - Kagemusha JS and Python SDKs now expose deterministic ABI-7 Pallas
   open-envelope archive builders for current-hop record bundles and previous
   recursive proof bundles. Keep the Node/PyO3 native symbols, JS source/dist,
@@ -1277,15 +1277,15 @@ and completed history lives in [`status.md`](./status.md).
   - Update and certify the C# shared ABI-7 archive fixture assertions for the
     regenerated current `64x4` profile hashes on the Windows host:
     append-bundle
-    `4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906`,
+    `107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5`,
     verify-request
-    `d3815dd9f6a015c6178e6976167308d0113823ce5877a21ae8f088fb54a56d76`,
+    `ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d`,
     verify-result
     `67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
     redeem-request
-    `0ea80af6e6260a254fe4931cd4c75b622f998db6434d8762136e65547e303089`,
+    `f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250`,
     and redeem-instruction
-    `5e2d34bdda70b524497397ca72e4a3849b02ab58007b15337dd73eb247039f09`.
+    `d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838`.
   - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
     `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
     `ToriiClientTests`, `SignedQueryBuilderTests`, and

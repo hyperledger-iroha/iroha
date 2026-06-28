@@ -23,6 +23,8 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.queue_hard_limit == 0
     assert args.post_load_sample_seconds == 30.0
     assert args.load_runs == 1
+    assert args.deploy_queue_capacity == 4_096
+    assert args.kura_blocks_in_memory == 16
     assert not args.no_status_snapshots
 
 
@@ -54,6 +56,42 @@ def test_tx_load_command_forwards_queue_limits(tmp_path):
     assert cmd[cmd.index("--queue-soft-limit") + 1] == "11"
     assert cmd[cmd.index("--queue-hard-limit") + 1] == "22"
     assert cmd[cmd.index("--queue-wait-timeout") + 1] == "33.0"
+
+
+def test_deploy_command_forwards_kura_hot_cache_limit(tmp_path):
+    args = MODULE.parse_args(
+        [
+            "--iroha-dir",
+            str(tmp_path),
+            "--out-dir",
+            str(tmp_path / "run"),
+            "--deploy-queue-capacity",
+            "123",
+            "--kura-blocks-in-memory",
+            "9",
+        ]
+    )
+    cmd = MODULE.build_deploy_cmd(args)
+    assert cmd[cmd.index("--queue-capacity") + 1] == "123"
+    assert cmd[cmd.index("--kura-blocks-in-memory") + 1] == "9"
+
+
+def test_deploy_queue_capacity_must_be_positive():
+    try:
+        MODULE.parse_args(["--deploy-queue-capacity", "0"])
+    except SystemExit as err:
+        assert err.code == 2
+    else:
+        raise AssertionError("expected --deploy-queue-capacity=0 to be rejected")
+
+
+def test_kura_hot_cache_limit_must_be_positive():
+    try:
+        MODULE.parse_args(["--kura-blocks-in-memory", "0"])
+    except SystemExit as err:
+        assert err.code == 2
+    else:
+        raise AssertionError("expected --kura-blocks-in-memory=0 to be rejected")
 
 
 def test_base_api_port_uses_generated_client_config(tmp_path):

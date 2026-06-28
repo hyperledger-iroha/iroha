@@ -575,14 +575,18 @@ mod tests {
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::{Domain, DomainId},
-        isi::Mint,
+        isi::{Mint, Register, domain_link::SetAccountAliasBinding},
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        permission::Permission,
         query::sns::prelude::FindDataspaceNameOwnerById,
         sns::{
             NameControllerV1, NameRecordV1, PaymentProofV1, RegisterNameRequestV1,
             RenewNameRequestV1,
         },
+    };
+    use iroha_executor_data_model::permission::account::{
+        AccountAliasPermissionScope, CanManageAccountAlias,
     };
     use mv::storage::StorageReadOnly;
 
@@ -899,6 +903,101 @@ mod tests {
         assert!(
             renewed.expires_at_ms > initial_expiry,
             "renewal must extend the alias expiry"
+        );
+    }
+
+    #[test]
+    fn register_account_acquire_alias_lease_and_bind_alias_in_one_transaction() {
+        let authority = owner();
+        let retail_account = another_owner();
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis_domain =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
+            .with_name("xor".to_owned())
+            .build(&authority);
+        let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
+        seed_default_namespace_policies(&mut world);
+        let mut permissions = world
+            .account_permissions
+            .view()
+            .get(&authority)
+            .cloned()
+            .unwrap_or_default();
+        permissions.insert(Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }));
+        world
+            .account_permissions
+            .insert(authority.clone(), permissions);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Mint::asset_numeric(
+                1_000_u64,
+                AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
+            )
+            .execute(&authority, &mut stx)
+            .expect("mint payment balance");
+            stx.apply();
+            block.commit().expect("mint block commits");
+        }
+
+        let alias = AccountAlias::domainless(
+            "clearorbit3941".parse().expect("label"),
+            DataSpaceId::UNIVERSAL,
+        );
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Register::account(Account::new(retail_account.clone()))
+                .execute(&authority, &mut stx)
+                .expect("register retail account");
+            seed_test_call_hash(&mut stx, 0xD1);
+            AcquireAccountAliasLease::new(
+                alias.clone(),
+                retail_account.clone(),
+                authority.clone(),
+                1,
+                None,
+            )
+            .execute(&authority, &mut stx)
+            .expect("acquire alias lease for newly registered account");
+            SetAccountAliasBinding::bind(retail_account.clone(), alias.clone(), None)
+                .execute(&authority, &mut stx)
+                .expect("bind alias for newly registered account");
+            stx.apply();
+            block.commit().expect("registration batch commits");
+        }
+
+        let view = state.view();
+        assert!(
+            view.world().account(&retail_account).is_ok(),
+            "retail account should be visible after the batch"
+        );
+        let lease = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "clearorbit3941@universal",
+            0,
+        )
+        .expect("alias lease should be active after the batch");
+        assert_eq!(lease.owner, retail_account);
+        assert_eq!(
+            view.world().account_aliases().get(&alias),
+            Some(&retail_account),
+            "alias binding should be visible after the batch"
         );
     }
 

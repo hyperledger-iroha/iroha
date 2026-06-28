@@ -408,8 +408,13 @@ const LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 128;
 /// This value intentionally trades peak stress throughput for bounded memory
 /// usage when consensus stalls or clients oversubmit.
 const LOCALNET_QUEUE_CAPACITY: usize = 20_000;
-/// Queue capacity used for perf-profile localnets (keeps stress bursts in-memory).
-const LOCALNET_PERF_QUEUE_CAPACITY: usize = 262_144;
+/// Queue capacity used for perf-profile localnets.
+///
+/// The queue also enforces a retained-byte budget, which is the binding limit for
+/// high-throughput localnet bursts. Keep the count cap only high enough to avoid
+/// count-based rejection before the byte guard engages; larger values preallocate
+/// fixed queue slots that sit mostly empty under the byte budget.
+const LOCALNET_PERF_QUEUE_CAPACITY: usize = 4_096;
 /// Default transaction TTL in the queue for localnet (ms).
 const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
@@ -4917,6 +4922,21 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.collectors.redundant_send_r,
             expected_redundant_send_r
+        );
+        assert_eq!(
+            parsed.queue.capacity.get(),
+            LOCALNET_PERF_QUEUE_CAPACITY,
+            "perf localnet should keep the fixed queue allocation bounded"
+        );
+        assert_eq!(
+            parsed.queue.capacity_per_user.get(),
+            LOCALNET_PERF_QUEUE_CAPACITY,
+            "perf localnet per-user capacity should match the bounded queue capacity"
+        );
+        assert_eq!(
+            parsed.torii.api_high_load_tx_threshold,
+            Some(LOCALNET_PERF_QUEUE_CAPACITY),
+            "perf localnet should expose backpressure at the bounded queue capacity"
         );
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()

@@ -7828,7 +7828,8 @@ SDK_SELECTOR_REQUIREMENTS = {
         "return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;",
     ),
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs": (
-        "_ = recursiveCompactAvailable;",
+        "if (recursiveCompactAvailable)",
+        "return KagemushaOfflineSpendMode.RecursiveCompactV1;",
         "return recursiveSpendAvailable",
         "KagemushaOfflineSpendMode.RecursiveSpendV1",
         "KagemushaOfflineSpendMode.CheckedPrefoldV1",
@@ -10143,8 +10144,8 @@ if mode == "--negative-control-sdk-default-cross-sdk":
             ),
             (
                 "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-                "_ = recursiveCompactAvailable;",
-                "if (recursiveCompactAvailable) { return KagemushaOfflineSpendMode.RecursiveCompactV1; }",
+                "        if (recursiveCompactAvailable)\n        {\n            return KagemushaOfflineSpendMode.RecursiveCompactV1;\n        }\n\n",
+                "        _ = recursiveCompactAvailable;\n",
             ),
         )
         for target, old, new in mutations:
@@ -21201,5 +21202,5 @@ if errors:
         print(f"error: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring and compact-first SDK selection outside the C# Windows deferral")
+print("Kagemusha production readiness is routed through ABI-6 Reserved-lineage recursive spend; ABI-7 recursive compact has package-aware one-hop/append proof wiring and cross-SDK compact-first selection")
 PY

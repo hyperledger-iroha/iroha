@@ -695,7 +695,11 @@ public static class KagemushaRecursiveSpendNative
         bool recursiveCompactAvailable,
         bool recursiveSpendAvailable)
     {
-        _ = recursiveCompactAvailable;
+        if (recursiveCompactAvailable)
+        {
+            return KagemushaOfflineSpendMode.RecursiveCompactV1;
+        }
+
         return recursiveSpendAvailable
             ? KagemushaOfflineSpendMode.RecursiveSpendV1
             : KagemushaOfflineSpendMode.CheckedPrefoldV1;

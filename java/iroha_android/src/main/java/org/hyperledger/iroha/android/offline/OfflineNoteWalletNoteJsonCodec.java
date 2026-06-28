@@ -11,7 +11,10 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
-/** JSON persistence codec for structured Offline Note wallet notes. */
+/**
+ * Archived classic Offline Note wallet-note JSON codec retained for compatibility
+ * fixtures; production offline payments use Kagemusha.
+ */
 public final class OfflineNoteWalletNoteJsonCodec {
   public static final long VERSION = 1L;
 

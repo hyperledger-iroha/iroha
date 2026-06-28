@@ -141,13 +141,13 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
-    public void RecursiveSpendNativePreferredModeDefaultsToRecursiveWhenAvailable()
+    public void RecursiveSpendNativePreferredModePrefersCompactWhenAvailable()
     {
         Assert.Equal(
-            KagemushaOfflineSpendMode.RecursiveSpendV1,
+            KagemushaOfflineSpendMode.RecursiveCompactV1,
             KagemushaRecursiveSpendNative.PreferredMode(true, true));
         Assert.Equal(
-            KagemushaOfflineSpendMode.CheckedPrefoldV1,
+            KagemushaOfflineSpendMode.RecursiveCompactV1,
             KagemushaRecursiveSpendNative.PreferredMode(true, false));
         Assert.Equal(
             KagemushaOfflineSpendMode.RecursiveSpendV1,

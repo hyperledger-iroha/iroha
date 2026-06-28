@@ -156,9 +156,11 @@ parsing or builder mutation. These builders require valid Norito archives,
 reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
-Use `PreferredMode(...)` to select `recursive_spend_v1` when the complete
-ABI-6-or-later native surface is available, otherwise fall back to
-`checked_prefold_v1`.
+Use `PreferredMode(...)` to select `recursive_compact_v1` when the ABI-7
+compact-token prover surface is available, `recursive_spend_v1` when only the
+complete ABI-6-or-later native surface is available, otherwise
+`checked_prefold_v1`. The single-argument overload models only the recursive
+spend capability and keeps the recursive-spend/checked-prefold choice.
 The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
 probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle

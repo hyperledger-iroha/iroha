@@ -633,6 +633,8 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java",
@@ -10832,13 +10834,41 @@ def check_bridge_retired_offline_note_transaction_builders(texts, errors):
 
 
 def check_mobile_classic_offline_note_fixture_labels(texts, errors):
+    swift_model = "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift"
     swift = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt"
+    kotlin_wallet = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
     android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
+    android_wallet = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+    )
+    android_token_codec = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "OfflineNotePaymentTokenCodec.java"
+    )
+    android_store_codec = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "OfflineNoteWalletNoteJsonCodec.java"
+    )
+    require_contains(
+        texts,
+        swift_model,
+        (
+            "Archived classic Offline Note model/codec helpers retained for compatibility",
+            "fixtures; production offline payments use Kagemusha.",
+        ),
+        "Swift archived Offline Note model/codec helper labels",
+        errors,
+    )
     require_contains(
         texts,
         swift,
         (
+            "Archived classic Offline Note wallet/model helpers retained for compatibility",
+            "fixtures; production offline payments use Kagemusha.",
+            "Archived classic Offline Note receive-request codec retained for",
+            "compatibility fixtures; production offline payments use Kagemusha.",
+            "Archived classic Offline Note payment-token codec retained for compatibility",
             "Retired classic Offline Note outcome names retained for historical",
             "compatibility fixture indexing; production offline payments use Kagemusha",
             'public static let kindIssue = "IssueOfflineNote"',
@@ -10846,8 +10876,46 @@ def check_mobile_classic_offline_note_fixture_labels(texts, errors):
             'public static let kindAudit = "AuditOfflineNote"',
         ),
         "Swift classic Offline Note fixture labels",
+            errors,
+        )
+    require_contains(
+        texts,
+        kotlin_wallet,
+        (
+            "Archived classic Offline Note wallet/model helpers retained for compatibility",
+            "fixtures; production offline payments use Kagemusha.",
+            "Archived classic Offline Note wallet facade retained for compatibility",
+        ),
+        "Kotlin archived Offline Note wallet/model helper labels",
         errors,
     )
+    for relative, label, markers in (
+        (
+            android_wallet,
+            "Android Java archived Offline Note wallet/model helper labels",
+            (
+                "Archived classic Offline Note wallet/model helpers retained for compatibility",
+                "fixtures; production offline payments use Kagemusha.",
+            ),
+        ),
+        (
+            android_token_codec,
+            "Android Java archived Offline Note payment-token codec labels",
+            (
+                "Archived classic Offline Note payment-token codec retained for compatibility",
+                "fixtures; production offline payments use Kagemusha.",
+            ),
+        ),
+        (
+            android_store_codec,
+            "Android Java archived Offline Note wallet-note JSON codec labels",
+            (
+                "Archived classic Offline Note wallet-note JSON codec retained for compatibility",
+                "fixtures; production offline payments use Kagemusha.",
+            ),
+        ),
+    ):
+        require_contains(texts, relative, markers, label, errors)
     for relative, label in (
         (kotlin, "Kotlin classic Offline Note fixture labels"),
         (android, "Android Java classic Offline Note fixture labels"),
@@ -10856,6 +10924,8 @@ def check_mobile_classic_offline_note_fixture_labels(texts, errors):
             texts,
             relative,
             (
+                "Archived classic Offline Note model/codec helpers retained for compatibility",
+                "fixtures; production offline payments use Kagemusha.",
                 "Historical classic Offline Note instruction wire names retained only for",
                 "compatibility fixture decoding; production offline payments use Kagemusha",
                 "ISSUE_INSTRUCTION_SCHEMA",
@@ -26323,7 +26393,7 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
             "`recursive_compact_v1` is selected when the ABI-7 compact prover/verifier",
             "`recursive_spend_v1` is selected when only the recursive",
             "`checked_prefold_v1` remains the",
-            "The C# selector remains on the ABI-6 fallback policy until",
+            "C# follows the same compact-first selector policy",
         ),
         "offline Kagemusha docs preferred compact-first mode policy",
         errors,
@@ -26496,14 +26566,31 @@ def check_cross_sdk_preferred_mode_fallback_policy(texts, errors):
         "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
         (
             'CheckedPrefoldV1WireName = "checked_prefold_v1"',
+            'RecursiveCompactV1WireName = "recursive_compact_v1"',
             "return PreferredMode(IsRecursiveCompactPaymentTokenProverAvailable(), IsAvailable());",
             "return PreferredMode(false, recursiveSpendAvailable);",
-            "_ = recursiveCompactAvailable;",
+            "if (recursiveCompactAvailable)",
+            "return KagemushaOfflineSpendMode.RecursiveCompactV1;",
             "? KagemushaOfflineSpendMode.RecursiveSpendV1",
             ": KagemushaOfflineSpendMode.CheckedPrefoldV1;",
         ),
-        "C# preferred Kagemusha mode fallback policy",
+        "C# preferred Kagemusha compact-first mode policy",
         errors,
+    )
+    require_regex(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        r"public\s+static\s+KagemushaOfflineSpendMode\s+PreferredMode"
+        r"\(\s*bool\s+recursiveCompactAvailable,\s*"
+        r"bool\s+recursiveSpendAvailable\s*\)\s*\{\s*"
+        r"if\s*\(\s*recursiveCompactAvailable\s*\)\s*\{\s*"
+        r"return\s+KagemushaOfflineSpendMode\.RecursiveCompactV1;\s*\}\s*"
+        r"return\s+recursiveSpendAvailable\s*\?\s*"
+        r"KagemushaOfflineSpendMode\.RecursiveSpendV1\s*:\s*"
+        r"KagemushaOfflineSpendMode\.CheckedPrefoldV1;\s*\}",
+        "C# preferred Kagemusha compact-first mode policy",
+        errors,
+        flags=re.S,
     )
 
 
@@ -33977,10 +34064,28 @@ if mode == "--negative-control-mobile-classic-offline-note-fixture-labels":
     mutated = dict(texts)
     mutations = (
         (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
+            "Archived classic Offline Note model/codec helpers retained for compatibility",
+            "Classic Offline Note model/codec helpers",
+            "Swift archived Offline Note model/codec helper labels missing Archived classic Offline Note model/codec helpers retained for compatibility",
+        ),
+        (
             "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
             "Retired classic Offline Note outcome names retained for historical",
             "Classic Offline Note outcome names",
             "Swift classic Offline Note fixture labels missing Retired classic Offline Note outcome names retained for historical",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "Archived classic Offline Note wallet/model helpers retained for compatibility",
+            "Classic Offline Note wallet/model helpers",
+            "Swift classic Offline Note fixture labels missing Archived classic Offline Note wallet/model helpers retained for compatibility",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "Archived classic Offline Note receive-request codec retained for",
+            "Classic Offline Note receive-request codec",
+            "Swift classic Offline Note fixture labels missing Archived classic Offline Note receive-request codec retained for",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
@@ -33989,10 +34094,46 @@ if mode == "--negative-control-mobile-classic-offline-note-fixture-labels":
             "Kotlin classic Offline Note fixture labels missing Historical classic Offline Note instruction wire names retained only for",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
+            "Archived classic Offline Note model/codec helpers retained for compatibility",
+            "Classic Offline Note model/codec helpers",
+            "Kotlin classic Offline Note fixture labels missing Archived classic Offline Note model/codec helpers retained for compatibility",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "Archived classic Offline Note wallet/model helpers retained for compatibility",
+            "Classic Offline Note wallet/model helpers",
+            "Kotlin archived Offline Note wallet/model helper labels missing Archived classic Offline Note wallet/model helpers retained for compatibility",
+        ),
+        (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
             "Historical classic Offline Note instruction wire names retained only for",
             "Classic Offline Note instruction wire names",
             "Android Java classic Offline Note fixture labels missing Historical classic Offline Note instruction wire names retained only for",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
+            "Archived classic Offline Note model/codec helpers retained for compatibility",
+            "Classic Offline Note model/codec helpers",
+            "Android Java classic Offline Note fixture labels missing Archived classic Offline Note model/codec helpers retained for compatibility",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+            "Archived classic Offline Note wallet/model helpers retained for compatibility",
+            "Classic Offline Note wallet/model helpers",
+            "Android Java archived Offline Note wallet/model helper labels missing Archived classic Offline Note wallet/model helpers retained for compatibility",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
+            "Archived classic Offline Note payment-token codec retained for compatibility",
+            "Classic Offline Note payment-token codec",
+            "Android Java archived Offline Note payment-token codec labels missing Archived classic Offline Note payment-token codec retained for compatibility",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java",
+            "Archived classic Offline Note wallet-note JSON codec retained for compatibility",
+            "Classic Offline Note wallet-note JSON codec",
+            "Android Java archived Offline Note wallet-note JSON codec labels missing Archived classic Offline Note wallet-note JSON codec retained for compatibility",
         ),
     )
     detected_messages = []
@@ -52641,9 +52782,9 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "_ = recursiveCompactAvailable;",
-            "if (recursiveCompactAvailable) { return KagemushaOfflineSpendMode.RecursiveCompactV1; }",
-            "C# preferred Kagemusha mode fallback policy",
+            "        if (recursiveCompactAvailable)\n        {\n            return KagemushaOfflineSpendMode.RecursiveCompactV1;\n        }\n\n",
+            "        _ = recursiveCompactAvailable;\n",
+            "C# preferred Kagemusha compact-first mode policy",
         ),
     )
     detected_messages = []

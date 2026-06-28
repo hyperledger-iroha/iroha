@@ -3297,8 +3297,8 @@ All SDKs expose the same default spend-mode choice:
 surface is available, `recursive_spend_v1` is selected when only the recursive
 spend ABI-6-or-later surface is available, and `checked_prefold_v1` remains the
 compatibility fallback for older runtimes that only provide the record-backed
-compact-token path. The C# selector remains on the ABI-6 fallback policy until
-the matching compact-first change is certified on a Windows host.
+compact-token path. C# follows the same compact-first selector policy; its
+single-argument overload represents only the recursive-spend capability.
 Verifier records for chain-side transfers, recursive final redeem/unshield,
 record-backed compact-token proving, and final folded-token record verification
 must live in the canonical `offline_kagemusha` namespace and publish the

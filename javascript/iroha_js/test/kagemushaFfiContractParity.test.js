@@ -3642,7 +3642,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
   const androidRawPuller = source("scripts/kagemusha_pull_android_device_lab_raw_slot.py");
   const dataModel = source("crates/iroha_data_model/src/offline/mod.rs");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
-  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1";
+  const verifierWitnessProfile = "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4";
   const expectedModes = [
     "--negative-control-abi6-manifest",
     "--negative-control-abi6-manifest-direct-invalid-json",
@@ -5015,8 +5015,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     readiness,
     [
       verifierWitnessProfile,
-      "255-by-1 scalar coverage",
-      "255-by-1 fixed-window Vesta verifier witness profile",
+      "64-by-4 scalar coverage",
+      "64-by-4 fixed-window Vesta verifier witness profile",
     ],
     "Kagemusha readiness verifier witness profile docs requirements",
   );
@@ -5201,7 +5201,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-offline-doc-verifier-profile-exactness",
-      /pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-255x1[\s\S]*?pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-85x3[\s\S]*?255-by-1 scalar coverage[\s\S]*?85-by-3 scalar coverage/u,
+      /pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-64x4[\s\S]*?pallas-ipa-transparent-v1\/vesta-recursive-fixed-window-85x3[\s\S]*?64-by-4 scalar coverage[\s\S]*?85-by-3 scalar coverage/u,
       "offline Kagemusha verifier-witness profile exactness",
     ],
     [
@@ -6606,7 +6606,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?_ = recursiveCompactAvailable;[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
+      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1[\s\S]*?_ = recursiveCompactAvailable;/u,
       "cross-SDK production default selector",
     ],
     [
@@ -10123,13 +10123,16 @@ test("recursive Kagemusha active marker scan covers workflow-backed non-C# test 
     "crates/iroha_core/src/queue/router.rs",
     "crates/iroha_torii/src/offline_issuer.rs",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "javascript/iroha_js/src/toriiClient.js",
     "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/privacyCatalogParity.test.js",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
     "python/iroha_python/src/iroha_python/offline_cash.py",
   ];
 
@@ -10873,7 +10876,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ArchiveBranch,
-    /4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906[\s\S]*?00f72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
+    /107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5[\s\S]*?007b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
     "ABI-7 archive fixture negative control must mutate the archive and require the exact hash diagnostic",
   );
   const abi7SdkCoverageBranch = guard.slice(
@@ -10996,9 +10999,9 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     guard,
     [
       "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
-      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
-      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;",
-      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;",
+      "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
+      "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
       "CURRENT_ROADMAP_PROFILE_NEEDLES",
       "STALE_ROADMAP_PROFILE_MARKERS",
       "roadmap.md still references stale Kagemusha verifier-witness profile marker",
@@ -16837,7 +16840,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*void recursiveCompactAvailable[\s\S]*_ = recursive_compact_available[\s\S]*Rust data-model preferred Kagemusha compact-first mode policy[\s\S]*Kotlin preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy/u,
+    /Swift preferred Kagemusha compact-first mode policy[\s\S]*void recursiveCompactAvailable[\s\S]*_ = recursive_compact_available[\s\S]*Rust data-model preferred Kagemusha compact-first mode policy[\s\S]*Kotlin preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha compact-first mode policy/u,
     "preferred-mode fallback negative control must mutate compact-first policy back to fallback across editable SDKs",
   );
   assertContainsAll(
@@ -16854,8 +16857,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha mode fallback policy/u,
-    "preferred-mode fallback negative control must expect editable-SDK compact-first labels and the C# deferral label",
+    /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha compact-first mode policy/u,
+    "preferred-mode fallback negative control must expect every editable-SDK compact-first label",
   );
   assertPerMutationDetector(
     preferredModeFallbackBranch,

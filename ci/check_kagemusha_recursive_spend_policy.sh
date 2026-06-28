@@ -223,11 +223,11 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         '"KagemushaRecursiveSpendVerifyResultV1"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
-        '"sha256_hex": "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"',
-        '"sha256_hex": "d3815dd9f6a015c6178e6976167308d0113823ce5877a21ae8f088fb54a56d76"',
+        '"sha256_hex": "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"',
+        '"sha256_hex": "ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d"',
         '"sha256_hex": "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"',
-        '"sha256_hex": "0ea80af6e6260a254fe4931cd4c75b622f998db6434d8762136e65547e303089"',
-        '"sha256_hex": "5e2d34bdda70b524497397ca72e4a3849b02ab58007b15337dd73eb247039f09"',
+        '"sha256_hex": "f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250"',
+        '"sha256_hex": "d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838"',
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_PRINT_ABI7_ARCHIVES",
@@ -2281,6 +2281,7 @@ REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS = (
 ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     *REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS,
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
@@ -2305,7 +2306,9 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNotePaymentTokenCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWalletNoteJsonCodec.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java",
@@ -5103,13 +5106,13 @@ def check_shared_abi7_archive_fixture_manifest():
             "append",
             "KagemushaRecursiveSpendBundleV1",
             13622,
-            "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906",
+            "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5",
         ),
         "verify_request": (
             "verify",
             "KagemushaRecursiveSpendVerifyRequestV1",
             13628,
-            "d3815dd9f6a015c6178e6976167308d0113823ce5877a21ae8f088fb54a56d76",
+            "ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d",
         ),
         "verify_result": (
             "verify",
@@ -5120,14 +5123,14 @@ def check_shared_abi7_archive_fixture_manifest():
         "redeem_request": (
             "redeem",
             "KagemushaRecursiveSpendRedeemRequestV1",
-            26266,
-            "0ea80af6e6260a254fe4931cd4c75b622f998db6434d8762136e65547e303089",
+            26275,
+            "f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250",
         ),
         "redeem_instruction": (
             "redeem",
             "RedeemKagemushaRecursive",
             26262,
-            "5e2d34bdda70b524497397ca72e4a3849b02ab58007b15337dd73eb247039f09",
+            "d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838",
         ),
     }
     by_name = {
@@ -5929,8 +5932,8 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
     target = SHARED_ABI7_ARCHIVE_FIXTURE_PATH
     source = read(target)
     mutated = source.replace(
-        '"sha256_hex": "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"',
-        '"sha256_hex": "00f72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"',
+        '"sha256_hex": "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"',
+        '"sha256_hex": "007b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"',
         1,
     )
     if mutated == source:
@@ -5942,7 +5945,7 @@ if mode == "--negative-control-shared-abi7-archive-fixture":
         message = str(error)
         expected = (
             f'{target} is missing shared recursive spend ABI-7 fixture coverage: '
-            '"sha256_hex": "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"'
+            '"sha256_hex": "107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5"'
         )
         if expected not in message:
             raise SystemExit(
@@ -7675,8 +7678,8 @@ if mode == "--negative-control-active-noncsharp-todo":
         ),
         (
             "roadmap.md",
-            "TODO(C# Windows): promote the C# preferred-mode selector",
-            "TODO(non-C#): promote the C# preferred-mode selector",
+            "TODO(C# Windows): certify matching exact C# verify-result",
+            "TODO(non-C#): certify matching exact C# verify-result",
             "roadmap C# handoff scope",
         ),
         (

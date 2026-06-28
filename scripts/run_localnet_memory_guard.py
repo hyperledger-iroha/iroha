@@ -29,6 +29,8 @@ DEFAULT_QUEUE_HARD_LIMIT = 0
 DEFAULT_QUEUE_WAIT_TIMEOUT = 300.0
 DEFAULT_POST_LOAD_SAMPLE_SECONDS = 30.0
 DEFAULT_LOAD_RUNS = 1
+DEFAULT_DEPLOY_QUEUE_CAPACITY = 4_096
+DEFAULT_KURA_BLOCKS_IN_MEMORY = 16
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-p2p-port", type=int, default=48337)
     parser.add_argument("--seed", default="memory-guard-repro")
     parser.add_argument("--perf-profile", default="10k-permissioned")
+    parser.add_argument(
+        "--deploy-queue-capacity",
+        type=int,
+        default=DEFAULT_DEPLOY_QUEUE_CAPACITY,
+        help="Queue capacity written into generated localnet peer configs.",
+    )
+    parser.add_argument(
+        "--kura-blocks-in-memory",
+        type=int,
+        default=DEFAULT_KURA_BLOCKS_IN_MEMORY,
+        help="Decoded Kura block cache size to use for generated localnet peers.",
+    )
     parser.add_argument("--queue-soft-limit", type=int, default=DEFAULT_QUEUE_SOFT_LIMIT)
     parser.add_argument("--queue-hard-limit", type=int, default=DEFAULT_QUEUE_HARD_LIMIT)
     parser.add_argument("--queue-wait-timeout", type=float, default=DEFAULT_QUEUE_WAIT_TIMEOUT)
@@ -139,6 +153,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--post-load-sample-seconds must not be negative")
     if args.load_runs <= 0:
         parser.error("--load-runs must be greater than zero")
+    if args.deploy_queue_capacity <= 0:
+        parser.error("--deploy-queue-capacity must be greater than zero")
+    if args.kura_blocks_in_memory <= 0:
+        parser.error("--kura-blocks-in-memory must be greater than zero")
     return args
 
 
@@ -162,6 +180,10 @@ def build_deploy_cmd(args: argparse.Namespace) -> list[str]:
         "iroha3",
         "--perf-profile",
         args.perf_profile,
+        "--queue-capacity",
+        str(args.deploy_queue_capacity),
+        "--kura-blocks-in-memory",
+        str(args.kura_blocks_in_memory),
         "--base-api-port",
         str(args.base_api_port),
         "--base-p2p-port",
