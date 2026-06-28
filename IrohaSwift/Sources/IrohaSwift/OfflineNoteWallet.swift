@@ -6,6 +6,7 @@ import Security
 
 public enum OfflineNoteWalletNoteState: String, Sendable {
     case spendable
+    case issuePending
     case receivePending
     case spent
     case redeemPending
@@ -1279,10 +1280,26 @@ public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
         let transactionHashHex: String?
     }
 
+    private var committedIssues: [String: OutcomeHit] = [:]
+    private var rejectedIssues: [String: OutcomeHit] = [:]
     private var committedRedeems: [String: OutcomeHit] = [:]
     private var rejectedRedeems: [String: OutcomeHit] = [:]
 
     public init() {}
+
+    @discardableResult
+    public func recordCommittedIssue(_ issue: OfflineNoteIssue,
+                                     transactionHashHex: String? = nil) -> OfflineNoteOutcomeIndex {
+        putFirst(&committedIssues, key: issue.noteCommitment, value: transactionHashHex)
+        return self
+    }
+
+    @discardableResult
+    public func recordRejectedIssue(_ issue: OfflineNoteIssue,
+                                    transactionHashHex: String? = nil) -> OfflineNoteOutcomeIndex {
+        putFirst(&rejectedIssues, key: issue.noteCommitment, value: transactionHashHex)
+        return self
+    }
 
     @discardableResult
     public func recordCommittedAudit(_ audit: OfflineNoteAuditBundle,
@@ -1312,11 +1329,24 @@ public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
 
     public func resolve(_ note: OfflineNoteWalletNote) throws -> OfflineNoteSyncResolution? {
         switch note.state {
+        case .issuePending:
+            return resolveIssuePending(note)
         case .redeemPending:
             return resolveRedeemPending(note)
         default:
             return nil
         }
+    }
+
+    private func resolveIssuePending(_ note: OfflineNoteWalletNote) -> OfflineNoteSyncResolution? {
+        let commitmentKey = note.noteCommitmentHex
+        if let hit = committedIssues[commitmentKey] {
+            return OfflineNoteSyncResolution(state: .spendable, transactionHashHex: hit.transactionHashHex)
+        }
+        if let hit = rejectedIssues[commitmentKey] {
+            return OfflineNoteSyncResolution(state: .cancelled, transactionHashHex: hit.transactionHashHex)
+        }
+        return nil
     }
 
     private func resolveRedeemPending(_ note: OfflineNoteWalletNote) -> OfflineNoteSyncResolution? {
@@ -1344,7 +1374,14 @@ public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
             let committed = status == "committed"
             let rejected = status == "rejected"
             guard committed || rejected else { continue }
-            if outcome.kind.caseInsensitiveCompare(kindAudit) == .orderedSame {
+            if outcome.kind.caseInsensitiveCompare(kindIssue) == .orderedSame {
+                let issue = try OfflineNoteDecoding.decodeIssueInstruction(outcome.encodedInstruction)
+                if committed {
+                    index.recordCommittedIssue(issue, transactionHashHex: outcome.transactionHashHex)
+                } else {
+                    index.recordRejectedIssue(issue, transactionHashHex: outcome.transactionHashHex)
+                }
+            } else if outcome.kind.caseInsensitiveCompare(kindAudit) == .orderedSame {
                 let audit = try OfflineNoteDecoding.decodeAuditInstruction(outcome.encodedInstruction)
                 if committed {
                     index.recordCommittedAudit(audit, transactionHashHex: outcome.transactionHashHex)
@@ -1389,9 +1426,10 @@ public final class ToriiOfflineNoteOutcomeProvider: OfflineNoteOutcomeProvider {
     }
 
     public func listOutcomes() async throws -> [OfflineNoteExplorerInstructionOutcome] {
+        let issue = try await fetch(kind: OfflineNoteOutcomeIndex.kindIssue)
         let audit = try await fetch(kind: OfflineNoteOutcomeIndex.kindAudit)
         let redeem = try await fetch(kind: OfflineNoteOutcomeIndex.kindRedeem)
-        return audit + redeem
+        return issue + audit + redeem
     }
 
     private func fetch(kind: String) async throws -> [OfflineNoteExplorerInstructionOutcome] {
@@ -1628,7 +1666,7 @@ public final class OfflineNoteWallet {
             noteCommitment: commitment,
             noteSecret: noteSecret,
             origin: origin,
-            state: .spendable,
+            state: .issuePending,
             createdAtMs: now,
             updatedAtMs: now
         )
@@ -2245,7 +2283,7 @@ private func draftPlaceholderProof(publicInputsHash: Data) throws -> OfflineNote
 private extension OfflineNoteWalletNoteState {
     var isPending: Bool {
         switch self {
-        case .redeemPending:
+        case .issuePending, .redeemPending:
             return true
         case .receivePending, .spendable, .spent, .redeemed, .cancelled:
             return false
