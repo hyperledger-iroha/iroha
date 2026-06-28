@@ -39,6 +39,11 @@ def test_artifact_fingerprint_rejects_string_field_sequence_without_splitting() 
         artifact_fingerprint({"schema": "test"}, "schema")
 
 
+def test_artifact_fingerprint_rejects_bytearray_fields_without_byte_iteration() -> None:
+    with pytest.raises(ValueError, match="fields must be a sequence of strings"):
+        artifact_fingerprint({"schema": "test"}, bytearray(b"schema"))
+
+
 def test_artifact_fingerprint_rejects_non_string_field_without_traceback() -> None:
     with pytest.raises(ValueError, match="fields must be non-empty strings"):
         artifact_fingerprint({"schema": "test"}, ("schema", 7))
@@ -52,6 +57,11 @@ def test_artifact_fingerprint_rejects_blank_field_without_traceback() -> None:
 def test_artifact_fingerprint_rejects_padded_field_without_drift() -> None:
     with pytest.raises(ValueError, match="fields must be canonical strings"):
         artifact_fingerprint({"schema": "test"}, ("schema", " digest"))
+
+
+def test_artifact_fingerprint_rejects_control_character_field_without_drift() -> None:
+    with pytest.raises(ValueError, match="fields must not contain control characters"):
+        artifact_fingerprint({"schema": "test"}, ("schema", "dig\nest"))
 
 
 def test_artifact_fingerprint_rejects_duplicate_fields_without_overwrite() -> None:

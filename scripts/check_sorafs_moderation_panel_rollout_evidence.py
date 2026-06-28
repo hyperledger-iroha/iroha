@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -32,6 +33,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     build_evidence_artifact,
     count_evidence_artifacts,
     count_evidence_files,
+    deployment_context_summary,
     evidence_gate_status,
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
@@ -921,11 +923,7 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
-        "deployment_context": {
-            key: deployment_context[key]
-            for key in ("deployment_id", "environment")
-            if key in deployment_context
-        },
+        "deployment_context": deployment_context_summary(deployment_context),
         "valid_case_digests": sorted(valid_case_digests),
         "valid_roster_bindings": [
             {
@@ -1001,7 +999,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -1015,7 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

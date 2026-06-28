@@ -105,6 +105,33 @@ def test_dry_run_prints_complete_reserve_rollout_plan(tmp_path: Path, capsys) ->
     assert plan["external_evidence"]["signed_routes"] == [
         str(tmp_path / "payloads" / "signed-routes.json")
     ]
+    assert plan["evidence_contract"]["provider_bake"]["schema"] == (
+        "sorafs.reserve.provider_bake.v1"
+    )
+    assert (
+        "scheduled_lifecycle_canary_passed"
+        in plan["evidence_contract"]["provider_bake"]["required_payload_fields"]
+    )
+    assert (
+        "confirmed_balance_projection_verified"
+        in plan["evidence_contract"]["reserve_movement"]["required_payload_fields"]
+    )
+    assert (
+        "live_chain_submission_verified"
+        in plan["evidence_contract"]["reserve_movement"]["required_payload_fields"]
+    )
+    assert (
+        "automatic_finality_polling_verified"
+        in plan["evidence_contract"]["reserve_movement"]["required_payload_fields"]
+    )
+    assert (
+        "live_account_mutation_verified"
+        in plan["evidence_contract"]["credit_line"]["required_payload_fields"]
+    )
+    assert (
+        "downstream_compliance_policy_applied"
+        in plan["evidence_contract"]["governance_approval"]["required_payload_fields"]
+    )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_reserve_rent_rollout_evidence.py" in verifier[1]
@@ -127,6 +154,7 @@ def test_response_file_dry_run_prints_complete_reserve_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["provider_bake"]
+    assert "provider_bake" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_reserve_plan(
@@ -189,6 +217,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["policy_config"]
+    assert list(plan["evidence_contract"]) == ["policy_config"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "policy_config" in verifier

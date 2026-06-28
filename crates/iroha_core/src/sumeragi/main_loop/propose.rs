@@ -3396,9 +3396,9 @@ impl Actor {
                     let account_exists = |account: &iroha_data_model::account::AccountId| -> bool {
                         world.accounts().get(account).is_some()
                     };
-                    let (mut intents, rejected) = crate::da::sanitize_pin_intents(
+                    let (mut intents, rejected) = crate::da::sanitize_pin_intents_against_nexus(
                         bundle.intents,
-                        &lane_config,
+                        &nexus,
                         account_exists,
                     );
                     if let Some(first_rejection) = rejected.first().cloned() {
@@ -3462,7 +3462,7 @@ impl Actor {
                     }
                 }
 
-                let proof_policy_bundle = crate::da::proof_policy_bundle(&lane_config);
+                let proof_policy_bundle = crate::da::active_proof_policy_bundle(&nexus);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
                 if !tx_batch.is_empty() {
@@ -3996,7 +3996,8 @@ impl Actor {
     /// openings by the same count until proof summaries are threaded through the
     /// consensus path.
     pub(super) fn validate_da_bundle(&mut self, bundle: &DaCommitmentBundle) -> Result<()> {
-        let lane_config = self.state.nexus_snapshot().lane_config.clone();
+        let nexus = self.state.nexus_snapshot();
+        let lane_config = nexus.lane_config.clone();
         validate_da_bundle_caps(
             bundle,
             self.config.da.max_commitments_per_block,
@@ -4004,6 +4005,14 @@ impl Actor {
         )?;
 
         for record in &bundle.commitments {
+            crate::da::active_lane_proof_policy(&nexus, record.lane_id).map_err(|err| {
+                eyre!(
+                    "DA commitment active lane validation failed for lane {} epoch {} seq {}: {err}",
+                    record.lane_id.as_u32(),
+                    record.epoch,
+                    record.sequence
+                )
+            })?;
             let policy = lane_config.manifest_policy(record.lane_id);
             let (outcome, cache_outcome) = {
                 let da_rbc = &mut self.subsystems.da_rbc;
@@ -4051,7 +4060,7 @@ impl Actor {
             )?;
         }
 
-        crate::da::validate_commitment_bundle(bundle, &lane_config)
+        crate::da::validate_commitment_bundle_against_nexus(bundle, &nexus)
             .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
 
         Ok(())

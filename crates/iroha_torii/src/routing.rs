@@ -87,7 +87,13 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, Signa
 use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
-    block::{BlockHeader, SignedBlock, consensus::EvidenceRecord},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{
+            EvidenceRecord, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
+            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
+        },
+    },
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
@@ -56688,6 +56694,88 @@ where
         .to_owned()
 }
 
+fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
+    match phase {
+        NativeAmxPhase::Prepare => "prepare",
+        NativeAmxPhase::Commit => "commit",
+    }
+}
+
+fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV1) -> Value {
+    json_object(vec![
+        json_entry("source_id", hex::encode(body.source_id)),
+        json_entry(
+            "tx_entrypoint_hash",
+            hash_with_prefix(body.tx_entrypoint_hash),
+        ),
+        json_entry("plan_digest", hash_with_prefix(body.plan_digest)),
+        json_entry("phase", native_amx_phase_label(body.phase)),
+        json_entry("coordinator_lane_id", body.coordinator_lane_id),
+        json_entry("coordinator_dataspace_id", body.coordinator_dataspace_id),
+        json_entry("participant_lane_id", body.participant_lane_id),
+        json_entry("participant_dataspace_id", body.participant_dataspace_id),
+        json_entry(
+            "planned_coordinator_block_height",
+            body.planned_coordinator_block_height,
+        ),
+    ])
+}
+
+fn native_amx_attestation_qc_json(qc: &NativeAmxAttestationQcV1) -> Value {
+    json_object(vec![
+        json_entry("body", native_amx_attestation_body_json(&qc.body)),
+        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
+        json_entry(
+            "validator_set_hash",
+            hash_with_prefix(qc.validator_set_hash),
+        ),
+        json_entry(
+            "validator_set",
+            Value::Array(
+                qc.validator_set
+                    .iter()
+                    .map(|peer| Value::from(peer.to_string()))
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "signers_bitmap",
+            Value::Array(qc.signers_bitmap.iter().copied().map(Value::from).collect()),
+        ),
+        json_entry(
+            "bls_aggregate_signature",
+            hex::encode(&qc.bls_aggregate_signature),
+        ),
+    ])
+}
+
+fn native_amx_leg_json(leg: &NativeAmxLegRecord) -> Value {
+    json_object(vec![
+        json_entry("lane_id", leg.lane_id),
+        json_entry("dataspace_id", leg.dataspace_id),
+        json_entry(
+            "prepare_qc",
+            native_amx_attestation_qc_json(&leg.prepare_qc),
+        ),
+        json_entry("commit_qc", native_amx_attestation_qc_json(&leg.commit_qc)),
+    ])
+}
+
+fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
+    json_object(vec![
+        json_entry("version", receipt.version),
+        json_entry("source_id", hex::encode(receipt.source_id)),
+        json_entry("plan_digest", hash_with_prefix(receipt.plan_digest)),
+        json_entry("lane_id", receipt.lane_id),
+        json_entry("dataspace_id", receipt.dataspace_id),
+        json_entry("block_height", receipt.block_height),
+        json_entry(
+            "legs",
+            Value::Array(receipt.legs.iter().map(native_amx_leg_json).collect()),
+        ),
+    ])
+}
+
 fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashOf<BlockHeader>> {
     let settled = snap
         .qc_deferred_resolved_total
@@ -57623,6 +57711,13 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                         })
                         .collect(),
                 );
+                let native_amx_receipts = Value::Array(
+                    entry
+                        .native_amx_receipts
+                        .iter()
+                        .map(native_amx_receipt_json)
+                        .collect(),
+                );
                 let swap_metadata = entry
                     .swap_metadata
                     .as_ref()
@@ -57659,6 +57754,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     ),
                     json_entry("swap_metadata", swap_metadata),
                     json_entry("receipts", receipts),
+                    json_entry("nexus_fee_receipts", json_value(&entry.nexus_fee_receipts)),
+                    json_entry("native_amx_receipts", native_amx_receipts),
                 ])
             })
             .collect(),
@@ -58538,9 +58635,13 @@ mod status_tests {
         DataSpaceId, LaneId,
         block::consensus::{
             LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-            LaneVolatilityClass,
+            LaneVolatilityClass, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
+            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
         },
-        consensus::{ValidatorElectionOutcome, ValidatorElectionParameters, ValidatorTieBreak},
+        consensus::{
+            VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorElectionParameters,
+            ValidatorTieBreak,
+        },
         peer::PeerId,
     };
     use iroha_p2p::ConsensusConfigCaps;
@@ -59486,6 +59587,218 @@ mod status_tests {
                 .expect("timestamp"),
             receipt.timestamp_ms
         );
+    }
+
+    #[test]
+    fn status_snapshot_json_serializes_native_amx_receipts_in_lane_settlement_commitments() {
+        let source_id = [0xCE; 32];
+        let plan_digest = Hash::new(b"torii-status-native-amx-plan");
+        let tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::prehashed([0x44; Hash::LENGTH]),
+        );
+        let coordinator_lane_id = LaneId::new(4);
+        let coordinator_dataspace_id = DataSpaceId::new(11);
+        let participant_lane_id = LaneId::new(5);
+        let participant_dataspace_id = DataSpaceId::new(12);
+        let validators = vec![
+            checked_status_peer(0xA1, "derive native AMX status fixture peer key 1"),
+            checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
+        ];
+        let validator_set_hash = HashOf::new(&validators);
+        let native_amx_qc = |phase: NativeAmxPhase| NativeAmxAttestationQcV1 {
+            body: NativeAmxAttestationBodyV1 {
+                source_id,
+                tx_entrypoint_hash,
+                plan_digest,
+                phase,
+                coordinator_lane_id,
+                coordinator_dataspace_id,
+                participant_lane_id,
+                participant_dataspace_id,
+                planned_coordinator_block_height: 77,
+            },
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
+            validator_set: validators.clone(),
+            signers_bitmap: vec![0b0000_0011],
+            bls_aggregate_signature: vec![0xA5; 96],
+        };
+        let receipt = NativeAmxReceipt {
+            version: 1,
+            source_id,
+            plan_digest,
+            lane_id: coordinator_lane_id,
+            dataspace_id: coordinator_dataspace_id,
+            block_height: 77,
+            legs: vec![NativeAmxLegRecord {
+                lane_id: participant_lane_id,
+                dataspace_id: participant_dataspace_id,
+                prepare_qc: native_amx_qc(NativeAmxPhase::Prepare),
+                commit_qc: native_amx_qc(NativeAmxPhase::Commit),
+            }],
+        };
+        let commitment = LaneBlockCommitment {
+            block_height: 77,
+            lane_id: coordinator_lane_id,
+            dataspace_id: coordinator_dataspace_id,
+            tx_count: 1,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: vec![receipt],
+        };
+        let snap = sumeragi::StatusSnapshot {
+            lane_settlement_commitments: vec![commitment],
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let entries = payload
+            .get("lane_settlement_commitments")
+            .and_then(Value::as_array)
+            .expect("lane settlement commitments array");
+        let entry = entries[0]
+            .as_object()
+            .expect("lane settlement commitment object");
+        let native_receipts = entry
+            .get("native_amx_receipts")
+            .and_then(Value::as_array)
+            .expect("native AMX receipts array");
+        assert_eq!(native_receipts.len(), 1);
+        assert!(
+            entry
+                .get("nexus_fee_receipts")
+                .and_then(Value::as_array)
+                .expect("nexus fee receipts array")
+                .is_empty()
+        );
+
+        let native = native_receipts[0]
+            .as_object()
+            .expect("native AMX receipt object");
+        let source_id_hex = hex::encode(source_id);
+        let plan_digest_json = hash_with_prefix(plan_digest);
+        let tx_entrypoint_hash_json = hash_with_prefix(tx_entrypoint_hash);
+        let validator_set_hash_json = hash_with_prefix(validator_set_hash);
+        let first_validator = validators[0].to_string();
+        let aggregate_signature_hex = hex::encode(vec![0xA5; 96]);
+        assert_eq!(native.get("version").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            native.get("source_id").and_then(Value::as_str),
+            Some(source_id_hex.as_str())
+        );
+        assert_eq!(
+            native.get("plan_digest").and_then(Value::as_str),
+            Some(plan_digest_json.as_str())
+        );
+        assert_eq!(
+            native.get("lane_id").and_then(Value::as_u64),
+            Some(u64::from(coordinator_lane_id))
+        );
+        assert_eq!(
+            native.get("dataspace_id").and_then(Value::as_u64),
+            Some(u64::from(coordinator_dataspace_id))
+        );
+        assert_eq!(native.get("block_height").and_then(Value::as_u64), Some(77));
+
+        let legs = native
+            .get("legs")
+            .and_then(Value::as_array)
+            .expect("native AMX legs array");
+        assert_eq!(legs.len(), 1);
+        let leg = legs[0].as_object().expect("native AMX leg object");
+        assert_eq!(
+            leg.get("lane_id").and_then(Value::as_u64),
+            Some(u64::from(participant_lane_id))
+        );
+        assert_eq!(
+            leg.get("dataspace_id").and_then(Value::as_u64),
+            Some(u64::from(participant_dataspace_id))
+        );
+
+        let prepare_qc = leg
+            .get("prepare_qc")
+            .and_then(Value::as_object)
+            .expect("prepare QC object");
+        let prepare_body = prepare_qc
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("prepare body object");
+        assert_eq!(
+            prepare_body.get("source_id").and_then(Value::as_str),
+            Some(source_id_hex.as_str())
+        );
+        assert_eq!(
+            prepare_body
+                .get("tx_entrypoint_hash")
+                .and_then(Value::as_str),
+            Some(tx_entrypoint_hash_json.as_str())
+        );
+        assert_eq!(
+            prepare_body.get("phase").and_then(Value::as_str),
+            Some("prepare")
+        );
+        assert_eq!(
+            prepare_body
+                .get("participant_lane_id")
+                .and_then(Value::as_u64),
+            Some(u64::from(participant_lane_id))
+        );
+        assert_eq!(
+            prepare_body
+                .get("participant_dataspace_id")
+                .and_then(Value::as_u64),
+            Some(u64::from(participant_dataspace_id))
+        );
+        assert_eq!(
+            prepare_body
+                .get("planned_coordinator_block_height")
+                .and_then(Value::as_u64),
+            Some(77)
+        );
+        assert_eq!(
+            prepare_qc
+                .get("validator_set_hash_version")
+                .and_then(Value::as_u64),
+            Some(u64::from(VALIDATOR_SET_HASH_VERSION_V1))
+        );
+        assert_eq!(
+            prepare_qc.get("validator_set_hash").and_then(Value::as_str),
+            Some(validator_set_hash_json.as_str())
+        );
+        let validator_set = prepare_qc
+            .get("validator_set")
+            .and_then(Value::as_array)
+            .expect("validator set array");
+        assert_eq!(validator_set.len(), validators.len());
+        assert_eq!(validator_set[0].as_str(), Some(first_validator.as_str()));
+        assert_eq!(
+            prepare_qc
+                .get("signers_bitmap")
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(Value::as_u64),
+            Some(0b0000_0011)
+        );
+        assert_eq!(
+            prepare_qc
+                .get("bls_aggregate_signature")
+                .and_then(Value::as_str),
+            Some(aggregate_signature_hex.as_str())
+        );
+
+        let commit_phase = leg
+            .get("commit_qc")
+            .and_then(Value::as_object)
+            .and_then(|qc| qc.get("body"))
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("phase"))
+            .and_then(Value::as_str);
+        assert_eq!(commit_phase, Some("commit"));
     }
 
     #[test]
@@ -87756,6 +88069,498 @@ pub async fn handle_post_nexus_lane_lifecycle(
         norito::json::Value::Object(payload),
         utils::current_response_format(),
     ))
+}
+
+#[cfg(test)]
+mod nexus_lane_lifecycle_tests {
+    use super::*;
+
+    fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
+        let mut state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                ..Default::default()
+            })
+            .expect("enable Nexus for lifecycle test");
+        Arc::new(state)
+    }
+
+    fn disabled_state_for_lifecycle_test() -> Arc<CoreState> {
+        Arc::new(CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        ))
+    }
+
+    fn queue_for_lifecycle_test() -> Arc<Queue> {
+        let (events_sender, _) = tokio::sync::broadcast::channel(8);
+        Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events_sender,
+        ))
+    }
+
+    fn lane_with_teu_capacity(id: LaneId, alias: &str, teu_capacity: u64) -> LaneConfig {
+        let mut lane = LaneConfig {
+            id,
+            alias: alias.to_owned(),
+            ..Default::default()
+        };
+        lane.metadata.insert(
+            "scheduler.teu_capacity".to_owned(),
+            teu_capacity.to_string(),
+        );
+        lane
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_autoscale_spoof_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let spoofed_lane_id = LaneId::new(1);
+        let before_limits = queue.queue_limits().for_lane(spoofed_lane_id);
+
+        let mut spoofed_lane =
+            lane_with_teu_capacity(spoofed_lane_id, "spoofed-elastic", 987_654_321);
+        spoofed_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![spoofed_lane],
+            retire: Vec::new(),
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("autoscale-spoofed lane lifecycle plan must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason == "lane 1 uses reserved autoscale-managed metadata"
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != spoofed_lane_id),
+            "rejected lifecycle plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(spoofed_lane_id),
+            before_limits,
+            "rejected lifecycle plan must not refresh queue limits from spoofed metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_when_nexus_disabled_without_queue_refresh() {
+        let state = disabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let added_lane_id = LaneId::new(1);
+        let before_limits = queue.queue_limits().for_lane(added_lane_id);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                added_lane_id,
+                "disabled-nexus-lane",
+                777_777,
+            )],
+            retire: Vec::new(),
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("disabled Nexus lifecycle request must be rejected"),
+                Err(err) => err,
+            };
+        match err {
+            Error::AppQueryValidation { code, message } => {
+                assert_eq!(code, "nexus_disabled");
+                assert!(
+                    message.contains("nexus.enabled=true"),
+                    "message should explain required flag: {message}"
+                );
+            }
+            other => panic!("expected nexus disabled validation error, got {other:?}"),
+        }
+        assert_eq!(
+            queue.queue_limits().for_lane(added_lane_id),
+            before_limits,
+            "disabled Nexus lifecycle request must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_default_lane_retire_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
+        let plan = LaneLifecyclePlanDto {
+            additions: Vec::new(),
+            retire: vec![LaneId::SINGLE],
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("default-lane retirement must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("lane catalog cannot be empty")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected default-lane retire plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(LaneId::SINGLE),
+            before_limits,
+            "rejected default-lane retire plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_duplicate_additions_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let duplicate_lane_id = LaneId::new(1);
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(duplicate_lane_id);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![
+                lane_with_teu_capacity(duplicate_lane_id, "duplicate-addition-a", 111_111),
+                lane_with_teu_capacity(duplicate_lane_id, "duplicate-addition-b", 222_222),
+            ],
+            retire: Vec::new(),
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("duplicate lifecycle additions must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("duplicate lane id 1")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected duplicate-addition plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(duplicate_lane_id),
+            before_limits,
+            "rejected duplicate-addition plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_duplicate_aliases_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let first_lane_id = LaneId::new(1);
+        let second_lane_id = LaneId::new(2);
+        let before_nexus = state.nexus_snapshot();
+        let before_first_limits = queue.queue_limits().for_lane(first_lane_id);
+        let before_second_limits = queue.queue_limits().for_lane(second_lane_id);
+        let duplicate_alias = "duplicate-alias";
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![
+                lane_with_teu_capacity(first_lane_id, duplicate_alias, 111_111),
+                lane_with_teu_capacity(second_lane_id, duplicate_alias, 222_222),
+            ],
+            retire: Vec::new(),
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("duplicate lifecycle aliases must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("duplicate lane alias duplicate-alias")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected duplicate-alias plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(first_lane_id),
+            before_first_limits,
+            "rejected duplicate-alias plan must not refresh first lane limits"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(second_lane_id),
+            before_second_limits,
+            "rejected duplicate-alias plan must not refresh second lane limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_duplicate_retires_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let retired_lane_id = LaneId::new(1);
+        let retired_teu_capacity = 333_333;
+        let add_plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                retired_lane_id,
+                "duplicate-retire-target",
+                retired_teu_capacity,
+            )],
+            retire: Vec::new(),
+        };
+        handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), add_plan)
+            .await
+            .expect("manual lifecycle addition should be accepted");
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(retired_lane_id);
+        assert_eq!(
+            before_limits.teu_capacity, retired_teu_capacity,
+            "setup must install lane-specific queue limits before duplicate retire"
+        );
+        let duplicate_retire_plan = LaneLifecyclePlanDto {
+            additions: Vec::new(),
+            retire: vec![retired_lane_id, retired_lane_id],
+        };
+
+        let err = match handle_post_nexus_lane_lifecycle(
+            Arc::clone(&state),
+            Arc::clone(&queue),
+            duplicate_retire_plan,
+        )
+        .await
+        {
+            Ok(_) => panic!("duplicate lifecycle retire ids must be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("duplicate retire lane 1")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected duplicate-retire plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(retired_lane_id),
+            before_limits,
+            "rejected duplicate-retire plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_unknown_retire_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let unknown_lane_id = LaneId::new(9);
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(unknown_lane_id);
+        let plan = LaneLifecyclePlanDto {
+            additions: Vec::new(),
+            retire: vec![unknown_lane_id],
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("unknown lifecycle retire lane must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("cannot retire unknown lane 9")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected unknown-retire plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(unknown_lane_id),
+            before_limits,
+            "rejected unknown-retire plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_unknown_dataspace_without_queue_refresh() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let added_lane_id = LaneId::new(1);
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(added_lane_id);
+        let mut unknown_dataspace_lane =
+            lane_with_teu_capacity(added_lane_id, "unknown-dataspace", 444_444);
+        unknown_dataspace_lane.dataspace_id = DataSpaceId::new(42);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![unknown_dataspace_lane],
+            retire: Vec::new(),
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("unknown lifecycle dataspace must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("lane lifecycle plan references unknown dataspace 42")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected unknown-dataspace plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(added_lane_id),
+            before_limits,
+            "rejected unknown-dataspace plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_applies_manual_lane_and_refreshes_queue_limits() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let added_lane_id = LaneId::new(1);
+        let added_teu_capacity = 654_321;
+        let fallback_limits = queue.queue_limits().for_lane(added_lane_id);
+        assert_ne!(
+            fallback_limits.teu_capacity, added_teu_capacity,
+            "test must use a lane-specific capacity distinct from the fallback"
+        );
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                added_lane_id,
+                "manual-through-torii",
+                added_teu_capacity,
+            )],
+            retire: Vec::new(),
+        };
+
+        let response =
+            handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+                .expect("manual lifecycle plan should be accepted")
+                .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let nexus = state.nexus_snapshot();
+        assert!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == added_lane_id && lane.alias == "manual-through-torii"),
+            "accepted lifecycle plan must update the committed lane catalog"
+        );
+        assert_eq!(nexus.lane_catalog.lane_count().get(), 2);
+        assert_eq!(
+            queue.queue_limits().for_lane(added_lane_id).teu_capacity,
+            added_teu_capacity,
+            "accepted lifecycle plan must refresh queue limits from committed Nexus metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_retires_manual_lane_and_clears_queue_limits() {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let retired_lane_id = LaneId::new(1);
+        let retired_teu_capacity = 987_654_321;
+        let fallback_limits = queue.queue_limits().for_lane(retired_lane_id);
+        assert_ne!(
+            fallback_limits.teu_capacity, retired_teu_capacity,
+            "test must use a lane-specific capacity distinct from fallback"
+        );
+
+        let add_plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                retired_lane_id,
+                "manual-retire-through-torii",
+                retired_teu_capacity,
+            )],
+            retire: Vec::new(),
+        };
+        handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), add_plan)
+            .await
+            .expect("manual lifecycle addition should be accepted");
+        assert_eq!(
+            queue.queue_limits().for_lane(retired_lane_id).teu_capacity,
+            retired_teu_capacity,
+            "setup must install lane-specific queue limits before retirement"
+        );
+
+        let retire_plan = LaneLifecyclePlanDto {
+            additions: Vec::new(),
+            retire: vec![retired_lane_id],
+        };
+        let response =
+            handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), retire_plan)
+                .await
+                .expect("manual lifecycle retirement should be accepted")
+                .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let nexus = state.nexus_snapshot();
+        assert!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != retired_lane_id),
+            "accepted retire plan must remove the lane from the committed catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(retired_lane_id),
+            fallback_limits,
+            "accepted retire plan must clear stale lane-specific queue limits"
+        );
+    }
 }
 
 pub mod block {

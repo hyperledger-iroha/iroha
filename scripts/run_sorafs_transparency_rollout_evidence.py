@@ -15,7 +15,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
+    DEFAULT_REQUIRED_KINDS,
     DEFAULT_REQUIRED_SOURCE_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
+    KIND_BY_NAME,
     MAX_EVIDENCE_BYTES,
     SUMMARY_SCHEMA,
 )
@@ -25,6 +28,7 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     require_rollout_deployment_id,
     require_rollout_environment,
@@ -32,6 +36,7 @@ from sorafs_evidence_validation import (  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
+    emit_runner_exception,
     inspect_runner_path_is_file,
     inspect_runner_path_is_symlink,
     run_command_plan,
@@ -87,7 +92,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         try:
             source_entries.append(split_source_entry_spec(spec))
         except ValueError as error:
-            errors.append(str(error))
+            errors.append(error_diagnostic_label(error))
 
     present_source_kinds = {source_kind for source_kind, _ in source_entries}
     for source_kind in DEFAULT_REQUIRED_SOURCE_KINDS:
@@ -220,6 +225,14 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "deployment_context": {
             "deployment_id": args.deployment_id,
             "environment": args.environment.lower(),
+            "deployment_context_reviewed": True,
+        },
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in DEFAULT_REQUIRED_KINDS
         },
         "steps": [
             {
@@ -261,11 +274,18 @@ def annotate_evidence_artifact(
     try:
         payload = load_evidence_json(path, MAX_EVIDENCE_BYTES)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as error:
-        return [f"failed to read generated evidence artifact `{path}`: {error}"]
+        path_label = path_diagnostic_label(path)
+        return [
+            "failed to read generated evidence artifact `{}`: {}".format(
+                path_label,
+                error_diagnostic_label(error, path_label=path_label),
+            )
+        ]
 
     for field, value in (
         ("deployment_id", deployment_id),
         ("environment", environment),
+        ("deployment_context_reviewed", True),
     ):
         existing = payload.get(field)
         if existing is not None and existing != value:
@@ -278,7 +298,13 @@ def annotate_evidence_artifact(
     try:
         path.write_text(render_runner_plan(payload), encoding="utf-8")
     except (OSError, RuntimeError, TypeError, ValueError) as error:
-        return [f"failed to write deployment context into `{path}`: {error}"]
+        path_label = path_diagnostic_label(path)
+        return [
+            "failed to write deployment context into `{}`: {}".format(
+                path_label,
+                error_diagnostic_label(error, path_label=path_label),
+            )
+        ]
     return []
 
 
@@ -418,7 +444,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         raise SystemExit(2) from error
     return parser.parse_args(normalize_iroha_arg_values(expanded_args))
 

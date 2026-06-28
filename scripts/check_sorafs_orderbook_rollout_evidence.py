@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -188,6 +189,120 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "contract_surface": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "contract_deployed",
+        "deterministic_matching_verified",
+        "escrow_enforced",
+        "pause_control_configured",
+        "fee_policy_config_bound",
+        "capability_policy_configured",
+        "contract_state_source",
+        "contract_digest_hex",
+        "raw_contract_state_included",
+    ),
+    "matcher_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "daemonized",
+        "contract_forwarding_enabled",
+        "price_time_priority_verified",
+        "replay_snapshot_verified",
+        "durable_checkpoint_verified",
+        "contract_digest_hex",
+        "divergence_detected",
+        "matcher_lag_ms",
+        "accepted_order_count",
+        "matched_order_count",
+        "rejected_invalid_order_count",
+        "raw_snapshot_included",
+    ),
+    "settlement_service": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "daemonized",
+        "contract_digest_hex",
+        "escrow_custody_mutation_verified",
+        "receipt_authorization_verified",
+        "non_overlapping_ranges_enforced",
+        "governance_receipts_published",
+        "open_channel_count",
+        "settled_receipt_count",
+        "settlement_backlog_count",
+        "raw_receipts_included",
+    ),
+    "api_gateway": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "contract_digest_hex",
+        "routes",
+        "canonical_request_auth_enforced",
+        "owner_account_binding_verified",
+        "provider_role_binding_verified",
+        "capability_policy_enforced",
+        "response_bodies_included",
+    ),
+    "event_streams": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "contract_digest_hex",
+        "streams",
+        "response_bodies_included",
+    ),
+    "sdk_release": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "artifact_hashes_verified",
+        "contract_digest_hex",
+        "live_smoke_passed",
+        "submitter_helpers_verified",
+        "languages",
+        "artifact_count",
+        "artifacts",
+    ),
+    "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "contract_digest_hex",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "live_dashboard_wired",
+        "critical_alerts_firing",
+        "metrics",
+        "response_bodies_included",
+    ),
+    "reconciliation": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "peer_count",
+        "contract_digest_hex",
+        "source_count",
+        "sources",
+        "contract_mirror_reconciliation_passed",
+        "evidence_dag_published",
+        "contract_mirror_divergence",
+        "mismatch_count",
+        "unreconciled_event_count",
+        "raw_ledger_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "orderbook_activation_governed",
+        "emergency_pause_tested",
+        "capability_policy_bound",
+        "treasury_policy_bound",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -587,7 +702,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -601,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

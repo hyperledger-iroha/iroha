@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f5a117fec4a2b24447c10002713a115f5d0a46a87f05f5fb9e79c7c778311448
+source_hash: a198824eb738079cea112c31d42f259d98ce0ed631fd39a90ea461efafde5a3a
 source_last_modified: "2026-06-25T17:34:55+00:00"
 translation_last_reviewed: 2026-06-25
 ---

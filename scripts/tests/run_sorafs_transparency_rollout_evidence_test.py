@@ -92,7 +92,31 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     assert plan["deployment_context"] == {
         "deployment_id": "transparency-staging-a",
         "environment": "staging",
+        "deployment_context_reviewed": True,
     }
+    assert plan["evidence_contract"]["source_entry"]["schema"] == (
+        "sorafs.transparency.source_entry.canary.v1"
+    )
+    assert (
+        "source_entry_probe_count"
+        in plan["evidence_contract"]["source_entry"]["required_payload_fields"]
+    )
+    assert (
+        "publisher_identity_required"
+        in plan["evidence_contract"]["publication"]["required_payload_fields"]
+    )
+    assert (
+        "publish_due_probe_count"
+        in plan["evidence_contract"]["privacy_aggregate"]["required_payload_fields"]
+    )
+    assert (
+        "proof_token_frames_included"
+        in plan["evidence_contract"]["proof_token_issuance"]["required_payload_fields"]
+    )
+    assert (
+        "routes"
+        in plan["evidence_contract"]["explorer"]["required_payload_fields"]
+    )
     labels = [step["label"] for step in plan["steps"]]
     assert labels == [
         "source_entry_canary",
@@ -121,6 +145,7 @@ def test_response_file_dry_run_prints_complete_rollout_plan(tmp_path: Path, caps
     publication = plan["steps"][3]["command"]
     assert publication[:4] == ["/usr/local/bin/iroha", "--config", "/runtime/client.toml", "sorafs"]
     assert "publication-canary" in publication
+    assert "source_entry" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_rollout_plan(
@@ -146,6 +171,90 @@ def test_missing_source_kind_fails_before_plan(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "missing --source-entry coverage" in captured.err
     assert captured.out == ""
+
+
+def test_malformed_source_entry_sanitizes_exception_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bad_message = "transparency\nsource"
+
+    def raise_malformed_source_entry(_spec: str):
+        raise ValueError(bad_message)
+
+    monkeypatch.setattr(MODULE, "split_source_entry_spec", raise_malformed_source_entry)
+    errors = MODULE.validate_inputs(MODULE.parse_args(complete_args(tmp_path)))
+
+    assert "<non-canonical-error>" in errors
+    assert bad_message not in "\n".join(errors)
+
+
+def test_generated_artifact_read_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    bad_message = "json\nsecret"
+
+    def load_raises(_path: Path, _max_bytes: int):
+        raise ValueError(bad_message)
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", load_raises)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == [
+        f"failed to read generated evidence artifact `{artifact}`: "
+        "<non-canonical-error>"
+    ]
+    assert bad_message not in "\n".join(errors)
+
+
+def test_generated_artifact_annotation_marks_reviewed_context(tmp_path: Path) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == []
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["deployment_id"] == "transparency-staging-a"
+    assert payload["environment"] == "staging"
+    assert payload["deployment_context_reviewed"] is True
+
+
+def test_deployment_context_write_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    original_write_text = Path.write_text
+    bad_message = "write denied\nsecret"
+
+    def write_text_raises(path: Path, *args, **kwargs):
+        if path == artifact:
+            raise OSError(bad_message)
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_text_raises)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == [
+        f"failed to write deployment context into `{artifact}`: "
+        "<non-canonical-error>"
+    ]
+    assert bad_message not in "\n".join(errors)
 
 
 def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:

@@ -131,6 +131,29 @@ def test_non_path_evidence_directory_fails_closed_without_traceback() -> None:
     assert errors == ["evidence directory `reviewed` must be a path"]
 
 
+def test_noncanonical_evidence_directory_labels_are_sanitized() -> None:
+    for directory, expected_label in (
+        (" reviewed", "<non-canonical-path>"),
+        ("reviewed\npath", "<non-canonical-path>"),
+        (b"reviewed", "<non-path>"),
+    ):
+        errors: list[str] = []
+        assert inspect_evidence_directory(directory, errors) is None
+        assert errors == [f"evidence directory `{expected_label}` must be a path"]
+
+
+def test_noncanonical_missing_evidence_directory_label_is_sanitized(
+    tmp_path: Path,
+) -> None:
+    errors: list[str] = []
+    files = discover_evidence_files([tmp_path / "bad\npath"], [], errors)
+
+    assert files == []
+    assert errors == [
+        "evidence directory `<non-canonical-path>` must exist and be a directory"
+    ]
+
+
 def test_evidence_path_collection_rejects_scalar_and_mapping_containers() -> None:
     errors: list[str] = []
 
@@ -159,6 +182,19 @@ def test_evidence_path_collection_rejects_malformed_error_container() -> None:
             raise AssertionError(f"accepted malformed errors {errors!r}")
 
 
+def test_evidence_path_collection_rejects_malformed_existing_error_text() -> None:
+    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+        try:
+            evidence_path_collection([], errors, label="evidence file")
+        except ValueError as error:
+            assert (
+                "evidence path errors must contain non-empty canonical strings"
+                in str(error)
+            )
+        else:
+            raise AssertionError(f"accepted malformed error text {errors!r}")
+
+
 def test_evidence_path_collection_rejects_malformed_labels() -> None:
     for label in ("", " evidence", "evidence ", "evidence\nfile", 7):
         errors: list[str] = []
@@ -183,6 +219,42 @@ def test_discover_evidence_files_rejects_malformed_path_collections() -> None:
         "evidence directory paths must be a sequence",
         "evidence file paths must be a sequence",
     ]
+
+
+def test_discover_evidence_files_stops_after_malformed_reserved_outputs(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    errors: list[str] = []
+    files = discover_evidence_files(
+        [tmp_path],
+        [evidence],
+        errors,
+        reserved_output_paths="summary.json",
+    )
+
+    assert files == []
+    assert errors == ["reserved output paths must be a sequence"]
+
+
+def test_discover_evidence_files_stops_after_non_path_reserved_outputs(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    errors: list[str] = []
+    files = discover_evidence_files(
+        [tmp_path],
+        [evidence],
+        errors,
+        reserved_output_paths=[7],
+    )
+
+    assert files == []
+    assert errors == ["reserved output `<non-path>` must be a path"]
 
 
 def test_discover_evidence_files_rejects_malformed_error_container() -> None:
@@ -244,6 +316,30 @@ def test_evidence_directory_inspection_failure_fails_closed(
     assert errors == [
         f"evidence directory `{evidence_dir}` cannot be inspected: "
         "evidence dir stat denied"
+    ]
+
+
+def test_evidence_directory_inspection_failure_sanitizes_noncanonical_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence_dir = tmp_path / "bad\npath"
+    original_is_dir = Path.is_dir
+
+    def is_dir(path: Path) -> bool:
+        if path == evidence_dir:
+            raise OSError("evidence dir stat denied")
+        return original_is_dir(path)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+    errors: list[str] = []
+    files = discover_evidence_files([evidence_dir], [], errors)
+
+    assert files == []
+    assert errors == [
+        "evidence directory `<non-canonical-path>` cannot be inspected: "
+        "<non-canonical-error>"
     ]
 
 
@@ -430,6 +526,20 @@ def test_explicit_identity_helpers_record_resolver_failures(tmp_path: Path) -> N
     assert evidence_path_identities([loop], errors) == set()
     assert is_explicit_evidence_path(loop, set(), errors) is False
     assert all("cannot be resolved" in error for error in errors)
+
+
+def test_explicit_identity_helper_rejects_malformed_identity_container(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+
+    for identities in (None, [], {"path": evidence}, {str(evidence)}):
+        errors: list[str] = []
+
+        assert is_explicit_evidence_path(evidence, identities, errors) is False
+
+        assert errors == ["explicit evidence identities must be a set of paths"]
 
 
 def test_evidence_path_identities_rejects_malformed_path_collections() -> None:

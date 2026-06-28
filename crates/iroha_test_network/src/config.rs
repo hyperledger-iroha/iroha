@@ -1123,6 +1123,7 @@ fn rebuild_block_from_parts(
     let da_commitments = template.da_commitments().cloned();
     let da_proof_policies = template.da_proof_policies().cloned();
     let da_pin_intents = template.da_pin_intents().cloned();
+    let committed_fragment_count = template.committed_fragment_count();
 
     let signer_index = initial_signature.index();
     let mut working = iroha_data_model::block::SignedBlock::presigned(
@@ -1136,6 +1137,9 @@ fn rebuild_block_from_parts(
     working
         .set_transaction_results(time_triggers.clone(), &hashes, results.clone())
         .expect("genesis result hashes should match payload");
+    if let Some(count) = committed_fragment_count {
+        working.set_committed_fragment_count(count);
+    }
     let signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
         SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
@@ -1153,6 +1157,9 @@ fn rebuild_block_from_parts(
     rebuilt
         .set_transaction_results(time_triggers, &hashes, results)
         .expect("genesis result hashes should match payload");
+    if let Some(count) = committed_fragment_count {
+        rebuilt.set_committed_fragment_count(count);
+    }
     rebuilt
 }
 
@@ -1360,6 +1367,50 @@ mod tests {
         assert!(
             block.0.results().all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should yield successful outcomes"
+        );
+    }
+
+    #[test]
+    fn rebuild_block_with_results_preserves_committed_fragment_count() {
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()]
+            .into_iter()
+            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted(
+                Vec::new(),
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            );
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+            None,
+        );
+        let preserved_count =
+            u64::try_from(block.0.results().count()).expect("genesis result count fits u64") + 1;
+        block.0.set_committed_fragment_count(preserved_count);
+
+        let rebuilt = super::rebuild_block_with_results(&block.0, &genesis_key_pair);
+
+        assert_eq!(
+            rebuilt.committed_fragment_count(),
+            Some(preserved_count),
+            "re-signing genesis must preserve the execution-derived committed fragment count"
+        );
+        assert!(
+            super::genesis_signature_is_canonical(&rebuilt, &genesis_key_pair),
+            "preserved committed fragment count must be included before the canonical signature"
         );
     }
 

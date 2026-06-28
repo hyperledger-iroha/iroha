@@ -45,9 +45,11 @@ deposit, settlement, submitter, worker, Governance DAG, dashboard,
 reconciliation, and governance approval evidence back to a valid pricing-config
 artifact in the same bundle. Config-digest mismatches are recorded on the
 offending artifact in the JSON summary before required-kind validity is
-reported, and
+reported. The checker also exports its required top-level payload fields as
+`EVIDENCE_REQUIRED_FIELDS`, and
 `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner.
+reviewed evidence collection planner/runner with a dry-run
+`evidence_contract` map for the selected required kinds.
 The repo still does not ship a standalone pricing daemon. Deposit custody uses
 the returned native `OpenAssetLock` instruction, which the authenticated payer
 must sign and submit through the normal transaction path, then external
@@ -442,7 +444,9 @@ reconciliation/governance artifacts carry a `config_digest_hex` matching a
 valid pricing-config artifact in the same bundle, config-bound mismatches are
 attached to the offending artifact in the emitted summary, the multi-peer
 reconciliation run covers at least four peers, and the governance approval is
-bound to `iroha_config`.
+bound to `iroha_config`. The collection planner includes the checker-backed
+`evidence_contract` map in `--dry-run` output so operators can review the exact
+SFM-4b2 artifact contract before promoting staged evidence.
 
 ## Remaining Production Gates
 

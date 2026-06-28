@@ -97,6 +97,35 @@ def test_dry_run_prints_complete_pdp_rollout_plan(tmp_path: Path, capsys) -> Non
     assert plan["external_evidence"]["provider_transport"] == [
         str(tmp_path / "payloads" / "provider-transport.json")
     ]
+    assert plan["evidence_contract"]["provider_transport"]["schema"] == (
+        "sorafs.pdp.provider_transport_canary.v1"
+    )
+    assert (
+        "proof_stream_pdp_enabled"
+        in plan["evidence_contract"]["provider_transport"]["required_payload_fields"]
+    )
+    assert (
+        "proof_summary_digest_hex"
+        in plan["evidence_contract"]["proof_generation"]["required_payload_fields"]
+    )
+    assert (
+        "validation_bundle_digest_hex"
+        in plan["evidence_contract"]["validator_replay"]["required_payload_fields"]
+    )
+    assert (
+        "repair_handoff_verified"
+        in plan["evidence_contract"]["governance_repair"]["required_payload_fields"]
+    )
+    assert (
+        "proof_failure_alert_tested"
+        in plan["evidence_contract"]["observability"]["required_payload_fields"]
+    )
+    assert (
+        "iroha_config_bound"
+        in plan["evidence_contract"]["governance_approval"][
+            "required_payload_fields"
+        ]
+    )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_pdp_rollout_evidence.py" in verifier[1]
@@ -117,6 +146,7 @@ def test_response_file_dry_run_prints_complete_pdp_plan(tmp_path: Path, capsys) 
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["provider_transport"]
+    assert "proof_generation" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_pdp_plan(tmp_path: Path, capsys) -> None:
@@ -128,6 +158,7 @@ def test_split_response_file_dry_run_prints_complete_pdp_plan(tmp_path: Path, ca
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.pdp.rollout_evidence_collection_plan.v1"
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
+    assert "observability" in plan["evidence_contract"]
 
 
 def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -174,6 +205,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["provider_transport"]
+    assert list(plan["evidence_contract"]) == ["provider_transport"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "provider_transport" in verifier

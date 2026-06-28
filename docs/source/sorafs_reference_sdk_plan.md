@@ -365,8 +365,58 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke runner that emits `ValidationOutcomeV1` JSON for committed fixtures.
 - Implemented: portal reference SDK error catalogue at
   `docs/portal/docs/sorafs/reference-sdk/errors.md`.
-- Remaining: publish operator, metrics, and binding-generation guides once the
-  release artifacts and downstream packages are cut.
+- Implemented: the operator, metrics, and binding-generation guides below cover
+  the local release helper, `ValidationOutcomeV1` telemetry contract, checked C
+  header, and downstream package evidence handoff. Final release-specific URLs,
+  signatures, and package versions remain SF-11 release evidence.
+
+### Operator Guide
+
+1. Build or package one target at a time with
+   `scripts/package_sorafs_validate_release.sh`, keeping generated output under
+   an untracked `dist/sorafs-validate-release/<target>/` directory. Commit only
+   `dist/.gitkeep`.
+2. For each supported target, archive the helper-generated binary, release
+   archive, `.sha256` files, manifest JSON, optional manifest signature, FFI
+   header copy, and smoke-output hash. Do not persist runtime signing seeds,
+   release private keys, tokens, or raw payload fixtures in release evidence.
+3. Run `docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh` against
+   the staged binaries by setting `SORAFS_VALIDATE_BIN` and
+   `SORANET_TRUSTLESS_VERIFIER_BIN`. Attach only the outcome digests and
+   payload-free smoke summary to SF-11 evidence.
+4. Before promotion, run
+   `scripts/run_sorafs_reference_sdk_release_evidence.py
+   @scripts/examples/sorafs_reference_sdk_release_collection.args.example
+   --dry-run` to capture the exact verifier command and thresholds, then execute
+   the runner against reviewed evidence paths.
+
+### Metrics Guide
+
+`sorafs-validate` commands accept `--telemetry-out <path>` and write the raw
+`ValidationOutcomeV1` JSON contract. Operators should translate those files into
+counter-style telemetry keyed by `status`, `code`, `category`, validator command
+family, and every stable entry in `telemetry_tags`. Keep `docs_url`, `action`,
+and bounded `context` fields as log attributes for triage, but do not export raw
+payload bytes, signed payloads, archive contents, signing keys, or response
+bodies as metric labels. The release smoke bundle should retain the telemetry
+file hashes and aggregate pass/fail counts; the SF-11 gate rejects raw smoke
+output in evidence.
+
+### Binding-Generation Guide
+
+`crates/sorafs_manifest/include/sorafs_reference.h` is the source contract for
+native SDK bindings. Regenerate or review downstream bindings whenever that
+header changes, and run `ci/check_sorafs_reference_ffi_header.sh` before
+publishing. Each binding must pass byte slices and labels without changing
+Norito bytes, must decode the returned `SorafsReferenceFfiBuffer` as
+`ValidationOutcomeV1` JSON, and must release it with
+`sorafs_reference_free_buffer`. Bindings must mirror the checked selector
+constants for bundle, orderbook, repair, PoP, hedging, and proof-stream
+profiles; unknown selector values should surface the returned
+`ValidationOutcomeV1` error instead of mapping to local exceptions. Release
+evidence for downstream packages must include package name/version, target
+platform, exported selector inventory, package checksum, smoke result digest,
+and the `release_manifest_digest_hex` it was built against.
 
 ## Packaging & Release
 - Rust APIs currently ship through `sorafs_manifest::reference` and
@@ -436,6 +486,9 @@ Implemented locally:
 - Release-packaging helper that stages binary/archive/manifest digests and
   optional detached manifest signatures under untracked
   `dist/sorafs-validate-release/`.
+- Published operator, metrics, and binding-generation guidance for packaging,
+  telemetry extraction, C FFI header synchronization, downstream selector
+  parity, and SF-11 release evidence handoff.
 - Fail-closed SF-11 release evidence gate, collection planner, operator argfile
   templates, and focused tests for release archives, signed manifests,
   downstream bindings, cookbook smoke, FFI/header contract, and governance

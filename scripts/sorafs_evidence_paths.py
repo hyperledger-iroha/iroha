@@ -6,7 +6,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from sorafs_path_identity import resolve_path_identity
+from sorafs_path_identity import (
+    error_diagnostic_label,
+    path_diagnostic_label,
+    resolve_path_identity,
+)
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -15,6 +19,14 @@ def _require_error_list(errors: Any) -> list[str]:
     for error in errors:
         if not isinstance(error, str):
             raise ValueError("evidence path errors must be a list of strings")
+        if (
+            not error.strip()
+            or error != error.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in error)
+        ):
+            raise ValueError(
+                "evidence path errors must contain non-empty canonical strings"
+            )
     return errors
 
 
@@ -27,6 +39,31 @@ def _require_label(label: Any) -> str:
     ):
         raise ValueError("evidence path label must be a non-empty canonical string")
     return label
+
+
+def _path_label(path: Any) -> str:
+    return path_diagnostic_label(path)
+
+
+def _error_label(error: BaseException, *, path_label: str | None = None) -> str:
+    return error_diagnostic_label(error, path_label=path_label)
+
+
+def _evidence_path_identity_set(
+    identities: Any,
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Path] | None:
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if not isinstance(identities, set):
+        error_list.append(f"{path_label} identities must be a set of paths")
+        return None
+    if not all(isinstance(identity, Path) for identity in identities):
+        error_list.append(f"{path_label} identities must be a set of paths")
+        return None
+    return identities
 
 
 def resolve_evidence_path(
@@ -79,8 +116,15 @@ def is_explicit_evidence_path(
 ) -> bool:
     """Return whether a discovered path came from an explicit --evidence input."""
 
+    identities = _evidence_path_identity_set(
+        explicit_identities,
+        errors,
+        label="explicit evidence",
+    )
+    if identities is None:
+        return False
     resolved = resolve_evidence_path(path, errors)
-    return resolved is not None and resolved in explicit_identities
+    return resolved is not None and resolved in identities
 
 
 def reserved_output_path_identities(
@@ -110,13 +154,15 @@ def inspect_evidence_directory(
 
     error_list = _require_error_list(errors)
     if not isinstance(directory, Path):
-        error_list.append(f"evidence directory `{directory}` must be a path")
+        error_list.append(f"evidence directory `{_path_label(directory)}` must be a path")
         return None
     try:
         return directory.is_dir()
     except (OSError, RuntimeError) as error:
+        directory_label = _path_label(directory)
         error_list.append(
-            f"evidence directory `{directory}` cannot be inspected: {error}"
+            f"evidence directory `{directory_label}` cannot be inspected: "
+            f"{_error_label(error, path_label=directory_label)}"
         )
         return None
 
@@ -129,13 +175,15 @@ def scan_evidence_directory_json(
 
     error_list = _require_error_list(errors)
     if not isinstance(directory, Path):
-        error_list.append(f"evidence directory `{directory}` must be a path")
+        error_list.append(f"evidence directory `{_path_label(directory)}` must be a path")
         return []
     try:
         return sorted(directory.rglob("*.json"))
     except (OSError, RuntimeError) as error:
+        directory_label = _path_label(directory)
         error_list.append(
-            f"failed to scan evidence directory `{directory}`: {error}"
+            f"failed to scan evidence directory `{directory_label}`: "
+            f"{_error_label(error, path_label=directory_label)}"
         )
         return []
 
@@ -179,8 +227,8 @@ def record_reserved_output_evidence_conflicts(
         reserved_output = reserved_outputs.get(resolved)
         if reserved_output is not None:
             error_list.append(
-                f"evidence file `{path}` conflicts with {output_label} "
-                f"`{reserved_output}`"
+                f"evidence file `{_path_label(path)}` conflicts with {output_label} "
+                f"`{_path_label(reserved_output)}`"
             )
 
     for path in evidence_file_items:
@@ -219,9 +267,12 @@ def discover_evidence_files(
     )
     if evidence_dir_items is None or evidence_file_items is None:
         return files
+    reserved_error_count = len(error_list)
     reserved_outputs = reserved_output_path_identities(
         reserved_output_paths, error_list
     )
+    if len(error_list) != reserved_error_count:
+        return files
 
     def add(path: Path, *, explicit: bool) -> None:
         resolved = resolve_evidence_path(path, error_list)
@@ -230,8 +281,8 @@ def discover_evidence_files(
         reserved_output = reserved_outputs.get(resolved)
         if reserved_output is not None:
             error_list.append(
-                f"evidence file `{path}` conflicts with reserved output "
-                f"`{reserved_output}`"
+                f"evidence file `{_path_label(path)}` conflicts with reserved output "
+                f"`{_path_label(reserved_output)}`"
             )
             return
         previous = seen.get(resolved)
@@ -239,17 +290,19 @@ def discover_evidence_files(
             previous_path, previous_explicit = previous
             if explicit and previous_explicit:
                 error_list.append(
-                    f"duplicate explicit evidence file `{path}` matches `{previous_path}`"
+                    f"duplicate explicit evidence file `{_path_label(path)}` "
+                    f"matches `{_path_label(previous_path)}`"
                 )
             elif explicit or previous_explicit:
                 duplicate_source = "both --evidence and --evidence-dir"
                 error_list.append(
-                    f"evidence file `{path}` is provided by {duplicate_source}"
+                    f"evidence file `{_path_label(path)}` is provided by "
+                    f"{duplicate_source}"
                 )
             else:
                 error_list.append(
-                    f"duplicate evidence file `{path}` also discovered from "
-                    f"`{previous_path}`"
+                    f"duplicate evidence file `{_path_label(path)}` also discovered "
+                    f"from `{_path_label(previous_path)}`"
                 )
             return
         seen[resolved] = (path, explicit)
@@ -264,7 +317,7 @@ def discover_evidence_files(
             continue
         if not is_dir:
             error_list.append(
-                f"evidence directory `{directory}` must exist and be a directory"
+                f"evidence directory `{_path_label(directory)}` must exist and be a directory"
             )
             continue
         discovered = scan_evidence_directory_json(directory, error_list)

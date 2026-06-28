@@ -1,6 +1,5398 @@
 # Status
 
-Last updated: 2026-06-27
+Last updated: 2026-06-28
+
+## 2026-06-28 SoraFS PDP and PoP evidence-contract dry-run export
+
+- Exposed the SF-13 PDP and SFM-4b1 PoP credential rollout checkers'
+  required payload-field contracts through `EVIDENCE_REQUIRED_FIELDS` and each
+  collection planner's dry-run `evidence_contract` output. Operators can now
+  inspect exact required fields for PDP provider transport, proof generation,
+  validator replay, governance repair, observability, governance approval, and
+  PoP issuer/root/revocation/enrollment/juror/verifier/moderation/metrics/
+  governance evidence before promoting staged bundles.
+- Added runner dry-run coverage for PDP proof-summary binding, Pop root and
+  revocation binding, verifier service fields, governance proof-backend policy,
+  governance `iroha_config` binding, response-file handling, split
+  response-file handling, and subset gates. Updated the SF-13 PDP and SFM-4b1
+  PoP plans and roadmap while leaving live deployed proof/credential evidence
+  collection as the remaining production gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_pdp_rollout_evidence.py scripts/run_sorafs_pdp_rollout_evidence.py scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/run_sorafs_pdp_rollout_evidence_test.py scripts/check_sorafs_pop_credentials_rollout_evidence.py scripts/run_sorafs_pop_credentials_rollout_evidence.py scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_pdp_rollout_evidence_test.py scripts/tests/run_sorafs_pdp_rollout_evidence_test.py -q`
+    passed: 27 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py -q`
+    passed: 24 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - localized source hashes were refreshed:
+    `docs/source/sorafs_pdp_plan.*.md` ->
+    `9282c522d94aab6cbc286ac4de9ee8780050b76d409fc4ce3f4aa369c9010282`;
+    `docs/source/sorafs_pop_credentials_plan.*.md` ->
+    `22dbc13f3322ef703f4d1c091a66b8206335411af2e06d8ff92c5d641b980ada`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS repair, PoR, and PoTR evidence-contract dry-run export
+
+- Exposed the SF-8b repair, SF-9 PoR, and SF-14 PoTR rollout checkers'
+  required payload-field contracts through `EVIDENCE_REQUIRED_FIELDS` and each
+  collection planner's dry-run `evidence_contract` output. Operators can now
+  inspect exact required fields for repair roster/failure/API/worker/event/
+  handoff/observability/governance evidence, PoR randomness/runtime/replay/
+  reporting/observability/governance evidence, and PoTR probe/validation/stream/
+  reputation/observability/governance evidence before promoting staged bundles.
+- Added runner dry-run coverage for repair roster and failure-bundle bindings,
+  PoR seed replay bindings, PoTR receipt-summary bindings, route/stream fields,
+  governance `iroha_config` binding, response-file handling, split
+  response-file handling, and subset gates. Updated the SF-8b repair, SF-9 PoR,
+  SF-9 validator/reporting, SF-14 PoTR plans, and roadmap while leaving live
+  production evidence collection as the remaining gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_repair_rollout_evidence.py scripts/run_sorafs_repair_rollout_evidence.py scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/run_sorafs_repair_rollout_evidence_test.py scripts/check_sorafs_por_rollout_evidence.py scripts/run_sorafs_por_rollout_evidence.py scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/run_sorafs_por_rollout_evidence_test.py scripts/check_sorafs_potr_rollout_evidence.py scripts/run_sorafs_potr_rollout_evidence.py scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/run_sorafs_potr_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_repair_rollout_evidence_test.py scripts/tests/run_sorafs_repair_rollout_evidence_test.py -q`
+    passed: 26 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_por_rollout_evidence_test.py scripts/tests/run_sorafs_por_rollout_evidence_test.py -q`
+    passed: 26 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_potr_rollout_evidence_test.py scripts/tests/run_sorafs_potr_rollout_evidence_test.py -q`
+    passed: 26 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - localized source hashes were refreshed:
+    `docs/source/sorafs_repair_plan.*.md` ->
+    `dc4d510176f12b96075467cdef53e54e186c67affa3128eee429f4eef5200196`;
+    `docs/source/sorafs_por_plan.*.md` ->
+    `ab47380ee5f214b20198f21426d47e91566ce9c24f19c26532f39f9baf2af538`;
+    `docs/source/sorafs_por_validator_plan.*.md` ->
+    `59681c3f49093f091d40a455fa21f24faf442a2ce9af0d63dcde3bac6b6a9d3b`;
+    `docs/source/sorafs_potr_plan.*.md` ->
+    `4ae28e47d11116f3f30833c3daabbfa29c428c16d573cc26921bdfd6388c1941`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS appeal-finance evidence-contract dry-run export
+
+- Exposed the SFM-4b2 appeal-finance rollout checker's required payload-field
+  contract through `EVIDENCE_REQUIRED_FIELDS` and the collection planner's
+  dry-run `evidence_contract` output. Operators can now inspect exact required
+  fields for pricing/config, quote API, deposit lifecycle, settlement
+  execution, settlement submitter, moderation worker, Governance DAG
+  publication, dashboard metrics, multi-peer reconciliation, and governance
+  approval evidence before promoting staged appeal-finance artifacts.
+- Added runner dry-run coverage for config source binding, deposit routes,
+  settlement probes, runtime DAG publication, QC quorum, governance
+  `iroha_config` binding, response-file handling, split response-file handling,
+  and subset gates. Updated the SFM-4b2 appeal-pricing plan and roadmap so
+  dry-run evidence-contract export is tracked while hosted live/public
+  dashboard evidence and multi-peer end-to-end ledger reconciliation evidence
+  remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_appeal_finance_rollout_evidence.py scripts/run_sorafs_appeal_finance_rollout_evidence.py scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py -q`
+    passed: 17 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - localized `docs/source/sorafs_appeal_pricing_plan.*.md` files were updated
+    to source hash `a198824eb738079cea112c31d42f259d98ce0ed631fd39a90ea461efafde5a3a`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reputation evidence-contract dry-run export
+
+- Exposed the SFM-3 reputation rollout checker's required payload-field
+  contract through `EVIDENCE_REQUIRED_FIELDS` and the collection planner's
+  dry-run `evidence_contract` output. Operators can now inspect exact required
+  fields for publish/latest snapshots, provider proofs, event watches, proof
+  replay, metrics, transport, and routing/incentive consumption evidence before
+  collecting live reputation artifacts.
+- Added runner dry-run coverage for schema-less publish/latest artifacts,
+  provider/proof fields, proof replay, metrics schema, SSE transport, routing
+  consumption, and response-file handling. Updated the SFM-3 reputation plan and
+  roadmap so dry-run evidence-contract export is tracked while deployment of
+  the live ingest/publisher service and passing production evidence remain
+  open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reputation_rollout_evidence.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    passed: 27 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_reputation_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - localized `docs/source/sorafs_reputation_plan.*.md` files were updated to
+    source hash `e90824639bc20cd535be2f2037b825c934b591957995c2b83a434855eaa551d7`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS transparency evidence-contract dry-run export
+
+- Exposed the SFM-4c transparency rollout checker's required payload-field
+  contract through `EVIDENCE_REQUIRED_FIELDS` and the collection planner's
+  dry-run `evidence_contract` output. Operators can now inspect exact required
+  fields for source-entry, publication, privacy aggregate, proof-token
+  issuance, and explorer evidence before collecting live transparency
+  artifacts.
+- Added runner dry-run coverage for source-entry probes, publisher identity,
+  privacy publish-due probes, proof-token frame exclusion, explorer routes, and
+  response-file handling. Updated the SFM-4c transparency plan and roadmap so
+  dry-run evidence-contract export is tracked while deployed producers,
+  deployed aggregate/scheduler evidence, proof service hardening, deployed
+  public explorer evidence, proof-token producer/explorer evidence, and staged
+  rollout evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_transparency_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py scripts/tests/check_sorafs_transparency_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_transparency_rollout_evidence_test.py -q`
+    passed: 23 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_transparency_rollout_evidence_test.py -q`
+    passed: 11 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures after refreshing localized
+    transparency plan hashes.
+  - localized `docs/source/sorafs_transparency_plan.*.md` files were updated to
+    source hash `1b3a52b360818291e0a6e4876a6a9372cbe80ec8856504fc4bb7c5823943a1de`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS orderbook evidence-contract dry-run export
+
+- Exposed the SFM-2 orderbook rollout checker's required payload-field contract
+  through `EVIDENCE_REQUIRED_FIELDS` and the collection planner's dry-run
+  `evidence_contract` output. Operators can now inspect exact required fields
+  for contract surface, matcher, settlement, API gateway, event stream, SDK
+  release, observability, reconciliation, and governance evidence before
+  collecting live orderbook artifacts.
+- Added runner dry-run coverage for contract digest, API routes, event streams,
+  SDK languages, reconciliation, governance config binding, response-file, and
+  subset gates. Updated the SFM-2 orderbook plan and roadmap so dry-run
+  evidence-contract export is tracked while on-chain contract deployment,
+  durable matcher/settlement services, contract-backed authorization/streams,
+  SDK release artifacts, live observability, reconciliation tests, and passing
+  staged/live evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_orderbook_rollout_evidence.py scripts/run_sorafs_orderbook_rollout_evidence.py scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py scripts/tests/run_sorafs_orderbook_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_orderbook_rollout_evidence_test.py -q`
+    passed: 20 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_orderbook_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched orderbook checker, runner,
+    tests, source docs, localized mirrors, roadmap, and status files returned
+    no matches.
+  - localized `docs/source/sorafs_orderbook_plan.*.md` files were updated to
+    source hash `b85b568485fdf57ffb60772a5c62b5e0681a1f43433906cef4146e0e03806d8d`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS hedging billing evidence-contract dry-run export
+
+- Exposed the SFM-5 hedging/billing rollout checker's required payload-field
+  contract through `EVIDENCE_REQUIRED_FIELDS` and the collection planner's
+  dry-run `evidence_contract` output. Operators can now inspect exact required
+  fields for feed collection, reference pricing, staged billing cycles,
+  statement publication, reconciliation, metrics, native bridge release, and
+  governance approval evidence before collecting live billing artifacts.
+- Added runner dry-run coverage for billing-cycle digest arrays,
+  reconciliation line-item fields, native bridge SDK wrapper verification,
+  governance config binding, response-file, and subset gates. Updated the
+  SFM-5 hedging plan and roadmap so dry-run evidence-contract export is tracked
+  while the collector service, pricing/exposure daemon, billing aggregator,
+  statement publisher, signed APIs, runtime CLI helpers, runtime metric
+  emission, released native bridge artifacts, reconciliation tests, governance
+  approval flow, and passing staged billing evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_rollout_evidence.py scripts/run_sorafs_hedging_rollout_evidence.py scripts/tests/check_sorafs_hedging_rollout_evidence_test.py scripts/tests/run_sorafs_hedging_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_rollout_evidence_test.py -q`
+    passed: 26 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_hedging_rollout_evidence_test.py -q`
+    passed: 11 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched hedging checker, runner,
+    tests, source docs, localized mirrors, roadmap, and status files returned
+    no matches.
+  - localized `docs/source/sorafs_hedging_plan.*.md` files were updated to
+    source hash `89499e368934e755c75d39de12b92d69e1b59664f5107d9b89127e12c771021f`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS Governance DAG evidence-contract dry-run export
+
+- Exposed the SF-12 Governance DAG rollout checker's current required
+  payload-field contract through `EVIDENCE_REQUIRED_FIELDS` and the collection
+  planner's dry-run `evidence_contract` output. Operators can now inspect exact
+  required fields for ingest, publisher, mirror, recovery, dashboard,
+  observability, IPFS/IPNS, and governance evidence before collecting live
+  publication artifacts.
+- Added runner dry-run coverage for the new contract output, including
+  publisher IPFS pinning, RocksDB/IPLD mirror, public IPFS/IPNS head, governance
+  config binding, response-file, and subset gates. Updated the SF-12 Governance
+  DAG plan and roadmap so dry-run evidence-contract export is tracked while the
+  always-on ingest/publisher services, live IPFS/IPNS publication,
+  runtime-backed mirror/dashboard APIs, live metrics, IPFS-backed tests, and
+  staged/live publication evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_governance_dag_rollout_evidence.py scripts/run_sorafs_governance_dag_rollout_evidence.py scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/run_sorafs_governance_dag_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_governance_dag_rollout_evidence_test.py -q`
+    passed: 18 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_governance_dag_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched Governance DAG checker,
+    runner, tests, source docs, localized mirrors, roadmap, and status files
+    returned no matches.
+  - localized `docs/source/sorafs_governance_dag_plan.*.md` files were updated
+    to source hash `281b9435d91b25484425a2b5dbfcb8413aefb974228dd7bd3ca97f3e14d9d246`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reference SDK operator and binding guides
+
+- Published SF-11 reference SDK operator, metrics, and binding-generation
+  guidance in the source plan. The guide now covers per-target packaging under
+  untracked `dist/sorafs-validate-release/`, cookbook smoke handoff,
+  `ValidationOutcomeV1` telemetry extraction, payload-free metric labeling, C
+  FFI header synchronization, selector parity, `SorafsReferenceFfiBuffer`
+  ownership, and downstream package evidence fields.
+- Updated the SF-11 rollout status and roadmap so guide publishing is no longer
+  tracked as remaining work; the remaining production gates are per-target
+  published archives, signed release manifests, downstream SDK package
+  publication, and live operator smoke evidence that passes the SF-11 release
+  gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - stale reference-SDK guide-reminder scan over
+    `docs/source/sorafs_reference_sdk_plan.md` and `roadmap.md` returned no
+    matches.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve checker, runner,
+    tests, reserve docs, reference SDK docs, localized mirrors, roadmap, and
+    status files returned no matches.
+  - localized `docs/source/sorafs_reference_sdk_plan.*.md` files were updated
+    to source hash `b0e4b8cf2909fc8c68e4601a668888f74cc1f744db940940f3e1674cd073d680`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve live submission/finality evidence gate
+
+- Tightened the SFM-6 reserve/rent rollout gate so reserve-movement evidence
+  must prove live chain submission coverage, submitted transaction-hash
+  readback, automatic finality polling, confirmed-status polling, and timeout
+  rejection in addition to the existing custody-status, confirmed-balance, and
+  chain-reconciled readback checks. Submission and finality-poll counts must
+  cover every accepted movement before promotion can report `ready`.
+- Added focused checker and runner dry-run coverage for the new
+  reserve-movement fields, and updated the SFM-6 reserve/rent plan plus roadmap
+  so the gate blocks promotion without production submission/finality evidence
+  while the actual live chain submission and automatic finality-poller runtime
+  remains open service work.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/run_sorafs_reserve_rent_rollout_evidence.py scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 23 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve evidence gate,
+    runner, tests, reserve docs, localized reserve docs, roadmap, and status
+    files returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `04184b558958fdc24b754cd6b01706d54034cec84c19d023398f81db72a4d1ac`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve rollout evidence-contract dry-run export
+
+- Exposed the SFM-6 reserve/rent checker's current required payload-field
+  contract through `EVIDENCE_REQUIRED_FIELDS` and the collection planner's
+  dry-run `evidence_contract` output. Operators can now inspect the exact
+  required fields for each requested evidence kind before collecting or
+  submitting live reserve/rent artifacts.
+- Added runner dry-run coverage for the new contract output, including
+  provider-bake scheduler canary fields, reserve-movement confirmed-balance
+  fields, credit-line account-state fields, governance downstream-compliance
+  fields, and subset gates. Updated the SFM-6 reserve/rent plan and roadmap so
+  dry-run evidence-contract export is tracked with the collection planner while
+  live chain custody submission/finality polling, live credit-line account
+  mutation, broader compliance application evidence, and live provider-bake
+  evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/run_sorafs_reserve_rent_rollout_evidence.py scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 23 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve evidence gate,
+    runner, tests, reserve docs, localized reserve docs, roadmap, and status
+    files returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `1f5ecb2a419a97b8337601be83b073dc7da847cae9eb1cc5b51b7b57ca96d2ad`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve downstream governance compliance evidence gate
+
+- Tightened the SFM-6 reserve/rent rollout gate so governance-approval
+  evidence must now prove governance source entries were published, downstream
+  compliance policy was applied, at least one downstream compliance consumer
+  processed the policy, source-entry handoff was verified, non-reserve
+  compliance entries were preserved, and denylist/policy consumers remained
+  consistent.
+- Added negative coverage for missing downstream compliance application,
+  missing consumer coverage, and missing source-entry handoff evidence. Updated
+  the SFM-6 reserve/rent plan and roadmap so downstream governance compliance
+  evidence is part of the fail-closed gate while live chain custody
+  submission/finality polling, live credit-line account mutation, and live
+  provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 23 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve evidence gate,
+    reserve evidence tests, reserve docs, roadmap, and status files returned no
+    matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `f627c11c09d1dbec1ee50a5bf7059156343c48aa3b09f9398150532c42ed11b0`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve credit-line account-state evidence gate
+
+- Tightened the SFM-6 reserve/rent rollout gate so credit-line canary evidence
+  must now prove live account-state mutation, account-state readback, credit
+  accrual posting, manual-approval tier non-mutation, and account-state
+  reconciliation in addition to the existing draw-cap, APR, shortfall, and
+  no-negative-balance checks.
+- Added negative coverage for missing live account mutation, accrual posting,
+  and account-state readback evidence. Updated the SFM-6 reserve/rent plan and
+  roadmap so live credit-line account-state evidence is part of the
+  fail-closed gate while live chain custody submission/finality polling,
+  broader governance compliance effects, and live provider-bake evidence remain
+  open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 22 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve evidence gate,
+    reserve evidence tests, reserve docs, roadmap, and status files returned no
+    matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `0145d198cd926cb57e9db989dd300bd15ac38a58548dbaf3b34581928278bd9b`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve movement custody/finality evidence gate
+
+- Tightened the SFM-6 reserve/rent rollout gate so reserve-movement canary
+  evidence must now prove the custody-status route is present, submitted and
+  confirmed custody evidence is recorded, rejected custody reconciliation
+  passes, the confirmed-balance projection is verified, confirmed withdrawals
+  without confirmed reserve funds are rejected, and chain-reconciled private
+  readback is verified.
+- Added negative coverage for missing confirmed custody, confirmed-balance, and
+  chain-reconciled readback evidence. Updated the SFM-6 reserve/rent plan and
+  roadmap so custody/finality canary checks are part of the fail-closed gate
+  while live chain submission, automatic finality polling, live credit-line
+  account mutation, broader governance compliance effects, and live
+  provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 21 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve evidence gate,
+    reserve evidence tests, reserve docs, roadmap, and status files returned no
+    matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `ef02b8bf5164481ec4e43140b936caa6129d9fcf8045b92e2201d32468503e51`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve provider-bake scheduler canary gate
+
+- Tightened the SFM-6 reserve/rent rollout gate so provider-bake evidence must
+  now prove the config-backed reserve lifecycle scheduler canary is bound to
+  config, has passed, ticked during the bake freshness window, advanced at
+  least one defaulting provider, synced gateway compliance, and preserved the
+  orderbook rejection behavior for defaulted providers.
+- Added negative coverage for missing/failed scheduler canary evidence and
+  stale scheduler ticks relative to provider-bake completion. Updated the SFM-6
+  reserve/rent plan and roadmap so the gate contract is marked implemented
+  while live provider-bake evidence, live chain custody submission/finality
+  polling, live credit-line account mutation, and broader governance compliance
+  effects remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 20 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 89 tests completed with 0 failures.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve evidence gate,
+    reserve evidence tests, reserve docs, roadmap, and status files returned no
+    matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `8c555dcda57381192d964957f310c86bfbeeed9f9e464e83f74d61d213b5c023`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve chain-confirmed balance projection
+
+- Added separate chain-confirmed reserve balance tracking to the local SFM-6
+  reserve movement ledger. Intent-recorded and submitted movements continue to
+  update the local spendable projection, confirmed custody movements update the
+  confirmed-balance projection, and confirmed withdrawals now fail closed unless
+  prior confirmed reserve funds cover them.
+- Torii private reserve movement and provider-balance JSON now expose
+  `confirmed_balance_after_micro_xor` and
+  `confirmed_balance_micro_xor` alongside the existing local balance fields,
+  and reserve transparency source entries bind the confirmed-balance projection
+  into movement metadata and payload digests.
+- Updated focused `sorafs_node` and Torii assertions for intent/submitted
+  versus confirmed custody accounting, confirmed-withdrawal underflow
+  rejection, and private confirmed-balance readback. Updated the SFM-6
+  reserve/rent plan and roadmap so confirmed-balance projection is tracked as
+  implemented while live chain submission, automatic finality polling, live
+  credit-line account mutation, broader governance compliance effects, and
+  staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve runtime, Torii,
+    transparency, reserve docs, and roadmap files returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files were updated
+    to source hash `f4f54fe363b0739bdb6331653083843eb5467810caafbaa7c56eb6d7f39ed6b0`.
+  - Cargo validation was deferred while an external
+    `cargo test -p iroha_core --lib` process was already running.
+
+## 2026-06-28 SoraFS reserve lifecycle scheduler automation
+
+- Added config-backed SFM-6 reserve lifecycle scheduler automation under
+  `torii.sorafs.storage.reserve_lifecycle`. The user and actual config layers
+  now expose `enabled`, `interval_seconds`, and `initial_delay_seconds`, clamp
+  zero cadence to one second, and carry the parsed schedule through
+  `sorafs_node::StorageConfig`.
+- Torii startup now spawns a shutdown-aware scheduler when SoraFS storage and
+  the reserve lifecycle schedule are enabled. Each tick calls the same local
+  lifecycle advancement method used by the signed
+  `/v1/sorafs/reserve/lifecycle/advance` route, publishes replay events through
+  `NodeHandle`, refreshes credit-line state and reserve metrics, and re-runs
+  reserve gateway compliance sync for affected providers without making a
+  self-HTTP call.
+- Added focused coverage for parsed/clamped scheduler config, disabled
+  scheduler omission from the SoraFS node runtime wrapper, config fixture
+  snapshots, and a Torii scheduler tick that advances a delinquent provider
+  into default, syncs the reserve gateway denylist, and rejects local orderbook
+  ask admission.
+- Updated the SFM-6 reserve/rent plan, roadmap, and localized source hashes so
+  config-backed lifecycle scheduler automation is tracked as done while live
+  chain custody submission/finality polling, live credit-line account mutation,
+  broader governance compliance effects, and staged provider-bake evidence
+  including scheduled lifecycle canaries remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/fixtures.rs crates/sorafs_node/src/config.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `rustfmt --edition 2024 --check crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/fixtures.rs crates/sorafs_node/src/config.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `cargo test -p iroha_config sorafs_storage_reserve_lifecycle_schedule_parses_and_clamps_interval -- --nocapture`
+    passed: 1 matching test completed with 0 failures.
+  - `cargo test -p iroha_config --test fixtures -- --nocapture` passed: 79
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node reserve_lifecycle_schedule -- --nocapture`
+    passed: 1 matching test completed with 0 failures.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 44 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_lifecycle_scheduler_tick -- --nocapture`
+    passed: 1 matching test completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 24 matching tests completed with 0 failures.
+  - `cargo clippy -p sorafs_node --all-targets -- -D warnings` passed.
+  - `cargo clippy -p iroha_torii --features app_api --lib -- -D warnings`
+    passed.
+  - `cargo clippy -p iroha_config --lib --tests -- -D warnings` passed.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched config, SoraFS, Torii,
+    reserve docs, roadmap, and status files returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `d55cdc8da2400118a49daf38b5facb5ef4d3fa83d524627c354a69a47fafbd7a`.
+
+## 2026-06-28 SoraFS reserve lifecycle time advancement
+
+- Added deterministic local SFM-6 reserve lifecycle advancement. The reserve
+  runtime can now age retained provider summaries to an operator-supplied
+  observation timestamp by whole elapsed days, apply the effective lifecycle
+  policy and accepted appeal override at that timestamp, append sequenced
+  lifecycle replay events, and refresh local credit-line state.
+- `NodeHandle` now exposes `advance_reserve_lifecycle(...)`, publishes
+  time-advance lifecycle events through the existing reserve event channel,
+  records privacy-safe transparency source entries, tracks the service request
+  outcome, and refreshes reserve runtime metrics after advancement.
+- Torii now exposes the signed
+  `/v1/sorafs/reserve/lifecycle/advance` route. The route verifies the
+  authority account with canonical request auth, returns the advanced lifecycle
+  events, re-runs reserve gateway compliance sync for affected providers, and
+  route coverage proves the resulting defaulted provider is rejected by local
+  orderbook ask admission while sub-day repeats are no-ops.
+- Updated the SFM-6 reserve/rent plan, roadmap, and localized source hashes so
+  signed local lifecycle advancement is tracked as done while production
+  scheduler/daemon automation, live chain custody submission/finality polling,
+  live credit-line account mutation, broader governance compliance effects, and
+  staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 43 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 23 matching tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api orderbook -- --nocapture`
+    passed: 15 matching tests completed with 0 failures.
+  - `cargo clippy -p sorafs_node --all-targets -- -D warnings` passed.
+  - `cargo clippy -p iroha_torii --features app_api --lib -- -D warnings`
+    passed.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve files, roadmap, and
+    status returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `14eb8f197696b92c9629e87b363af0d62371fec958a0100ab2467637026e16ff`.
+
+## 2026-06-28 SoraFS reserve lifecycle-policy reprojection
+
+- Added local SFM-6 lifecycle-policy reprojection for retained provider
+  summaries. When an accepted lifecycle-policy update is already effective for
+  a provider's retained lifecycle observation, the reserve runtime now
+  recalculates that provider with the new grace/default windows, appends a new
+  lifecycle replay event, refreshes local credit-line state, and preserves the
+  original event history.
+- `NodeHandle` now publishes policy-driven lifecycle replay events through the
+  existing reserve lifecycle event channel, records their privacy-safe
+  transparency source entries, and refreshes reserve runtime metrics after
+  reprojection.
+- Torii's signed lifecycle-policy route now returns the reprojected lifecycle
+  events, re-runs reserve gateway compliance sync for each affected provider,
+  and the route coverage proves the reprojected default also rejects local
+  orderbook ask admission.
+- Updated the SFM-6 reserve/rent plan, roadmap, and localized source hashes so
+  already-effective lifecycle-policy provider reprojection is tracked as done
+  while live chain custody submission, automatic finality polling, live
+  credit-line account mutation, broader governance compliance effects,
+  time-driven lifecycle automation, and staged provider-bake evidence remain
+  open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 40 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 22 matching tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api orderbook -- --nocapture`
+    passed: 15 matching tests completed with 0 failures.
+  - `cargo clippy -p sorafs_node --all-targets -- -D warnings` passed.
+  - `cargo clippy -p iroha_torii --features app_api --lib -- -D warnings`
+    passed.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve files, roadmap, and
+    status returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `a62da0da0c2a0a30b0d1e3b7daabf3c98995f9a459ae0365bb0a770b6237f494`.
+
+## 2026-06-28 SoraFS reserve rejected-custody gateway compliance sync
+
+- Extended Torii's SFM-6 reserve-to-gateway compliance projection from
+  lifecycle defaults to a provider-level reconciler. Reserve-owned denylist
+  entries now use lifecycle default as the highest-priority source and fall
+  back to the latest rejected reserve movement custody record when no accepted
+  appeal has cleared that rejected movement.
+- Added reserve-scoped movement-custody denylist provenance
+  (`sorafs-reserve-movement-custody`) with governance and review references
+  derived from the rejected movement id. The reconciler still refuses to
+  overwrite or remove static/operator denylist entries for the same provider.
+- Accepted reserve appeal decisions now re-run the same provider reconciler, so
+  a later accepted appeal clears a reserve-owned movement-custody denylist
+  entry when no higher-priority lifecycle default still applies.
+- Added signed route coverage proving that rejected custody evidence inserts
+  the movement-scoped provider denylist entry and that an accepted appeal clears
+  it. Updated the SFM-6 reserve/rent plan, roadmap, and localized source hashes
+  to track rejected movement-custody gateway compliance sync as implemented
+  while live chain custody submission, automatic finality polling, live
+  credit-line account mutation, broader lifecycle-policy/governance compliance
+  effects, and staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs` passed.
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 21 matching tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api orderbook -- --nocapture`
+    passed: 15 matching tests completed with 0 failures.
+  - `cargo clippy -p iroha_torii --features app_api --lib -- -D warnings`
+    passed.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `27f7a6c9e98f83b1ed4a9a3b3135e6387333197e034c5cb8e2b5e328ea557ddf`.
+
+## 2026-06-28 SoraFS reserve gateway compliance denylist sync
+
+- Added Torii-side SFM-6 reserve lifecycle sync into the SoraFS gateway
+  compliance denylist. Accepted reserve lifecycle updates now insert a
+  reserve-scoped provider denylist entry when the current lifecycle projection
+  disables adverts, making defaulted reserve providers visible to the existing
+  provider-aware gateway policy evaluator.
+- Accepted reserve appeal decisions now re-read the provider lifecycle summary
+  and remove the reserve-derived provider denylist entry when an accepted
+  appeal override clears the default state. The removal only applies to entries
+  marked with the reserve lifecycle source pack id, so static/operator
+  denylist entries for the same provider are preserved.
+- Added signed route coverage proving that a defaulted reserve provider is
+  inserted into the gateway compliance denylist with reserve provenance and
+  that an accepted appeal override removes that reserve-derived entry.
+- Updated the SFM-6 reserve/rent plan and roadmap so reserve lifecycle gateway
+  compliance denylist sync is tracked as implemented while live chain custody
+  submission, automatic finality polling, live credit-line account mutation,
+  broader movement/appeal/lifecycle-policy compliance source-entry effects,
+  and staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 20 matching tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api orderbook -- --nocapture`
+    passed: 15 matching tests completed with 0 failures.
+  - `cargo clippy -p iroha_torii --features app_api --lib -- -D warnings`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 38 matching
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node orderbook -- --nocapture` passed: 19 matching
+    tests completed with 0 failures.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.29s.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path) }' dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
+    passed.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `118ad1b64da47ef2d97c655533e99b970105ee238f5cbffd9ca9b4f05be68332`.
+  - `git diff --check` passed.
+  - `git diff --exit-code -- Cargo.lock` passed.
+  - anchored conflict-marker scan over the touched reserve/compliance files
+    returned no matches.
+  - `promtool` was not installed in the environment, so Prometheus rule-test
+    execution was not available; dashboard JSON and alert YAML syntax checks
+    passed.
+
+## 2026-06-28 SoraFS reserve-gated orderbook ask admission
+
+- Added local SFM-6 reserve lifecycle enforcement to `NodeHandle` orderbook ask
+  admission. Ask orders now derive the provider id from the canonical owner
+  account bytes and fail closed when the current reserve lifecycle summary has
+  `disable_adverts` set, preventing defaulted reserve providers from posting
+  new local orderbook adverts.
+- Preserved the existing reserve lifecycle semantics: warning, grace, and
+  delinquent providers are not blocked by the advert-disable policy, and an
+  accepted appeal override that moves a defaulted provider back to grace
+  restores local ask admission.
+- Updated Torii orderbook error mapping so reserve lifecycle advert-disable
+  rejections return `412 Precondition Failed`, and added signed route coverage
+  proving reserve lifecycle state recorded through the Torii reserve endpoint
+  is enforced by the orderbook order endpoint.
+- Updated the SFM-6 reserve/rent plan and roadmap so local orderbook
+  reserve-lifecycle ask admission is tracked as implemented while live chain
+  custody submission, automatic finality polling, live credit-line account
+  mutation, downstream compliance source-entry application, and staged
+  provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `cargo test -p sorafs_node orderbook -- --nocapture` passed: 19 matching
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 38 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api orderbook -- --nocapture`
+    passed: 15 matching tests completed with 0 failures.
+  - `cargo clippy -p sorafs_node --all-targets -- -D warnings` passed.
+  - `cargo clippy -p iroha_torii --features app_api --lib -- -D warnings`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.91s.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path) }' dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
+    passed.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `6e2d3df1605e152f2af09a4e030564274a85726049332e70ebbbdb2c2542b981`.
+  - `promtool` was not installed in the environment, so Prometheus rule-test
+    execution was not available; dashboard JSON and alert YAML syntax checks
+    passed.
+
+## 2026-06-28 SoraFS reserve-adjusted reputation snapshots
+
+- Added a local SFM-6 reserve-to-reputation publication path on `NodeHandle`.
+  `publish_reserve_adjusted_reputation_snapshot` translates current local
+  reserve lifecycle stages into the existing reputation reserve-stage scorer,
+  publishes through the normal reputation snapshot cache/governance pipeline,
+  preserves prior raw metrics and score smoothing for matching reputation
+  providers, and adds reserve-only providers with neutral proof metrics so
+  reserve-stage penalties are visible downstream.
+- Added coverage proving defaulted reserve providers receive
+  `ReserveDefault` reputation degradation and that accepted appeal lifecycle
+  overrides update the downstream reputation stage from default to grace.
+- Updated the SFM-6 reserve/rent plan and roadmap so local reserve lifecycle
+  stages feeding reputation snapshots are tracked as implemented while live
+  chain custody submission, automatic finality polling, live credit-line account
+  mutation, downstream compliance/orderbook policy application, and staged
+  provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/lib.rs` passed.
+  - `cargo test -p sorafs_node reserve_adjusted_reputation -- --nocapture`
+    passed: 2 matching tests completed with 0 failures.
+  - `cargo test -p sorafs_node publish_reputation_snapshot -- --nocapture`
+    passed: 1 matching test completed with 0 failures.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 36 matching
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node reputation -- --nocapture` passed: 4 matching
+    tests completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/lib.rs` passed.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_capacity_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_capacity_rules.test.yml"); puts "yaml ok"'`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.36s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `b8b2bf8225a129722702c5860584054f4d4bfb494992b58eb527466530e47176`.
+  - `git diff --check -- crates/sorafs_node/src/lib.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+  - `promtool` was not installed in the environment, so Prometheus rule-test
+    execution was not available; dashboard JSON and alert YAML syntax checks
+    passed.
+
+## 2026-06-28 SoraFS reserve accepted-appeal lifecycle overrides
+
+- Updated the local SFM-6 reserve runtime so accepted appeal decisions with a
+  requested lifecycle stage apply a deterministic local lifecycle override.
+  The override emits a lifecycle event, updates the provider summary and
+  credit-line state, preserves the original financial projection amounts, and
+  records the applied appeal id for provenance. Future lifecycle updates also
+  honor the latest accepted appeal override whose decision time is effective for
+  the observation.
+- Exposed `applied_appeal_id_hex` through Torii reserve provider, lifecycle
+  event, and credit-line JSON readback.
+- Added applied appeal id metadata and payload-digest binding to local reserve
+  lifecycle transparency source entries.
+- Updated the SFM-6 reserve/rent plan and roadmap so accepted local
+  appeal-decision lifecycle overrides are tracked as implemented while live
+  chain custody submission, automatic finality polling, live credit-line account
+  mutation, downstream reputation/compliance/orderbook policy application, and
+  staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 34 matching
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node transparency -- --nocapture` passed: 12 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 18 matching reserve tests completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_capacity_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_capacity_rules.test.yml"); puts "yaml ok"'`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 14.88s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `714863bfa45bb17a681a9a9dcf15020bc3d59a8cecf37193b2bfe1229144b78c`.
+  - `git diff --check -- crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+  - `promtool` was not installed in the environment, so Prometheus rule-test
+    execution was not available; dashboard JSON and alert YAML syntax checks
+    passed.
+
+## 2026-06-28 SoraFS reserve lifecycle-policy projection enforcement
+
+- Updated the local SFM-6 reserve lifecycle runtime so accepted
+  lifecycle-policy records apply to later lifecycle projections once their
+  `effective_at_unix` is reached. The runtime chooses the latest effective
+  policy by `(effective_at_unix, sequence)` and records the effective
+  grace/default windows plus applied policy id on provider summaries and
+  lifecycle events.
+- Exposed effective grace/default windows and applied policy id through Torii
+  reserve lifecycle provider/event JSON readback.
+- Bound the effective lifecycle windows and applied policy id into local
+  reserve lifecycle transparency source entries so governance publication
+  reflects the policy inputs used for the projection.
+- Updated the SFM-6 reserve/rent plan and roadmap so local lifecycle-policy
+  window enforcement is tracked as implemented while live chain custody
+  submission, automatic finality polling, live credit-line account mutation,
+  downstream reputation/compliance/orderbook policy application, accepted
+  appeal-decision lifecycle overrides, and staged provider-bake evidence remain
+  open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 30 matching
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node transparency -- --nocapture` passed: 12 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 18 matching reserve tests completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs`
+    passed.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_capacity_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_capacity_rules.test.yml"); puts "yaml ok"'`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 14.97s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `34cd8bd5e4a4784314cfcb68e9175113724790e0cb9ee400a647f3d65565d261`.
+  - `git diff --check -- crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/transparency.rs crates/iroha_torii/src/sorafs/api.rs dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+  - `promtool` was not installed in the environment, so Prometheus rule-test
+    execution was not available; dashboard JSON and alert YAML syntax checks
+    passed.
+
+## 2026-06-28 SoraFS reserve rejected movement balance reconciliation
+
+- Updated the local SFM-6 reserve movement runtime so rejected custody evidence
+  recomputes provider balances from the retained movement ledger. Rejected
+  top-ups no longer remain spendable, rejected withdrawals restore the prior
+  balance, and retroactive rejections fail closed before mutating state when
+  they would make later withdrawals underflow.
+- Added reserve runtime coverage for rejected top-up and withdrawal balance
+  reconciliation plus the impossible retroactive-rejection path.
+- Updated the SFM-6 reserve/rent plan and roadmap so local rejected-movement
+  balance reconciliation is tracked as implemented while live chain custody
+  submission, automatic finality polling, live credit-line account mutation,
+  downstream reputation/compliance/orderbook and lifecycle-policy application,
+  and staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs` passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 28 matching
+    tests completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs` passed.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_capacity_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_capacity_rules.test.yml"); puts "yaml ok"'`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.52s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `0044f09edbe4d3ea91b3fe7c58f183921c1c4504bc46d2a3fd60cd545d97569c`.
+  - `git diff --check -- crates/sorafs_node/src/reserve.rs dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve runtime dashboard and alert wiring
+
+- Extended `dashboards/grafana/sorafs_reserve_economics.json` with runtime
+  reserve lifecycle-stage, credit exposure, default/appeal, custody
+  reconciliation, service request, and service rate-limit panels.
+- Mirrored the key runtime reserve default/appeal, chain reconciliation, and
+  rate-limit panels into `dashboards/grafana/sorafs_capacity_health.json`.
+- Added Alertmanager rules and promtool fixtures for reserve runtime defaults,
+  uncovered credit shortfall, appeal backlog, rejected chain reconciliation,
+  and service rate-limit events.
+- Tightened `scripts/check_sorafs_reserve_rent_rollout_evidence.py` so SFM-6
+  metrics evidence must include the actual exported
+  `torii_sorafs_reserve_*` runtime metric families instead of placeholder
+  reserve metric names.
+- Updated the SFM-6 reserve/rent plan and roadmap so dashboard/alert
+  consumption of runtime reserve metrics is tracked as implemented while live
+  chain custody submission/finality reconciliation, live credit-line account
+  mutation, downstream reputation/compliance/orderbook and lifecycle-policy
+  application, and staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `jq empty dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json`
+    passed.
+  - `ruby -e 'require "yaml"; YAML.load_file("dashboards/alerts/sorafs_capacity_rules.yml"); YAML.load_file("dashboards/alerts/tests/sorafs_capacity_rules.test.yml"); puts "yaml ok"'`
+    passed.
+  - `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
+    was not run because `promtool` is not installed in this environment.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.37s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `e1296395a4fc60a2dec09c633c205c2a872eb6eac6abda66baead0de2f9a8d3e`.
+  - `git diff --check -- dashboards/grafana/sorafs_reserve_economics.json dashboards/grafana/sorafs_capacity_health.json dashboards/alerts/sorafs_capacity_rules.yml dashboards/alerts/tests/sorafs_capacity_rules.test.yml scripts/check_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve runtime telemetry
+
+- Added Torii reserve runtime metrics for local SFM-6 lifecycle-stage provider
+  counts, credit draw/shortfall/accrued-interest gauges, defaulted providers,
+  appeal backlog, movement custody counts, chain-reconciled movement counts,
+  reserve service requests, and reserve service rate-limit counters.
+- Wired `NodeHandle` reserve lifecycle, movement, custody, appeal, decision,
+  and lifecycle-policy paths to refresh runtime metrics after accepted local
+  state changes and to count idempotent/replay service outcomes without
+  mutating reserve state.
+- Updated the SFM-6 reserve/rent plan and roadmap so runtime service telemetry
+  is tracked as implemented while live chain custody submission/finality
+  reconciliation, live credit-line account mutation, downstream
+  reputation/compliance/orderbook and lifecycle-policy application,
+  dashboard/alert consumption of runtime metrics, and staged provider-bake
+  evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 --check crates/iroha_telemetry/src/metrics.rs crates/sorafs_node/src/lib.rs`
+    passed.
+  - `cargo test -p iroha_telemetry records_sorafs_reserve_runtime_metrics -- --nocapture`
+    passed: 1 matching test completed with 0 failures.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 26 matching
+    tests completed with 0 failures.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.14s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `ef9a195c764281daa7e970802c15a1cbb736f1ef49ffa6ed85ab54de6082388f`.
+  - `git diff --check -- crates/iroha_telemetry/src/metrics.rs crates/sorafs_node/src/lib.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve governance source-entry handoff
+
+- Added privacy-safe transparency source-entry adapters for local SFM-6 reserve
+  lifecycle events, movement/custody records, appeal records, and
+  lifecycle-policy updates. The adapters publish public event metadata while
+  hashing private provider accounts, reserve accounts, appeal reasons,
+  decision rationales, policy authority accounts, and idempotency material.
+- Wired `NodeHandle` so accepted local reserve lifecycle updates, movements,
+  custody updates, appeals, appeal decisions, and lifecycle-policy updates
+  record best-effort governance/transparency source entries. Idempotent
+  movement, custody, appeal, decision, and policy replays do not create
+  duplicate source entries.
+- Updated the SFM-6 reserve/rent plan and roadmap so local governance
+  source-entry handoff is tracked as implemented while live chain custody
+  submission/finality reconciliation, live credit-line account mutation,
+  downstream reputation/compliance/orderbook and lifecycle-policy application,
+  service telemetry, and staged provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/transparency.rs crates/sorafs_node/src/lib.rs`
+    passed.
+  - `cargo test -p sorafs_node transparency -- --nocapture` passed: 12 matching
+    tests completed with 0 failures.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 26 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 18 matching reserve tests completed with 0 failures.
+  - `cargo test -p iroha sorafs_reserve -- --nocapture` passed: 3 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_cli reserve_ -- --nocapture` passed: reserve CLI
+    unit tests in `iroha`, `iroha3`, and `iroha_cli` plus 4 matching smoke
+    tests completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/transparency.rs crates/sorafs_node/src/lib.rs`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 16.24s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `4073eaf85d973704516462e83bc5d5a28e4917660975c999818722878be82f74`.
+  - `git diff --check -- crates/sorafs_node/src/transparency.rs crates/sorafs_node/src/lib.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - anchored conflict-marker and trailing-whitespace scans over the same touched
+    files returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve appeal and lifecycle-policy handoff
+
+- Added local SFM-6 reserve appeal and lifecycle-policy state to
+  `sorafs_node`. The runtime now records idempotent provider appeal
+  submissions, terminal accepted/rejected appeal decisions, and sequenced
+  lifecycle-policy grace/default window updates with invalid-window rejection.
+- Exposed the local handoff through Torii, the Rust client, and the operator
+  CLI. New routes are `POST/GET /v1/sorafs/reserve/appeals`,
+  `POST /v1/sorafs/reserve/appeals/{appeal_id_hex}/decision`, and
+  `POST/GET /v1/sorafs/reserve/lifecycle/policy`. New CLI commands are
+  `iroha app sorafs reserve appeal-submit`, `appeals`, `appeal-decide`,
+  `policy-update`, and `policy`.
+- Updated the SFM-6 reserve/rent plan and roadmap so local authenticated
+  appeal/policy routes and CLI are tracked as implemented while live chain
+  custody submission/finality reconciliation, live credit-line account
+  mutation, governance/downstream application of appeal/policy records, service
+  telemetry, and provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 25 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 18 matching tests completed with 0 failures.
+  - `cargo test -p iroha sorafs_reserve -- --nocapture` passed: 3 matching
+    tests completed with 0 failures.
+  - `cargo test -p iroha_cli reserve_ -- --nocapture` passed: reserve CLI
+    builder tests and smoke tests completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.32s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `cf664f59b87e32cca508bfc04fe069a1b0792cc45819bb8f0daeb7dd7e5c8d50`.
+  - `git diff --check -- crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - conflict-marker and trailing-whitespace scans over the same touched files
+    returned no matches.
+  - `git status --short -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve credit-line runtime readback
+
+- Added local SFM-6 credit-line state derived from accepted reserve lifecycle
+  updates. `sorafs_node` now records the provider's current credit draw,
+  remaining automatic credit capacity, shortfall, accrued interest, total due
+  after credit, manual-approval flag, governance-notification flag, lifecycle
+  stage, and source lifecycle event sequence.
+- Exposed signed private credit-line readback through Torii, the Rust client,
+  and the operator CLI. New routes are
+  `GET /v1/sorafs/reserve/credit-lines` and
+  `GET /v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}`; both use
+  canonical request authentication and only return states visible to the signed
+  provider account. New CLI commands are
+  `iroha app sorafs reserve credit-lines` and `credit-status`.
+- Updated the SFM-6 reserve/rent plan and roadmap so local credit-line
+  draw/accrual state is tracked as implemented while live account mutation,
+  live chain custody submission/finality reconciliation, appeal/policy routes,
+  governance wiring, and provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 19 matching
+    tests in `sorafs_node` completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 14 matching tests in `iroha_torii` completed with 0 failures.
+  - `cargo test -p iroha sorafs_reserve -- --nocapture` passed: 3 matching
+    tests in `iroha` completed with 0 failures.
+  - `cargo test -p iroha_cli --test cli_smoke sorafs_reserve_help_lists_movement_commands -- --nocapture`
+    passed: 1 smoke test completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 17.67s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `abaae62e72e748296629010f3f181a5e0df3779632c66b8d663dfc1d34585a33`.
+  - `git diff --check -- crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs docs/source/sorafs_reserve_rent_plan*.md roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve custody-status handoff
+
+- Added local chain-custody status tracking to SFM-6 reserve movement records.
+  New movements start as `intent_recorded`; signed updates can attach
+  `submitted`, `confirmed`, or `rejected` transaction evidence, reject
+  transaction-hash replacement, and keep `confirmed`/`rejected` terminal except
+  for exact idempotent replay.
+- Exposed the custody handoff through `NodeHandle`, Torii, the Rust client, and
+  the operator CLI. Torii now serves
+  `POST /v1/sorafs/reserve/movements/{movement_id_hex}/custody`, guarded by the
+  same canonical request authentication and provider/reserve visibility checks
+  used for private movement readback. `iroha app sorafs reserve custody` signs
+  the update after normalizing the movement id and transaction hash.
+- Updated the SFM-6 reserve/rent plan and roadmap so local custody evidence is
+  tracked as implemented while live chain transfer submission, authoritative
+  finality reconciliation, credit-line mutation/accrual, appeal/policy routes,
+  and provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 17 matching
+    tests in `sorafs_node` completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 13 matching tests in `iroha_torii` completed with 0 failures.
+  - `cargo test -p iroha sorafs_reserve -- --nocapture` passed: 3 matching
+    tests in `iroha` completed with 0 failures.
+  - `cargo test -p iroha_cli reserve_custody -- --nocapture` passed: 2
+    matching tests in each CLI binary target completed with 0 failures.
+  - `cargo test -p iroha_cli reserve_movement -- --nocapture` passed: 2
+    matching tests in each CLI binary target completed with 0 failures.
+  - `cargo test -p iroha_cli --test cli_smoke sorafs_reserve_help_lists_movement_commands -- --nocapture`
+    passed: 1 smoke test completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs`
+    passed.
+  - `python3 -m py_compile scripts/*.py scripts/tests/*.py` passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280
+    tests in 15.81s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `a9a980dd3e6536d177063fa62d4fb26dead54266cb27a06c7eaf00d614612bc2`.
+  - `git diff --check -- crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs docs/source/sorafs_reserve_rent_plan*.md roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve operator CLI for signed movement routes
+
+- Added `iroha` client helpers for the signed SFM-6 reserve movement API:
+  `post_sorafs_reserve_top_up_json`, `post_sorafs_reserve_withdrawal_json`,
+  `get_sorafs_reserve_movements`, and `get_sorafs_reserve_balance`. The
+  readback helpers sign GET requests, preserve `since`/`limit` query
+  parameters inside the canonical request, and normalize provider ids before
+  targeting balance status.
+- Added operator CLI coverage for the signed local movement routes:
+  `iroha app sorafs reserve top-up`, `withdraw`, `movements`, and `status`.
+  The submit commands canonicalize provider/reserve account ids, parse decimal
+  XOR amounts into micro-XOR strings, reject zero amounts before submission,
+  and reuse the existing canonical request signing path. The command
+  classification keeps offline quote/ledger/lifecycle helpers fallback-safe
+  while requiring real client config for signed movement/status operations.
+- Updated the SFM-6 reserve/rent plan, localized mirror source hashes, and
+  roadmap wording so operator CLI coverage for the implemented local movement
+  routes is tracked as complete while chain custody reconciliation,
+  appeal/policy routes and CLI, live credit-line mutation/accrual, governance
+  integration, and provider-bake evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `cargo test -p iroha sorafs_reserve -- --nocapture` passed: 3 matching
+    tests in `iroha` completed with 0 failures.
+  - `cargo test -p iroha_cli reserve_movement -- --nocapture` passed: 2
+    matching tests in each CLI binary target completed with 0 failures.
+  - `cargo test -p iroha_cli --test cli_smoke sorafs_reserve_help_lists_movement_commands -- --nocapture`
+    passed: 1 smoke test completed with 0 failures.
+  - `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_cli/src/commands/sorafs.rs crates/iroha_cli/src/main_shared.rs crates/iroha_cli/tests/cli_smoke.rs crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `python3 -m py_compile scripts/check_sorafs_*.py scripts/run_sorafs_*.py scripts/sorafs_*.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 15.02s.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `7257afd8d301fd412166947feadc798e7662d31054f45d36e86d049a3fbb2992`.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve movement ledger and Torii API
+
+- Added a local SFM-6 reserve movement ledger to `sorafs_node`. It records
+  idempotent top-up and withdrawal movements, rejects zero amounts and
+  withdrawal underflow, preserves deterministic provider balances, exposes
+  movement snapshots/replay/latest-sequence helpers, and broadcasts live local
+  movement records.
+- Added canonical-request-authenticated Torii reserve movement routes.
+  `POST /v1/sorafs/reserve/top-up` and
+  `POST /v1/sorafs/reserve/withdraw` verify the signer against the canonical
+  provider account, record the local movement, and return the movement plus a
+  client-submitted transfer intent. `GET /v1/sorafs/reserve/movements` and
+  `GET /v1/sorafs/reserve/balances/{provider_id_hex}` provide private,
+  authenticated readback with no-store cache headers and ETags.
+- Updated the SFM-6 reserve/rent plan, localized mirror source hashes, and
+  roadmap wording so signed local movement routes are tracked as implemented
+  while chain custody submission/reconciliation, live credit-line
+  mutation/accrual, appeal/policy routes, operator CLI, and provider-bake
+  evidence remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `rustfmt --edition 2024 --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 14 matching
+    tests in `sorafs_node` completed with 0 failures.
+  - `cargo test -p iroha_torii --features app_api reserve_ -- --nocapture`
+    passed: 11 matching tests in `iroha_torii` completed with 0 failures.
+  - `python3 -m py_compile scripts/check_sorafs_*.py scripts/run_sorafs_*.py scripts/sorafs_*.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 14.99s.
+  - `git diff --check -- crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md`
+    passed.
+  - `rg -n "[ \t]$" crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs docs/source/sorafs_reserve_rent_plan.md roadmap.md status.md`
+    returned no matches.
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs docs/source/sorafs_reserve_rent_plan*.md roadmap.md status.md`
+    returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `c6384cc9fb632faca910fac4c619bde78afbf19a7ae6b56bc96de29f2a709e2e`.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve lifecycle Torii API surface
+
+- Added canonical-request-authenticated SFM-6 reserve lifecycle Torii routes.
+  `POST /v1/sorafs/reserve/lifecycle` accepts Norito JSON reserve lifecycle
+  updates, verifies the request signer against the canonical provider account,
+  records the local provider summary, and returns the sequenced lifecycle event.
+  Readback routes now expose the local snapshot, one-provider summaries,
+  ETagged event replay, and SSE/WebSocket streams for replay plus live lifecycle
+  updates.
+- Added route-level reserve lifecycle JSON helpers with stable stage labels and
+  projection objects, plus focused Torii tests for missing auth, signer/account
+  mismatch, invalid lifecycle windows, provider readback, bounded snapshots,
+  event replay, and ETag emission.
+- Updated the SFM-6 reserve/rent plan, localized mirror source hashes, and
+  roadmap wording so signed lifecycle update/readback/stream routes are tracked
+  as implemented while live reserve movement, top-up/withdrawal/appeal/policy
+  routes, credit-line mutation/accrual, operator CLI, and provider-bake evidence
+  remain open.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt --edition 2024 crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs`
+    passed.
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs`
+    passed.
+  - `cargo test -p iroha_torii --features app_api reserve_lifecycle -- --nocapture`
+    passed: 5 matching tests in `iroha_torii` completed with 0 failures.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 9 matching
+    tests in `sorafs_node` completed with 0 failures.
+  - `cargo test -p sorafs_node orderbook -- --nocapture` passed: 17 matching
+    tests in `sorafs_node` completed with 0 failures.
+  - `python3 -m py_compile scripts/check_sorafs_*.py scripts/run_sorafs_*.py scripts/sorafs_*.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 15.65s after refreshing the reserve-plan localized mirror
+    `source_hash` metadata.
+  - `git diff --check -- crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/sorafs_node/src/lib.rs crates/sorafs_node/src/orderbook.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md scripts`
+    passed.
+  - `rg -n "[ \t]$" crates/sorafs_node/src/reserve.rs` returned no matches.
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" crates/iroha_torii/src/sorafs/api.rs crates/iroha_torii/src/lib.rs crates/sorafs_node docs/source/sorafs_reserve_rent_plan*.md scripts roadmap.md status.md`
+    returned no matches.
+  - localized `docs/source/sorafs_reserve_rent_plan.*.md` files all carry
+    source hash `b7e52b3267b7b82dfa69f537f421bf253435596e981af406d931376f731f45bf`.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS reserve lifecycle runtime foundation
+
+- Added a local SFM-6 reserve lifecycle runtime to `sorafs_node`. The runtime
+  accepts provider reserve lifecycle updates, derives ledger and lifecycle
+  projections with the shared `ReserveQuote` policy math, stores latest provider
+  summaries sorted by provider id, and retains sequenced lifecycle events for
+  replay and live stream subscribers.
+- Wired the runtime through `NodeHandle` with summary, snapshot, event replay,
+  latest-sequence, and subscription helpers. This is the local service-state
+  foundation for signed Torii routes; it does not yet submit authenticated
+  reserve custody movements or mutate live credit lines.
+- Updated the SFM-6 roadmap and reserve/rent plan so they distinguish the new
+  local runtime from the still-open signed API, movement/authentication,
+  credit-line mutation/accrual, and staged provider-bake evidence work.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `rustfmt crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs`
+    passed.
+  - `rustfmt --check crates/sorafs_node/src/reserve.rs crates/sorafs_node/src/lib.rs`
+    passed.
+  - `cargo test -p sorafs_node reserve -- --nocapture` passed: 9 matching
+    tests in `sorafs_node` completed with 0 failures.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 14.25s after refreshing the reserve-plan localized mirror
+    `source_hash` metadata.
+  - `git diff --check -- crates/sorafs_node/src/lib.rs crates/sorafs_node/src/reserve.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md scripts`
+    passed.
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/sorafs_node/src/lib.rs crates/sorafs_node/src/reserve.rs docs/source/sorafs_reserve_rent_plan.md docs/source/sorafs_reserve_rent_plan.*.md roadmap.md status.md scripts`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS orderbook settlement ledger snapshot
+
+- Added a deterministic local `OrderbookSettlementLedger` to
+  `sorafs_node` orderbook snapshots. The ledger is derived from accepted
+  settlement receipts and current channel state, with buyer debit totals,
+  provider credit totals, retained fees, and remaining locked escrow grouped in
+  stable byte/id order.
+- Re-exported the ledger rows from `sorafs_node`, kept poisoned-lock fallback
+  snapshots well-formed, and extended runtime/checkpoint restore coverage so
+  local replay state proves the derived accounting survives snapshot and
+  checkpoint round trips.
+- Updated the SFM-2 roadmap note to distinguish this deterministic local
+  accounting surface from the still-open live contract/on-chain escrow custody
+  service work.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted; the focused
+    Cargo validation waited for the artifact-directory lock to clear.
+  - `rustfmt --check crates/sorafs_node/src/orderbook.rs crates/sorafs_node/src/lib.rs`
+    passed.
+  - `cargo test -p sorafs_node orderbook -- --nocapture` passed: 17 matching
+    tests in `sorafs_node` completed with 0 failures after Cargo acquired the
+    build lock.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 15.93s.
+  - `git diff --check -- crates/sorafs_node/src/orderbook.rs crates/sorafs_node/src/lib.rs roadmap.md status.md scripts`
+    passed.
+  - `rg -n "^(<<<<<<<|=======$|>>>>>>>)" crates/sorafs_node/src/orderbook.rs crates/sorafs_node/src/lib.rs roadmap.md status.md scripts`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 Nexus replay validation stack refresh
+
+- The replay WSV checkpoint mismatch regressions now run through the existing
+  16 MiB replay validation stack helper, matching the other deep replay tests
+  in the module. The follow-up broad `iroha_core --lib` run no longer hit the
+  replay stack overflow; it completed the suite and exposed 11 remaining
+  failures instead.
+- Fixed the remaining broad-run state failures by preserving lane lifecycle
+  lock order across tiered/Kura geometry reconciliation, keeping world-backed
+  lifecycle cleanup out of the state writer lock, correcting stale Nexus DA
+  replay fixtures to enable Nexus when they install non-default lane geometry,
+  committing the DA cursor-warning apply path before asserting durable bundle
+  retention, and correcting the lane-reset fixture's catalog width.
+- Refreshed the Kagemusha recursive production-width assertions for the current
+  255 one-bit fixed-window profile, replacing the stale 64 four-bit table
+  accounting in the layout, schedule, plan, and manifest checks.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib -- --nocapture`
+    was attempted before this fix and did not complete: the process aborted on
+    the replay WSV checkpoint mismatch stack overflow after 5759 tests had
+    started.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib`
+    completed after the replay stack fix: 5484 passed, 11 failed, 264 ignored,
+    0 measured, 0 filtered out, finished in 13789.41s. The failures were the
+    lane lifecycle lock-order regression, five Nexus/DA fixture or cursor
+    persistence regressions, one lane-reset catalog-width regression, and four
+    Kagemusha production-width assertion regressions.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib replay_preserves_committed_result_mismatch_despite_wsv_checkpoint_mismatch -- --nocapture`
+    passed: 1 test in 1.51s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block -- --nocapture`
+    passed: 1 test in 1.50s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib replay_validation_tests -- --nocapture`
+    passed: 8 tests in 19.25s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state_commit_lock_order_tests -- --nocapture`
+    passed: 3 tests in 2.61s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state::tests::lanes_requiring_state_reset_tracks_additions_retirements_and_dataspace_rebinds -- --nocapture`
+    passed: 1 test in 0.00s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state::tests::missing_shard_cursor_blocks_touched_lane_when_da_bundle_present -- --nocapture`
+    passed: 1 test in 0.86s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state::tests::hydrate_da_indexes -- --nocapture`
+    passed: 8 tests in 6.95s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state::tests::resharding_clears_stale_shard_cursors -- --nocapture`
+    passed: 1 test in 0.83s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state::tests::apply_without_execution_records_da_cursor_errors_without_panic -- --nocapture`
+    passed: 1 test in 0.85s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib covers_production_width -- --nocapture`
+    passed: 5 tests in 11.28s after a 3m08s rebuild.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib autoscale -- --nocapture`
+    passed: 155 tests in 86.80s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib apply_lane_lifecycle -- --nocapture`
+    passed: 51 tests in 42.15s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib state::tests::da -- --nocapture`
+    passed: 10 tests in 7.60s.
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/state.rs crates/iroha_core/src/zk.rs`
+    passed.
+  - `git diff --check -- crates/iroha_core/src/state.rs crates/iroha_core/src/zk.rs status.md`
+    passed.
+  - `rg -n "^(<<<<<<< .+|=======$|>>>>>>> .+)$" crates/iroha_core/src/state.rs crates/iroha_core/src/zk.rs status.md`
+    returned no matches.
+  - `git diff --name-only -- Cargo.lock` was empty.
+  - Pending broader rerun after these fixes:
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib`
+
+## 2026-06-28 Nexus public-lane invariant validation refresh
+
+- Re-ran the pending public-lane key/record invariant filters for core and
+  Torii app API exposure. The refreshed evidence covers mismatched validator
+  rows across staking mutations, due activation, Soracloud authority,
+  host-finance stake accounting, peer/account cleanup, roster penalty lookup,
+  multisig rekey cleanup, and public Torii validator/stake/reward reads.
+- Validation status:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_validator_record -- --nocapture`
+    passed: 1 test in 0.01s after a 3m00s rebuild.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib mismatched_public_lane_validator -- --nocapture`
+    passed: 17 tests in 11.21s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib locate_validator_in_roster_prefers_matching_peer -- --nocapture`
+    passed: 1 test in 0.65s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib rekey_public_lane_validators_ignores_mismatched_rows -- --nocapture`
+    passed: 1 test in 0.65s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib public_lane_validator_record_matches_key_rejects_mismatched_rows -- --nocapture`
+    passed: 1 test in 0.04s after a 6m16s feature rebuild.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib public_lane_stake_share_matches_key_rejects_mismatched_rows -- --nocapture`
+    passed: 1 test in 0.00s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib public_lane_reward_record_matches_key_rejects_mismatched_rows -- --nocapture`
+    passed: 1 test in 0.00s.
+
+## 2026-06-28 SoraFS deployment-context review marker gate
+
+- Tightened the shared SoraFS rollout/release payload wrapper so gates that opt
+  into reviewed deployment context now require
+  `deployment_context_reviewed: true` in addition to reviewed
+  `deployment_id` and `environment` values. This prevents deployed rollout
+  artifacts from passing the production evidence gate with only environment
+  labels and no explicit operator-reviewed context marker.
+- Updated the transparency rollout runner to stamp the review marker into
+  generated source-entry evidence artifacts and expose it in dry-run collection
+  plans. Existing rollout/release checker fixtures now carry the same marker
+  through their shared context builders.
+- Extended shared validation tests and the rollout-gate static contract so the
+  marker requirement remains centralized in `scripts/sorafs_evidence_validation.py`.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_*rollout_evidence_test.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py -q`
+    passed: 827 tests in 5.91s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1280 tests
+    in 16.10s.
+
+## 2026-06-28 SoraFS hedging JSON decode diagnostic binding
+
+- Bound hedging fixture-manifest checker bounded JSON decode diagnostics to the
+  sanitized manifest/sidecar path label before formatting collected errors.
+  Noncanonical manifest or generated sidecar paths now force
+  `<non-canonical-error>` for the paired decode error instead of preserving raw
+  one-line parser details under a sanitized path label.
+- Added direct regressions for noncanonical manifest and generated JSON sidecar
+  decode failures, and extended the rollout-gate static contract to keep those
+  decode paths path-label-bound.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'noncanonical_path_decode or hedging_billing_fixture_generator'`
+    passed: 3 tests in 0.72s.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 127 tests in 11.88s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1277 tests
+    in 18.88s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n -F 'manifest is not valid bounded JSON object: {_error_label(error)}' scripts/check_sorafs_hedging_fixture_manifest.py`
+    returned no matches.
+  - `rg -n 'is not a valid bounded JSON object:.*_error_label\\(error\\)' scripts/check_sorafs_hedging_fixture_manifest.py`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 Torii Nexus lifecycle retire queue refresh
+
+- Added endpoint-level coverage for `POST /v1/nexus/lifecycle` retirement of a
+  manual lane. The regression proves the committed lane catalog drops the
+  retired lane and the queue clears stale lane-specific scheduling limits after
+  the successful destroy-lane operation.
+- Added a destructive-negative endpoint regression for retiring the only/default
+  lane; the handler now has explicit coverage proving that invalid destroy-lane
+  requests preserve the committed catalog and do not refresh queue limits.
+- Added endpoint-level duplicate-plan regressions for duplicate addition ids,
+  duplicate addition aliases, and duplicate retire ids. Rejected plans preserve
+  the committed lane catalog and avoid queue-limit refreshes, so malformed
+  public lifecycle requests cannot rely on implicit deduplication.
+- Added public handler regressions for unknown retire ids, additions bound to
+  unknown dataspaces, and `nexus.enabled=false`; all fail before queue
+  reconfiguration and leave scheduling limits unchanged.
+- Added grouped Torii HTTP endpoint regressions for unknown retire ids and
+  unknown dataspaces, proving those documented `lane_lifecycle_error` responses
+  leave the catalog usable for a follow-up valid add plan.
+- Existing add and autoscale-spoof rejection coverage remains intact, giving the
+  public lifecycle surface explicit create, destroy, and fail-closed tests.
+- Validation status:
+  - `cargo test -p iroha_torii --lib nexus_lane_lifecycle -- --nocapture`
+    passed: 10 tests in 6.62s after a 5m40s rebuild.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --test torii_nexus_sorafs nexus_lifecycle_rejects_unknown_ -- --nocapture`
+    passed: 2 tests in 1.58s after a 3m07s rebuild.
+
+## 2026-06-28 SoraFS path-identity template error typing
+
+- Replaced the shared path-identity helper's message-prefix check for
+  failure-template validation errors with a typed internal
+  `_PathIdentityFailureTemplateError`. Malformed templates still return the same
+  operator diagnostics, but the helper no longer parses `str(error)` to decide
+  whether to re-raise its own validation failures.
+- Extended the rollout-gate static contract to pin the typed branch and reject
+  the old `str(error).startswith(...)` pattern.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/sorafs_path_identity.py scripts/tests/sorafs_path_identity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'failure_templates or shared_path_identity_resolution or path_identity'`
+    passed: 12 tests in 0.73s.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 100 tests in 1.75s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1275 tests
+    in 15.87s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n -F 'str(error).startswith("path identity failure template")' scripts/sorafs_path_identity.py`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS typed bounded-byte oversize errors
+
+- Added `EvidenceFileTooLargeError`, a `ValueError` subclass carrying the
+  configured byte limit, to the shared bounded evidence byte reader. Oversized
+  evidence files keep the existing human diagnostic text while giving callers a
+  typed branch for file-size limit handling.
+- Updated the hedging fixture-manifest checker to use the typed oversize error
+  instead of comparing `str(error)` against the shared error text. Added focused
+  regressions and static contract checks for the typed path.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'typed_oversize or oversized_file or oversized_norito or hedging_billing_fixture_generator or shared_bounded_json_loader'`
+    passed: 7 tests in 0.73s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 149 tests in 11.44s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1275 tests
+    in 14.10s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n -F 'str(error) == f"evidence file exceeds' scripts/check_sorafs_hedging_fixture_manifest.py`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 Torii DA active-lane query boundary
+
+- DA commitment and pin-intent list/prove handlers now filter results through
+  the active Nexus lane catalog, so stale runtime-only lanes cannot be exposed
+  by query endpoints after lane removal or catalog drift.
+- Updated `docs/source/nexus_lanes.md` to document that public DA list/prove
+  query endpoints expose only active catalog-backed lane records.
+- Verification remains fail-closed on inactive lanes, giving list, prove, and
+  verify a consistent active-lane boundary for live DA APIs.
+- Validation status:
+  - `cargo test -p iroha_torii --lib da::commitments -- --nocapture` passed:
+    27 tests in 12.51s after a 2m58s incremental rebuild.
+  - `cargo test -p iroha_torii --lib da::pin_intents -- --nocapture` passed:
+    15 tests in 4.12s.
+
+## 2026-06-28 SoraFS shared JSON render diagnostic sanitization
+
+- Routed shared runner plan and checker summary JSON render exceptions through
+  `error_diagnostic_label(...)` before returning collected diagnostics.
+  Malformed multi-line render failures now report `<non-canonical-error>`
+  instead of raw exception text while preserving canonical one-line render
+  failures.
+- Added focused regressions for malformed runner plan render and checker summary
+  render errors, and extended the rollout-gate static contract to reject the
+  previous raw `{error}` render diagnostics.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/sorafs_checker_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'render_runner_plan or write_runner_plan or checker_summary or render_and_write_checker_summary or dry_run_plan or summary_shape'`
+    passed: 31 tests in 0.89s.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 265 tests in 2.02s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1273 tests
+    in 16.79s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n -F 'failed to render runner plan JSON: {error}' scripts/sorafs_runner_preflight.py`
+    returned no matches.
+  - `rg -n -F 'failed to render checker summary JSON: {error}' scripts/sorafs_checker_preflight.py`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS argfile diagnostic sanitization
+
+- Routed shared `@ARGFILE` stat, read, UTF-8 decode, and response-line parser
+  exception diagnostics through `path_diagnostic_label(...)` and
+  `error_diagnostic_label(...)`. Malformed multi-line filesystem or parser
+  errors now report `<non-canonical-error>` instead of raw exception text while
+  preserving canonical one-line diagnostics.
+- Added focused regressions for malformed stat, read, and response-line parser
+  failures, and extended the rollout-gate static contract to reject the previous
+  raw `{error}` argfile diagnostics.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'response_file_stat_failure or response_file_read_failure or response_file_line_parse_error or reviewed_response_files_use_shared_path_identity_resolution or rollout_tools_use_bounded_shared_response_file_expansion'`
+    passed: 8 tests in 0.69s.
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 119 tests in 1.82s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1271 tests
+    in 17.31s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/sorafs_response_args.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n -F 'failed to stat @ARGFILE `{path}`: {error}' scripts/sorafs_response_args.py`
+    returned no matches.
+  - `rg -n -F 'failed to read @ARGFILE `{path}`: {error}' scripts/sorafs_response_args.py`
+    returned no matches.
+  - `rg -n -F '@ARGFILE `{path}` must be UTF-8: {error}' scripts/sorafs_response_args.py`
+    returned no matches.
+  - `rg -n -F '@ARGFILE `{path}` line {line_number}: {error}' scripts/sorafs_response_args.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 Torii DA pin-intent active-lane verification
+
+- Updated DA pin-intent proof verification to fail closed when the proof lane
+  no longer resolves through the active Nexus lane catalog, matching the DA
+  commitment verifier's active-lane behavior.
+- Added handler regressions that seed explicit active lane catalogs for
+  pin-intent proofs and reject a stale runtime-only lane during verification.
+- Validation status:
+  - `cargo test -p iroha_torii --lib da::pin_intents -- --nocapture` passed:
+    14 tests in 3.52s after a 3m02s incremental rebuild.
+
+## 2026-06-28 SoraFS transparency annotation diagnostic sanitization
+
+- Routed generated evidence artifact annotation read/write failures in
+  `run_sorafs_transparency_rollout_evidence.py` through shared path and error
+  diagnostic labels. Malformed filesystem, UTF-8, JSON, render, or write
+  exception text now records `<non-canonical-error>` instead of raw multi-line
+  diagnostics while preserving the existing collected-error contract.
+- Added focused regressions for malformed generated-artifact read and
+  deployment-context write exceptions, plus a rollout-gate static contract that
+  rejects the previous raw `{error}` annotation diagnostics.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/run_sorafs_transparency_rollout_evidence.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'generated_artifact_read or deployment_context_write or transparency_runner_sanitizes_generated_artifact'`
+    passed: 3 tests in 0.71s.
+  - `python3 -m pytest scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 99 tests in 1.68s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1268 tests
+    in 14.30s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n -F 'failed to read generated evidence artifact `{path}`: {error}' scripts/run_sorafs_transparency_rollout_evidence.py`
+    returned no matches.
+  - `rg -n -F 'failed to write deployment context into `{path}`: {error}' scripts/run_sorafs_transparency_rollout_evidence.py`
+    returned no matches.
+  - `rg -n 'failed to read generated evidence artifact .*: \\{error\\}|failed to write deployment context into .*: \\{error\\}' scripts/run_sorafs_transparency_rollout_evidence.py`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS runner launch diagnostic sanitization
+
+- Routed shared command-plan subprocess launch `OSError` diagnostics through
+  `error_diagnostic_label(...)` before stderr emission. Multi-line or otherwise
+  non-canonical OS launch failures now report `<non-canonical-error>` instead
+  of raw exception text across every rollout runner that uses the shared command
+  plan executor.
+- Added a focused regression that monkeypatches runner launch to raise a
+  multi-line `OSError`, and extended the rollout-gate static contract to reject
+  the previous raw `{error}` launch diagnostic.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'launch_failure or command_plan or runner_command_plan'`
+    passed: 23 tests in 0.80s.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 190 tests in 1.85s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1265 tests
+    in 15.44s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n "failed to launch: \\{error\\}|failed to launch: \{error\}|emit_runner_error_lines\\(\\(f\".*failed to launch: \{error\}" scripts/sorafs_runner_preflight.py`
+    returned no matches.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 Sumeragi DA proposal stale-runtime lane validation
+
+- Added feature-gated proposal assembly regressions proving stale runtime-only
+  lanes in DA commitment and pin-intent spool files fail before sealing and do
+  not enter the sealed DA caches.
+- The commitment regression includes matching receipt evidence so the receipt
+  alignment gate carries the stale-lane record into active-lane validation
+  instead of intentionally dropping an unpaired commitment.
+- Validation status:
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests assemble_proposal_rejects_stale_geometry_da -- --nocapture`
+    passed: 2 tests in 2.33s after a 3m31s feature-gated rebuild.
+  - `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests assemble_proposal_rejects_invalid_da -- --nocapture`
+    passed: 2 tests in 2.26s.
+
+## 2026-06-28 SoraFS hedging validator diagnostic sanitization
+
+- Routed hedging fixture checker validator-command tokenization failures and
+  validator process-launch `OSError` paths through the shared error diagnostic
+  sanitizer. Malformed multi-line parser or OS exception text now records
+  `<non-canonical-error>` instead of raw exception content.
+- Added focused regressions for both paths and extended the rollout-gate static
+  contract so the checker keeps using `_error_label(error)` for those collected
+  diagnostics.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'validation_command_tokenize or validator_execution or hedging_billing_fixture_generator'`
+    passed: 3 tests in 0.73s.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 123 tests in 11.92s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1264 tests
+    in 14.61s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `rg -n "validation_command is not shell-tokenizable: \\{error\\}|validator execution failed: \\{error\\}|errors\\.append\\(f\".*\\{error\\}" scripts/check_sorafs_hedging_fixture_manifest.py`
+    returned no matches.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS collected validation error sanitization
+
+- Routed the remaining SoraFS rollout checker/runner collected `ValueError`
+  diagnostics through `error_diagnostic_label(...)` instead of appending raw
+  exception text. This covers malformed source-entry/provider-proof/evidence
+  spec parsing in the AI pre-screen, reputation, and transparency collection
+  runners plus the reputation rollout checker.
+- Added focused regressions that monkeypatch those spec parsers to raise
+  multi-line exception text and assert the collected diagnostics contain
+  `<non-canonical-error>` rather than raw exception text. The rollout-gate
+  static contract now rejects `errors.append(str(error))` in SoraFS rollout
+  checkers/runners and pins the shared sanitizer imports on the affected tools.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - no Rust/Cargo validation was started for this Python-only SoraFS tooling
+    slice.
+  - `python3 -m py_compile scripts/run_sorafs_ai_prescreen_rollout_evidence.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/run_sorafs_transparency_rollout_evidence.py scripts/check_sorafs_reputation_rollout_evidence.py scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'malformed or caught_argument or complete_rollout or dry_run or missing_source or provider_proof'`
+    passed: 22 tests in 0.38s.
+  - `python3 -m pytest scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 137 tests in 1.91s.
+  - `rg -n "errors\\.append\\(str\\(error\\)\\)|emit_runner_error_lines\\(\\(str\\(error\\),\\)\\)|emit_checker_error_lines\\(\\(str\\(error\\),\\)\\)" scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_*.py`
+    returned no matches.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1262 tests
+    in 16.67s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/tests/*sorafs*_test.py`
+    passed.
+  - `git diff --check -- scripts roadmap.md status.md` passed.
+  - `rg -n '^(<<<<<<<|=======$|>>>>>>>)' scripts roadmap.md status.md`
+    returned no matches.
+  - `git diff -- Cargo.lock` was empty.
+
+## 2026-06-28 SoraFS caught argument error sanitization
+
+- Added shared `emit_checker_exception(...)` and `emit_runner_exception(...)`
+  helpers that route caught checker/runner exceptions through the same
+  canonical error emitters while sanitizing malformed exception text to
+  `<non-canonical-error>`.
+- Updated SoraFS rollout/release checkers and collection runners to use the
+  shared exception emitters for handled `ValueError` paths instead of passing
+  raw `str(error)` into stderr output. The rollout-gate static contract now
+  requires those shared exception paths and rejects the previous raw
+  `emit_*_error_lines((str(error),))` pattern.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, Python, npm, Node, shell, or Codex-owned
+    processes were killed, signaled, restarted, or interrupted.
+  - external Node/npm jobs were active during this Python-only SoraFS validation
+    and were left untouched; no Rust/Cargo validation was started. The final
+    process snapshot showed active `npm exec jest`/`node` work in a separate
+    `tonswap` checkout and no active `cargo`/`rustc` jobs.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/check_sorafs_pdp_rollout_evidence.py scripts/run_sorafs_pdp_rollout_evidence.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py -q -k 'exception_sanitizes or exception_preserves or error_lines'`
+    passed: 9 tests in 0.19s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_caught_argument_error_reporting scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_use_shared_caught_argument_error_reporting -q`
+    passed: 2 tests in 0.82s.
+  - `python3 -m py_compile scripts/check_sorafs*.py scripts/run_sorafs*.py scripts/sorafs_checker_preflight.py scripts/sorafs_runner_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 261 tests in 1.87s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1258 tests
+    in 16.82s.
+
+## 2026-06-28 Torii DA stale-runtime lane handler validation
+
+- Added Torii DA commitment handler regressions showing proof-policy endpoints
+  omit stale runtime-only lanes and proof verification rejects commitments for
+  lanes removed from the authoritative catalog.
+- Hardened the DA commitment handler fixture so seeded commitment catalogs also
+  include lane 0, preserving the default-route invariant enforced by Nexus
+  configuration validation.
+- Validation status:
+  - `cargo test -p iroha_torii --lib stale_runtime_lane_geometry -- --nocapture`
+    passed: 2 tests in 1.49s after a 3m02s incremental rebuild.
+  - `cargo test -p iroha_torii --lib da::commitments -- --nocapture` passed:
+    26 tests in 11.63s.
+
+## 2026-06-28 SoraFS evidence helper diagnostic consolidation
+
+- Consolidated SoraFS evidence path discovery and bounded evidence JSON loading
+  onto the shared `sorafs_path_identity` diagnostic label helpers. Both helpers
+  now delegate path/error label generation to the same sanitizer instead of
+  carrying local canonical-text copies, keeping malformed path/error labels
+  consistent across checker preflight, runner preflight, evidence discovery,
+  bounded JSON loading, and the hedging fixture checker.
+- Updated the rollout-gate static contract to require shared sanitizer imports
+  in `sorafs_evidence_paths.py` and `sorafs_evidence_json.py`, to keep the
+  sentinel labels pinned in `sorafs_path_identity.py`, and to reject
+  reintroduced local `_canonical_diagnostic_text` copies in those helpers.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, Python, shell, or Codex-owned processes were
+    killed, signaled, restarted, or interrupted.
+  - separate external jobs were active during this Python-only SoraFS
+    validation and were left untouched; no Rust/Cargo validation was started.
+    The final process snapshot showed
+    `cargo test -p iroha_torii --lib stale_runtime_lane_geometry -- --nocapture`
+    with a `rustc` child and a separate
+    `sh -c npm run build:deploy && npm run test:dlmm && python3 -m unittest tests.test_deploy_flow tests.test_testnet_deploy`
+    pipeline.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_paths_test.py -q -k 'sanitize or sanitized or noncanonical or malformed_path_label or inspection_failure or scan_failure or non_path'`
+    passed: 16 tests in 0.06s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_evidence_file_discovery scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_bounded_json_loader -q`
+    passed: 2 tests in 0.67s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 144 tests in 2.36s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1254 tests
+    in 15.94s.
+
+## 2026-06-28 iroha_core review compile fixes
+
+- Fixed the reviewed `iroha_core` staking/state compile regressions: the slash
+  closure now has an explicit instruction error type, the mismatched reward-row
+  test keeps its fixture lanes inside the 64-lane catalog and borrows the
+  invariant message, and the AXT replay fixture converts `LaneId::as_u32()` to
+  `u64` before constructing a `DataSpaceId`.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - an existing default-target `cargo test -p iroha_core --lib stale_geometry_da
+    -- --nocapture` job was running, so validation used
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-review-fix`.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-review-fix cargo check -p iroha_core`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-review-fix cargo test -p iroha_core --lib record_rewards_rejects_mismatched_public_lane_validator_row -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-review-fix cargo test -p iroha_core --lib axt_replay_ledger_keys_for_lanes_selects_target_lane_only -- --nocapture`
+    passed.
+
+## 2026-06-28 SoraFS hedging fixture diagnostic sanitization
+
+- Routed the hedging fixture-manifest checker's local filesystem diagnostics
+  through the shared SoraFS path/error diagnostic label helpers. Malformed
+  summary targets, manifest inspection/read failures, generated fixture byte
+  reads, generated JSON sidecar misses, and generated fixture-root scan failures
+  now report sanitized `<non-path>`, `<non-canonical-path>`, and
+  `<non-canonical-error>` labels instead of interpolating raw malformed values.
+- Added focused hedging checker regressions for non-path `--summary-out`,
+  noncanonical inspection/read failures, non-path directory inspection, and
+  noncanonical generated sidecar paths. The rollout-gate static contract now
+  pins the shared sanitizer imports and those regression names.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - separate Rust/Cargo jobs were active during this Python-only SoraFS
+    validation and were left untouched; no Rust/Cargo validation was started.
+    The final process snapshot still showed
+    `cargo test -p iroha_core --lib record_rewards_rejects_mismatched_public_lane_validator_row -- --nocapture`
+    and `cargo test -p iroha_torii --lib stale_runtime_lane_geometry -- --nocapture`
+    with `rustc` children.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py -q -k 'sanitizes or sanitized or sidecar_missing_path'`
+    passed: 5 tests in 0.05s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_hedging_billing_fixture_generator_is_checked_in -q`
+    passed: 1 test in 0.05s.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 121 tests in 11.03s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1254 tests
+    in 15.03s.
+
+## 2026-06-28 SoraFS checker path diagnostic completion
+
+- Extended checker preflight path/error sanitization beyond filesystem
+  inspectors. Evidence input validation, summary/evidence identity collisions,
+  summary symlink/directory checks, summary parent-chain diagnostics, and
+  summary parent creation/write failures now use the shared sanitized
+  path/error label helpers instead of interpolating raw malformed values.
+- Added focused checker-preflight regressions for malformed evidence labels,
+  noncanonical summary/evidence collisions, and noncanonical summary create/write
+  failures. The rollout-gate static contract now pins those tests and the
+  shared sanitizer use for checker evidence inputs and summary output handling.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - separate Rust/Cargo jobs were active during this Python-only SoraFS
+    validation and were left untouched; no Rust/Cargo validation was started.
+    The final hygiene snapshot showed
+    `cargo test -p iroha_core --lib record_rewards_rejects_mismatched_public_lane_validator_row -- --nocapture`
+    and `cargo test -p iroha_torii --lib stale_runtime_lane_geometry -- --nocapture`
+    with `rustc` children.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py -q -k 'sanitizes_malformed_entry_labels or reports_malformed_evidence_inputs or same_as_explicit_evidence_sanitizes or sanitizes_create_parent_failure or sanitizes_write_failure or non_path_entries'`
+    passed: 6 tests in 0.11s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_preflight_summary_output_targets scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_evidence_input_preflight -q`
+    passed: 2 tests in 0.68s.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 158 tests in 1.80s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1249 tests
+    in 16.73s.
+
+## 2026-06-28 Block DA stale-geometry consensus validation
+
+- Added full `validate_keep_voting_block` regressions proving stale runtime lane
+  geometry cannot smuggle removed lanes through DA commitment or pin-intent
+  sidecars when the authoritative `LaneCatalog` is default-only.
+- Validation status:
+  - `cargo test -p iroha_core --lib stale_geometry_da -- --nocapture` passed:
+    3 tests in 2.59s after a cold 12m18s test build.
+  - `cargo test -p iroha_core --lib validate_keep_voting_block_rejects_da_ -- --nocapture`
+    passed: 3 tests in 2.56s.
+
+## 2026-06-28 SoraFS runner path diagnostic completion
+
+- Extended the shared SoraFS runner preflight path/error sanitizer beyond
+  filesystem inspectors. Missing input files/directories, duplicate input
+  identities, non-path command-plan artifacts, malformed reserved outputs,
+  duplicate planned artifacts, reserved-output collisions, expected-artifact
+  checks, and output-directory creation failures now format operator path/error
+  labels through the same canonical diagnostic helpers.
+- Added focused runner-preflight regressions for malformed verifier/out-dir and
+  summary-out inputs, noncanonical missing input paths, noncanonical
+  command-plan artifact labels, malformed reserved-output entries, and
+  noncanonical output creation failures. The rollout-gate static contract now
+  pins those tests and the shared sanitizer use in command-plan execution.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - separate `cargo check -p iroha_core` and
+    `cargo test -p iroha_core --lib stale_geometry_da -- --nocapture` jobs with
+    Rust children were active during this Python-only SoraFS validation and
+    were left untouched; no Rust/Cargo validation was started. The final
+    hygiene snapshot still showed the separate `cargo check -p iroha_core` with
+    a `rustc` child active; the earlier stale-geometry Cargo test was no longer
+    present in that final snapshot.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py -q -k 'sanitizes_malformed_non_path_targets or sanitizes_noncanonical_path or sanitizes_malformed_artifact_labels or malformed_reserved_outputs or sanitizes_output_creation_failure'`
+    passed: 6 tests in 0.13s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_preflight_verifier_and_output_targets scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_use_shared_command_plan_execution -q`
+    passed: 2 tests in 0.68s.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 187 tests in 1.91s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1245 tests
+    in 19.63s.
+
+## 2026-06-28 SoraFS runner preflight diagnostic sanitization
+
+- Routed collection-runner preflight filesystem inspectors through the shared
+  SoraFS path/error diagnostic label helpers. Malformed non-path inputs,
+  noncanonical path text, and noncanonical inspection exceptions now report
+  `<non-path>`, `<non-canonical-path>`, and `<non-canonical-error>` before
+  verifier, input, output-directory, summary-output, or planned-artifact
+  validation can leak raw malformed diagnostics.
+- Added direct runner-preflight regressions for sanitized malformed path labels
+  and noncanonical inspection failures, and updated the rollout-gate static
+  contract so collection runners keep using the shared sanitizer.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - a separate `cargo test -p iroha_core --lib stale_geometry_da -- --nocapture`
+    job and its `rustc` child were active before and during this Python-only
+    SoraFS validation; both were left untouched and no Rust/Cargo validation was
+    started. The final hygiene snapshot still showed that Cargo job, and also
+    showed a separate `cargo check -p iroha_core` with Rust children; all were
+    left untouched.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py -q -k 'sanitize_malformed_path_labels or sanitize_noncanonical_failures or inspection_failure or non_path'`
+    passed: 12 tests in 0.13s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_preflight_verifier_and_output_targets -q`
+    passed: 1 test in 0.65s.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 182 tests in 1.93s after the final helper readability cleanup.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1240 tests
+    in 13.95s after the final helper readability cleanup.
+
+## 2026-06-28 SoraFS checker preflight diagnostic sanitization
+
+- Exposed shared path/error diagnostic label helpers from
+  `scripts/sorafs_path_identity.py` and routed checker preflight filesystem
+  inspectors through them. Malformed non-path inputs, noncanonical path text,
+  and noncanonical inspection exceptions now report `<non-path>`,
+  `<non-canonical-path>`, and `<non-canonical-error>` before checker
+  summary-output or evidence-source validation can leak raw malformed path
+  diagnostics.
+- Added direct path-identity and checker-preflight regressions plus rollout-gate
+  static contract pins for the shared diagnostic helper exports and checker
+  inspection sanitization.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - the initial process snapshot showed no active `cargo`, `rustc`, or pytest
+    jobs, so this Python-only SoraFS validation ran without build-process
+    contention.
+  - `python3 -m py_compile scripts/sorafs_path_identity.py scripts/sorafs_checker_preflight.py scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_checker_preflight_test.py -q -k 'diagnostic_label or noncanonical_failures or malformed_path_labels or non_path or inspection_failure'`
+    passed: 12 tests in 0.12s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reviewed_response_files_use_shared_path_identity_resolution scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_preflight_summary_output_targets -q`
+    passed: 2 tests in 0.06s after correcting the focused test selector.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 165 tests in 1.77s after the final helper readability cleanup.
+  - a separate `cargo test -p iroha_core --lib stale_geometry_da -- --nocapture`
+    job appeared before the broader validation step and was left untouched;
+    Rust/Cargo validation was not started for this Python-only slice. The final
+    hygiene snapshot still showed that Cargo job with a `rustc` child active,
+    and both were left untouched.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1238 tests
+    in 15.32s after the final helper readability cleanup.
+
+## 2026-06-28 Block DA proof-policy hash active-lane validation
+
+- Added a block-validation regression that forges a candidate block whose DA
+  proof-policy sidecar/hash is derived from stale runtime lane geometry while
+  the authoritative Nexus lane catalog exposes only the default lane. Static
+  validation now directly pins the rejection as `ProofPolicyHashMismatch`
+  against `active_proof_policy_bundle_hash(...)`.
+- Validation status:
+  - no `cargo`, `rustc`, or Codex-owned processes were killed, signaled, or
+    interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib validate_static_state_dependent_rejects_stale_geometry_da_proof_policy_hash -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib validate_static_state_dependent -- --nocapture`
+    passed: 9 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib validate_keep_voting_block_rejects_da_ -- --nocapture`
+    passed: 3 tests.
+  - Full workspace tests were not run in this focused slice.
+
+## 2026-06-28 Autoscale static config admission hardening
+
+- Added user-config parser regressions that reject autoscale before runtime
+  when Nexus is disabled, when the routing default lane sits inside the
+  autoscale elastic id range, when a manual lane occupies that reserved range,
+  or when an operator attempts to set the reserved `autoscale.managed` lane
+  metadata key. The fixtures use the real TOML reader path so schema defaults
+  and diagnostic attachments are exercised together.
+- Validation status:
+  - no `cargo`, `rustc`, or Codex-owned processes were killed, signaled, or
+    interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_config --lib nexus_autoscale_parse -- --nocapture`
+    passed: 4 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_config --lib autoscale -- --nocapture`
+    passed: 4 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_config --lib nexus_fees_parse -- --nocapture`
+    passed: 7 tests.
+  - Full workspace tests were not run in this focused slice.
+
+## 2026-06-28 DA active-lane proof-policy adversarial coverage
+
+- Added focused DA active-lane negatives for catalog lanes whose dataspace is no
+  longer active and for lanes whose derived runtime geometry drifts from the
+  authoritative lane catalog. Both cases now pin that proof-policy bundle
+  generation, commitment validation, and pin-intent validation fail closed
+  instead of accepting stale lane geometry.
+- Validation status:
+  - no `cargo`, `rustc`, or Codex-owned processes were killed, signaled, or
+    interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib active_proof_policy -- --nocapture`
+    passed: 3 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib validate_commitment_bundle_against_nexus -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib validate_pin_intent_bundle_against_nexus -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib lane_proof_scheme -- --nocapture`
+    passed: 2 tests.
+  - Full workspace tests were not run in this focused slice.
+
+## 2026-06-28 Autoscale lane lifecycle adversarial validation
+
+- Aligned the embedded reset-lane cleanup tests with the hardened live-validator
+  filter: mismatched public-lane validator key/record rows are ignored before
+  cleanup, but still prove reset ownership when a removed lane is embedded in
+  the corrupt record.
+- Updated the default-lane autoscale ownership admission test to expect the
+  stricter external config boundary (`ReservedAutoscaleManagedLane`) before
+  runtime autoscale range validation.
+- Made lane-relay-burn test fixtures production-consistent by seeding the
+  canonical sponsor required when fee receipts are active.
+- Validation status:
+  - no `cargo`, `rustc`, or Codex-owned processes were killed, signaled, or
+    interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib default_lane_claiming_autoscale -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib embedded_reset_lane -- --nocapture`
+    passed: 6 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib set_nexus_rejects_missing -- --nocapture`
+    passed: 3 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib set_nexus_rejects_unknown_dataspace -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib recreated_lane -- --nocapture`
+    passed: 6 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_economic_cleanup_keys -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib verified_lane_relay_contract_state_keys -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib lane_relay_burn -- --nocapture`
+    passed: 14 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib autoscale_transition -- --nocapture`
+    passed: 43 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib set_nexus_rejects_external_autoscale -- --nocapture`
+    passed: 4 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib set_nexus_rejects_default_lane -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib apply_lane_lifecycle -- --nocapture`
+    passed: 51 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib proposal_queue_reconfigures_pending_default_route -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib refresh_proposal_routing_from_state -- --nocapture`
+    passed: 5 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib active_lane -- --nocapture`
+    passed: 4 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib mismatched_public_lane -- --nocapture`
+    passed: 17 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib mismatched_stake_share -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_validator_records_by_peer -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib public_lane_ -- --nocapture`
+    passed: 5 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib nexus_lane_lifecycle -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib merge_candidates_ignore_contract_state_record -- --nocapture`
+    passed: 7 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib merge_candidates_ignore_cached_relay_for_catalog_dataspace_mismatch -- --nocapture`
+    passed: 1 test.
+  - Full workspace tests were not run in this focused slice.
+
+## 2026-06-28 SoraFS response argfile argument canonicalization
+
+- Hardened the shared reviewed `@ARGFILE` expander so raw `bytearray`
+  containers and malformed argument tokens fail closed before character-wise
+  or byte-wise expansion. Direct args and parser-returned response-file args
+  must now be non-empty canonical strings without padding or control
+  characters.
+- Added focused response-arg regressions and rollout-gate static pins for the
+  stricter argument-token boundary.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - an unrelated `cargo test -p iroha_torii --lib nexus_lane_lifecycle -- --nocapture`
+    job was active during validation and was left untouched; Rust/Cargo
+    validation was not started to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py -q -k 'bytearray or malformed_direct_argument or malformed_line_arg or direct_non_string_argument'`
+    passed: 4 tests in 0.04s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reviewed_response_files_use_shared_path_identity_resolution scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_tools_use_bounded_shared_response_file_expansion -q`
+    passed: 2 tests in 0.06s.
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 115 tests in 1.78s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1223 tests
+    in 16.11s.
+
+## 2026-06-28 SoraFS required-kind canonicalization
+
+- Hardened the shared `--require-kind` parser so allowed-kind registries,
+  default required-kind sets, and raw CLI entries must use non-empty canonical
+  kind names. Raw `bytearray` containers, padded names, and control-character
+  names now fail closed before character-wise parsing, trim-normalized matches,
+  or unchecked defaults can satisfy narrowed rollout/release gates.
+- Added direct parser regressions and rollout-gate static pins for the
+  canonical required-kind boundary.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - no active `cargo`, `rustc`, or pytest jobs were present in the initial
+    snapshot, but Rust/Cargo validation was not started for this Python-only
+    rollout-gate helper slice.
+  - a separate `cargo test -p iroha_core --lib active_proof_policy -- --nocapture`
+    job appeared during final hygiene and was left untouched.
+  - `python3 -m py_compile scripts/sorafs_required_kinds.py scripts/tests/sorafs_required_kinds_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_required_kinds_test.py -q`
+    passed: 10 tests in 0.04s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_required_kind_parser scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_use_shared_required_kind_parser -q`
+    passed: 2 tests in 0.64s.
+  - `python3 -m pytest scripts/tests/sorafs_required_kinds_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 98 tests in 1.75s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1224 tests
+    in 15.40s.
+
+## 2026-06-28 SoraFS bounded JSON duplicate-key diagnostics
+
+- Hardened the shared bounded evidence JSON loader so duplicate-key diagnostics
+  never echo malformed JSON object key text. Canonical duplicate keys keep their
+  existing stable label, while padded or control-character keys are reported
+  with a fixed `<non-canonical>` label before the error is recorded into rollout
+  summaries.
+- Added direct decode and record-error regressions plus rollout-gate static pins
+  for sanitized duplicate-key labels.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - a separate `cargo test -p iroha_core --lib active_proof_policy -- --nocapture`
+    job was active during validation and was left untouched; Rust/Cargo
+    validation was not started for this Python-only rollout-gate helper slice.
+  - the final process snapshot showed a separate
+    `cargo test -p iroha_torii --lib lane_proof_scheme -- --nocapture` job,
+    which was also left untouched.
+  - `python3 -m py_compile scripts/sorafs_required_kinds.py scripts/sorafs_evidence_json.py scripts/tests/sorafs_required_kinds_test.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py -q -k 'duplicate_key or malformed_duplicate_key'`
+    passed: 3 tests in 0.06s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_bounded_json_loader scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_required_kind_parser scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_use_shared_required_kind_parser -q`
+    passed: 3 tests in 0.65s.
+  - `python3 -m pytest scripts/tests/sorafs_required_kinds_test.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 119 tests in 1.76s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1226 tests
+    in 17.00s.
+
+## 2026-06-28 SoraFS bounded JSON path-error sanitization
+
+- Hardened the shared bounded evidence JSON loader so recorded load failures
+  use sanitized path and error labels. Malformed path strings and noncanonical
+  `Path` values now record `<non-canonical-path>`, non-path objects record
+  `<non-path>`, and noncanonical `OSError` text is replaced with
+  `<non-canonical-error>` before it can enter rollout summaries.
+- Added direct JSON-loader regressions and rollout-gate static pins for the
+  sanitized path/error labels.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - no active `cargo`, `rustc`, or pytest jobs were present in the initial
+    snapshot, so this Python-only helper validation ran without build-process
+    contention.
+  - a separate `cargo test -p iroha_config --lib nexus_autoscale_parse -- --nocapture`
+    job and its `rustc` child appeared during final hygiene and were left
+    untouched.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py -q -k 'non_path or malformed_path_label or malformed_os_error or duplicate_key'`
+    passed: 7 tests in 0.05s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_bounded_json_loader -q`
+    passed: 1 test in 0.06s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 111 tests in 1.75s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1229 tests
+    in 15.77s.
+
+## 2026-06-28 SoraFS evidence-path diagnostic sanitization
+
+- Hardened shared evidence path discovery so directory, duplicate, conflict,
+  inspection, and scan diagnostics use sanitized path/error labels before they
+  enter rollout summaries. Malformed path strings now report
+  `<non-canonical-path>`, non-path values report `<non-path>`, and
+  noncanonical inspection errors report `<non-canonical-error>`.
+- Added direct evidence-path regressions and rollout-gate static pins for the
+  sanitized diagnostics.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - a separate `cargo test -p iroha_config --lib nexus_autoscale_parse -- --nocapture`
+    job and its `rustc` child were active during validation and were left
+    untouched; Rust/Cargo validation was not started for this Python-only
+    rollout-gate helper slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py -q -k 'noncanonical or inspection_failure or non_path_evidence_directory'`
+    passed: 6 tests in 0.07s.
+  - An initial static-contract command used a stale selector
+    `test_rollout_checkers_use_shared_evidence_discovery` and pytest reported
+    `not found`; no tests ran.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_evidence_file_discovery -q`
+    passed: 1 test in 0.05s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 121 tests in 1.77s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1232 tests
+    in 14.78s.
+
+## 2026-06-28 SoraFS path identity diagnostic sanitization
+
+- Hardened the shared path-identity resolver so non-Path values, noncanonical
+  path strings, and resolver failures use sanitized path/error labels before
+  diagnostics are appended. Canonical paths keep their existing operator-facing
+  detail, while malformed values report `<non-path>`, `<non-canonical-path>`,
+  and `<non-canonical-error>`.
+- Added direct path-identity regressions and rollout-gate static pins for the
+  sanitized resolver diagnostics, and updated evidence-path expectations that
+  now inherit the shared non-path label.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - no active `cargo`, `rustc`, or pytest jobs were present in the initial
+    snapshot, so this Python-only helper validation ran without build-process
+    contention.
+  - a separate `cargo test -p iroha_core --lib validate_static_state_dependent_rejects_stale_geometry_da_proof_policy_hash -- --nocapture`
+    job and its `rustc` child appeared during final hygiene and were left
+    untouched.
+  - `python3 -m py_compile scripts/sorafs_path_identity.py scripts/tests/sorafs_path_identity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py -q -k 'non_path or resolver_failure or custom_failure'`
+    passed: 4 tests in 0.05s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reviewed_response_files_use_shared_path_identity_resolution -q`
+    passed: 1 test in 0.62s.
+  - Initial broader runs exposed one stale assertion in
+    `scripts/tests/sorafs_evidence_paths_test.py` that expected raw ``7`` for a
+    non-path reserved output; the helper now correctly reports `<non-path>`.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py::test_discover_evidence_files_stops_after_non_path_reserved_outputs scripts/tests/sorafs_path_identity_test.py -q`
+    passed: 10 tests in 0.09s after the assertion update.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 157 tests in 1.89s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1234 tests
+    in 14.71s.
+  - Follow-up validation after the explicit validation request:
+    - `python3 -m py_compile scripts/sorafs_path_identity.py scripts/tests/sorafs_path_identity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+      passed.
+    - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+      passed: 157 tests in 1.84s.
+    - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1234
+      tests in 15.63s.
+    - `git diff --check -- scripts/sorafs_path_identity.py scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py roadmap.md status.md`
+      passed, `git diff -- Cargo.lock` was empty, and the final process
+      snapshot no longer showed active `cargo`, `rustc`, or pytest jobs.
+
+## 2026-06-28 SoraFS artifact fingerprint field-container hardening
+
+- Hardened the shared payload-free artifact fingerprint helper so raw
+  `bytearray` field containers fail closed before byte-wise iteration.
+  Fingerprint field selectors must now pass the same scalar-container guard as
+  raw strings and bytes before any field lookup can shape rollout summaries.
+- Added direct helper coverage and rollout-gate static pins for the bytearray
+  field-container boundary.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - a separate `cargo test -p iroha_torii --lib lane_proof_scheme -- --nocapture`
+    job and its `rustc` child were active during validation and were left
+    untouched; Rust/Cargo validation was not started for this Python-only
+    rollout-gate helper slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_fingerprint.py scripts/tests/sorafs_evidence_fingerprint_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_fingerprint_test.py -q`
+    passed: 9 tests in 0.04s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_artifact_rows_and_fingerprints -q`
+    passed: 1 test in 0.64s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_fingerprint_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 97 tests in 1.72s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1227 tests
+    in 17.30s.
+
+## 2026-06-28 SoraFS sensitive-key configuration canonicalization
+
+- Hardened the shared sensitive-field scanner so `sensitive_keys` must be a
+  non-mapping sequence of non-empty canonical strings. Mapping containers,
+  raw byte containers, padded key names, and control-character key names now
+  fail closed before key-wise iteration or lowercasing can alter payload-scan
+  policy.
+- Added direct scanner coverage and rollout-gate static pins for canonical
+  sensitive-key configuration.
+- Validation status:
+  - no `cargo`, `rustc`, pytest, or Codex-owned processes were killed,
+    signaled, restarted, or interrupted.
+  - no active `cargo`, `rustc`, or pytest jobs were present in the initial
+    snapshot, but Rust/Cargo validation was not started for this Python-only
+    rollout-gate helper slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py -q -k 'malformed_sensitive_key_configuration or normalized_sensitive_key'`
+    passed: 2 tests in 0.04s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_sensitive_key_normalization -q`
+    passed: 1 test in 0.79s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 99 tests in 1.70s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1227 tests
+    in 14.63s.
+
+## 2026-06-28 SoraFS validation summary-error canonicalization
+
+- Hardened shared evidence validation recording so pre-existing summary error
+  sinks must contain only non-empty canonical strings before path-qualified
+  validation errors are appended. Dirty summary state can no longer flow into
+  rollout checker output when `record_evidence_validation_errors(...)` prefixes
+  validation diagnostics.
+- Added focused evidence-validation coverage and rollout-gate static pins for
+  malformed existing summary error text.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'record_evidence_validation_errors'`
+    passed: 9 tests in 0.57s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_validation_error_recorder -q`
+    passed: 1 test in 0.62s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 484 tests in 1.95s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1220 tests
+    in 15.28s.
+
+## 2026-06-28 SoraFS shared diagnostic sink canonicalization
+
+- Hardened the lower shared SoraFS helper stack so path identity, bounded JSON
+  evidence loading, runner preflight, and sensitive-field scanning all reject
+  pre-existing empty, padded, or control-character diagnostic text before they
+  append new errors or inspect filesystem/payload state.
+- Tightened path-identity failure templates to reject padded or
+  control-character templates before formatting diagnostics, and tightened
+  runner stderr error emitters so malformed diagnostic text cannot print partial
+  `ERROR:` lines or block headings.
+- Added focused helper coverage plus rollout-gate static pins for the new
+  canonical diagnostic-sink and runner stderr behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - an unrelated Cargo/Rust test job was present and left untouched; validation
+    remained Python-only for this SoraFS helper slice.
+  - `python3 -m py_compile scripts/sorafs_path_identity.py scripts/sorafs_evidence_json.py scripts/sorafs_evidence_sensitivity.py scripts/sorafs_runner_preflight.py scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/sorafs_runner_preflight_test.py -q -k 'existing_error_text or malformed_failure_templates or malformed_message_content'`
+    passed: 8 tests in 0.18s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reviewed_response_files_use_shared_path_identity_resolution scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_bounded_json_loader scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_preflight_verifier_and_output_targets scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_sensitive_key_normalization -q`
+    passed: 4 tests in 0.80s.
+  - `python3 -m pytest scripts/tests/sorafs_path_identity_test.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 217 tests in 2.58s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1219 tests
+    in 15.63s.
+
+## 2026-06-28 SoraFS preflight diagnostic canonicalization
+
+- Hardened shared SoraFS evidence path discovery so pre-existing path-helper
+  diagnostic sinks must contain only non-empty canonical strings before helper
+  code appends errors, resolves identities, scans directories, or checks
+  reserved-output conflicts. Dirty diagnostic state can no longer flow into
+  structured checker output through shared evidence discovery.
+- Hardened shared checker preflight so pre-existing summary-output and
+  filesystem diagnostic sinks must also contain only non-empty canonical strings
+  before helper code inspects paths or appends diagnostics.
+- Added focused evidence-path and checker-preflight coverage plus rollout-gate
+  static pins for malformed existing diagnostic text.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py -q -k 'error_container or existing_error_text or evidence_path_collection'`
+    passed: 7 tests in 0.07s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_evidence_file_discovery -q`
+    passed: 1 test in 0.61s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 118 tests in 1.79s.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/sorafs_evidence_paths.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py -q -k 'path_inspectors_reject_malformed_existing_error_text or path_inspectors_reject_malformed_error_container or validate_checker_summary_output_rejects_malformed_error_container or validate_checker_output_parent_rejects_malformed_error_container'`
+    passed: 4 tests in 0.10s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_preflight_summary_output_targets -q`
+    passed: 1 test in 0.62s.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 182 tests in 1.80s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1212 tests
+    in 14.48s.
+
+## 2026-06-28 SoraFS checker summary-key canonicalization
+
+- Hardened shared checker summary rendering so every top-level and nested
+  summary mapping key must be a non-empty canonical string before JSON rendering,
+  stdout emission, or `--summary-out` writes. Malformed keys can no longer be
+  coerced by `json.dumps` into misleading evidence-summary fields.
+- Added focused preflight coverage and rollout-gate static pins for malformed
+  summary keys.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py -q -k 'render_checker_summary or write_checker_summary'`
+    passed: 17 tests in 0.11s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_preflight_summary_output_targets -q`
+    passed: 1 test in 0.63s.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 151 tests in 1.79s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1210 tests
+    in 15.58s.
+
+## 2026-06-28 SoraFS checker stderr diagnostic canonicalization
+
+- Hardened shared checker stderr emitters so `_checker_error_messages(...)`
+  rejects empty, padded, or control-character diagnostics before printing
+  `ERROR:` lines or block headings. Malformed checker diagnostics can no longer
+  leak unsafe text or partial headings to stderr.
+- Added focused preflight coverage and rollout-gate static pins for canonical
+  stderr diagnostic text.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py -q -k 'emit_checker_error'`
+    passed: 4 tests in 0.09s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_preflight_summary_output_targets -q`
+    passed: 1 test in 0.06s.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 149 tests in 1.73s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1208 tests
+    in 14.90s.
+
+## 2026-06-27 SoraFS artifact-error bucket canonicalization
+
+- Hardened shared `record_artifact_error(...)` so existing artifact `errors`
+  lists are reused only when every entry is canonical artifact-error text.
+  Dirty buckets containing non-strings, padded strings, or control characters
+  are rebuilt before appending the new canonical error, matching the existing
+  fail-closed behavior for non-list error buckets.
+- Added focused preflight coverage and rollout-gate static pins for dirty
+  artifact error buckets.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py -q -k 'record_artifact_error'`
+    passed: 10 tests in 0.10s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_artifact_error_recording -q`
+    passed: 1 test in 0.58s.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 149 tests in 2.20s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1208 tests
+    in 14.80s.
+
+## 2026-06-27 SoraFS snapshot-anchor value hardening
+
+- Hardened `record_snapshot_bound_evidence_artifact(...)` so malformed
+  `snapshot_id_hex` or `merkle_root_hex` values on otherwise valid anchor
+  artifacts are mirrored into the artifact error bucket and invalidate the row
+  before binding registration.
+- Updated focused regression coverage and rollout-gate static pins for malformed
+  snapshot anchor values.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/integration-test jobs were present and left untouched;
+    Rust/Cargo validation was not run because this slice only changed Python
+    SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'record_snapshot_bound_evidence_artifact or validate_snapshot_bound_evidence_artifacts'`
+    passed: 11 tests in 0.56s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 1 test in 0.60s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 483 tests in 1.93s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1207 tests
+    in 14.34s.
+
+## 2026-06-27 SoraFS snapshot-binding kind-label hardening
+
+- Hardened `record_snapshot_bound_evidence_artifact(...)` so malformed
+  snapshot-binding `kind_name` values invalidate the artifact before anchor or
+  bound routing. Dirty kind labels can no longer be silently treated as unknown
+  non-participating evidence.
+- Added focused regression coverage and rollout-gate static pins for malformed
+  snapshot-binding kind labels.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'record_snapshot_bound_evidence_artifact or validate_snapshot_bound_evidence_artifacts'`
+    passed: 11 tests in 0.56s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 1 test in 0.05s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 483 tests in 1.88s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1207 tests
+    in 14.62s.
+
+## 2026-06-27 SoraFS missing-anchor kind-set hardening
+
+- Hardened scalar and tuple bound-evidence reference validators so malformed
+  `required_kinds` or `missing_anchor_required_kinds` inputs emit diagnostics
+  and return before missing-anchor artifact mutation. Dirty kind collections can
+  no longer silently make a required missing-anchor branch look optional.
+- Added focused regression coverage and rollout-gate static pins for the scalar
+  digest and tuple missing-anchor paths. The static contract loader now inserts
+  the owning script directory into `sys.path`, so focused contract selections do
+  not depend on earlier import side effects.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/integration-test jobs were present and left untouched;
+    Rust/Cargo validation was not run because this slice only changed Python
+    SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'validate_bound_evidence_digest_references or validate_bound_evidence_tuple_references or required_evidence_has_any_kind'`
+    passed: 26 tests in 0.59s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'tuple_binding or scalar_bound_digest or required_kind_predicates'`
+    passed: 1 test in 0.61s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 482 tests in 1.97s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1206 tests
+    in 15.94s.
+
+## 2026-06-27 SoraFS digest-mismatch artifact input hardening
+
+- Hardened `record_evidence_digest_mismatch_errors(...)` so malformed artifact
+  containers or mixed non-object artifact rows are rejected before any artifact
+  validity or error buckets are mutated. Digest-mismatch recording now fails
+  closed instead of partially marking only the clean rows from a dirty input.
+- Added focused regression coverage and rollout-gate static pins for malformed
+  digest-mismatch artifact inputs.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present and left untouched; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'record_evidence_digest_mismatch_errors or evidence_artifact_digest_set'`
+    passed: 8 tests in 0.56s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'rollout_checkers_use_shared_artifact_fingerprint_accessor'`
+    passed: 1 test in 0.60s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 480 tests in 1.91s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1204 tests
+    in 15.44s.
+
+## 2026-06-27 SoraFS recognized-artifact count aggregate hardening
+
+- Hardened `count_evidence_artifacts(...)` so standard rollout/release
+  `recognized_artifact_count` values are all-or-nothing across the
+  artifacts-by-kind map. Malformed bucket rows or noncanonical kind labels now
+  make the aggregate count `0` instead of reporting a partial count from other
+  clean buckets.
+- Added focused regression coverage and rollout-gate static pins for mixed
+  clean/dirty artifact bucket maps.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present and left untouched; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'count_evidence_artifacts or count_recognized_evidence_artifacts or recognized_evidence_artifacts_are_valid'`
+    passed: 5 tests in 0.56s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_recognized_artifact_count -q`
+    passed: 1 test in 0.59s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 479 tests in 1.88s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1203 tests
+    in 16.16s.
+
+## 2026-06-27 SoraFS object-array return fail-closed hardening
+
+- Hardened `require_object_array(...)` so malformed item rows still emit
+  path-qualified object diagnostics but the helper returns no indexed records
+  when any row is malformed. Route/probe/artifact/stream/event validators can no
+  longer treat placeholder `{}` rows as usable downstream records after a dirty
+  object-array input.
+- Added focused regression coverage and rollout-gate static pins for mixed
+  valid/malformed object arrays.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present and left untouched; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'require_object_array or require_object'`
+    passed: 9 tests in 0.57s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_route_probe_object_array_validation scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_generic_object_array_validation -q`
+    passed: 2 tests in 0.60s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 479 tests in 1.85s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1203 tests
+    in 14.91s.
+
+## 2026-06-27 SoraFS hex-array return fail-closed hardening
+
+- Hardened `require_hex_string_array(...)` so malformed, duplicate, or
+  length-mismatched arrays still report all relevant diagnostics but return an
+  empty normalized-value list. Mixed dirty proof-sibling or statement-digest
+  arrays can no longer hand later validation code a partial set of usable hex
+  values.
+- Added focused regression coverage and rollout-gate static pins for the
+  fail-closed return behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Cargo/rustc jobs were not active in the process snapshots; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'hex_string_array'`
+    passed: 9 tests in 0.53s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_hex_string_array_validation -q`
+    passed: 1 test in 0.57s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 478 tests in 1.81s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1202 tests
+    in 14.27s.
+
+## 2026-06-27 SoraFS string-coverage row hardening
+
+- Hardened the shared `require_string_coverage(...)` validator path so
+  malformed present rows are recorded as validation errors instead of being
+  skipped. Object coverage arrays now reject scalar rows and missing/blank/
+  noncanonical field values, while scalar coverage arrays reject object and
+  non-string rows.
+- Kept the legacy `collect_string_values(...)` helper tolerant for non-gating
+  collection use; rollout/release evidence gates use the stricter canonical
+  collector underneath `require_string_coverage(...)`.
+- Added focused regression coverage and rollout-gate static pins for malformed
+  present coverage rows.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Cargo/rustc jobs were not active in the process snapshots; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'string_coverage or collect_string_values'`
+    passed: 12 tests in 0.55s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_string_coverage_validation -q`
+    passed: 1 test in 0.59s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 477 tests in 1.81s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1201 tests
+    in 14.25s.
+
+## 2026-06-27 SoraFS required-or-observed presence fail-closed hardening
+
+- Hardened shared required-or-observed evidence presence checks so aggregate
+  value collections must contain only canonical present values before they can
+  satisfy the reputation rollout fallback for at least one verified provider
+  proof. Mixed dirty collections such as a valid provider id plus a malformed
+  object now fail closed instead of counting as present.
+- Kept the single-artifact observed-value recorder tolerant: malformed values
+  from one invalid artifact are still ignored there, while later valid artifact
+  values can be recorded normally.
+- Added focused regression coverage and rollout-gate static pins for the
+  stricter aggregate presence predicate.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present and left untouched; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - initial validation caught a temporary syntax error in
+    `scripts/sorafs_evidence_validation.py`; it was fixed before the passing
+    runs below.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'required_or_observed or hashable_evidence_values or missing_required_evidence_values'`
+    passed: 15 tests in 0.08s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_required_summary_builder scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_artifact_fingerprint_accessor -q`
+    passed: 2 tests in 0.06s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 475 tests in 1.93s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1199 tests
+    in 14.11s.
+
+## 2026-06-27 SoraFS artifact digest-set fail-closed hardening
+
+- Hardened `evidence_artifact_digest_set(...)` so digest anchors are derived
+  only from well-formed artifact sequences and canonical digest values.
+  Malformed artifact containers, non-object rows, missing digest fields, blank
+  values, padded/control-character values, and non-string digest values now
+  return an empty digest set instead of partially usable anchors.
+- Added focused regression coverage and rollout-gate static pins for the
+  digest-set fail-closed behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present and left untouched; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py -q -k 'evidence_artifact_digest_set'`
+    passed: 4 tests in 0.56s.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q -k 'digest_set or evidence_artifact'`
+    selected no tests; reran the exact contract target below.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_artifact_fingerprint_accessor -q`
+    passed: 1 test in 0.05s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 474 tests in 1.86s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1198 tests
+    in 15.17s.
+
+## 2026-06-27 SoraFS evidence-file count row hardening
+
+- Hardened `count_evidence_files(...)` so `evidence_file_count` only counts
+  well-formed sequences of `Path` entries. Scalar containers, string/bytes
+  inputs, and mixed non-Path rows now return `0` instead of inflating rollout
+  summary file counts.
+- Added focused regression coverage and rollout-gate static pins for malformed
+  evidence-file count inputs.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Cargo/rustc jobs were absent during the initial check but present during
+    final hygiene and were left untouched; Rust/Cargo validation was not run
+    because this slice only changed Python SoraFS rollout-gate helpers and
+    tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_count_evidence_files_rejects_strings_without_traceback scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_evidence_file_count -q`
+    passed: 2 tests in 1.09s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 473 tests in 1.86s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1197 tests
+    in 14.89s.
+
+## 2026-06-27 SoraFS deployment-context summary hardening
+
+- Hardened `deployment_context_summary(...)` so deployment-context summaries
+  fail closed on malformed containers and only emit canonical
+  `deployment_id`/`environment` string values. Malformed scalar containers,
+  non-string values, padded values, and control-character values are filtered
+  before summary JSON can be built.
+- Routed the moderation-panel rollout checker through the shared deployment
+  context summary helper instead of a checker-local dict comprehension, and
+  added static pins so it stays on the shared path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Cargo/rustc jobs were not active in the process snapshots; Rust/Cargo
+    validation was not run because this slice only changed Python SoraFS
+    rollout-gate helpers, checker glue, and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_deployment_context_summary_rejects_malformed_values scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_enforce_consistent_deployment_context scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py::test_deployment_context_is_required scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py::test_mixed_reviewed_deployment_context_fails -q`
+    passed: 4 tests in 1.19s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py -q`
+    passed: 502 tests in 2.03s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1197 tests
+    in 14.27s.
+
+## 2026-06-27 SoraFS required-summary schema canonicalization
+
+- Hardened `build_required_evidence_summary(...)` so per-kind summary schema
+  metadata must be a canonical non-empty string before required rows can be
+  valid. Missing, blank, padded/control-character, and non-string schema values
+  now fail the row with the existing configured-schema diagnostic instead of
+  entering rollout summaries.
+- Added focused regression coverage and rollout-gate static pins for malformed
+  schema labels in required-summary rows.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_build_required_evidence_summary_rejects_missing_schema_metadata scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_required_summary_builder -q`
+    passed: 2 tests in 1.10s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 472 tests in 1.89s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1196 tests
+    in 23.20s.
+
+## 2026-06-27 SoraFS required-summary readiness hardening
+
+- Hardened `required_evidence_summary_is_valid(...)` so required rows must have
+  `valid: true`, an empty canonical error list, at least one artifact object,
+  and explicitly valid artifact rows before reputation rollout evidence can
+  report ready. Malformed row errors, missing/empty artifact buckets, scalar
+  buckets, mixed artifact rows, and invalid artifacts now fail closed.
+- Added focused regressions plus rollout-gate static pins for required-summary
+  readiness row-shape checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_required_evidence_summary_is_valid_requires_explicit_true scripts/tests/sorafs_evidence_validation_test.py::test_required_evidence_summary_is_valid_fails_closed_on_malformed_rows scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 3 tests in 1.09s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 472 tests in 1.82s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1196 tests
+    in 14.31s.
+
+## 2026-06-27 SoraFS custom-required record bucket hardening
+
+- Hardened `record_custom_required_evidence_artifact(...)` so malformed custom
+  required rows and existing artifact buckets are rejected before any new
+  artifact is appended. Dirty rows now stay invalid, malformed artifact
+  containers remain unchanged, and the helper emits stable row/bucket
+  diagnostics instead of normalizing corrupted required-evidence state.
+- Added focused regressions plus rollout-gate static pins for malformed custom
+  required rows and existing artifact buckets at record time.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_record_custom_required_evidence_artifact_rejects_malformed_existing_artifacts_before_append scripts/tests/sorafs_evidence_validation_test.py::test_record_custom_required_evidence_artifact_rejects_malformed_row_before_append scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 3 tests in 1.06s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 472 tests in 1.84s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1196 tests
+    in 14.71s.
+
+## 2026-06-27 SoraFS recognized artifact bucket hardening
+
+- Hardened `record_evidence_artifact(...)` so existing recognized artifact
+  buckets must already contain only object rows before a new artifact can be
+  appended. Dirty buckets now remain unchanged and emit a stable artifact-object
+  bucket diagnostic instead of being silently normalized by later valid
+  evidence.
+- Added a focused regression plus rollout-gate static pins for malformed
+  existing recognized artifact buckets.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 471 tests in 1.85s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1195 tests
+    in 14.32s.
+
+## 2026-06-27 SoraFS custom-required artifact record hardening
+
+- Hardened `record_custom_required_evidence_artifact(...)` so non-object custom
+  artifact rows are rejected before they can be appended to required-evidence
+  buckets. Malformed artifact rows now mark the required row invalid with a
+  stable artifact-object diagnostic and leave the artifact list unchanged.
+- Added a focused regression plus rollout-gate static pins for record-time
+  custom required-evidence artifact row rejection.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_record_custom_required_evidence_artifact_rejects_malformed_artifact_rows_before_append scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 2 tests in 0.08s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 470 tests in 1.86s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1194 tests
+    in 17.06s.
+
+## 2026-06-27 SoraFS custom-required artifact row-shape hardening
+
+- Hardened `finalize_custom_required_evidence_rows(...)` so custom required
+  evidence rows distinguish malformed artifact buckets from missing evidence.
+  Scalar artifact containers now report a sequence diagnostic, and mixed
+  non-object rows now clear the bucket and report an artifact-object sequence
+  diagnostic before row validity is finalized.
+- Added a focused regression plus rollout-gate static pins for malformed custom
+  required-evidence artifact row buckets.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_finalize_custom_required_evidence_rows_fails_closed scripts/tests/sorafs_evidence_validation_test.py::test_finalize_custom_required_evidence_rows_rejects_malformed_artifact_rows scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 3 tests in 0.08s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 469 tests in 1.93s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1193 tests
+    in 15.57s.
+
+## 2026-06-27 SoraFS required-summary artifact row-shape hardening
+
+- Hardened `build_required_evidence_summary(...)` so artifact buckets containing
+  non-object rows fail closed as malformed gate input instead of being reported
+  as present-but-invalid evidence. Required summary rows now clear malformed
+  scalar/mixed buckets, report zero artifact count, and emit an explicit
+  artifact-object sequence diagnostic.
+- Added a focused regression plus rollout-gate static pins for malformed
+  required-summary artifact row buckets.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during final hygiene and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_build_required_evidence_summary_rejects_malformed_artifact_rows scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_required_summary_builder -q`
+    passed: 2 tests in 0.08s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 468 tests in 1.86s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1192 tests
+    in 17.25s.
+
+## 2026-06-27 SoraFS snapshot-bound artifact row-shape hardening
+
+- Hardened snapshot-bound evidence validation so `snapshot_bound_artifacts`
+  must be a sequence of artifact objects before binding-present or
+  missing-anchor branches run. Malformed scalar containers or mixed row
+  sequences now fail closed as gate-configuration errors instead of producing
+  misleading missing-anchor or artifact-mismatch diagnostics.
+- Added a focused regression plus rollout-gate static pins for malformed
+  snapshot-bound artifact containers and row entries.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_validate_snapshot_bound_evidence_artifacts_rejects_malformed_bound_artifacts scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_uses_shared_required_row_invalidation -q`
+    passed: 2 tests in 0.08s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 467 tests in 1.88s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1191 tests
+    in 15.07s.
+
+## 2026-06-27 Torii native AMX settlement receipt JSON surface
+
+- Extended the `/v1/sumeragi/status` lane settlement JSON renderer to expose
+  `nexus_fee_receipts` and structured `native_amx_receipts` instead of dropping
+  those commitment fields from the top-level convenience payload.
+- Native AMX receipt JSON now carries source ids, plan digests, coordinator and
+  participant lane/dataspace ids, prepare/commit QC bodies, validator-set
+  hashes, validator ids, signer bitmaps, and aggregate signature bytes in the
+  same status response used by audit consumers.
+- Added concrete OpenAPI schemas for `SumeragiStatusResponse`,
+  `LaneSettlementCommitment`, `NativeAmxReceipt`, native AMX leg records, and
+  native AMX attestation QCs so SDK generators can discover the settlement
+  receipt surface without falling back to arbitrary JSON.
+- Extended the four-peer native AMX routing integration corridor so, after all
+  peers observe the committed native AMX block, it polls `/v1/sumeragi/status`
+  and verifies the same native AMX receipt appears in structured
+  `lane_settlement_commitments` JSON for downstream audit consumers.
+- Preserved the execution-derived `committed_fragment_count` when
+  `iroha_test_network` re-signs pre-executed genesis blocks, fixing the
+  native AMX localnet startup path where synthetic result-count recomputation
+  advertised 9 committed fragments while validation recomputed 10.
+- Hardened the native AMX corridor so missing advisory approval events no
+  longer fail the receipt-status check before the authoritative block lookup;
+  explicit rejected or expired transaction events still fail immediately.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo build -p irohad`
+    passed, refreshing the daemon binary used by the localnet harness.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_test_network rebuild_block_with_results_preserves_committed_fragment_count -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_test_network ensure_genesis_results_resigns_mutated_genesis_with_existing_results -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib generated_spec_documents_sumeragi_status_lane_settlement_receipts -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib openapi_schemas_include_system_keys -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib status_snapshot_json_serializes_native_amx_receipts_in_lane_settlement_commitments -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --lib status_snapshot_json_serializes_lane_settlement_commitments -- --nocapture`
+    passed: 1 test, confirming the existing settlement total and swap metadata
+    JSON shape still holds.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p integration_tests --test native_amx_routing mixed_dataspace_native_amx_routes_and_commits_with_receipts -- --nocapture`
+    passed: 1 four-peer native AMX localnet test, including committed-block
+    convergence and structured Torii status receipt visibility.
+
+## 2026-06-27 SoraFS tuple anchor binding canonicalization order
+
+- Hardened tuple-bound evidence reference validation so multi-field anchor
+  binding collections are canonicalized before truthiness checks,
+  missing-anchor handling, or artifact mutation. Malformed anchor-binding
+  containers and malformed tuple values now fail closed as gate-configuration
+  errors instead of producing missing-anchor or artifact-mismatch diagnostics.
+- Added a focused regression plus rollout-gate static pins for malformed
+  tuple anchor bindings in bound-evidence validation.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during final hygiene and were left
+    untouched; Rust/Cargo validation was not run because this slice only changed
+    Python SoraFS rollout-gate helpers and tests.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_validate_bound_evidence_tuple_references_rejects_malformed_anchor_bindings_before_mutation scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_tuple_binding_validation -q`
+    passed: 2 tests in 0.08s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 466 tests in 1.84s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1190 tests
+    in 15.02s.
+
+## 2026-06-27 SoraFS anchor digest canonicalization order
+
+- Hardened digest-reference validation so allowed and anchor digest collections
+  are canonicalized before truthiness checks, missing-anchor handling, or
+  artifact mutation. Malformed anchor containers and malformed anchor digest
+  values now fail closed as gate-configuration errors instead of being treated
+  as absent anchors or artifact mismatches.
+- Added focused regressions plus rollout-gate static pins for malformed
+  allowed-digest inputs and bound-evidence anchor-digest inputs.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py::test_record_evidence_digest_mismatch_errors_rejects_malformed_allowed_digest_inputs_before_mutation scripts/tests/sorafs_evidence_validation_test.py::test_validate_bound_evidence_digest_references_rejects_malformed_anchor_digests_before_mutation scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_artifact_fingerprint_accessor -q`
+    passed: 3 tests in 0.07s.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 465 tests in 1.80s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1189 tests
+    in 14.64s.
+
+## 2026-06-27 Native AMX settlement-status receipt export
+
+- Added a block-validation regression proving that a signed native AMX receipt
+  attached to a durable execution context survives into the exported
+  `LaneBlockCommitment.native_amx_receipts` Sumeragi status surface.
+- The test builds a mixed-dataspace native AMX transaction, signs participant
+  prepare/commit QCs, validates the block, and checks the settlement commitment
+  uses the coordinator lane/dataspace and preserves the exact receipt for
+  downstream audit consumers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib native_amx_receipt_survives_into_lane_settlement_status -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib native_amx_receipt -- --nocapture`
+    passed: 4 tests, covering receipt validation rejects and the new
+    settlement-status export regression.
+
+## 2026-06-27 SoraFS binding value canonicalization order
+
+- Hardened `require_string_value_in(...)` so scalar binding values are validated
+  as canonical strings before normalization or allowed-container inspection;
+  malformed values now fail with the canonical value diagnostic even when the
+  allowed binding container is also malformed.
+- Added a focused regression plus rollout-gate static pins for validation-before
+  normalization in scalar binding checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 463 tests in 1.77s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1187 tests
+    in 16.51s.
+
+## 2026-06-27 Native AMX receipt participant-set drift hardening
+
+- Added a receipt-validation regression proving native AMX receipts reject
+  duplicate participant legs and unexpected participant lane/dataspace legs
+  before reused QC material can affect validation.
+- The new case starts from a fully signed two-participant native AMX receipt,
+  then mutates the participant set to exercise the duplicate and out-of-plan
+  guard branches directly.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib native_amx_receipt_validation_rejects_participant_set_drift -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib native_amx_receipt_validation -- --nocapture`
+    passed: 3 tests, covering the signed accept path, malformed-QC rejects,
+    and the new participant-set drift rejects.
+
+## 2026-06-27 SoraFS gate-status list-shape hardening
+
+- Hardened shared rollout gate status selection so `ready` is reported only for
+  an actual empty `list[str]` of canonical summary errors; empty tuples,
+  non-string entries, blank diagnostics, padded diagnostics, and control
+  characters now all fail closed to `blocked`.
+- Added focused regressions plus rollout-gate static pins for malformed
+  gate-status error containers and message text.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 462 tests in 1.85s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1186 tests
+    in 15.20s.
+
+## 2026-06-27 Nexus verified-relay restart hydration hardening
+
+- Added restart-style coverage for persisted verified lane relay records: after
+  state JSON snapshot/restore, merge-candidate hydration now proves that only
+  active Nexus catalog lanes populate the runtime relay cache while an
+  unknown-lane canonical record remains persisted but inert.
+- The regression reinstalls the active manifest registry as restart-time
+  configuration, then verifies the restored state produces exactly one merge
+  candidate for the active lane and does not admit stale unknown-lane relay
+  material.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib merge_candidates_restart_hydrates_only_active_verified_lane_relay_records -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib verified_lane_relay -- --nocapture`
+    passed: 55 tests, covering the new restart case plus adjacent
+    verified-relay registration, corruption, spoofed-key, unknown-lane,
+    dataspace-mismatch, and cleanup regressions.
+
+## 2026-06-27 SoraFS artifact count row-shape hardening
+
+- Hardened shared recognized-artifact count helpers so standard and custom
+  rollout summaries only count sequences of mapping artifact rows; scalar rows
+  or mixed malformed rows now fail closed to zero instead of inflating
+  `recognized_artifact_count`.
+- Added focused regressions plus rollout-gate static pins for malformed
+  artifact-row sequences in standard and custom count paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during final hygiene, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 462 tests in 1.94s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1186 tests
+    in 15.17s.
+
+## 2026-06-27 SoraFS artifact summary-field hardening
+
+- Hardened standard evidence artifact construction so `schema` and `status`
+  summary fields must be canonical strings or are sanitized to `None`; otherwise
+  clean artifacts now fail closed before malformed metadata can enter rollout
+  summaries.
+- Added focused regressions plus rollout-gate static pins for malformed standard
+  artifact summary fields.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 462 tests in 1.77s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1186 tests
+    in 17.10s.
+
+## 2026-06-27 Nexus NPoS embedded-QC roster active-lane rejection
+
+- Added an actor-level Sumeragi NPoS commit-QC regression proving that a future
+  QC with an embedded validator set containing a high-stake stale local
+  validator on an unknown lane is rejected once Nexus active-lane filtering is
+  enabled.
+- The test first proves the same stale embedded roster matches unscoped NPoS
+  derivation with Nexus disabled, then enables Nexus and verifies the
+  authoritative roster collapses to active catalog-lane validators only. The
+  stale embedded QC must not drive payload recovery, seed the vote-roster cache,
+  request the block, or advance highest-QC state.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --features sumeragi-main-loop-tests --lib npos_commit_qc_rejects_embedded_roster_with_stale_unknown_lane_validator -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --features sumeragi-main-loop-tests --lib unknown_lane -- --nocapture`
+    passed: 23 tests, covering the new QC-roster/embedded-QC regressions plus
+    adjacent DA, state, roster, and stake-snapshot unknown-lane guards.
+
+## 2026-06-27 SoraFS custom required-evidence canonicalization
+
+- Hardened custom required-evidence finalization and artifact recording so
+  malformed evidence labels, required-kind labels, and artifact error text fail
+  closed before non-canonical diagnostics can enter rollout summaries.
+- Added focused regressions plus rollout-gate static pins for malformed custom
+  required-row labels and artifact error lists.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during final hygiene, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 460 tests in 1.85s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1184 tests
+    in 15.07s.
+
+## 2026-06-27 Nexus NPoS QC roster active-lane filter coverage
+
+- Added an actor-level Sumeragi NPoS QC-roster regression proving that active
+  validator records on stale unknown lanes cannot re-enter the
+  `npos_stake_roster_for_qc` path once Nexus active-lane filtering is enabled.
+- The adversarial setup keeps the local peer only on a high-stake unknown lane
+  while two remote validators remain on the active single lane. Disabled-Nexus
+  roster derivation still observes the stale local record; enabled-Nexus roster
+  derivation returns only the active catalog-lane validators.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --features sumeragi-main-loop-tests --lib npos_stake_roster_for_qc_ignores_stale_unknown_lane_when_nexus_enabled -- --nocapture`
+    passed: 1 test.
+
+## 2026-06-27 SoraFS snapshot-binding validation-input hardening
+
+- Hardened shared snapshot-bound evidence validation so malformed required/bound
+  kind containers, valid-binding pair containers, and snapshot-binding
+  diagnostic labels mark the evidence summary invalid before artifact/anchor
+  matching can proceed.
+- Added focused regressions plus rollout-gate static pins for malformed
+  snapshot-binding validation containers and labels.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during final hygiene, so Rust/Cargo
+    validation was skipped to avoid contention for this script-only hardening
+    slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 456 tests in 1.82s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1180 tests
+    in 15.34s.
+
+## 2026-06-27 SoraFS snapshot-binding kind-container hardening
+
+- Hardened shared snapshot-bound evidence recording so malformed anchor/bound
+  kind containers record artifact errors instead of silently routing through
+  empty kind sets.
+- Expanded the malformed kind-container regression plus rollout-gate static pins
+  for the shared snapshot-binding helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 453 tests in 2.68s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1177 tests
+    in 13.47s.
+
+## 2026-06-27 Nexus NPoS retransmit active-lane filter coverage
+
+- Added an actor-level Sumeragi NPoS retransmit-target regression proving that
+  stale high-stake validator records on unknown lanes cannot make an inferred
+  missing-vote target set look stake-sufficient once Nexus active-lane filtering
+  is enabled.
+- The adversarial case first confirms disabled-Nexus behavior would suppress
+  full-fanout repair because the stale unknown-lane stake is counted, then
+  enables Nexus and proves the same selector widens to every remote validator
+  using only active catalog lanes.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --features sumeragi-main-loop-tests --lib quorum_retransmit_targets_ignore_stale_unknown_lane_stake_when_nexus_enabled -- --nocapture`
+    passed: 1 test.
+
+## 2026-06-27 SoraFS disallowed-string diagnostic fix
+
+- Fixed the shared `require_string_not_equal` default error path so disallowed
+  values report the field label instead of hitting an undefined helper variable
+  when no custom message is supplied.
+- Added a focused default-diagnostic regression plus rollout-gate static pins for
+  the shared string helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 453 tests in 2.25s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1177 tests
+    in 14.06s.
+
+## 2026-06-27 Nexus NPoS QC active-lane filter coverage
+
+- Added a direct Sumeragi NPoS consensus-QC regression proving that world-backed
+  stake snapshot recomputation ignores high-stake validator records on unknown
+  or retired lanes when active Nexus lane ids are supplied.
+- The adversarial case first proves the raw fallback would accept the same
+  one-signer QC due to inflated stale-lane stake, then proves the active-lane
+  validator rejects it with `StakeQuorumMissing`. The existing block-sync QC
+  companion regression was rerun in the same focused filter.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --features sumeragi-main-loop-tests --lib validate_qc_against_votes_active_lane_filter_ignores_stale_unknown_lane_stake -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --features sumeragi-main-loop-tests --lib active_lane_filter_ignores_stale_unknown_lane_stake -- --nocapture`
+    passed: 2 tests.
+
+## 2026-06-27 SoraFS string quote option hardening
+
+- Hardened shared string equality and membership helpers so `quote_expected`
+  and `quote_values` must be actual booleans before they can alter validation
+  diagnostics.
+- Added focused malformed quote-option regressions plus rollout-gate static pins
+  for the shared string helpers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 452 tests in 2.80s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1176 tests
+    in 14.88s.
+
+## 2026-06-27 SoraFS snapshot-binding valid-flag hardening
+
+- Hardened shared snapshot-bound evidence recording so malformed artifact
+  `valid` flags are recorded as artifact errors before snapshot anchors or bound
+  artifacts can be routed.
+- Added a focused malformed valid-flag regression plus rollout-gate static pins
+  for the shared snapshot-binding helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 450 tests in 2.66s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1174 tests
+    in 31.07s.
+  - Rust/Cargo validation was not run for this Python-only slice.
+
+## 2026-06-27 Nexus lane lifecycle Torii boundary hardening
+
+- Added Torii handler regressions for the Nexus lane lifecycle endpoint covering
+  both a rejected external autoscale-managed lane spoof and a successful manual
+  lane addition that refreshes the queue's per-lane scheduling limits.
+- The negative case proves a failed lifecycle request leaves the committed Nexus
+  lane catalog unchanged and does not refresh queue limits from spoofed metadata.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib nexus_lane_lifecycle -- --nocapture`
+    passed: 2 tests.
+
+## 2026-06-27 SoraFS deployment-context option hardening
+
+- Hardened the shared standard evidence wrapper so
+  `require_reviewed_deployment_context` must be an actual boolean before rollout
+  evidence can require or skip reviewed deployment context checks.
+- Added a focused malformed option regression plus rollout-gate static pins for
+  the shared evidence wrapper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 449 tests in 2.80s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1173 tests
+    in 14.44s.
+  - Rust/Cargo validation was not run for this Python-only slice.
+
+## 2026-06-27 SoraFS string-coverage option hardening
+
+- Hardened shared string-coverage validation so `allow_scalar_items` and
+  `trim_values` helper options must be actual booleans before coverage scans can
+  accept or reject scalar evidence entries.
+- Added a focused malformed option regression plus rollout-gate static pins for
+  the shared string-coverage helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 448 tests in 2.60s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1172 tests
+    in 13.94s.
+  - Rust/Cargo validation was not run for this Python-only slice.
+
+## 2026-06-27 SoraFS sum-skip option hardening
+
+- Hardened shared sum-count validation so the `skip_zero_total` helper option
+  must be an actual boolean before zero totals can bypass part-sum checks.
+- Added a focused malformed option regression plus rollout-gate static pins for
+  the shared sum-count helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 447 tests in 2.62s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1171 tests
+    in 15.98s.
+
+## 2026-06-27 Nexus DA active-lane admission hardening
+
+- Hardened DA proof-policy snapshots, DA commitment validation, DA pin-intent
+  validation, proposal sealing, block proof-policy hash validation, and Torii DA
+  ingest/proof-policy handlers to use active catalog-backed Nexus lanes instead
+  of trusting stale derived lane geometry.
+- Added stale-geometry regressions proving removed catalog lanes cannot re-enter
+  through DA commitments, pin intents, proof-policy bundles, or Torii ingest
+  proof-scheme resolution.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib against_nexus_rejects_stale_geometry_lane -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib proof_policy_tests -- --nocapture`
+    passed: 10 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib stale_geometry -- --nocapture`
+    passed: 10 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib lane_proof_scheme_ -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib stale_geometry -- --nocapture`
+    passed: 1 test.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib proof_policy -- --nocapture`
+    passed: 2 tests.
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/da/mod.rs crates/iroha_core/src/state.rs crates/iroha_core/src/block.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/queue.rs crates/iroha_torii/src/da/ingest.rs crates/iroha_torii/src/da/commitments.rs crates/iroha_torii/src/da/tests.rs`
+    passed.
+  - `git diff --check -- crates/iroha_core/src/da/mod.rs crates/iroha_core/src/state.rs crates/iroha_core/src/block.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/queue.rs crates/iroha_torii/src/da/ingest.rs crates/iroha_torii/src/da/commitments.rs crates/iroha_torii/src/da/tests.rs docs/source/nexus_lanes.md status.md`
+    passed.
+  - conflict-marker scan over the touched Rust/docs/status files found no
+    markers.
+  - `git diff --name-only -- Cargo.lock` produced no output.
+  - full workspace tests were not run in this slice.
+
+## 2026-06-27 SoraFS hex-array option hardening
+
+- Hardened shared hex-array validation so helper `non_empty` and `unique`
+  options must be actual booleans before required-array or duplicate checks can
+  affect evidence validation.
+- Added focused malformed option regressions plus rollout-gate static pins for
+  the shared hex-array helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 446 tests in 1.82s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1170 tests
+    in 14.81s.
+
+## 2026-06-27 SoraFS optional-status flag hardening
+
+- Hardened shared status-set validation so helper `allow_absent` must be an
+  actual boolean before missing statuses can be accepted as optional. Malformed
+  truthy values can no longer turn required rollout status evidence into an
+  optional field.
+- Added focused malformed `allow_absent` regressions plus rollout-gate static
+  pins for the shared status helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 445 tests in 2.83s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1169 tests
+    in 16.61s.
+
+## 2026-06-27 SoraFS hex length hardening
+
+- Hardened shared hex validation so helper-supplied exact lengths must be
+  non-bool positive integers before required, optional, policy-digest, or array
+  hex values can satisfy evidence gates.
+- Hardened hex-array expected length checks so helper `expected_length` must be
+  a non-bool, non-negative integer before array length comparison.
+- Added focused malformed hex-length and expected-length regressions plus
+  rollout-gate static pins for the shared helpers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 444 tests in 2.37s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1168 tests
+    in 17.05s.
+
+## 2026-06-27 SoraFS timestamp-threshold hardening
+
+- Hardened shared freshness validation so helper `now_unix` and `max_age_secs`
+  thresholds must be non-bool, non-negative integer values before future/stale
+  timestamp comparisons are evaluated.
+- Added malformed current-time and max-age regressions plus rollout-gate static
+  pins for the shared timestamp helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 441 tests in 2.78s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1165 tests
+    in 14.65s.
+
+## 2026-06-27 SoraFS integer-range threshold hardening
+
+- Hardened shared inclusive integer-range validation so helper `min_value` and
+  `max_value` thresholds must be non-bool integers, with `max_value >=
+  min_value`, before reputation score ranges are evaluated.
+- Added focused malformed range-threshold regressions and rollout-gate static
+  pins while preserving the existing score/path/custom-message diagnostics.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 440 tests in 2.63s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1164 tests
+    in 16.25s.
+
+## 2026-06-27 SoraFS maximum-threshold input hardening
+
+- Hardened shared maximum-number validation so configured helper limits must be
+  finite, non-bool, non-negative numbers before latency or lag ceilings are
+  compared.
+- Hardened shared maximum-integer validation so helper `minimum` and `maximum`
+  thresholds must be non-bool integers, with `maximum >= minimum`, before
+  integer ceilings are evaluated.
+- Added focused malformed threshold regressions for both helpers plus
+  rollout-gate static pins.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 439 tests in 2.69s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1163 tests
+    in 16.27s.
+
+## 2026-06-27 SoraFS computed-threshold input hardening
+
+- Hardened shared computed minimum/maximum validation so helper-input values and
+  configured thresholds must be non-bool integers before comparison. This
+  prevents bool, float, string, or otherwise malformed helper inputs from
+  satisfying rollout count/quorum gates or raising runtime comparison errors.
+- Added focused malformed numeric-input regressions for both computed minimum
+  and maximum helpers plus rollout-gate static pins.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 437 tests in 2.62s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1161 tests
+    in 14.32s.
+
+## 2026-06-27 SoraFS count-length input hardening
+
+- Hardened shared count/length validation so helper-input counts must be
+  non-bool, non-negative integers before evidence arrays can match by length.
+  This closes Python coercion cases such as `True == 1` and `1.0 == 1` for
+  route, probe, artifact, and reputation event array gates.
+- Added malformed count regressions and rollout-gate static pins for the shared
+  helper behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 435 tests in 2.61s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1159 tests
+    in 14.66s.
+
+## 2026-06-27 Merge and AXT active-lane hardening
+
+- Hardened merge-ledger lane snapshot validation so committed merge entries
+  require catalog-backed runtime geometry before accepting a lane snapshot; stale
+  derived geometry for a removed lane is rejected as `UnknownLane`.
+- Hardened Space Directory-derived AXT policy snapshots so target-lane selection
+  enumerates active catalog-backed lanes only. Stale geometry-only lanes can no
+  longer produce AXT policy bindings or cached AXT policy state.
+- Updated AXT policy test fixtures to seed lane catalog, derived geometry, and
+  dataspace catalog together unless a test is deliberately corrupting one side.
+- Updated Nexus lane documentation to state that merge-ledger commits and AXT
+  policy derivation use the shared active-lane agreement.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - full workspace `cargo test --workspace` was not run; the suite typically
+    takes several hours.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib axt_policy_snapshot_ignores_stale_geometry_for_removed_catalog_lane -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib commit_merge_entry_rejects_stale_geometry_for_removed_catalog_lane -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib axt_policy -- --nocapture`
+    passed: 12 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib commit_merge_entry_rejects -- --nocapture`
+    passed: 14 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib commit_merge_entry_updates_cache -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib commit_merge_entry_persists_to_kura -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib space_directory_manifest -- --nocapture`
+    passed: 8 tests.
+
+## 2026-06-27 SoraFS sum-count input hardening
+
+- Hardened shared count-sum validation so helper-input totals and named part
+  counts must be non-bool, non-negative integers before a sum can satisfy
+  rollout gates. The existing literal integer-zero skip for upstream-invalid
+  totals remains intact.
+- Added malformed total-count and part-count regressions plus rollout-gate
+  static pins for the shared helper behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 434 tests in 2.74s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1158 tests
+    in 14.92s.
+
+## 2026-06-27 SoraFS expected-count input hardening
+
+- Hardened shared direct count equality validation so programmatic
+  `expected_count` inputs must be non-bool positive integers before payload
+  counts can match them. The existing literal integer-zero skip remains for
+  upstream invalid counts that have already reported their own error.
+- Added malformed expected-count regressions and rollout-gate static pins so
+  Python's `1 == True` / `0 == False` coercions and non-integer expected counts
+  cannot satisfy direct count gates.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 432 tests in 2.59s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1156 tests
+    in 14.30s.
+
+## 2026-06-27 Lane relay active-lane admission hardening
+
+- Hardened lane relay admission so `State::record_lane_relay`, verified lane
+  relay registration, and lane-relay emergency override registration require
+  the same active-lane invariant: authoritative lane catalog presence, matching
+  derived runtime geometry, and active dataspace catalog membership.
+- Added adversarial coverage proving stale geometry-only lanes cannot register
+  verified relay state, cannot receive emergency relay validator overrides, and
+  cannot be accepted by state-level lane relay recording after catalog removal.
+- Updated Nexus lane documentation to state that relay admission and emergency
+  overrides use the shared catalog + geometry + dataspace agreement before
+  accepting lane-scoped state.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - full workspace `cargo test --workspace` was not run; the suite typically
+    takes several hours.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib register_verified_lane_relay_rejects_stale_geometry_lane_id -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib set_lane_relay_emergency_validators_rejects_stale_geometry_lane -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib record_lane_relay_rejects_stale_geometry_for_removed_catalog_lane -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib register_verified_lane_relay_rejects -- --nocapture`
+    passed: 28 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib set_lane_relay_emergency_validators -- --nocapture`
+    passed: 12 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib record_lane_relay_rejects -- --nocapture`
+    passed: 17 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib stake_snapshot_tests -- --nocapture`
+    passed: 19 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib authoritative_lane_validators -- --nocapture`
+    passed: 4 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib record_lane_relay_accepts_emergency_override -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib record_lane_relay_builds_merge_candidate -- --nocapture`
+    passed: 2 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib register_verified_lane_relay_persists -- --nocapture`
+    passed: 1 test.
+
+## 2026-06-27 SoraFS count equality bool hardening
+
+- Hardened shared count equality helpers so boolean values can no longer
+  satisfy integer equality through Python's `True == 1` behavior. Passed-count
+  fields and direct expected-count fields now require non-bool integers before
+  equality is accepted.
+- Added focused bool-count regressions for `require_count_equal`,
+  `require_count_match`, and `require_count_value_equal`, plus rollout-gate
+  static pins for the shared helper behavior.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 431 tests in 2.72s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1155 tests
+    in 14.75s.
+
+## 2026-06-27 SoraFS count-length collection-shape hardening
+
+- Hardened the shared count/length validator so scalar strings, bytes,
+  mappings, and non-sequences cannot satisfy collection counts through
+  character, byte, or object-key lengths. Malformed collection containers now
+  report a canonical sequence requirement before count comparison.
+- Added focused malformed-collection regressions and a rollout-gate static pin
+  for the shared helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 428 tests in 2.57s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1152 tests
+    in 16.45s.
+
+## 2026-06-27 SoraFS timestamp path fail-closed hardening
+
+- Hardened the shared recent-timestamp validator so malformed diagnostic paths
+  fail closed before returning observed `generated_at_unix` values. Valid
+  fresh, stale, and future timestamp comparisons still return the observed
+  timestamp with canonical age diagnostics.
+- Updated the focused malformed-path regression and rollout-gate static pin for
+  the timestamp helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 427 tests in 2.68s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1151 tests
+    in 14.64s.
+
+## 2026-06-27 Active-lane catalog geometry hardening
+
+- Hardened active Nexus lane resolution so a lane is considered active only
+  when the authoritative lane catalog contains it, the derived runtime geometry
+  contains the same lane, both agree on the dataspace, and that dataspace is in
+  the active dataspace catalog.
+- Added adversarial coverage proving stale geometry-only lanes cannot re-enter
+  active-lane sets, NPoS epoch roster selection, or lane-relay authoritative
+  validator/peer resolution after catalog removal.
+- Updated Nexus lane documentation to state the catalog + geometry + dataspace
+  agreement invariant for lane relay, block sync, Torii authority checks, and
+  NPoS stake snapshots.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - full workspace `cargo test --workspace` was not run; the suite typically
+    takes several hours.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_snapshot_ignores_stale_geometry_for_removed_catalog_lane -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib authoritative_lane_validators_ignore_stale_geometry_for_removed_catalog_lane -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib stake_snapshot_tests -- --nocapture`
+    passed: 19 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib authoritative_lane_validators -- --nocapture`
+    passed: 4 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib record_lane_relay_builds_merge_candidate_from_active_lanes -- --nocapture`
+    passed.
+  - `rustfmt --edition 2024 --check` passed on the touched Rust files.
+  - `git diff --check` passed on touched code/docs/status files.
+  - anchored conflict-marker scan returned no matches on touched files.
+  - `git diff --name-only -- Cargo.lock` returned no output.
+
+## 2026-06-27 SoraFS integer range custom-message hardening
+
+- Hardened the shared integer range validator so caller-provided custom range
+  diagnostics must be canonical strings before they are emitted. Malformed
+  custom messages now fail closed to the range minimum instead of publishing
+  raw operator text into rollout evidence summaries.
+- Added focused regression coverage and a rollout-gate static pin for malformed
+  range custom messages.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 427 tests in 2.71s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1151 tests
+    in 14.69s.
+
+## 2026-06-27 SoraFS computed threshold message hardening
+
+- Hardened shared computed minimum/maximum threshold validators so malformed
+  threshold labels or malformed custom threshold messages fail closed before
+  returning observed computed counts. Valid below/above-threshold checks still
+  return the observed count and report the canonical threshold diagnostic.
+- Updated focused regressions and rollout-gate static pins for malformed
+  threshold label/message return paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 426 tests in 2.58s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1150 tests
+    in 13.91s.
+
+## 2026-06-27 SoraFS string inequality fail-closed return hardening
+
+- Hardened shared string inequality validation so malformed disallowed values
+  or custom mismatch messages stop before returning an observed provider/proof
+  identity value. Valid comparisons still return the canonical observed value,
+  and valid disallowed matches still report the configured production-backend
+  diagnostic.
+- Updated focused regressions and rollout-gate static pins for the malformed
+  disallowed-value/message return paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 424 tests in 2.60s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1148 tests
+    in 14.07s.
+
+## 2026-06-27 Multilane autoscale adversarial guard validation
+
+- Hardened verified lane relay hydration/query paths so decoded relay payloads
+  must match the contract-state key they were loaded from before they can seed
+  merge-entry candidates or query results.
+- Added public-lane economic key guards for stake shares and reward rows, plus
+  reward-recording/claim regressions that ignore or reject mismatched embedded
+  lane identifiers.
+- Added autoscale scale-out corruption coverage for malformed elastic runtime
+  lane ranges, aligned synthetic queue/gossip route tests with explicit Nexus
+  catalogs, and moved the legacy route-sensitive replay regression onto the
+  existing large-stack replay test harness.
+- Refreshed the SoraCloud BFV full-bootstrap material fixture to the current
+  canonical schema, prover-key, material, and statement digests.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - full workspace `cargo test --workspace` was not run; the suite typically
+    takes several hours.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib queue::tests -- --nocapture`
+    passed: 131 tests.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib gossip_accepts_restricted_route_match -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib soracloud_bfv_operation_vectors -- --nocapture`
+    passed: 2 tests, 1 ignored print helper.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_crypto --lib full_bootstrap_proof_schema_artifact_digest_is_stable -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib replay_legacy_route_sensitive_blocks_reconstruct_canonical_state_despite_checkpoint_drift -- --nocapture`
+    passed after moving the test onto the replay large-stack harness.
+  - Focused negative regressions passed:
+    `public_lane_economic_records_match_storage_keys`,
+    `merge_candidates_ignore_verified_lane_relay_record_stored_under_another_relay_key`,
+    `autoscale_transition_scale_out_rejects_runtime_elastic_range_corruption`,
+    `record_rewards_rejects_mismatched_public_lane_validator_row`,
+    `claim_rewards_ignores_mismatched_reward_record_rows`,
+    `load_verified_lane_relay_record_rejects_payload_ref_mismatch`, and
+    `enforce_lane_teu_limits_defers_when_capacity_exceeded`.
+  - `rustfmt --edition 2024 --check` passed on the touched Rust files.
+  - `git diff --check` passed on touched code/docs/fixture/status files.
+  - anchored conflict-marker scan returned no matches on touched files.
+  - `git diff --name-only -- Cargo.lock` returned no output.
+
+## 2026-06-27 SoraFS string value equality fail-closed return hardening
+
+- Hardened shared string-value equality validation so malformed comparison
+  labels, expected values, or custom mismatch messages stop before returning an
+  observed provider/proof identity value. Valid matches and valid mismatches
+  still return the canonical observed value, while malformed comparison inputs
+  now fail closed with an empty return.
+- Updated focused regressions and rollout-gate static pins for the
+  malformed-label/expected/message return paths.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 424 tests in 2.40s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1148 tests
+    in 14.80s.
+
+## 2026-06-27 SoraFS digest anchor canonical hardening
+
+- Hardened shared artifact digest-anchor collection so only canonical digest
+  fingerprint strings can seed downstream reference checks. Empty, non-string,
+  padded, or control-character digest values are now ignored instead of being
+  lowercased into valid anchor sets.
+- Added focused regressions and rollout-gate static pins for canonical digest
+  anchor collection.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 424 tests in 2.70s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1148 tests
+    in 16.39s.
+
+## 2026-06-27 SoraFS evidence distinctness hardening
+
+- Hardened shared evidence distinctness checks so consistency can only be
+  reported after each value passes the canonical evidence-value normalizer.
+  Malformed one-item collections, padded/control-character strings, booleans,
+  zero values, and unhashable values now fail closed instead of skipping
+  provider-count mismatch reporting.
+- Added focused regressions and rollout-gate static pins for normalized
+  distinct-value consistency.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - Rust/Cargo validation was not run for this Python/docs-only slice.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 423 tests in 2.61s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1147 tests
+    in 15.25s.
+
+## 2026-06-27 SoraFS evidence-value normalizer hardening
+
+- Hardened shared reputation evidence-value normalization so observed values
+  used for required/observed provider checks must be canonical strings or
+  non-bool hashable values. Padded or control-character provider IDs and boolean
+  stand-ins no longer satisfy presence, missing-value, or observed-value sets.
+- Added focused regressions and rollout-gate static pins for malformed observed
+  strings and bool evidence values.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo jobs were present during the turn, so Rust/Cargo validation
+    was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 423 tests in 2.67s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1147 tests
+    in 14.37s.
+
+## 2026-06-27 SoraFS artifact builder error-message hardening
+
+- Hardened shared standard and kinded artifact builders so validation-error
+  buckets must contain non-empty canonical strings before their messages are
+  published into artifact rows. Blank, padded, or control-character diagnostics
+  now collapse to a stable builder error instead of leaking malformed summary
+  text downstream.
+- Added focused builder regressions and rollout-gate static pins for canonical
+  validation-error messages.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 421 tests in 2.70s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1145 tests
+    in 15.05s.
+
+## 2026-06-27 SoraFS artifact builder path hardening
+
+- Hardened shared standard and kinded artifact builders so artifact paths must
+  be `Path` objects with canonical string labels before summary rows are marked
+  valid. Non-Path, padded, or control-character paths now publish `<unknown>`
+  and mark the artifact invalid instead of serializing arbitrary path text.
+- Added focused builder regressions and rollout-gate static pins for canonical
+  artifact path handling.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 419 tests in 2.70s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1143 tests
+    in 15.33s.
+
+## 2026-06-27 SoraFS status value canonical hardening
+
+- Hardened shared status-set validation so present payload status values must
+  be canonical non-empty strings before allowed-status membership. Optional
+  absent statuses remain allowed where configured, while padded,
+  control-character, blank, or non-string present statuses now fail closed with
+  canonical-value diagnostics.
+- Added focused regressions and rollout-gate static pins for observed status
+  canonicality.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 417 tests in 2.55s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1141 tests
+    in 14.37s.
+
+## 2026-06-27 SoraFS exact string comparison value hardening
+
+- Hardened shared exact string-field comparison so payload values must be
+  canonical non-empty strings before comparison with the expected value.
+  Padded, control-character, blank, or non-string evidence fields now fail
+  closed with canonical-value diagnostics instead of falling through to a
+  generic mismatch.
+- Added focused regressions and rollout-gate static pins for canonical
+  exact-string comparison values.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 416 tests in 2.61s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1140 tests
+    in 14.64s.
+
+## 2026-06-27 SoraFS snapshot anchor canonical hardening
+
+- Hardened shared snapshot-bound anchor recording so `snapshot_id_hex` and
+  `merkle_root_hex` must be canonical non-empty strings before they are
+  lowercased into valid snapshot bindings. Padded or control-character anchor
+  values now fail closed like other malformed anchor inputs instead of becoming
+  downstream bindings.
+- Added focused regressions and rollout-gate static pins for canonical snapshot
+  anchor recording.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 415 tests in 2.73s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1139 tests
+    in 15.00s.
+
+## 2026-06-27 SoraFS string equality exact-value hardening
+
+- Hardened shared cross-artifact string equality validation so both observed
+  and expected values must be canonical non-empty strings before comparison.
+  Identical padded or control-character values now fail closed instead of
+  satisfying provider/proof identity style bindings.
+- Updated focused regressions and rollout-gate static pins for canonical
+  string equality values.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 415 tests in 2.62s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1139 tests
+    in 14.33s.
+
+## 2026-06-27 SoraFS binding allowed-value normalization
+
+- Hardened shared scalar and tuple binding helpers so validated allowed values
+  are materialized into the same lowercase membership space as observed
+  evidence values. This keeps digest/id and multi-field binding checks
+  deterministic when policy or source artifacts carry uppercase-but-canonical
+  values, while malformed allowed entries still fail closed before membership.
+- Added focused regressions and rollout-gate static pins for normalized
+  allowed-side scalar and tuple binding membership.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 415 tests in 2.64s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1139 tests
+    in 14.73s.
+
+## 2026-06-27 SoraFS schema string exact-value hardening
+
+- Hardened the shared `require_string_type` schema/string helper so blank,
+  padded, or control-character schema values fail closed before known-schema
+  lookup. Canonical unknown schemas still keep artifact-specific
+  unknown-schema diagnostics, while malformed schema strings no longer leak
+  raw values into those diagnostics.
+- Added focused regressions for malformed schema strings and pinned the
+  rollout-gate static contract to keep canonical schema string validation
+  shared.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 413 tests in 2.62s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1137 tests
+    in 14.62s.
+
+## 2026-06-27 SoraFS basic string exact-value hardening
+
+- Hardened the shared `require_string` primitive used by rollout/release
+  checkers so generic evidence fields must already be canonical non-empty
+  strings. Padded or control-character values now fail closed instead of being
+  trimmed before downstream URL, identifier, version, subject, verdict, and
+  provider checks.
+- Updated focused regressions and the rollout-gate static contract to keep the
+  exact string primitive shared across SoraFS checkers.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 411 tests in 2.61s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1135 tests
+    in 14.58s.
+
+## 2026-06-27 SoraFS string coverage exact-value hardening
+
+- Hardened shared string coverage validation so `require_string_coverage`
+  canonicalizes observed scalar and object-field values before required-value
+  membership. Padded or control-character route/metric labels now fail closed
+  instead of being trimmed into satisfying required coverage.
+- Added focused regressions for noncanonical observed coverage values and
+  pinned the rollout-gate static contract to keep the shared exact-value guard
+  in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 411 tests in 2.60s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1135 tests
+    in 14.09s.
+
+## 2026-06-27 SoraFS string enum exact-value hardening
+
+- Hardened shared string-enum validation so `require_string_in` validates the
+  payload value as a canonical string before allowed-value membership checks.
+  Padded or control-character route-state style values now fail closed instead
+  of being trimmed into accepted evidence.
+- Added focused regressions for noncanonical string-enum values and pinned the
+  rollout-gate static contract to keep the shared exact-value guard in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest caught a local variable shadowing bug in the new
+    exact-value path; fixed before broader validation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 410 tests in 1.77s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1134 tests
+    in 13.99s.
+
+## 2026-06-27 SoraFS deployment context canonical value hardening
+
+- Hardened reviewed deployment context validation so `deployment_id` and
+  `environment` evidence values must be canonical before reviewed marker,
+  shape, or environment-membership checks run. Padded or control-character
+  production labels now fail closed instead of being trimmed into acceptable
+  rollout/release context.
+- Added focused regressions for noncanonical deployment ids and environments,
+  and pinned the rollout-gate static contract to keep the canonical payload
+  string guard shared.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 409 tests in 1.79s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1133 tests
+    in 13.91s.
+
+## 2026-06-27 SoraFS exact hex value hardening
+
+- Hardened shared hex validation so `require_hex` no longer trims evidence
+  values before exact-length checks. Uppercase hex still normalizes to
+  lowercase, but padded or control-character digest strings now fail closed
+  instead of satisfying rollout/release digest and policy binding gates.
+- Added focused regressions for padded hex and policy digest inputs, and pinned
+  the rollout-gate static contract to keep direct value validation in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 407 tests in 1.75s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1131 tests
+    in 14.13s.
+
+## 2026-06-27 SoraFS status-set allowed-label hardening
+
+- Hardened shared status-set validation so `require_status_in` canonicalizes
+  every allowed status before status lookup or diagnostic construction. Padded,
+  blank, control-character, non-string, scalar, and mapping allowed-status
+  inputs now fail closed before they can satisfy rollout/release gates.
+- Extended focused regressions for malformed allowed-status labels and pinned
+  the rollout-gate static contract to keep the shared allowed-status guard in
+  place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 406 tests in 1.80s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1130 tests
+    in 14.23s.
+
+## 2026-06-27 SoraFS bound-reference field selector hardening
+
+- Hardened shared SoraFS bound-reference fingerprint field selectors so direct
+  digest collection, digest mismatch recording, scalar bound-reference
+  validation, and tuple bound-reference validation reject malformed digest
+  fields, per-kind digest field maps, and tuple binding field lists before any
+  artifact row is invalidated or any fingerprint lookup can traceback.
+- Added focused regressions for malformed digest fields, digest field maps,
+  missing per-kind selectors, and malformed tuple binding field containers, and
+  pinned rollout-gate static contracts for the shared selector guards.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 406 tests in 1.76s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1130 tests
+    in 14.08s.
+
+## 2026-06-27 SoraFS artifact accessor label hardening
+
+- Hardened shared artifact accessors so artifact kind, detail-field, and schema
+  labels are canonical before downstream invalidation or binding logic can use
+  them. Blank, padded, control-character, or non-string artifact kinds now
+  return `None`, malformed detail fields return an empty mapping, and malformed
+  schema labels resolve to `<unknown>` for diagnostics.
+- Extended focused accessor regressions and rollout-gate static pins for
+  canonical kind/detail/schema access so checker-local direct field reads stay
+  blocked.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 402 tests in 1.77s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1126 tests
+    in 14.30s.
+
+## 2026-06-27 SoraFS artifact label materialization hardening
+
+- Hardened shared SoraFS evidence label materialization so required-kind
+  lists, evidence schema maps, artifact bucket initialization, kinded artifact
+  rows, explicit fingerprint override keys, and recognized-artifact recording
+  reject padded or control-character labels before those values can become
+  summary keys, artifact kinds, fingerprint fields, or bucket diagnostics.
+  Fingerprint override keys are now validated before any override value is
+  merged, preserving all-or-nothing payload-free summary shape.
+- Extended focused regressions for malformed required-kind names, schema map
+  keys/schemas, kinded artifact labels, fingerprint override keys, and
+  recognized artifact recording, and pinned the rollout-gate static contract to
+  keep the shared canonical-label guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 402 tests in 1.83s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1126 tests
+    in 14.83s.
+
+## 2026-06-27 SoraFS required-row invalidation label hardening
+
+- Hardened shared required-row invalidation, summary invalidation,
+  invalid-if-present, and required-kind normalization so malformed or
+  unhashable row kind names, summary errors, and required/candidate kind
+  containers fail closed before raw row keys or diagnostic text can be
+  recorded. Malformed required row keys are moved to the safe `<unknown>`
+  bucket.
+- Added focused malformed-label regressions for required-row invalidation,
+  summary invalidation, invalid-if-present, and required-kind matching, and
+  pinned the rollout-gate static contracts to keep the shared guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 402 tests in 1.77s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1126 tests
+    in 14.62s.
+
+## 2026-06-27 SoraFS required-summary recorder label hardening
+
+- Hardened shared required-summary and cross-artifact evidence-value recorders
+  so malformed required-row kind names, missing-evidence messages,
+  inconsistent-evidence messages, evidence contexts, evidence keys, and
+  evidence values fail closed before summary mutation or mismatch diagnostic
+  construction. Canonical missing-evidence, inconsistent-value, and
+  deployment-context diagnostics are preserved.
+- Added focused malformed-label regressions for missing required evidence,
+  missing-or-observed fallback evidence, inconsistent evidence values,
+  cross-artifact value recording, and deployment-context recording, and pinned
+  the rollout-gate static contract to keep these guards shared.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 399 tests in 1.75s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1123 tests
+    in 14.60s.
+
+## 2026-06-27 SoraFS bound-reference template hardening
+
+- Hardened shared scalar and tuple bound-reference validators so malformed
+  binding-error templates, missing-anchor templates, missing-anchor summary
+  errors, and evidence-kind labels fail closed before formatter expansion or
+  artifact-error recording. Bound-reference templates now accept only canonical
+  strings with plain `{kind_name}` formatter fields.
+- Added focused malformed-template, malformed-summary-error, and malformed-kind
+  regressions for digest and tuple bound-reference validation, and pinned the
+  rollout-gate static contracts to keep formatter validation shared.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 394 tests in 1.76s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1118 tests
+    in 16.57s.
+
+## 2026-06-27 SoraFS string comparison/binding label hardening
+
+- Hardened shared string comparison and binding helpers so malformed
+  string-equality expected values, string-exclusion disallowed values,
+  string-value comparison labels, scalar binding messages/values/allowed
+  values, and tuple binding messages/values/allowed tuple values fail closed
+  before diagnostics or artifact errors can interpolate raw text. Canonical
+  string comparison and cross-artifact binding diagnostics are preserved.
+- Added focused malformed-label regressions for `require_string_equal`,
+  `require_string_not_equal`, `require_string_value_equal`,
+  `require_string_value_in`, and `require_string_tuple_in`, and pinned the
+  rollout-gate static contracts to keep the shared helper guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found stale static-contract assertions for the old
+    string-exclusion and scalar-binding helper source shapes; the pins now
+    assert the canonical-label implementation.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the static-contract updates: 389 tests in 1.85s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1113 tests
+    in 16.28s.
+
+## 2026-06-27 SoraFS minimum/maximum threshold label hardening
+
+- Hardened shared `require_minimum_int`, `require_minimum_value`, and
+  `require_maximum_value` labels so malformed payload fields and computed
+  threshold labels fail closed before payload lookup or threshold diagnostics
+  can interpolate raw label text. Canonical minimum/maximum threshold
+  diagnostics are preserved.
+- Added focused malformed-label regressions for minimum-int fields and
+  computed minimum/maximum threshold labels, and pinned the rollout-gate static
+  contract to keep the shared helper guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 384 tests in 1.74s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1108 tests
+    in 14.28s.
+
+## 2026-06-27 SoraFS string membership/coverage label hardening
+
+- Hardened shared `require_string_in` and `require_string_coverage` helper
+  labels so malformed membership fields, path-qualified diagnostics,
+  allowed-value labels, coverage array fields, item fields, and required-value
+  labels fail closed before payload lookup, coverage scans, or diagnostic text
+  construction. Canonical string-membership and string-coverage diagnostics are
+  preserved.
+- Added focused malformed-label regressions for string membership field/path/
+  allowed values and string coverage array/item/required labels, and pinned the
+  rollout-gate static contracts to keep these shared helper guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found duplicate malformed-required-value diagnostics;
+    the helper now emits the canonical required-value label failure without the
+    generic required-values container error.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the duplicate diagnostic fix: 381 tests in 1.87s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1105 tests
+    in 16.01s.
+
+## 2026-06-27 SoraFS timestamp validation label hardening
+
+- Hardened shared `require_recent_timestamp` path labels so malformed
+  path-qualified timestamp diagnostics fail closed before future/stale
+  comparison messages are emitted. Canonical timestamp freshness and age
+  diagnostics are preserved.
+- Added a focused malformed-path regression and pinned the rollout-gate static
+  timestamp contract to keep the shared helper on canonical path labels.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 379 tests in 2.63s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1103 tests
+    in 14.46s.
+
+## 2026-06-27 SoraFS count helper label hardening
+
+- Hardened shared `require_count_value_equal`, `require_count_match`,
+  `require_count_length_match`, and `require_sum_equal` helper labels so
+  malformed count fields, expected-count labels, collection labels, sum part
+  labels, and total labels fail closed before payload lookup, count comparison,
+  or diagnostic text construction. Canonical count-value, count-match,
+  count-length, and count-sum diagnostics are preserved.
+- Added focused malformed-label regressions for count-value equality,
+  count-match fields, count-length labels, and count-sum part/total labels, and
+  pinned the rollout-gate static contract to keep these shared helper guards in
+  place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found a stale static-contract assertion still
+    looking for the old raw `collection_label` diagnostic template; the static
+    pin was updated to the canonical `collection_name` template.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the static assertion update: 378 tests in 2.16s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1102 tests
+    in 13.78s.
+
+## 2026-06-27 SoraFS status/hex validation label hardening
+
+- Hardened shared `require_status_in`, `require_hex`, `require_optional_hex`,
+  and `require_hex_string_array` helper labels so malformed status field/path
+  text, hex field/path text, optional-hex fields, and hex-array
+  field/path/count labels fail closed before payload lookup or diagnostic text
+  construction. Canonical status-set, exact-hex, optional-hex, and
+  hex-string-array diagnostics are preserved.
+- Added focused malformed-label regressions for status field/path labels,
+  exact hex field/path labels, optional-hex fields, and hex-string-array
+  field/path/count labels, and pinned the rollout-gate static contracts for
+  shared status, hex, optional-hex, and hex-string-array validation.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 374 tests in 2.48s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1098 tests
+    in 13.54s.
+
+## 2026-06-27 SoraFS integer validation label hardening
+
+- Hardened shared `require_int_range`, `require_advancing_int_pair`,
+  `require_score_bps`, and `require_maximum_int` helper labels so malformed
+  payload field names or path-qualified diagnostics fail closed before payload
+  lookup, pair comparison, range diagnostics, or maximum-threshold diagnostics.
+  Canonical integer range, cursor advancement, score-bps, and maximum-int
+  diagnostics are preserved.
+- Added focused malformed-label regressions for integer range fields/paths,
+  advancing integer pair field names, score-bps fields, and maximum-int
+  fields/paths, and pinned the rollout-gate static contract to keep these
+  shared helper guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 370 tests in 2.47s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1094 tests
+    in 14.27s.
+
+## 2026-06-27 SoraFS basic object/string validation label hardening
+
+- Hardened shared `require_object`, `require_object_array`,
+  `require_string`, and `require_string_type` helper labels so malformed
+  object paths, array field names, string field names, and schema path labels
+  fail closed before payload lookup, object-item traversal, or diagnostic
+  emission. Canonical object, object-array, basic string, and schema
+  string-type diagnostics are preserved.
+- Added focused malformed-label regressions for object paths, object-array
+  fields, stripped-string fields, and schema string-type field/path labels, and
+  pinned the rollout-gate static contracts for basic validation, route/probe
+  object arrays, generic object arrays, and schema string-type validation.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found a static-test setup issue where the new schema
+    string-type assertion referenced `helper_test` before assignment; the
+    contract test setup was fixed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the static-test fix: 366 tests in 2.22s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1090 tests
+    in 14.35s.
+
+## 2026-06-27 SoraFS HTTP status validation label hardening
+
+- Hardened shared `require_2xx_status` helper labels so malformed status field
+  names or path-qualified route/probe labels fail closed before payload lookup.
+  Canonical endpoint diagnostics still report the same `must be a 2xx status`
+  message.
+- Added a focused malformed-label regression and pinned the rollout-gate static
+  contract so route/probe HTTP status checks keep using the guarded shared
+  helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 363 tests in 2.49s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1087 tests
+    in 14.12s.
+
+## 2026-06-27 SoraFS false/number validation label hardening
+
+- Hardened shared `require_false`, `require_false_or_absent`,
+  `require_false_or_governed`, `require_non_negative_number`, and
+  `require_maximum_number` helper labels so malformed field/path text fails
+  closed before payload lookup or maximum-ceiling diagnostics. Normal
+  false-field, governed-true, and route-latency diagnostics are preserved for
+  canonical labels.
+- Added focused regressions for malformed false-helper labels,
+  non-negative-number field/path labels, and maximum-number field/path labels,
+  and pinned the rollout-gate static contract to keep these shared helper
+  guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 362 tests in 2.49s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1086 tests
+    in 16.01s.
+
+## 2026-06-27 SoraFS count/integer validation label hardening
+
+- Hardened shared `require_non_negative_int` and `require_count_equal` helper
+  labels so count and integer diagnostics require canonical field names before
+  payload lookup or summary-error emission. Malformed total/passed field labels
+  now fail closed instead of leaking malformed names into count-equality errors.
+- Added focused regressions for malformed non-negative integer labels and
+  malformed count-equality total/passed labels, and pinned the rollout-gate
+  static contract to keep those shared helper guards in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 359 tests in 2.41s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1083 tests
+    in 14.22s.
+
+## 2026-06-27 SoraFS validation helper label hardening
+
+- Hardened shared validation helper labels for `require_string_equal`,
+  `require_bool_true`, and `require_positive_int`. Field and path diagnostic
+  labels now must be canonical strings before payload lookup or summary-error
+  emission, preventing malformed helper arguments from producing ambiguous
+  field names or multi-line validation diagnostics.
+- Added focused regressions for malformed string-equality, bool-true, and
+  positive-int labels, and pinned the rollout-gate static contract to keep the
+  shared helper label guard in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found a static-contract assertion expecting formatted
+    diagnostics as source literals; the contract was adjusted to pin helper
+    label arguments and the shared canonical-string guard.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the static assertion update: 357 tests in 2.26s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1081 tests
+    in 14.43s.
+
+## 2026-06-27 SoraFS artifact-error mirroring hardening
+
+- Hardened shared checker artifact-error mirroring so the summary-error sink,
+  artifact error text, optional summary-error text, and artifact path label are
+  validated before artifact rows are mutated. Malformed message text now raises
+  before mutation, and unsafe artifact path labels record a structured summary
+  error without changing the artifact row.
+- Added focused regressions for malformed artifact errors, malformed summary
+  error text, and padded/control-character artifact path labels, and pinned the
+  rollout-gate static contract to keep checkers on the guarded shared helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found a static-contract assertion expecting formatted
+    diagnostics as single source literals; the contract was adjusted to pin the
+    helper label arguments and shared canonical-string guard.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the static assertion update: 148 tests in 2.08s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1078 tests
+    in 14.69s.
+
+## 2026-06-27 SoraFS sensitive diagnostic text hardening
+
+- Hardened the shared sensitive-field scanner so the starting diagnostic path
+  and evidence-label text must be canonical strings before payload traversal.
+  Malformed path labels or evidence labels now fail closed before sensitive
+  fields can partially append ambiguous or multi-line summary errors.
+- Added focused regressions for malformed scanner paths and evidence labels,
+  building on the existing malformed-error-sink guard, and pinned the
+  rollout-gate static contract to keep the shared helper enforcing those
+  diagnostic boundaries.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest found a static-contract assertion expecting the
+    fully formatted diagnostic as one source literal; the contract was adjusted
+    to pin the shared helper label arguments and common canonical-string
+    message.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the static assertion update: 98 tests in 2.05s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1075 tests
+    in 14.05s.
+
+## 2026-06-27 SoraFS fingerprint field control-character hardening
+
+- Hardened the shared SoraFS artifact fingerprint helper so selected fingerprint
+  field names cannot contain ASCII control characters or DEL. Fingerprint field
+  tuples already rejected scalar containers, non-string entries, blank/padded
+  names, and duplicates; control-character names now fail before they can drift
+  summary keys or cross-artifact binding fields.
+- Added a focused regression for newline-bearing fingerprint fields and pinned
+  the rollout-gate static contract to keep fingerprint-emitting checkers on the
+  guarded shared helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_fingerprint.py scripts/tests/sorafs_evidence_fingerprint_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_fingerprint_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 96 tests in 2.04s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1073 tests
+    in 14.26s.
+
+## 2026-06-27 SoraFS hedging fixture bounded-byte hardening
+
+- Hardened the hedging fixture-manifest checker so generated Norito `.to`
+  fixture bytes are read through the shared bounded evidence byte reader instead
+  of an unbounded `Path.read_bytes()` call. Oversized generated byte fixtures
+  now fail with the checker's structured generated-fixture diagnostic before
+  hashing or sidecar comparison.
+- Added a focused regression for oversized generated Norito fixture bytes and
+  updated the unreadable-fixture regression to intercept the shared reader's
+  `Path.open` boundary. Pinned the static rollout-gate contract to keep the
+  checker on the shared bounded byte reader.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - initial focused pytest run found the old unreadable-fixture test still
+    monkeypatched `Path.read_bytes`; the test was updated to intercept
+    `Path.open`, matching the shared bounded reader.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed after the test update: 116 tests in 11.01s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1072 tests
+    in 13.51s.
+
+## 2026-06-27 SoraFS validation-error recorder hardening
+
+- Hardened shared evidence validation-error recording so path-qualified summary
+  errors require `Path` inputs with canonical labels and validation messages
+  must be non-empty, trimmed, single-line strings. Malformed path labels or
+  message lists now fail closed before ambiguous or multi-line summary errors
+  can be appended.
+- Added focused regressions for non-Path validation paths, control-character
+  path labels, and blank/padded/control-character validation messages; pinned
+  the rollout-gate static contract to keep checkers on the guarded shared
+  recorder.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 354 tests in 2.41s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1071 tests
+    in 14.35s.
+
+## 2026-06-27 SoraFS evidence discovery reserved-output hardening
+
+- Hardened shared evidence discovery so malformed `reserved_output_paths`
+  containers or non-Path reserved-output entries stop discovery before evidence
+  directory scans or explicit evidence files can be returned. Reserved-output
+  preflight errors now surface alone instead of being mixed with discovered
+  evidence state.
+- Added focused regressions for malformed reserved-output containers and
+  entries, and pinned the rollout-gate static contract to keep the early-stop
+  boundary in the shared discovery helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 117 tests in 2.08s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1068 tests
+    in 13.77s.
+
+## 2026-06-27 SoraFS checker evidence-input early-fail hardening
+
+- Hardened shared checker preflight so malformed `--evidence` or
+  `--evidence-dir` input-shape errors return immediately before optional
+  `--summary-out` filesystem inspection. Bad evidence arguments now surface
+  alone instead of being mixed with summary-output alias, symlink, or parent
+  diagnostics.
+- Added a focused regression for malformed evidence inputs paired with a
+  symlinked summary output and pinned the rollout-gate static contract to keep
+  the early-return boundary in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 145 tests in 2.14s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1066 tests
+    in 14.00s.
+  - Scoped hygiene checks passed: diff whitespace, staged diff whitespace,
+    conflict markers, trailing whitespace, and Cargo.lock drift.
+
+## 2026-06-27 SoraFS checker evidence-input shape hardening
+
+- Hardened shared checker evidence-source preflight so `--evidence-dir` and
+  `--evidence` containers must be non-scalar sequences before they can satisfy
+  the evidence-source requirement. Directory entries must be `Path` values, and
+  explicit evidence entries must be either `Path` values or canonical
+  reputation-style evidence spec strings.
+- Added focused regressions for malformed collections, non-Path directory
+  entries, malformed explicit evidence entries, and accepted `kind=PATH`
+  evidence specs; pinned the rollout-gate static contract to keep checkers on
+  the guarded shared preflight.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 144 tests in 2.15s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1065 tests
+    in 15.80s.
+
+## 2026-06-27 SoraFS checker notice hardening
+
+- Hardened shared checker stderr notices so notice messages must be non-empty
+  canonical strings before output is written. Non-string, blank, padded, or
+  multi-line notice messages now fail closed instead of producing partial or
+  malformed operator stderr.
+- Added focused no-output regressions for malformed checker notice messages and
+  pinned the rollout-gate static contract to keep checkers on the guarded shared
+  notice emitter.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 140 tests in 2.14s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1061 tests
+    in 15.57s.
+
+## 2026-06-27 SoraFS runner notice hardening
+
+- Hardened shared runner stderr notices so notice messages must be non-empty
+  canonical strings before output is written. Non-string, blank, padded, or
+  multi-line notice messages now fail closed instead of producing partial or
+  malformed operator stderr.
+- Added focused no-output regressions for malformed notice messages and pinned
+  the rollout-gate static contract to keep runners on the guarded shared notice
+  emitter.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 176 tests in 2.23s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1060 tests
+    in 13.55s.
+
+## 2026-06-27 SoraFS runner command control-character hardening
+
+- Hardened shared runner command-plan validation so command executables must be
+  non-empty canonical strings and command entries cannot contain NUL bytes or
+  other ASCII control characters. Malformed command entries now fail before
+  `--out-dir` creation, subprocess launch, or multi-line `RUN` notices.
+- Added focused regressions for whitespace-only executables and newline-bearing
+  command arguments, and converted command-execution tests to single-line
+  `python -c` snippets so artifact/path behavior remains independently covered.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 175 tests in 1.81s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1059 tests
+    in 15.84s.
+
+## 2026-06-27 SoraFS runner dry-run plan shape hardening
+
+- Hardened shared runner dry-run plan rendering so plans must be JSON objects
+  before stdout writes. Direct list/string/scalar plan values now fail closed
+  through the existing `failed to render runner plan JSON` path without
+  producing partial stdout.
+- Added focused render and write-path regressions for non-object runner plans,
+  and pinned the rollout-gate static contract to keep all runners on the shared
+  guarded dry-run renderer.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 175 tests in 2.27s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1059 tests
+    in 14.03s.
+
+## 2026-06-27 SoraFS runner reserved-output early-fail hardening
+
+- Hardened shared runner planned-artifact validation so malformed or duplicate
+  reserved output path diagnostics return before planned artifact filesystem
+  inspection. Reserved-output shape and identity errors can no longer be mixed
+  with later artifact symlink/existence checks, keeping the operator diagnostic
+  boundary deterministic.
+- Added focused regression coverage that proves malformed reserved outputs stop
+  before planned artifact symlink inspection, and pinned the rollout-gate static
+  contract to keep that guarded shared path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 173 tests in 2.27s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1057 tests
+    in 16.06s.
+
+## 2026-06-27 SoraFS runner reserved-output identity hardening
+
+- Hardened shared runner planned-artifact validation so duplicate or aliased
+  reserved output identities fail closed instead of overwriting the earlier
+  reserved-output map entry. Planned artifact/output collisions now stay
+  deterministic even when callers pass multiple reserved output paths.
+- Added focused regression coverage for aliased reserved output paths and pinned
+  the rollout-gate static contract to keep the guarded shared artifact
+  validator.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 172 tests in 2.25s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1056 tests
+    in 15.61s.
+
+## 2026-06-27 SoraFS runner reserved-output hardening
+
+- Hardened shared runner planned-artifact validation so reserved output paths
+  must be supplied as a non-scalar sequence of `Path` entries before path
+  identity collision checks run. Scalar/mapping containers and non-Path
+  reserved entries now fail closed with stable diagnostics instead of relying on
+  downstream path identity handling.
+- Added focused regressions for malformed reserved-output containers and
+  entries, and pinned the rollout-gate static contract to keep the guarded
+  shared command-plan artifact path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 171 tests in 2.29s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1055 tests
+    in 14.78s.
+
+## 2026-06-27 SoraFS runner command-entry hardening
+
+- Hardened shared runner command-plan validation so command vectors with empty
+  executables or embedded NUL bytes are rejected before `--out-dir` creation or
+  subprocess launch. This keeps malformed command entries on the same
+  fail-closed path as malformed step labels, artifacts, and scalar command
+  containers.
+- Added focused direct helper coverage plus runtime no-output-directory
+  regressions, and pinned the rollout-gate static contract to keep runners on
+  the guarded command-entry checks.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 170 tests in 2.29s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1054 tests
+    in 13.83s.
+
+## 2026-06-27 SoraFS runner command-step shape hardening
+
+- Hardened the shared runner command-plan executor so step labels, artifact
+  fields, and command vectors are validated before `--out-dir` creation or
+  subprocess launch. Malformed labels, non-Path artifacts, empty command lists,
+  scalar/mapping commands, and non-string command entries now fail closed with
+  stable diagnostics instead of creating partial output directories or reaching
+  subprocess edge cases.
+- Added focused direct helper coverage plus runtime no-output-directory
+  regressions, and pinned the rollout-gate static contract to keep runners on
+  the guarded shared command-plan path.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 169 tests in 2.20s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1053 tests
+    in 14.03s.
+
+## 2026-06-27 SoraFS runner stderr emitter hardening
+
+- Hardened shared runner stderr emitters so error containers must be
+  non-scalar sequences of strings before any output is written. Raw strings,
+  bytes, mappings, and non-string entries now fail closed instead of printing
+  character-split diagnostics or partial error headings.
+- Added focused no-output regressions for malformed `emit_runner_error_lines`
+  and `emit_runner_error_block` inputs, and pinned the rollout-gate static
+  contract to keep runners on the guarded shared emitters.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 167 tests in 2.30s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1051 tests
+    in 14.58s.
+
+## 2026-06-27 SoraFS checker stderr emitter hardening
+
+- Hardened shared checker stderr emitters so error containers must be
+  non-scalar sequences of strings before any output is written. Raw strings,
+  bytes, mappings, and non-string entries now fail closed instead of printing
+  character-split diagnostics or partial error headings.
+- Added focused no-output regressions for malformed `emit_checker_error_lines`
+  and `emit_checker_error_block` inputs, and pinned the rollout-gate static
+  contract to keep checkers on the guarded shared emitters.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 139 tests in 2.11s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1049 tests
+    in 15.61s.
+
+## 2026-06-27 SoraFS checker summary shape hardening
+
+- Hardened shared checker summary rendering and writing so summaries must be
+  JSON objects before canonical rendering, and summary text must be a string
+  before optional output writes. Malformed direct helper inputs now fail closed
+  with stable diagnostics instead of rendering scalar JSON or raising uncaught
+  `TypeError`s from `Path.write_text`.
+- Added focused regressions for non-object summaries through both direct render
+  and render-and-write paths, plus non-string summary text on direct writes.
+  Pinned the rollout-gate static contract to keep all checkers on the shared
+  guarded summary helper.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 137 tests in 2.14s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1047 tests
+    in 13.99s.
+
+## 2026-06-27 SoraFS artifact error sink hardening
+
+- Hardened shared checker artifact-error mirroring so `summary_errors` must be
+  `list[str]` before `record_artifact_error` mutates any artifact row. Malformed
+  summary sinks now fail closed with the existing checker preflight diagnostic
+  instead of leaving partially modified artifact state.
+- Added focused regression coverage that proves malformed summary sinks leave
+  artifact rows untouched, and pinned the rollout-gate static contract to keep
+  the guarded shared recorder in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present during the turn, so Rust/Cargo
+    validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 134 tests in 2.16s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1044 tests
+    in 16.03s.
+
+## 2026-06-27 SoraFS sensitive-field sink hardening
+
+- Hardened the shared SoraFS sensitive-field scanner so its diagnostic sink must
+  be `list[str]` before sensitive-key normalization or recursive payload
+  scanning runs. Malformed sinks now fail closed with a stable `ValueError`
+  instead of producing container-specific tracebacks or partial reports.
+- Added focused regression coverage for malformed sensitivity error containers
+  and pinned the rollout-gate static contract to keep the shared scanner
+  guarded.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - `python3 -m py_compile scripts/sorafs_evidence_sensitivity.py scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_sensitivity_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 96 tests in 2.11s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1043 tests
+    in 15.84s.
+
+## 2026-06-27 SoraFS explicit evidence identity hardening
+
+- Hardened shared explicit-evidence path detection so the explicit identity
+  container must be `set[Path]` before membership checks run. Malformed
+  containers now return `False` with a stable diagnostic instead of raising
+  during validation-error recording.
+- Added direct evidence-path regressions and wrapper coverage through
+  `record_explicit_evidence_validation_errors`, then pinned the rollout-gate
+  static contract to keep the guarded shared helper in place.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present at the start of the turn, so
+    Rust/Cargo validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 378 tests in 2.60s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1042 tests
+    in 14.66s.
+
+## 2026-06-27 SoraFS evidence validation sink hardening
+
+- Hardened shared evidence-validation error recording so the summary error sink
+  must be `list[str]` before path-qualified validation errors are appended.
+  Malformed sinks now fail closed with a stable `ValueError` instead of
+  producing partial writes or container-specific tracebacks.
+- Added a focused regression for malformed summary error containers and pinned
+  the rollout-gate static contract to keep checker validation errors routed
+  through the guarded shared recorder.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - active Cargo/rustc jobs were present at the start of the turn, so
+    Rust/Cargo validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_evidence_validation.py scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_validation_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 350 tests in 2.57s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1040 tests
+    in 13.50s.
+
+## 2026-06-27 SoraFS runner input identity hardening
+
+- Hardened shared runner input preflight so file/directory path collections
+  must be real non-scalar sequences before iteration. Raw strings, bytes, and
+  mappings now fail closed with stable diagnostics instead of being iterated as
+  characters or keys.
+- Added validation for runner input labels and duplicate-identity maps before
+  filesystem inspection. Malformed shared `seen` maps now produce deterministic
+  diagnostics instead of tracebacks. Adjusted the reputation rollout runner to
+  pass provider proof paths as an explicit sequence while preserving provider
+  matching.
+- Pinned focused regressions for malformed input path containers, labels, and
+  identity maps across file and directory input helpers, plus rollout-gate
+  static contract coverage for the new helper boundary.
+- Validation status:
+  - no processes were killed, signaled, interrupted, or restarted.
+  - process guards showed existing Cargo/rustc work, including Cargo PIDs
+    `18818`, `20748`, `25118`, and `90379` during validation and final
+    hygiene, so Rust/Cargo validation was skipped to avoid contention.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/run_sorafs_reputation_rollout_evidence.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 171 tests in 1.93s.
+  - `python3 -m pytest scripts/tests/*sorafs*_test.py -q` passed: 1039 tests
+    in 13.59s.
 
 ## 2026-06-27 SoraFS runner namespace integer hardening
 
@@ -171,6 +5563,11 @@ Last updated: 2026-06-27
   and Torii stake-share/reward app API paths now apply exact-key filters to
   `(lane_id, validator, staker)` shares and `(lane_id, epoch)` reward records
   before consuming or exposing account-facing public-lane economic state.
+  `FindLaneRelayEnvelopeByRef` and runtime relay-cache hydration now also
+  reject verified-relay contract-state payloads whose embedded `relay_ref` does
+  not exactly match the canonical key requested or scanned, preventing malformed
+  state from spoofing a different lane, dataspace, height, or settlement hash
+  under a valid key.
 - Added focused adversarial regressions for mismatched validator rows in
   registration capacity/peer binding, rebind peer binding and direct rebind,
   pending and explicit activation, released-exit finalization, reward target
@@ -186,40 +5583,65 @@ Last updated: 2026-06-27
   excluded from candidate profiles, and multisig account-rekey coverage now
   proves malformed validator, stake-share, and reward rows cannot be rewritten
   into live key/record matches or otherwise have account-bearing economic fields
-  rewritten.
+  rewritten. Added the scale-out counterpart to the runtime elastic-range
+  corruption matrix so hot autoscale cannot add capacity while an in-range lane
+  is manual, malformed, off-default, or otherwise outside the configured
+  ownership envelope. Added verified-relay query and scanner regressions proving
+  spoofed payload refs under a different requested/scanned state key fail
+  closed.
 - Updated `docs/source/nexus_lanes.md`, `docs/source/nexus_transition_notes.md`,
   and `roadmap.md` to document the shared key/record invariant for live
   validator derivations and staking-economic mutation paths.
 - Validation status:
   - no processes were killed, signaled, interrupted, or restarted.
-  - process guards showed existing Cargo PID `90379` still running
-    `cargo test -p iroha_core --lib da_pin_intents -- --nocapture`, so new
-    Cargo validation remains pending to avoid contention.
+  - focused Cargo validation initially exposed stale test issues: an AXT replay
+    selector fixture passed a `u32` to `DataSpaceId::new`, and the new staking
+    reward regression moved an invariant-violation message in a `matches!`
+    guard. Both were fixed; the reward regression was also moved to in-range
+    lane ids so it tests the malformed row rather than catalog bounds.
   - `rustfmt --edition 2024 crates/iroha_core/src/state.rs crates/iroha_core/src/smartcontracts/isi/staking.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/domain.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/multisig.rs crates/iroha_core/src/sumeragi/stake_snapshot.rs crates/iroha_core/src/sumeragi/main_loop/roster.rs crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/penalties.rs crates/iroha_core/src/sumeragi/status.rs crates/iroha_torii/src/routing.rs`
     passed.
   - `rustfmt --edition 2024 --check crates/iroha_core/src/state.rs crates/iroha_core/src/smartcontracts/isi/staking.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/domain.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/multisig.rs crates/iroha_core/src/sumeragi/stake_snapshot.rs crates/iroha_core/src/sumeragi/main_loop/roster.rs crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/penalties.rs crates/iroha_core/src/sumeragi/status.rs crates/iroha_torii/src/routing.rs`
     passed.
   - `git diff --check -- crates/iroha_core/src/state.rs crates/iroha_core/src/smartcontracts/isi/staking.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/domain.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/multisig.rs crates/iroha_core/src/sumeragi/stake_snapshot.rs crates/iroha_core/src/sumeragi/main_loop/roster.rs crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/penalties.rs crates/iroha_core/src/sumeragi/status.rs crates/iroha_torii/src/routing.rs docs/source/nexus_lanes.md docs/source/nexus_transition_notes.md roadmap.md status.md`
     passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib load_verified_lane_relay_record_rejects_payload_ref_mismatch -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib merge_candidates_ignore_verified_lane_relay_record_stored_under_another_relay_key -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib axt_replay_ledger_keys_for_lanes_selects_target_lane_only -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib record_rewards_rejects_mismatched_public_lane_validator_row -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_economic_records_match_storage_keys -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib claim_rewards_ignores_mismatched_reward_record_rows -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib autoscale_transition_scale_out_rejects_runtime_elastic_range_corruption -- --nocapture`
+    passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib collect_candidate_profiles_ignores_mismatched_stake_share_rows -- --nocapture`
+    passed.
   - conflict-marker scan over the touched Rust/docs/status/roadmap files found
     no markers.
   - `git diff --name-only -- Cargo.lock` produced no output.
-- Pending Cargo validation once PID `90379` exits:
+- Refreshed broader Cargo validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_validator_record -- --nocapture`
+    passed.
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib mismatched_public_lane_validator -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_validator_records_by_peer_ignore_mismatched_storage_key_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib locate_validator_in_roster_prefers_matching_peer -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib unregister_account_ignores_mismatched_public_lane_validator_row -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib unregister_peer_ignores_mismatched_public_lane_validator_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib rekey_public_lane_validators_ignores_mismatched_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib public_lane_economic_records_match_storage_keys -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib claim_rewards_ignores_mismatched_reward_record_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib collect_candidate_profiles_ignores_mismatched_stake_share_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib public_lane_validator_record_matches_key_rejects_mismatched_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib public_lane_stake_share_matches_key_rejects_mismatched_rows -- --nocapture`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_torii --features app_api --lib public_lane_reward_record_matches_key_rejects_mismatched_rows -- --nocapture`
+    passed.
+  - Exact `soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows`,
+    `hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows`,
+    `public_lane_validator_records_by_peer_ignore_mismatched_storage_key_rows`,
+    `locate_validator_in_roster_prefers_matching_peer`,
+    `unregister_account_ignores_mismatched_public_lane_validator_row`,
+    `unregister_peer_ignores_mismatched_public_lane_validator_rows`, and
+    `rekey_public_lane_validators_ignores_mismatched_rows` filters passed under
+    `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane`.
+  - Torii app API `public_lane_validator_record_matches_key_rejects_mismatched_rows`,
+    `public_lane_stake_share_matches_key_rejects_mismatched_rows`, and
+    `public_lane_reward_record_matches_key_rejects_mismatched_rows` filters
+    passed under `--features app_api`.
+- Pending broader Cargo validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo clippy -p iroha_core --lib --tests --no-deps -- -D warnings`
 

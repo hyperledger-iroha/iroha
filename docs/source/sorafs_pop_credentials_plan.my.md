@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_pop_credentials_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e76b066b08e8cf62d08c3fce2e7f78c1d103d1d5cdd30edf7f0683524d740b9f
+source_hash: 22dbc13f3322ef703f4d1c091a66b8206335411af2e06d8ff92c5d641b980ada
 source_last_modified: "2026-06-25T17:19:30+00:00"
 translation_last_reviewed: 2026-06-25
 ---

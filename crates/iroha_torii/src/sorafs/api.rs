@@ -79,6 +79,10 @@ use iroha_data_model::{
             SoraFsModerationVoteChoice,
         },
         pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
+        reserve::{
+            ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage,
+            ReserveQuote,
+        },
         transparency::{
             MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerCyclePublicationV1,
             ModerationLedgerEntryKindV1, ModerationLedgerMetadataV1, ModerationPrivacyModeV1,
@@ -114,6 +118,7 @@ use sorafs_manifest::{
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
     chunker_registry,
+    deal::XorAmount,
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
     potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
     repair::{RepairTaskEventV1, RepairTaskStatusV1},
@@ -133,8 +138,16 @@ use sorafs_node::{
     OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
     OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome, PorTrackerError,
     PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
-    RepairEvent, TransparencyLedgerSourceEntry, appeal_finance_report_source_entry,
-    appeal_finance_settlement_receipt_source_entry,
+    RepairEvent, ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord,
+    ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
+    ReserveCreditLineSnapshot, ReserveLifecycleEvent, ReserveLifecyclePolicyOutcome,
+    ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot, ReserveLifecyclePolicyUpdate,
+    ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot, ReserveLifecycleUpdate,
+    ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate, ReserveMovementKind,
+    ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
+    ReserveMovementRuntimeError, ReserveProviderBalance, ReserveProviderCreditLineState,
+    ReserveProviderLifecycleSummary, TransparencyLedgerSourceEntry,
+    appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
     capacity::CapacityUsageSnapshot,
     gar_enforcement_receipt_source_entry, local_moderation_panel_roster_hash,
     local_orderbook_provider_id_for_owner_account,
@@ -171,9 +184,9 @@ use crate::{
         },
         encode_token_base64,
         gateway::{
-            ClientFingerprint, DenylistHit, DenylistKind, DenylistPolicyTier, PerceptualMatchBasis,
-            PerceptualObservation, PolicyViolation, RateLimitError, RequestContext,
-            SORA_TLS_STATE_HEADER,
+            ClientFingerprint, DenylistEntryBuilder, DenylistHit, DenylistKind, DenylistPolicyTier,
+            PerceptualMatchBasis, PerceptualObservation, PolicyViolation, RateLimitError,
+            RequestContext, SORA_TLS_STATE_HEADER,
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
@@ -243,6 +256,13 @@ const ORDERBOOK_ROUTE_CHANNELS: &str = "/v1/sorafs/orderbook/channels";
 const ORDERBOOK_ROUTE_EVENTS: &str = "/v1/sorafs/orderbook/events";
 const ORDERBOOK_ROUTE_EVENTS_STREAM: &str = "/v1/sorafs/orderbook/events/stream";
 const ORDERBOOK_ROUTE_EVENTS_WS: &str = "/v1/sorafs/orderbook/events/ws";
+#[cfg(test)]
+const RESERVE_LIFECYCLE_ROUTE: &str = "/v1/sorafs/reserve/lifecycle";
+const RESERVE_GATEWAY_COMPLIANCE_SOURCE_PACK_ID: &str = "sorafs-reserve-lifecycle";
+const RESERVE_GATEWAY_COMPLIANCE_REVIEW_REFERENCE: &str = "sorafs-reserve-lifecycle-compliance-v1";
+const RESERVE_MOVEMENT_GATEWAY_COMPLIANCE_SOURCE_PACK_ID: &str = "sorafs-reserve-movement-custody";
+const RESERVE_MOVEMENT_GATEWAY_COMPLIANCE_REVIEW_REFERENCE: &str =
+    "sorafs-reserve-movement-custody-compliance-v1";
 const MODERATION_ROUTE_BALLOTS: &str = "/v1/sorafs/moderation/ballots";
 const MODERATION_ROUTE_COMMITS: &str = "/v1/sorafs/moderation/ballots/commits";
 const MODERATION_ROUTE_REVEALS: &str = "/v1/sorafs/moderation/ballots/reveals";
@@ -2392,6 +2412,71 @@ struct ModerationScreeningReadbackQuery {
 #[derive(Debug, Default)]
 struct OrderbookReadbackQuery {
     limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveLifecycleUpdateRequestDto {
+    provider_id_hex: String,
+    provider_account: String,
+    quote: ReserveQuote,
+    days_past_due: u16,
+    grace_period_days: u16,
+    default_after_days: u16,
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveMovementRequestDto {
+    provider_id_hex: String,
+    provider_account: String,
+    reserve_account: String,
+    asset_definition_id: String,
+    amount_micro_xor: String,
+    idempotency_key: String,
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveMovementCustodyUpdateRequestDto {
+    status: String,
+    tx_hash_hex: String,
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveAppealRequestDto {
+    provider_id_hex: String,
+    provider_account: String,
+    requested_stage: Option<String>,
+    reason: String,
+    evidence_digest_hex: Option<String>,
+    idempotency_key: String,
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveAppealDecisionRequestDto {
+    status: String,
+    decision_account: String,
+    rationale: String,
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveLifecyclePolicyUpdateRequestDto {
+    authority_account: String,
+    grace_period_days: u16,
+    default_after_days: u16,
+    effective_at_unix: u64,
+    reason: String,
+    idempotency_key: String,
+    observed_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+struct ReserveLifecycleAdvanceRequestDto {
+    authority_account: String,
+    observed_at_unix: u64,
 }
 
 #[derive(Debug, Default)]
@@ -9205,6 +9290,586 @@ fn require_orderbook_request_auth(
     }
 }
 
+fn reserve_provider_account_id(
+    state: &SharedAppState,
+    provider_account: &str,
+) -> Result<AccountId, Response> {
+    if provider_account.trim().is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS reserve lifecycle provider_account must not be empty",
+        ));
+    }
+    let (account, canonical) = crate::routing::parse_account_literal_with_state(
+        &state.state,
+        provider_account,
+        &state.telemetry,
+        "sorafs_reserve_lifecycle_provider_account",
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "invalid SoraFS reserve lifecycle provider_account: {}",
+                err.reason()
+            ),
+        )
+    })?;
+    if provider_account != canonical {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS reserve lifecycle provider_account must be a canonical AccountId",
+        ));
+    }
+    Ok(account)
+}
+
+fn reserve_provider_account_literal(provider_account: &[u8]) -> Result<&str, String> {
+    reserve_account_literal(provider_account, "provider_account")
+}
+
+fn reserve_account_literal<'a>(account: &'a [u8], field: &str) -> Result<&'a str, String> {
+    let literal = std::str::from_utf8(account)
+        .map_err(|_| format!("SoraFS reserve {field} must be UTF-8 canonical account bytes"))?;
+    if literal.is_empty() {
+        Err(format!("SoraFS reserve {field} must not be empty"))
+    } else {
+        Ok(literal)
+    }
+}
+
+fn require_reserve_lifecycle_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: &AccountId,
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(
+        &state.state,
+        headers,
+        method,
+        uri,
+        body,
+        Some(expected_account),
+    ) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS reserve lifecycle updates require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS reserve lifecycle canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS reserve lifecycle request authentication",
+            ))
+        }
+    }
+}
+
+fn require_reserve_movement_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(
+        &state.state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+    ) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS reserve movements require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS reserve movement canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS reserve movement request authentication",
+            ))
+        }
+    }
+}
+
+fn require_reserve_credit_line_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
+    {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS reserve credit-line readback requires X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS reserve credit-line canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS reserve credit-line request authentication",
+            ))
+        }
+    }
+}
+
+fn require_reserve_appeal_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(
+        &state.state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+    ) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS reserve appeals require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS reserve appeal canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS reserve appeal request authentication",
+            ))
+        }
+    }
+}
+
+fn require_reserve_policy_request_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
+    match crate::app_auth::verify_canonical_request(
+        &state.state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+    ) {
+        Ok(Some(verified)) => Ok(verified),
+        Ok(None) => Err(json_error(
+            StatusCode::UNAUTHORIZED,
+            "SoraFS reserve lifecycle policy routes require X-Iroha canonical request authentication",
+        )),
+        Err(err) => {
+            warn!(
+                ?err,
+                "SoraFS reserve lifecycle policy canonical request authentication rejected"
+            );
+            Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid SoraFS reserve lifecycle policy request authentication",
+            ))
+        }
+    }
+}
+
+fn reserve_lifecycle_update_from_request(
+    state: &SharedAppState,
+    request: ReserveLifecycleUpdateRequestDto,
+) -> Result<(AccountId, ReserveLifecycleUpdate), Response> {
+    let provider_id = parse_hex_fixed::<32>(&request.provider_id_hex, "provider_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let provider_account = reserve_provider_account_id(state, &request.provider_account)?;
+    let update = ReserveLifecycleUpdate {
+        provider_id,
+        provider_account: request.provider_account.into_bytes(),
+        quote: request.quote,
+        days_past_due: request.days_past_due,
+        grace_period_days: request.grace_period_days,
+        default_after_days: request.default_after_days,
+        observed_at_unix: request.observed_at_unix.unwrap_or_else(unix_timestamp_now),
+    };
+    Ok((provider_account, update))
+}
+
+fn reserve_movement_from_request(
+    state: &SharedAppState,
+    request: ReserveMovementRequestDto,
+    kind: ReserveMovementKind,
+) -> Result<(AccountId, ReserveMovementRequest), Response> {
+    let provider_id = parse_hex_fixed::<32>(&request.provider_id_hex, "provider_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let provider_account = reserve_provider_account_id(state, &request.provider_account)?;
+    let reserve_account = reserve_account_id(state, "reserve_account", &request.reserve_account)?;
+    let asset_definition_id = reserve_asset_definition_id(&request.asset_definition_id)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let amount = reserve_micro_xor_amount("amount_micro_xor", &request.amount_micro_xor)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let idempotency_key = required_reserve_text("idempotency_key", request.idempotency_key)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let provider_account_bytes = request.provider_account.into_bytes();
+    let reserve_account_bytes = reserve_account.to_string().into_bytes();
+    let asset_definition_id_bytes = asset_definition_id.to_string().into_bytes();
+    let movement_id = reserve_movement_id(
+        kind,
+        &provider_id,
+        &provider_account_bytes,
+        &reserve_account_bytes,
+        &asset_definition_id_bytes,
+        amount,
+        &idempotency_key,
+    );
+    let movement = ReserveMovementRequest {
+        movement_id,
+        provider_id,
+        provider_account: provider_account_bytes,
+        reserve_account: reserve_account_bytes,
+        asset_definition_id: asset_definition_id_bytes,
+        kind,
+        amount,
+        idempotency_key,
+        observed_at_unix: request.observed_at_unix.unwrap_or_else(unix_timestamp_now),
+    };
+    Ok((provider_account, movement))
+}
+
+fn reserve_movement_custody_update_from_request(
+    movement_id_hex: &str,
+    request: ReserveMovementCustodyUpdateRequestDto,
+) -> Result<ReserveMovementCustodyUpdate, Response> {
+    let movement_id = parse_hex_fixed::<32>(movement_id_hex, "movement_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let status = reserve_movement_custody_status(&request.status)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let tx_hash = parse_hex_fixed::<32>(&request.tx_hash_hex, "tx_hash_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    Ok(ReserveMovementCustodyUpdate {
+        movement_id,
+        status,
+        tx_hash_hex: hex::encode(tx_hash),
+        observed_at_unix: request.observed_at_unix.unwrap_or_else(unix_timestamp_now),
+    })
+}
+
+fn reserve_appeal_from_request(
+    state: &SharedAppState,
+    request: ReserveAppealRequestDto,
+) -> Result<(AccountId, ReserveAppealRequest), Response> {
+    let provider_id = parse_hex_fixed::<32>(&request.provider_id_hex, "provider_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let provider_account = reserve_provider_account_id(state, &request.provider_account)?;
+    let provider_account_bytes = request.provider_account.into_bytes();
+    let reason = required_reserve_text("reason", request.reason)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let idempotency_key = required_reserve_text("idempotency_key", request.idempotency_key)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let requested_stage = request
+        .requested_stage
+        .as_deref()
+        .map(reserve_lifecycle_stage_from_label)
+        .transpose()
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let evidence_digest_hex = request
+        .evidence_digest_hex
+        .as_deref()
+        .map(|digest| parse_hex_fixed::<32>(digest, "evidence_digest_hex").map(hex::encode))
+        .transpose()
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let appeal_id = reserve_appeal_id(
+        &provider_id,
+        &provider_account_bytes,
+        requested_stage,
+        &reason,
+        evidence_digest_hex.as_deref(),
+        &idempotency_key,
+    );
+    Ok((
+        provider_account,
+        ReserveAppealRequest {
+            appeal_id,
+            provider_id,
+            provider_account: provider_account_bytes,
+            requested_stage,
+            reason,
+            evidence_digest_hex,
+            idempotency_key,
+            observed_at_unix: request.observed_at_unix.unwrap_or_else(unix_timestamp_now),
+        },
+    ))
+}
+
+fn reserve_appeal_decision_from_request(
+    state: &SharedAppState,
+    appeal_id_hex: &str,
+    request: ReserveAppealDecisionRequestDto,
+) -> Result<(AccountId, ReserveAppealDecision), Response> {
+    let appeal_id = parse_hex_fixed::<32>(appeal_id_hex, "appeal_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let decision_account =
+        reserve_account_id(state, "decision_account", &request.decision_account)?;
+    let status = reserve_appeal_decision_status(&request.status)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let rationale = required_reserve_text("rationale", request.rationale)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    Ok((
+        decision_account,
+        ReserveAppealDecision {
+            appeal_id,
+            status,
+            decision_account: request.decision_account.into_bytes(),
+            rationale,
+            decided_at_unix: request.observed_at_unix.unwrap_or_else(unix_timestamp_now),
+        },
+    ))
+}
+
+fn reserve_lifecycle_policy_update_from_request(
+    state: &SharedAppState,
+    request: ReserveLifecyclePolicyUpdateRequestDto,
+) -> Result<(AccountId, ReserveLifecyclePolicyUpdate), Response> {
+    let authority_account =
+        reserve_account_id(state, "authority_account", &request.authority_account)?;
+    let reason = required_reserve_text("reason", request.reason)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let idempotency_key = required_reserve_text("idempotency_key", request.idempotency_key)
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let authority_account_bytes = request.authority_account.into_bytes();
+    let policy_id = reserve_lifecycle_policy_id(
+        &authority_account_bytes,
+        request.grace_period_days,
+        request.default_after_days,
+        request.effective_at_unix,
+        &reason,
+        &idempotency_key,
+    );
+    Ok((
+        authority_account,
+        ReserveLifecyclePolicyUpdate {
+            policy_id,
+            authority_account: authority_account_bytes,
+            grace_period_days: request.grace_period_days,
+            default_after_days: request.default_after_days,
+            effective_at_unix: request.effective_at_unix,
+            reason,
+            idempotency_key,
+            observed_at_unix: request.observed_at_unix.unwrap_or_else(unix_timestamp_now),
+        },
+    ))
+}
+
+fn reserve_lifecycle_advance_from_request(
+    state: &SharedAppState,
+    request: ReserveLifecycleAdvanceRequestDto,
+) -> Result<(AccountId, u64), Response> {
+    let authority_account =
+        reserve_account_id(state, "authority_account", &request.authority_account)?;
+    Ok((authority_account, request.observed_at_unix))
+}
+
+fn reserve_movement_custody_status(raw: &str) -> Result<ReserveMovementCustodyStatus, String> {
+    match raw.trim() {
+        "submitted" => Ok(ReserveMovementCustodyStatus::Submitted),
+        "confirmed" => Ok(ReserveMovementCustodyStatus::Confirmed),
+        "rejected" => Ok(ReserveMovementCustodyStatus::Rejected),
+        "intent_recorded" => Err(
+            "SoraFS reserve movement custody status cannot be reset to intent_recorded".to_owned(),
+        ),
+        _ => Err(
+            "SoraFS reserve movement custody status must be submitted, confirmed, or rejected"
+                .to_owned(),
+        ),
+    }
+}
+
+fn reserve_appeal_decision_status(raw: &str) -> Result<ReserveAppealStatus, String> {
+    match raw.trim() {
+        "accepted" => Ok(ReserveAppealStatus::Accepted),
+        "rejected" => Ok(ReserveAppealStatus::Rejected),
+        "open" => Err("SoraFS reserve appeal decision status cannot be open".to_owned()),
+        _ => Err("SoraFS reserve appeal decision status must be accepted or rejected".to_owned()),
+    }
+}
+
+fn reserve_lifecycle_stage_from_label(raw: &str) -> Result<ReserveLifecycleStage, String> {
+    match raw.trim() {
+        "active" => Ok(ReserveLifecycleStage::Active),
+        "warning" => Ok(ReserveLifecycleStage::Warning),
+        "grace" => Ok(ReserveLifecycleStage::Grace),
+        "delinquent" => Ok(ReserveLifecycleStage::Delinquent),
+        "default" => Ok(ReserveLifecycleStage::Default),
+        _ => Err(
+            "SoraFS reserve lifecycle stage must be active, warning, grace, delinquent, or default"
+                .to_owned(),
+        ),
+    }
+}
+
+fn reserve_account_id(
+    state: &SharedAppState,
+    field: &'static str,
+    account_literal: &str,
+) -> Result<AccountId, Response> {
+    if account_literal.trim().is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("SoraFS reserve movement {field} must not be empty"),
+        ));
+    }
+    let (account, canonical) = crate::routing::parse_account_literal_with_state(
+        &state.state,
+        account_literal,
+        &state.telemetry,
+        field,
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS reserve movement {field}: {}", err.reason()),
+        )
+    })?;
+    if account_literal != canonical {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("SoraFS reserve movement {field} must be a canonical AccountId"),
+        ));
+    }
+    Ok(account)
+}
+
+fn reserve_asset_definition_id(raw: &str) -> Result<AssetDefinitionId, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("SoraFS reserve movement asset_definition_id must not be empty".to_owned());
+    }
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(trimmed)
+        .map_err(|err| format!("invalid SoraFS reserve movement asset_definition_id: {err}"))?;
+    if trimmed != asset_definition_id.to_string() {
+        return Err(
+            "SoraFS reserve movement asset_definition_id must be a canonical AssetDefinitionId"
+                .to_owned(),
+        );
+    }
+    Ok(asset_definition_id)
+}
+
+fn reserve_micro_xor_amount(field: &'static str, raw: &str) -> Result<XorAmount, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("SoraFS reserve movement {field} must not be empty"));
+    }
+    let micro = trimmed
+        .parse::<u128>()
+        .map_err(|err| format!("invalid SoraFS reserve movement {field}: {err}"))?;
+    Ok(XorAmount::from_micro(micro))
+}
+
+fn required_reserve_text(field: &'static str, raw: String) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        Err(format!("SoraFS reserve movement {field} must not be empty"))
+    } else {
+        Ok(trimmed.to_owned())
+    }
+}
+
+fn reserve_movement_id(
+    kind: ReserveMovementKind,
+    provider_id: &[u8; 32],
+    provider_account: &[u8],
+    reserve_account: &[u8],
+    asset_definition_id: &[u8],
+    amount: XorAmount,
+    idempotency_key: &str,
+) -> [u8; 32] {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs.reserve.movement.v1");
+    reserve_movement_id_part(&mut material, reserve_movement_kind_label(kind).as_bytes());
+    reserve_movement_id_part(&mut material, provider_id);
+    reserve_movement_id_part(&mut material, provider_account);
+    reserve_movement_id_part(&mut material, reserve_account);
+    reserve_movement_id_part(&mut material, asset_definition_id);
+    reserve_movement_id_part(&mut material, &amount.as_micro().to_le_bytes());
+    reserve_movement_id_part(&mut material, idempotency_key.as_bytes());
+    *blake3_hash(&material).as_bytes()
+}
+
+fn reserve_movement_id_part(material: &mut Vec<u8>, part: &[u8]) {
+    material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+    material.extend_from_slice(part);
+}
+
+fn reserve_appeal_id(
+    provider_id: &[u8; 32],
+    provider_account: &[u8],
+    requested_stage: Option<ReserveLifecycleStage>,
+    reason: &str,
+    evidence_digest_hex: Option<&str>,
+    idempotency_key: &str,
+) -> [u8; 32] {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs.reserve.appeal.v1");
+    reserve_movement_id_part(&mut material, provider_id);
+    reserve_movement_id_part(&mut material, provider_account);
+    reserve_movement_id_part(
+        &mut material,
+        requested_stage
+            .map(reserve_lifecycle_stage_label)
+            .unwrap_or("")
+            .as_bytes(),
+    );
+    reserve_movement_id_part(&mut material, reason.as_bytes());
+    reserve_movement_id_part(&mut material, evidence_digest_hex.unwrap_or("").as_bytes());
+    reserve_movement_id_part(&mut material, idempotency_key.as_bytes());
+    *blake3_hash(&material).as_bytes()
+}
+
+fn reserve_lifecycle_policy_id(
+    authority_account: &[u8],
+    grace_period_days: u16,
+    default_after_days: u16,
+    effective_at_unix: u64,
+    reason: &str,
+    idempotency_key: &str,
+) -> [u8; 32] {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs.reserve.lifecycle_policy.v1");
+    reserve_movement_id_part(&mut material, authority_account);
+    reserve_movement_id_part(&mut material, &grace_period_days.to_le_bytes());
+    reserve_movement_id_part(&mut material, &default_after_days.to_le_bytes());
+    reserve_movement_id_part(&mut material, &effective_at_unix.to_le_bytes());
+    reserve_movement_id_part(&mut material, reason.as_bytes());
+    reserve_movement_id_part(&mut material, idempotency_key.as_bytes());
+    *blake3_hash(&material).as_bytes()
+}
+
 fn ensure_orderbook_payload_signer(
     verified: &crate::app_auth::VerifiedCanonicalRequest,
     signature: &OrderbookSignatureV1,
@@ -9320,6 +9985,155 @@ fn orderbook_provider_capability_response(
             ("provider_id_hex", Value::from(hex::encode(provider_id))),
         ],
     )
+}
+
+fn unix_system_time(seconds: u64) -> SystemTime {
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))
+        .unwrap_or(UNIX_EPOCH)
+}
+
+fn reserve_gateway_compliance_source_is_owned(source_pack_id: Option<&str>) -> bool {
+    matches!(
+        source_pack_id,
+        Some(RESERVE_GATEWAY_COMPLIANCE_SOURCE_PACK_ID)
+            | Some(RESERVE_MOVEMENT_GATEWAY_COMPLIANCE_SOURCE_PACK_ID)
+    )
+}
+
+fn reserve_movement_custody_observed_at(record: &ReserveMovementRecord) -> u64 {
+    record
+        .custody_updated_at_unix
+        .unwrap_or(record.observed_at_unix)
+}
+
+fn latest_accepted_reserve_appeal_decision_at(
+    state: &SharedAppState,
+    provider_id: [u8; 32],
+) -> Option<u64> {
+    state
+        .sorafs_node
+        .reserve_appeal_snapshot(unix_timestamp_now())
+        .appeals
+        .into_iter()
+        .filter(|appeal| appeal.provider_id == provider_id)
+        .filter(|appeal| appeal.status == ReserveAppealStatus::Accepted)
+        .filter_map(|appeal| appeal.decided_at_unix)
+        .max()
+}
+
+fn latest_unappealed_rejected_reserve_movement(
+    state: &SharedAppState,
+    provider_id: [u8; 32],
+) -> Option<ReserveMovementRecord> {
+    let accepted_appeal_at = latest_accepted_reserve_appeal_decision_at(state, provider_id);
+    state
+        .sorafs_node
+        .reserve_movement_snapshot(unix_timestamp_now())
+        .movements
+        .into_iter()
+        .filter(|movement| movement.provider_id == provider_id)
+        .filter(|movement| movement.custody_status == ReserveMovementCustodyStatus::Rejected)
+        .filter(|movement| {
+            let custody_observed_at = reserve_movement_custody_observed_at(movement);
+            accepted_appeal_at.is_none_or(|accepted_at| custody_observed_at > accepted_at)
+        })
+        .max_by_key(|movement| {
+            (
+                reserve_movement_custody_observed_at(movement),
+                movement.sequence,
+            )
+        })
+}
+
+fn reserve_lifecycle_gateway_compliance_entry(
+    summary: &ReserveProviderLifecycleSummary,
+) -> DenylistEntryBuilder {
+    let provider_id_hex = hex::encode(summary.provider_id);
+    let mut reason = format!(
+        "reserve lifecycle stage `{}` disables provider adverts",
+        reserve_lifecycle_stage_label(summary.lifecycle.stage)
+    );
+    if let Some(policy_id) = summary.applied_policy_id {
+        reason.push_str(&format!(" under policy {}", hex::encode(policy_id)));
+    }
+    if let Some(appeal_id) = summary.applied_appeal_id {
+        reason.push_str(&format!(" after appeal {}", hex::encode(appeal_id)));
+    }
+    DenylistEntryBuilder::default()
+        .issued_at(unix_system_time(summary.updated_at_unix))
+        .policy_tier(DenylistPolicyTier::Standard)
+        .source_pack_id(Some(RESERVE_GATEWAY_COMPLIANCE_SOURCE_PACK_ID.to_owned()))
+        .review_reference(Some(RESERVE_GATEWAY_COMPLIANCE_REVIEW_REFERENCE.to_owned()))
+        .governance_reference(Some(format!(
+            "reserve-lifecycle-provider:{provider_id_hex}"
+        )))
+        .reason(reason)
+}
+
+fn reserve_movement_gateway_compliance_entry(
+    record: &ReserveMovementRecord,
+) -> DenylistEntryBuilder {
+    let movement_id_hex = hex::encode(record.movement_id);
+    let provider_id_hex = hex::encode(record.provider_id);
+    let mut reason = format!(
+        "reserve movement custody rejected for `{}` movement {movement_id_hex}",
+        reserve_movement_kind_label(record.kind)
+    );
+    if let Some(tx_hash_hex) = &record.custody_tx_hash_hex {
+        reason.push_str(&format!(" with custody transaction {tx_hash_hex}"));
+    }
+    DenylistEntryBuilder::default()
+        .issued_at(unix_system_time(reserve_movement_custody_observed_at(
+            record,
+        )))
+        .policy_tier(DenylistPolicyTier::Standard)
+        .source_pack_id(Some(
+            RESERVE_MOVEMENT_GATEWAY_COMPLIANCE_SOURCE_PACK_ID.to_owned(),
+        ))
+        .review_reference(Some(
+            RESERVE_MOVEMENT_GATEWAY_COMPLIANCE_REVIEW_REFERENCE.to_owned(),
+        ))
+        .governance_reference(Some(format!("reserve-movement-custody:{movement_id_hex}")))
+        .reason(format!(
+            "{reason}; provider {provider_id_hex} requires review"
+        ))
+}
+
+fn sync_reserve_gateway_compliance_for_provider(state: &SharedAppState, provider_id: [u8; 32]) {
+    let Some(denylist) = &state.sorafs_gateway_denylist else {
+        return;
+    };
+    let kind = DenylistKind::Provider(provider_id);
+    let desired = state
+        .sorafs_node
+        .reserve_provider_lifecycle_summary(provider_id)
+        .filter(|summary| summary.lifecycle.disable_adverts)
+        .map(|summary| reserve_lifecycle_gateway_compliance_entry(&summary).build())
+        .or_else(|| {
+            latest_unappealed_rejected_reserve_movement(state, provider_id)
+                .map(|movement| reserve_movement_gateway_compliance_entry(&movement).build())
+        });
+
+    if let Some(entry) = desired {
+        if denylist
+            .check_provider(&provider_id, SystemTime::now())
+            .is_some_and(|hit| {
+                !reserve_gateway_compliance_source_is_owned(hit.entry().source_pack_id())
+            })
+        {
+            return;
+        }
+        denylist.upsert(kind, entry);
+        return;
+    }
+
+    if denylist
+        .check_provider(&provider_id, SystemTime::now())
+        .is_some_and(|hit| reserve_gateway_compliance_source_is_owned(hit.entry().source_pack_id()))
+    {
+        denylist.remove(&kind);
+    }
 }
 
 pub(crate) async fn handle_get_sorafs_orderbook_book(
@@ -9524,6 +10338,772 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
         .into_response()
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_EVENTS_WS, response)
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_lifecycle_update(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveLifecycleUpdateRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve lifecycle update: {err}"),
+            );
+        }
+    };
+    let (provider_account_id, update) = match reserve_lifecycle_update_from_request(&state, request)
+    {
+        Ok(update) => update,
+        Err(response) => return response,
+    };
+    let _verified = match require_reserve_lifecycle_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        &provider_account_id,
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    let provider_id = update.provider_id;
+    let event = match state.sorafs_node.record_reserve_lifecycle_update(update) {
+        Ok(event) => event,
+        Err(err) => return reserve_lifecycle_runtime_error_response(err),
+    };
+    let Some(summary) = state
+        .sorafs_node
+        .reserve_provider_lifecycle_summary(provider_id)
+    else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SoraFS reserve lifecycle update was accepted but no provider summary was retained",
+        );
+    };
+    sync_reserve_gateway_compliance_for_provider(&state, provider_id);
+    match reserve_lifecycle_update_response_json(&event, &summary) {
+        Ok(value) => (StatusCode::ACCEPTED, JsonBody(value)).into_response(),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_lifecycle_snapshot(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let snapshot = state
+        .sorafs_node
+        .reserve_lifecycle_snapshot(unix_timestamp_now());
+    match reserve_lifecycle_snapshot_json(&snapshot, limit) {
+        Ok(value) => JsonBody(value).into_response(),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_lifecycle_provider(
+    State(state): State<SharedAppState>,
+    Path(provider_id_hex): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let provider_id = match parse_hex_fixed::<32>(&provider_id_hex, "provider_id_hex") {
+        Ok(provider_id) => provider_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let Some(summary) = state
+        .sorafs_node
+        .reserve_provider_lifecycle_summary(provider_id)
+    else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS reserve lifecycle provider `{provider_id_hex}` was not found"),
+        );
+    };
+    match reserve_lifecycle_provider_response_json(&summary) {
+        Ok(value) => JsonBody(value).into_response(),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_credit_lines(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve credit-line API is not enabled on this node");
+    }
+    let verified =
+        match require_reserve_credit_line_request_auth(&state, &headers, &method, &uri, &[]) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let visible_account = verified.account.to_string().into_bytes();
+    let mut snapshot = state
+        .sorafs_node
+        .reserve_credit_line_snapshot(unix_timestamp_now());
+    snapshot
+        .credit_lines
+        .retain(|credit_line| reserve_credit_line_visible_to(credit_line, &visible_account));
+    let total_count = snapshot.credit_lines.len();
+    let truncated = total_count > limit;
+    snapshot.credit_lines.truncate(limit);
+    match reserve_credit_lines_json(&snapshot, total_count, limit, truncated) {
+        Ok(value) => JsonBody(value).into_response(),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_credit_line_provider(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(provider_id_hex): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve credit-line API is not enabled on this node");
+    }
+    let verified =
+        match require_reserve_credit_line_request_auth(&state, &headers, &method, &uri, &[]) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let provider_id = match parse_hex_fixed::<32>(&provider_id_hex, "provider_id_hex") {
+        Ok(provider_id) => provider_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let Some(credit_line) = state.sorafs_node.reserve_provider_credit_line(provider_id) else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS reserve credit-line provider `{provider_id_hex}` was not found"),
+        );
+    };
+    let visible_account = verified.account.to_string().into_bytes();
+    if !reserve_credit_line_visible_to(&credit_line, &visible_account) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS reserve credit-line state is visible only to the provider account",
+        );
+    }
+    match reserve_credit_line_provider_response_json(&credit_line) {
+        Ok(value) => JsonBody(value).into_response(),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_appeal(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve appeal API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveAppealRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve appeal JSON: {err}"),
+            );
+        }
+    };
+    let (provider_account, appeal) = match reserve_appeal_from_request(&state, request) {
+        Ok(appeal) => appeal,
+        Err(response) => return response,
+    };
+    let _verified = match require_reserve_appeal_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&provider_account),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.record_reserve_appeal(appeal) {
+        Ok(outcome) => match reserve_appeal_outcome_json(&outcome) {
+            Ok(value) => {
+                let status = if outcome.duplicate {
+                    StatusCode::OK
+                } else {
+                    StatusCode::ACCEPTED
+                };
+                (status, JsonBody(value)).into_response()
+            }
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        },
+        Err(err) => reserve_appeal_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_appeals(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve appeal API is not enabled on this node");
+    }
+    let verified =
+        match require_reserve_appeal_request_auth(&state, &headers, &method, &uri, &[], None) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let visible_account = verified.account.to_string().into_bytes();
+    let mut snapshot = state
+        .sorafs_node
+        .reserve_appeal_snapshot(unix_timestamp_now());
+    snapshot
+        .appeals
+        .retain(|appeal| reserve_appeal_visible_to(appeal, &visible_account));
+    let total_count = snapshot.appeals.len();
+    let truncated = total_count > limit;
+    snapshot.appeals.truncate(limit);
+    let etag = reserve_appeals_etag(limit, &snapshot);
+    if let Some(response) = reserve_private_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reserve_appeals_json(&snapshot, total_count, limit, truncated) {
+        Ok(value) => reserve_private_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_appeal_decision(
+    State(state): State<SharedAppState>,
+    Path(appeal_id_hex): Path<String>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve appeal API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveAppealDecisionRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve appeal decision JSON: {err}"),
+            );
+        }
+    };
+    let (decision_account, decision) =
+        match reserve_appeal_decision_from_request(&state, &appeal_id_hex, request) {
+            Ok(decision) => decision,
+            Err(response) => return response,
+        };
+    let _verified = match require_reserve_appeal_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&decision_account),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.record_reserve_appeal_decision(decision) {
+        Ok(record) => {
+            sync_reserve_gateway_compliance_for_provider(&state, record.provider_id);
+            match reserve_appeal_decision_response_json(&record) {
+                Ok(value) => (StatusCode::ACCEPTED, JsonBody(value)).into_response(),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            }
+        }
+        Err(err) => reserve_appeal_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_lifecycle_policy(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle policy API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveLifecyclePolicyUpdateRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve lifecycle policy JSON: {err}"),
+            );
+        }
+    };
+    let (authority_account, update) =
+        match reserve_lifecycle_policy_update_from_request(&state, request) {
+            Ok(update) => update,
+            Err(response) => return response,
+        };
+    let _verified = match require_reserve_policy_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&authority_account),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    match state
+        .sorafs_node
+        .record_reserve_lifecycle_policy_update(update)
+    {
+        Ok(outcome) => {
+            for event in &outcome.reprojected_events {
+                sync_reserve_gateway_compliance_for_provider(&state, event.provider_id);
+            }
+            match reserve_lifecycle_policy_outcome_json(&outcome) {
+                Ok(value) => {
+                    let status = if outcome.duplicate {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::ACCEPTED
+                    };
+                    (status, JsonBody(value)).into_response()
+                }
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            }
+        }
+        Err(err) => reserve_appeal_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_lifecycle_advance(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveLifecycleAdvanceRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve lifecycle advance JSON: {err}"),
+            );
+        }
+    };
+    let (authority_account, observed_at_unix) =
+        match reserve_lifecycle_advance_from_request(&state, request) {
+            Ok(update) => update,
+            Err(response) => return response,
+        };
+    let _verified = match require_reserve_policy_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&authority_account),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    match state
+        .sorafs_node
+        .advance_reserve_lifecycle(observed_at_unix)
+    {
+        Ok(events) => {
+            for event in &events {
+                sync_reserve_gateway_compliance_for_provider(&state, event.provider_id);
+            }
+            match reserve_lifecycle_advance_response_json(observed_at_unix, &events) {
+                Ok(value) => (StatusCode::ACCEPTED, JsonBody(value)).into_response(),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            }
+        }
+        Err(err) => reserve_lifecycle_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_lifecycle_policy(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle policy API is not enabled on this node");
+    }
+    let _verified =
+        match require_reserve_policy_request_auth(&state, &headers, &method, &uri, &[], None) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let mut snapshot = state
+        .sorafs_node
+        .reserve_lifecycle_policy_snapshot(unix_timestamp_now());
+    let total_count = snapshot.policies.len();
+    let truncated = total_count > limit;
+    snapshot.policies.truncate(limit);
+    let etag = reserve_lifecycle_policy_etag(limit, &snapshot);
+    if let Some(response) = reserve_private_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reserve_lifecycle_policy_snapshot_json(&snapshot, total_count, limit, truncated) {
+        Ok(value) => reserve_private_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let events = state
+        .sorafs_node
+        .reserve_lifecycle_events_since(query.since, limit);
+    let tip_sequence = state
+        .sorafs_node
+        .latest_reserve_lifecycle_event_sequence()
+        .unwrap_or(0);
+    let etag = reserve_lifecycle_events_etag(query.since, limit, tip_sequence, &events);
+    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reserve_lifecycle_events_json(query.since, limit, &events) {
+        Ok(value) => reputation_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_stream(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let initial_events = state
+        .sorafs_node
+        .reserve_lifecycle_events_since(query.since, limit);
+    let receiver = state.sorafs_node.subscribe_reserve_lifecycle_events();
+    Sse::new(reserve_lifecycle_event_sse_stream(initial_events, receiver)).into_response()
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_lifecycle_events_ws(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve lifecycle API is not enabled on this node");
+    }
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let initial_events = state
+        .sorafs_node
+        .reserve_lifecycle_events_since(query.since, limit);
+    let receiver = state.sorafs_node.subscribe_reserve_lifecycle_events();
+    ws.on_upgrade(move |socket| async move {
+        if let Err(err) =
+            reserve_lifecycle_event_websocket_stream(socket, initial_events, receiver).await
+        {
+            debug!(%err, "SoraFS reserve lifecycle WebSocket stream closed with error");
+        }
+    })
+    .into_response()
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_top_up(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    handle_post_sorafs_reserve_movement(
+        state,
+        headers,
+        method,
+        uri,
+        body,
+        ReserveMovementKind::TopUp,
+    )
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_withdrawal(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    handle_post_sorafs_reserve_movement(
+        state,
+        headers,
+        method,
+        uri,
+        body,
+        ReserveMovementKind::Withdrawal,
+    )
+}
+
+fn handle_post_sorafs_reserve_movement(
+    state: SharedAppState,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+    kind: ReserveMovementKind,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve movement API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveMovementRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve movement JSON: {err}"),
+            );
+        }
+    };
+    let (provider_account, movement) = match reserve_movement_from_request(&state, request, kind) {
+        Ok(movement) => movement,
+        Err(response) => return response,
+    };
+    let _verified = match require_reserve_movement_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&provider_account),
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    match state.sorafs_node.record_reserve_movement(movement) {
+        Ok(outcome) => match reserve_movement_outcome_json(&outcome) {
+            Ok(value) => {
+                let status = if outcome.duplicate {
+                    StatusCode::OK
+                } else {
+                    StatusCode::ACCEPTED
+                };
+                (status, JsonBody(value)).into_response()
+            }
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        },
+        Err(err) => reserve_movement_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_movements(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve movement API is not enabled on this node");
+    }
+    let verified =
+        match require_reserve_movement_request_auth(&state, &headers, &method, &uri, &[], None) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(err) => return err.into_response(),
+    };
+    let limit = normalize_limit(query.limit);
+    let visible_account = verified.account.to_string().into_bytes();
+    let movements = state
+        .sorafs_node
+        .reserve_movements_since(query.since, MAX_LIST_LIMIT)
+        .into_iter()
+        .filter(|movement| reserve_movement_visible_to(movement, &visible_account))
+        .take(limit)
+        .collect::<Vec<_>>();
+    let tip_sequence = state
+        .sorafs_node
+        .latest_reserve_movement_sequence()
+        .unwrap_or(0);
+    let etag = reserve_movement_events_etag(query.since, limit, tip_sequence, &movements);
+    if let Some(response) = reserve_private_not_modified_response(&headers, &etag) {
+        return response;
+    }
+    match reserve_movements_json(query.since, limit, &movements) {
+        Ok(value) => reserve_private_json_response(value, &etag),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_reserve_movement_custody(
+    State(state): State<SharedAppState>,
+    Path(movement_id_hex): Path<String>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve movement API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ReserveMovementCustodyUpdateRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS reserve custody JSON: {err}"),
+            );
+        }
+    };
+    let update = match reserve_movement_custody_update_from_request(&movement_id_hex, request) {
+        Ok(update) => update,
+        Err(response) => return response,
+    };
+    let verified = match require_reserve_movement_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        None,
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+    let Some(record) = state.sorafs_node.reserve_movement(update.movement_id) else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS reserve movement `{movement_id_hex}` was not found"),
+        );
+    };
+    let visible_account = verified.account.to_string().into_bytes();
+    if !reserve_movement_visible_to(&record, &visible_account) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS reserve movement custody is visible only to the provider or reserve account",
+        );
+    }
+    match state
+        .sorafs_node
+        .record_reserve_movement_custody_update(update)
+    {
+        Ok(record) => {
+            sync_reserve_gateway_compliance_for_provider(&state, record.provider_id);
+            match reserve_movement_custody_response_json(&record) {
+                Ok(value) => (StatusCode::ACCEPTED, JsonBody(value)).into_response(),
+                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            }
+        }
+        Err(err) => reserve_movement_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_reserve_balance(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(provider_id_hex): Path<String>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs reserve movement API is not enabled on this node");
+    }
+    let verified =
+        match require_reserve_movement_request_auth(&state, &headers, &method, &uri, &[], None) {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    let provider_id = match parse_hex_fixed::<32>(&provider_id_hex, "provider_id_hex") {
+        Ok(provider_id) => provider_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let Some(balance) = state.sorafs_node.reserve_provider_balance(provider_id) else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("SoraFS reserve balance provider `{provider_id_hex}` was not found"),
+        );
+    };
+    let visible_account = verified.account.to_string().into_bytes();
+    if !reserve_balance_visible_to(&balance, &visible_account) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS reserve balance is visible only to the provider or reserve account",
+        );
+    }
+    match reserve_balance_response_json(&balance) {
+        Ok(value) => JsonBody(value).into_response(),
+        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
 }
 
 pub(crate) async fn handle_get_sorafs_repair_events(
@@ -10142,6 +11722,73 @@ pub(crate) fn spawn_sorafs_appeal_finance_settlement_worker(
             }
         }
     });
+}
+
+pub(crate) fn spawn_sorafs_reserve_lifecycle_scheduler(
+    state: SharedAppState,
+    shutdown_signal: ShutdownSignal,
+) {
+    if !state.sorafs_node.is_enabled() {
+        debug!("SoraFS reserve lifecycle scheduler disabled: SoraFS storage is disabled");
+        return;
+    }
+    let Some(schedule) = state.sorafs_node.config().reserve_lifecycle_schedule() else {
+        debug!("SoraFS reserve lifecycle scheduler disabled by configuration");
+        return;
+    };
+
+    tokio::spawn(async move {
+        if schedule.initial_delay_seconds() > 0 {
+            tokio::select! {
+                () = shutdown_signal.receive() => return,
+                () = tokio::time::sleep(Duration::from_secs(schedule.initial_delay_seconds())) => {}
+            }
+        }
+
+        loop {
+            let observed_at_unix = unix_timestamp_now();
+            match run_sorafs_reserve_lifecycle_scheduler_tick(&state, observed_at_unix) {
+                Ok(events) if events.is_empty() => {
+                    debug!(
+                        observed_at_unix,
+                        "SoraFS reserve lifecycle scheduler tick produced no lifecycle advances",
+                    );
+                }
+                Ok(events) => {
+                    debug!(
+                        observed_at_unix,
+                        advanced_event_count = events.len(),
+                        "SoraFS reserve lifecycle scheduler advanced provider lifecycle state",
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        observed_at_unix,
+                        error = %err,
+                        "SoraFS reserve lifecycle scheduler tick failed",
+                    );
+                }
+            }
+
+            tokio::select! {
+                () = shutdown_signal.receive() => break,
+                () = tokio::time::sleep(Duration::from_secs(schedule.interval_seconds())) => {}
+            }
+        }
+    });
+}
+
+pub(crate) fn run_sorafs_reserve_lifecycle_scheduler_tick(
+    state: &SharedAppState,
+    observed_at_unix: u64,
+) -> Result<Vec<ReserveLifecycleEvent>, ReserveLifecycleRuntimeError> {
+    let events = state
+        .sorafs_node
+        .advance_reserve_lifecycle(observed_at_unix)?;
+    for event in &events {
+        sync_reserve_gateway_compliance_for_provider(state, event.provider_id);
+    }
+    Ok(events)
 }
 
 fn log_sorafs_appeal_finance_settlement_worker_result(
@@ -13287,12 +14934,57 @@ fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
         | OrderbookRuntimeError::OrderBelowMinimum { .. }
         | OrderbookRuntimeError::OrderPriceTickMismatch { .. }
         | OrderbookRuntimeError::CancelOwnerMismatch => StatusCode::BAD_REQUEST,
+        OrderbookRuntimeError::ReserveLifecycleAdvertDisabled { .. } => {
+            StatusCode::PRECONDITION_FAILED
+        }
         OrderbookRuntimeError::SequenceOverflow
         | OrderbookRuntimeError::MissingMatchedOrder
         | OrderbookRuntimeError::InvalidMatchedSides
         | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs orderbook error: {err}"))
+}
+
+fn reserve_lifecycle_runtime_error_response(err: ReserveLifecycleRuntimeError) -> Response {
+    let status = match err {
+        ReserveLifecycleRuntimeError::ProjectionFailed(_) => StatusCode::BAD_REQUEST,
+        ReserveLifecycleRuntimeError::EventSequenceOverflow
+        | ReserveLifecycleRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(status, format!("sorafs reserve lifecycle error: {err}"))
+}
+
+fn reserve_movement_runtime_error_response(err: ReserveMovementRuntimeError) -> Response {
+    let status = match err {
+        ReserveMovementRuntimeError::ZeroAmount => StatusCode::BAD_REQUEST,
+        ReserveMovementRuntimeError::InsufficientBalance { .. }
+        | ReserveMovementRuntimeError::MovementIdCollision { .. }
+        | ReserveMovementRuntimeError::InvalidCustodyTransition { .. }
+        | ReserveMovementRuntimeError::CustodyTransactionHashMismatch { .. } => {
+            StatusCode::CONFLICT
+        }
+        ReserveMovementRuntimeError::MovementNotFound { .. } => StatusCode::NOT_FOUND,
+        ReserveMovementRuntimeError::EventSequenceOverflow
+        | ReserveMovementRuntimeError::ArithmeticFailed(_)
+        | ReserveMovementRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(status, format!("sorafs reserve movement error: {err}"))
+}
+
+fn reserve_appeal_runtime_error_response(err: ReserveAppealRuntimeError) -> Response {
+    let status = match err {
+        ReserveAppealRuntimeError::EmptyText { .. }
+        | ReserveAppealRuntimeError::InvalidDecisionStatus
+        | ReserveAppealRuntimeError::InvalidLifecyclePolicyWindow { .. } => StatusCode::BAD_REQUEST,
+        ReserveAppealRuntimeError::AppealIdCollision { .. }
+        | ReserveAppealRuntimeError::InvalidAppealTransition { .. }
+        | ReserveAppealRuntimeError::PolicyIdCollision { .. } => StatusCode::CONFLICT,
+        ReserveAppealRuntimeError::AppealNotFound { .. } => StatusCode::NOT_FOUND,
+        ReserveAppealRuntimeError::EventSequenceOverflow
+        | ReserveAppealRuntimeError::LifecyclePolicyProjectionFailed(_)
+        | ReserveAppealRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(status, format!("sorafs reserve appeal error: {err}"))
 }
 
 #[cfg(test)]
@@ -13310,6 +15002,13 @@ fn orderbook_admission_policy_errors_map_to_bad_request() {
             tick_micro_xor: 10_000,
         });
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response =
+        orderbook_runtime_error_response(OrderbookRuntimeError::ReserveLifecycleAdvertDisabled {
+            provider_id_hex: hex::encode([0xAB; 32]),
+            stage: "default".to_owned(),
+        });
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 }
 
 fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
@@ -15236,6 +16935,997 @@ fn orderbook_event_kind_label(kind: OrderbookEventKind) -> &'static str {
         OrderbookEventKind::OrderCancelled => "order_cancelled",
         OrderbookEventKind::SettlementReceiptAccepted => "settlement_receipt_accepted",
     }
+}
+
+fn reserve_lifecycle_update_response_json(
+    event: &ReserveLifecycleEvent,
+    summary: &ReserveProviderLifecycleSummary,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.lifecycle.update.v1")),
+        json_entry("status", Value::from("accepted")),
+        json_entry("event", reserve_lifecycle_event_json(event)?),
+        json_entry(
+            "provider",
+            reserve_provider_lifecycle_summary_json(summary)?,
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_provider_response_json(
+    summary: &ReserveProviderLifecycleSummary,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.reserve.lifecycle.provider.v1"),
+        ),
+        json_entry(
+            "provider",
+            reserve_provider_lifecycle_summary_json(summary)?,
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_snapshot_json(
+    snapshot: &ReserveLifecycleSnapshot,
+    limit: usize,
+) -> Result<Value, String> {
+    let providers = snapshot
+        .providers
+        .iter()
+        .map(reserve_provider_lifecycle_summary_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let events = snapshot
+        .events
+        .iter()
+        .map(reserve_lifecycle_event_json)
+        .collect::<Result<Vec<_>, _>>()?;
+    let provider_count = providers.len();
+    let event_count = events.len();
+    let (providers, truncated_providers) = limit_governance_readback_values(providers, limit);
+    let (events, truncated_events) = limit_governance_readback_values(events, limit);
+    Ok(json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.reserve.lifecycle.snapshot.v1"),
+        ),
+        json_entry("source", Value::from("local")),
+        json_entry("generated_at_unix", snapshot.generated_at_unix),
+        json_entry("next_sequence", snapshot.next_sequence),
+        json_entry("provider_count", provider_count as u64),
+        json_entry("event_count", event_count as u64),
+        json_entry("limit", limit as u64),
+        json_entry("returned_provider_count", providers.len() as u64),
+        json_entry("returned_event_count", events.len() as u64),
+        json_entry("truncated_providers", truncated_providers),
+        json_entry("truncated_events", truncated_events),
+        json_entry("providers", Value::Array(providers)),
+        json_entry("events", Value::Array(events)),
+    ]))
+}
+
+fn reserve_provider_lifecycle_summary_json(
+    summary: &ReserveProviderLifecycleSummary,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("provider_id_hex", hex::encode(summary.provider_id)),
+        json_entry(
+            "provider_account",
+            reserve_provider_account_literal(&summary.provider_account)?.to_owned(),
+        ),
+        json_entry(
+            "provider_account_hex",
+            hex::encode(&summary.provider_account),
+        ),
+        json_entry("updated_at_unix", summary.updated_at_unix),
+        json_entry(
+            "stage",
+            reserve_lifecycle_stage_label(summary.lifecycle.stage),
+        ),
+        json_entry("grace_period_days", summary.grace_period_days),
+        json_entry("default_after_days", summary.default_after_days),
+        json_entry(
+            "applied_policy_id_hex",
+            summary
+                .applied_policy_id
+                .map_or(Value::Null, |policy_id| Value::from(hex::encode(policy_id))),
+        ),
+        json_entry(
+            "applied_appeal_id_hex",
+            summary
+                .applied_appeal_id
+                .map_or(Value::Null, |appeal_id| Value::from(hex::encode(appeal_id))),
+        ),
+        json_entry("quote", reserve_quote_json(&summary.quote)?),
+        json_entry("ledger", reserve_ledger_projection_json(&summary.ledger)?),
+        json_entry(
+            "lifecycle",
+            reserve_lifecycle_projection_json(&summary.lifecycle)?,
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_event_json(event: &ReserveLifecycleEvent) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("sequence", event.sequence),
+        json_entry("provider_id_hex", hex::encode(event.provider_id)),
+        json_entry(
+            "previous_stage",
+            event.previous_stage.map_or(Value::Null, |stage| {
+                Value::from(reserve_lifecycle_stage_label(stage))
+            }),
+        ),
+        json_entry(
+            "current_stage",
+            reserve_lifecycle_stage_label(event.current_stage),
+        ),
+        json_entry("observed_at_unix", event.observed_at_unix),
+        json_entry("grace_period_days", event.grace_period_days),
+        json_entry("default_after_days", event.default_after_days),
+        json_entry(
+            "applied_policy_id_hex",
+            event
+                .applied_policy_id
+                .map_or(Value::Null, |policy_id| Value::from(hex::encode(policy_id))),
+        ),
+        json_entry(
+            "applied_appeal_id_hex",
+            event
+                .applied_appeal_id
+                .map_or(Value::Null, |appeal_id| Value::from(hex::encode(appeal_id))),
+        ),
+        json_entry("ledger", reserve_ledger_projection_json(&event.ledger)?),
+        json_entry(
+            "lifecycle",
+            reserve_lifecycle_projection_json(&event.lifecycle)?,
+        ),
+    ]))
+}
+
+fn reserve_credit_line_provider_response_json(
+    credit_line: &ReserveProviderCreditLineState,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.reserve.credit_line.provider.v1"),
+        ),
+        json_entry("credit_line", reserve_credit_line_json(credit_line)?),
+    ]))
+}
+
+fn reserve_credit_lines_json(
+    snapshot: &ReserveCreditLineSnapshot,
+    total_count: usize,
+    limit: usize,
+    truncated: bool,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.credit_lines.v1")),
+        json_entry("source", Value::from("local")),
+        json_entry("generated_at_unix", snapshot.generated_at_unix),
+        json_entry("credit_line_count", total_count as u64),
+        json_entry(
+            "returned_credit_line_count",
+            snapshot.credit_lines.len() as u64,
+        ),
+        json_entry("limit", limit as u64),
+        json_entry("truncated", truncated),
+        json_entry(
+            "credit_lines",
+            Value::Array(
+                snapshot
+                    .credit_lines
+                    .iter()
+                    .map(reserve_credit_line_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_credit_line_json(credit_line: &ReserveProviderCreditLineState) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("provider_id_hex", hex::encode(credit_line.provider_id)),
+        json_entry(
+            "provider_account",
+            reserve_provider_account_literal(&credit_line.provider_account)?.to_owned(),
+        ),
+        json_entry(
+            "provider_account_hex",
+            hex::encode(&credit_line.provider_account),
+        ),
+        json_entry(
+            "lifecycle_event_sequence",
+            credit_line.lifecycle_event_sequence,
+        ),
+        json_entry("stage", reserve_lifecycle_stage_label(credit_line.stage)),
+        json_entry(
+            "applied_appeal_id_hex",
+            credit_line
+                .applied_appeal_id
+                .map_or(Value::Null, |appeal_id| Value::from(hex::encode(appeal_id))),
+        ),
+        json_entry(
+            "rent_due_micro_xor",
+            credit_line.rent_due.as_micro().to_string(),
+        ),
+        json_entry(
+            "credit_draw_micro_xor",
+            credit_line.credit_draw.as_micro().to_string(),
+        ),
+        json_entry(
+            "credit_available_after_draw_micro_xor",
+            credit_line
+                .credit_available_after_draw
+                .map_or(Value::Null, |amount| {
+                    Value::from(amount.as_micro().to_string())
+                }),
+        ),
+        json_entry(
+            "credit_shortfall_micro_xor",
+            credit_line.credit_shortfall.as_micro().to_string(),
+        ),
+        json_entry(
+            "accrued_interest_micro_xor",
+            credit_line.accrued_interest.as_micro().to_string(),
+        ),
+        json_entry(
+            "total_due_after_credit_micro_xor",
+            credit_line.total_due_after_credit.as_micro().to_string(),
+        ),
+        json_entry(
+            "requires_manual_credit_approval",
+            credit_line.requires_manual_credit_approval,
+        ),
+        json_entry(
+            "requires_governance_notification",
+            credit_line.requires_governance_notification,
+        ),
+        json_entry("updated_at_unix", credit_line.updated_at_unix),
+    ]))
+}
+
+fn reserve_appeal_outcome_json(outcome: &ReserveAppealOutcome) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.appeal.v1")),
+        json_entry(
+            "status",
+            Value::from(if outcome.duplicate {
+                "duplicate"
+            } else {
+                "accepted"
+            }),
+        ),
+        json_entry("duplicate", outcome.duplicate),
+        json_entry("appeal", reserve_appeal_record_json(&outcome.record)?),
+    ]))
+}
+
+fn reserve_appeal_decision_response_json(record: &ReserveAppealRecord) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.appeal_decision.v1")),
+        json_entry("status", record.status.label()),
+        json_entry("appeal", reserve_appeal_record_json(record)?),
+    ]))
+}
+
+fn reserve_appeals_json(
+    snapshot: &ReserveAppealSnapshot,
+    total_count: usize,
+    limit: usize,
+    truncated: bool,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.appeals.v1")),
+        json_entry("source", Value::from("local")),
+        json_entry("generated_at_unix", snapshot.generated_at_unix),
+        json_entry("next_sequence", snapshot.next_sequence),
+        json_entry("appeal_count", total_count as u64),
+        json_entry("returned_appeal_count", snapshot.appeals.len() as u64),
+        json_entry("limit", limit as u64),
+        json_entry("truncated", truncated),
+        json_entry(
+            "appeals",
+            Value::Array(
+                snapshot
+                    .appeals
+                    .iter()
+                    .map(reserve_appeal_record_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_appeal_record_json(record: &ReserveAppealRecord) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("sequence", record.sequence),
+        json_entry("appeal_id_hex", hex::encode(record.appeal_id)),
+        json_entry("provider_id_hex", hex::encode(record.provider_id)),
+        json_entry(
+            "provider_account",
+            reserve_account_literal(&record.provider_account, "provider_account")?.to_owned(),
+        ),
+        json_entry(
+            "provider_account_hex",
+            hex::encode(&record.provider_account),
+        ),
+        json_entry(
+            "requested_stage",
+            record.requested_stage.map_or(Value::Null, |stage| {
+                Value::from(reserve_lifecycle_stage_label(stage))
+            }),
+        ),
+        json_entry("reason", record.reason.clone()),
+        json_entry(
+            "evidence_digest_hex",
+            record
+                .evidence_digest_hex
+                .as_ref()
+                .map_or(Value::Null, |digest| Value::from(digest.clone())),
+        ),
+        json_entry("idempotency_key", record.idempotency_key.clone()),
+        json_entry("status", record.status.label()),
+        json_entry("opened_at_unix", record.opened_at_unix),
+        json_entry(
+            "decision_account",
+            record
+                .decision_account
+                .as_ref()
+                .map_or(Ok(Value::Null), |account| {
+                    reserve_account_literal(account, "decision_account")
+                        .map(|literal| Value::from(literal.to_owned()))
+                })?,
+        ),
+        json_entry(
+            "decision_account_hex",
+            record
+                .decision_account
+                .as_ref()
+                .map_or(Value::Null, |account| Value::from(hex::encode(account))),
+        ),
+        json_entry(
+            "decision_rationale",
+            record
+                .decision_rationale
+                .as_ref()
+                .map_or(Value::Null, |rationale| Value::from(rationale.clone())),
+        ),
+        json_entry(
+            "decided_at_unix",
+            record.decided_at_unix.map_or(Value::Null, Value::from),
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_policy_outcome_json(
+    outcome: &ReserveLifecyclePolicyOutcome,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.reserve.lifecycle_policy.update.v1"),
+        ),
+        json_entry(
+            "status",
+            Value::from(if outcome.duplicate {
+                "duplicate"
+            } else {
+                "accepted"
+            }),
+        ),
+        json_entry("duplicate", outcome.duplicate),
+        json_entry(
+            "policy",
+            reserve_lifecycle_policy_record_json(&outcome.record)?,
+        ),
+        json_entry(
+            "reprojected_event_count",
+            outcome.reprojected_events.len() as u64,
+        ),
+        json_entry(
+            "reprojected_events",
+            Value::Array(
+                outcome
+                    .reprojected_events
+                    .iter()
+                    .map(reserve_lifecycle_event_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_advance_response_json(
+    observed_at_unix: u64,
+    events: &[ReserveLifecycleEvent],
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.lifecycle.advance.v1")),
+        json_entry(
+            "status",
+            Value::from(if events.is_empty() {
+                "noop"
+            } else {
+                "advanced"
+            }),
+        ),
+        json_entry("observed_at_unix", observed_at_unix),
+        json_entry("advanced_event_count", events.len() as u64),
+        json_entry(
+            "events",
+            Value::Array(
+                events
+                    .iter()
+                    .map(reserve_lifecycle_event_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_policy_snapshot_json(
+    snapshot: &ReserveLifecyclePolicySnapshot,
+    total_count: usize,
+    limit: usize,
+    truncated: bool,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.lifecycle_policy.v1")),
+        json_entry("source", Value::from("local")),
+        json_entry("generated_at_unix", snapshot.generated_at_unix),
+        json_entry("next_sequence", snapshot.next_sequence),
+        json_entry("policy_count", total_count as u64),
+        json_entry("returned_policy_count", snapshot.policies.len() as u64),
+        json_entry("limit", limit as u64),
+        json_entry("truncated", truncated),
+        json_entry(
+            "latest",
+            snapshot
+                .latest
+                .as_ref()
+                .map_or(Ok(Value::Null), reserve_lifecycle_policy_record_json)?,
+        ),
+        json_entry(
+            "policies",
+            Value::Array(
+                snapshot
+                    .policies
+                    .iter()
+                    .map(reserve_lifecycle_policy_record_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_policy_record_json(
+    record: &ReserveLifecyclePolicyRecord,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("sequence", record.sequence),
+        json_entry("policy_id_hex", hex::encode(record.policy_id)),
+        json_entry(
+            "authority_account",
+            reserve_account_literal(&record.authority_account, "authority_account")?.to_owned(),
+        ),
+        json_entry(
+            "authority_account_hex",
+            hex::encode(&record.authority_account),
+        ),
+        json_entry("grace_period_days", record.grace_period_days),
+        json_entry("default_after_days", record.default_after_days),
+        json_entry("effective_at_unix", record.effective_at_unix),
+        json_entry("reason", record.reason.clone()),
+        json_entry("idempotency_key", record.idempotency_key.clone()),
+        json_entry("observed_at_unix", record.observed_at_unix),
+    ]))
+}
+
+fn reserve_quote_json(quote: &ReserveQuote) -> Result<Value, String> {
+    json::to_value(quote).map_err(|err| format!("failed to encode reserve quote: {err}"))
+}
+
+fn reserve_ledger_projection_json(projection: &ReserveLedgerProjection) -> Result<Value, String> {
+    json::to_value(projection)
+        .map_err(|err| format!("failed to encode reserve ledger projection: {err}"))
+}
+
+fn reserve_lifecycle_projection_json(
+    projection: &ReserveLifecycleProjection,
+) -> Result<Value, String> {
+    let mut value = json::to_value(projection)
+        .map_err(|err| format!("failed to encode reserve lifecycle projection: {err}"))?;
+    if let Value::Object(ref mut object) = value {
+        object.insert(
+            "stage_label".into(),
+            Value::from(reserve_lifecycle_stage_label(projection.stage)),
+        );
+    }
+    Ok(value)
+}
+
+fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
+    match stage {
+        ReserveLifecycleStage::Active => "active",
+        ReserveLifecycleStage::Warning => "warning",
+        ReserveLifecycleStage::Grace => "grace",
+        ReserveLifecycleStage::Delinquent => "delinquent",
+        ReserveLifecycleStage::Default => "default",
+    }
+}
+
+fn reserve_lifecycle_events_etag(
+    since: Option<u64>,
+    limit: usize,
+    tip_sequence: u64,
+    events: &[ReserveLifecycleEvent],
+) -> String {
+    let since = since.unwrap_or(0).to_le_bytes();
+    let limit = (limit as u64).to_le_bytes();
+    let tip = tip_sequence.to_le_bytes();
+    let count = (events.len() as u64).to_le_bytes();
+    let last_sequence = events
+        .last()
+        .map_or(0, |event| event.sequence)
+        .to_le_bytes();
+    reserve_lifecycle_cache_etag(
+        "events",
+        &[
+            since.as_ref(),
+            limit.as_ref(),
+            tip.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn reserve_lifecycle_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-reserve-lifecycle:");
+    material.extend_from_slice(kind.as_bytes());
+    for part in parts {
+        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        material.extend_from_slice(part);
+    }
+    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
+}
+
+fn reserve_movement_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
+    let mut material = Vec::new();
+    material.extend_from_slice(b"sorafs-reserve-movement:");
+    material.extend_from_slice(kind.as_bytes());
+    for part in parts {
+        material.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        material.extend_from_slice(part);
+    }
+    format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
+}
+
+fn reserve_lifecycle_events_json(
+    since: Option<u64>,
+    limit: usize,
+    events: &[ReserveLifecycleEvent],
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.lifecycle.events.v1")),
+        json_entry("since", since.map_or(Value::Null, Value::from)),
+        json_entry("limit", limit as u64),
+        json_entry("count", events.len() as u64),
+        json_entry(
+            "next_since",
+            events
+                .last()
+                .map_or(Value::Null, |event| Value::from(event.sequence)),
+        ),
+        json_entry(
+            "events",
+            Value::Array(
+                events
+                    .iter()
+                    .map(reserve_lifecycle_event_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_lifecycle_event_sse_stream(
+    initial_events: Vec<ReserveLifecycleEvent>,
+    receiver: tokio::sync::broadcast::Receiver<ReserveLifecycleEvent>,
+) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
+    struct ReserveLifecycleSseState {
+        pending: VecDeque<ReserveLifecycleEvent>,
+        receiver: tokio::sync::broadcast::Receiver<ReserveLifecycleEvent>,
+    }
+
+    stream::unfold(
+        ReserveLifecycleSseState {
+            pending: initial_events.into_iter().collect(),
+            receiver,
+        },
+        |mut state| async move {
+            use tokio::sync::broadcast::error::RecvError;
+
+            if let Some(event) = state.pending.pop_front() {
+                return Some((Ok(reserve_lifecycle_sse_event(&event)), state));
+            }
+            loop {
+                match state.receiver.recv().await {
+                    Ok(event) => return Some((Ok(reserve_lifecycle_sse_event(&event)), state)),
+                    Err(RecvError::Lagged(skipped)) => {
+                        return Some((
+                            Ok(SseEvent::default()
+                                .event("lagged")
+                                .data(skipped.to_string())),
+                            state,
+                        ));
+                    }
+                    Err(RecvError::Closed) => return None,
+                }
+            }
+        },
+    )
+}
+
+async fn reserve_lifecycle_event_websocket_stream(
+    ws: WebSocket,
+    initial_events: Vec<ReserveLifecycleEvent>,
+    mut receiver: tokio::sync::broadcast::Receiver<ReserveLifecycleEvent>,
+) -> Result<(), String> {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let (mut sender, mut reader) = ws.split();
+    for event in initial_events {
+        let text = reserve_lifecycle_websocket_frame(&event);
+        sender
+            .send(WsMessage::Text(Utf8Bytes::from(text)))
+            .await
+            .map_err(|err| format!("failed to send reserve lifecycle backlog frame: {err}"))?;
+    }
+
+    loop {
+        tokio::select! {
+            received = receiver.recv() => {
+                match received {
+                    Ok(event) => {
+                        let text = reserve_lifecycle_websocket_frame(&event);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send reserve lifecycle live frame: {err}"))?;
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        let text = reputation_lagged_websocket_frame(skipped);
+                        sender
+                            .send(WsMessage::Text(Utf8Bytes::from(text)))
+                            .await
+                            .map_err(|err| format!("failed to send reserve lifecycle lag frame: {err}"))?;
+                    }
+                    Err(RecvError::Closed) => return Ok(()),
+                }
+            }
+            message = reader.next() => {
+                match message {
+                    Some(Ok(WsMessage::Close(_))) | None => return Ok(()),
+                    Some(Ok(WsMessage::Ping(payload))) => {
+                        sender
+                            .send(WsMessage::Pong(payload))
+                            .await
+                            .map_err(|err| format!("failed to send reserve lifecycle pong frame: {err}"))?;
+                    }
+                    Some(Ok(WsMessage::Text(_)
+                        | WsMessage::Binary(_)
+                        | WsMessage::Pong(_))) => {}
+                    Some(Err(err)) => {
+                        return Err(format!("failed to receive reserve lifecycle WebSocket frame: {err}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn reserve_lifecycle_sse_event(event: &ReserveLifecycleEvent) -> SseEvent {
+    let data = reserve_lifecycle_event_json(event).and_then(|value| {
+        json::to_string(&value)
+            .map_err(|err| format!("failed to encode reserve lifecycle event: {err}"))
+    });
+    SseEvent::default()
+        .event("reserve_lifecycle_update")
+        .id(event.sequence.to_string())
+        .data(data.unwrap_or_else(|_| "{}".to_owned()))
+}
+
+fn reserve_lifecycle_websocket_frame(event: &ReserveLifecycleEvent) -> String {
+    let mut frame = Map::new();
+    frame.insert("event".into(), Value::from("reserve_lifecycle_update"));
+    frame.insert(
+        "data".into(),
+        reserve_lifecycle_event_json(event).unwrap_or(Value::Null),
+    );
+    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+}
+
+fn reserve_movement_outcome_json(outcome: &ReserveMovementOutcome) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.movement.v1")),
+        json_entry(
+            "status",
+            Value::from(if outcome.duplicate {
+                "duplicate"
+            } else {
+                "accepted"
+            }),
+        ),
+        json_entry("duplicate", outcome.duplicate),
+        json_entry("movement", reserve_movement_record_json(&outcome.record)?),
+        json_entry(
+            "transfer_intent",
+            reserve_transfer_intent_json(&outcome.record)?,
+        ),
+    ]))
+}
+
+fn reserve_balance_response_json(balance: &ReserveProviderBalance) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.balance.v1")),
+        json_entry("balance", reserve_provider_balance_json(balance)?),
+    ]))
+}
+
+fn reserve_movement_custody_response_json(record: &ReserveMovementRecord) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.movement_custody.v1")),
+        json_entry("status", record.custody_status.label()),
+        json_entry("movement", reserve_movement_record_json(record)?),
+    ]))
+}
+
+fn reserve_provider_balance_json(balance: &ReserveProviderBalance) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("provider_id_hex", hex::encode(balance.provider_id)),
+        json_entry(
+            "provider_account",
+            reserve_account_literal(&balance.provider_account, "provider_account")?.to_owned(),
+        ),
+        json_entry(
+            "reserve_account",
+            reserve_account_literal(&balance.reserve_account, "reserve_account")?.to_owned(),
+        ),
+        json_entry(
+            "asset_definition_id",
+            reserve_account_literal(&balance.asset_definition_id, "asset_definition_id")?
+                .to_owned(),
+        ),
+        json_entry("balance_micro_xor", balance.balance.as_micro().to_string()),
+        json_entry(
+            "confirmed_balance_micro_xor",
+            balance.confirmed_balance.as_micro().to_string(),
+        ),
+        json_entry("updated_at_unix", balance.updated_at_unix),
+    ]))
+}
+
+fn reserve_movement_record_json(record: &ReserveMovementRecord) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("sequence", record.sequence),
+        json_entry("movement_id_hex", hex::encode(record.movement_id)),
+        json_entry("provider_id_hex", hex::encode(record.provider_id)),
+        json_entry(
+            "provider_account",
+            reserve_account_literal(&record.provider_account, "provider_account")?.to_owned(),
+        ),
+        json_entry(
+            "reserve_account",
+            reserve_account_literal(&record.reserve_account, "reserve_account")?.to_owned(),
+        ),
+        json_entry(
+            "asset_definition_id",
+            reserve_account_literal(&record.asset_definition_id, "asset_definition_id")?.to_owned(),
+        ),
+        json_entry("kind", reserve_movement_kind_label(record.kind)),
+        json_entry("amount_micro_xor", record.amount.as_micro().to_string()),
+        json_entry(
+            "balance_after_micro_xor",
+            record.balance_after.as_micro().to_string(),
+        ),
+        json_entry(
+            "confirmed_balance_after_micro_xor",
+            record.confirmed_balance_after.as_micro().to_string(),
+        ),
+        json_entry("idempotency_key", record.idempotency_key.clone()),
+        json_entry("observed_at_unix", record.observed_at_unix),
+        json_entry("custody_status", record.custody_status.label()),
+        json_entry(
+            "custody_tx_hash_hex",
+            record
+                .custody_tx_hash_hex
+                .as_ref()
+                .map_or(Value::Null, |tx_hash| Value::from(tx_hash.clone())),
+        ),
+        json_entry(
+            "custody_updated_at_unix",
+            record
+                .custody_updated_at_unix
+                .map_or(Value::Null, Value::from),
+        ),
+    ]))
+}
+
+fn reserve_transfer_intent_json(record: &ReserveMovementRecord) -> Result<Value, String> {
+    let provider = reserve_account_literal(&record.provider_account, "provider_account")?;
+    let reserve = reserve_account_literal(&record.reserve_account, "reserve_account")?;
+    let asset_definition_id =
+        reserve_account_literal(&record.asset_definition_id, "asset_definition_id")?;
+    let (source, destination) = match record.kind {
+        ReserveMovementKind::TopUp => (provider, reserve),
+        ReserveMovementKind::Withdrawal => (reserve, provider),
+    };
+    Ok(json_object(vec![
+        json_entry("source_account", source.to_owned()),
+        json_entry("destination_account", destination.to_owned()),
+        json_entry("asset_definition_id", asset_definition_id.to_owned()),
+        json_entry("amount_micro_xor", record.amount.as_micro().to_string()),
+        json_entry("kind", reserve_movement_kind_label(record.kind)),
+        json_entry("client_submission_required", true),
+        json_entry("local_ledger_recorded", true),
+    ]))
+}
+
+fn reserve_movements_json(
+    since: Option<u64>,
+    limit: usize,
+    movements: &[ReserveMovementRecord],
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("schema", Value::from("sorafs.reserve.movements.v1")),
+        json_entry("since", since.map_or(Value::Null, Value::from)),
+        json_entry("limit", limit as u64),
+        json_entry("count", movements.len() as u64),
+        json_entry(
+            "next_since",
+            movements
+                .last()
+                .map_or(Value::Null, |movement| Value::from(movement.sequence)),
+        ),
+        json_entry(
+            "movements",
+            Value::Array(
+                movements
+                    .iter()
+                    .map(reserve_movement_record_json)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        ),
+    ]))
+}
+
+fn reserve_movement_events_etag(
+    since: Option<u64>,
+    limit: usize,
+    tip_sequence: u64,
+    movements: &[ReserveMovementRecord],
+) -> String {
+    let since = since.unwrap_or(0).to_le_bytes();
+    let limit = (limit as u64).to_le_bytes();
+    let tip = tip_sequence.to_le_bytes();
+    let count = (movements.len() as u64).to_le_bytes();
+    let last_sequence = movements
+        .last()
+        .map_or(0, |movement| movement.sequence)
+        .to_le_bytes();
+    reserve_movement_cache_etag(
+        "movements",
+        &[
+            since.as_ref(),
+            limit.as_ref(),
+            tip.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn reserve_appeals_etag(limit: usize, snapshot: &ReserveAppealSnapshot) -> String {
+    let limit = (limit as u64).to_le_bytes();
+    let next_sequence = snapshot.next_sequence.to_le_bytes();
+    let count = (snapshot.appeals.len() as u64).to_le_bytes();
+    let last_sequence = snapshot
+        .appeals
+        .last()
+        .map_or(0, |appeal| appeal.sequence)
+        .to_le_bytes();
+    reserve_lifecycle_cache_etag(
+        "appeals",
+        &[
+            limit.as_ref(),
+            next_sequence.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn reserve_lifecycle_policy_etag(
+    limit: usize,
+    snapshot: &ReserveLifecyclePolicySnapshot,
+) -> String {
+    let limit = (limit as u64).to_le_bytes();
+    let next_sequence = snapshot.next_sequence.to_le_bytes();
+    let count = (snapshot.policies.len() as u64).to_le_bytes();
+    let last_sequence = snapshot
+        .policies
+        .last()
+        .map_or(0, |policy| policy.sequence)
+        .to_le_bytes();
+    reserve_lifecycle_cache_etag(
+        "lifecycle-policy",
+        &[
+            limit.as_ref(),
+            next_sequence.as_ref(),
+            count.as_ref(),
+            last_sequence.as_ref(),
+        ],
+    )
+}
+
+fn reserve_private_json_response(value: Value, etag: &str) -> Response {
+    let mut response = JsonBody(value).into_response();
+    insert_reserve_private_cache_headers(&mut response, etag);
+    response
+}
+
+fn reserve_private_not_modified_response(headers: &HeaderMap, etag: &str) -> Option<Response> {
+    if !if_none_match_matches(headers, etag) {
+        return None;
+    }
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_MODIFIED;
+    insert_reserve_private_cache_headers(&mut response, etag);
+    Some(response)
+}
+
+fn insert_reserve_private_cache_headers(response: &mut Response, etag: &str) {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        response.headers_mut().insert(ETAG, value);
+    }
+}
+
+fn reserve_movement_kind_label(kind: ReserveMovementKind) -> &'static str {
+    match kind {
+        ReserveMovementKind::TopUp => "top_up",
+        ReserveMovementKind::Withdrawal => "withdrawal",
+    }
+}
+
+fn reserve_movement_visible_to(record: &ReserveMovementRecord, account: &[u8]) -> bool {
+    record.provider_account == account || record.reserve_account == account
+}
+
+fn reserve_balance_visible_to(balance: &ReserveProviderBalance, account: &[u8]) -> bool {
+    balance.provider_account == account || balance.reserve_account == account
+}
+
+fn reserve_credit_line_visible_to(
+    credit_line: &ReserveProviderCreditLineState,
+    account: &[u8],
+) -> bool {
+    credit_line.provider_account == account
+}
+
+fn reserve_appeal_visible_to(record: &ReserveAppealRecord, account: &[u8]) -> bool {
+    record.provider_account == account
+        || record
+            .decision_account
+            .as_ref()
+            .is_some_and(|decision_account| decision_account == account)
 }
 
 fn repair_events_etag(
@@ -24422,8 +27112,9 @@ mod advert_tests {
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
                 PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
-                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
+                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
             },
+            reserve::{ReserveDuration, ReservePolicyV1, ReserveTier},
         },
     };
     use iroha_primitives::json::Json;
@@ -30475,9 +33166,172 @@ mod advert_tests {
         Bytes::from(norito::to_bytes(&receipt).expect("encode orderbook receipt"))
     }
 
+    fn reserve_lifecycle_quote(reserve_balance_micro: u128) -> ReserveQuote {
+        ReservePolicyV1::default()
+            .quote(
+                StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                sorafs_manifest::deal::XorAmount::from_micro(reserve_balance_micro),
+            )
+            .expect("reserve quote")
+    }
+
+    fn reserve_lifecycle_update_request(
+        provider_id: [u8; 32],
+        provider_account: &AccountId,
+        days_past_due: u16,
+        grace_period_days: u16,
+        default_after_days: u16,
+    ) -> ReserveLifecycleUpdateRequestDto {
+        ReserveLifecycleUpdateRequestDto {
+            provider_id_hex: hex::encode(provider_id),
+            provider_account: provider_account.to_string(),
+            quote: reserve_lifecycle_quote(0),
+            days_past_due,
+            grace_period_days,
+            default_after_days,
+            observed_at_unix: Some(1_800_000_100 + u64::from(days_past_due)),
+        }
+    }
+
+    fn reserve_lifecycle_update_body(request: ReserveLifecycleUpdateRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(&request).expect("encode reserve lifecycle update"))
+    }
+
+    fn reserve_asset_definition_literal() -> String {
+        AssetDefinitionId::new(
+            DomainId::try_new("xor", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        )
+        .to_string()
+    }
+
+    fn reserve_movement_request(
+        provider_id: [u8; 32],
+        provider_account: &AccountId,
+        reserve_account: &AccountId,
+        amount_micro_xor: u128,
+        idempotency_key: &str,
+    ) -> ReserveMovementRequestDto {
+        ReserveMovementRequestDto {
+            provider_id_hex: hex::encode(provider_id),
+            provider_account: provider_account.to_string(),
+            reserve_account: reserve_account.to_string(),
+            asset_definition_id: reserve_asset_definition_literal(),
+            amount_micro_xor: amount_micro_xor.to_string(),
+            idempotency_key: idempotency_key.to_owned(),
+            observed_at_unix: Some(1_800_000_500),
+        }
+    }
+
+    fn reserve_movement_body(request: ReserveMovementRequestDto) -> Bytes {
+        Bytes::from(norito::json::to_vec(&request).expect("encode reserve movement request"))
+    }
+
+    fn reserve_movement_custody_body(status: &str, tx_hash: [u8; 32]) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ReserveMovementCustodyUpdateRequestDto {
+                status: status.to_owned(),
+                tx_hash_hex: hex::encode(tx_hash),
+                observed_at_unix: Some(1_800_000_900),
+            })
+            .expect("encode reserve movement custody request"),
+        )
+    }
+
+    fn reserve_appeal_body(
+        provider_id: [u8; 32],
+        provider_account: &AccountId,
+        idempotency_key: &str,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ReserveAppealRequestDto {
+                provider_id_hex: hex::encode(provider_id),
+                provider_account: provider_account.to_string(),
+                requested_stage: Some("grace".to_owned()),
+                reason: "provider supplied reserve evidence".to_owned(),
+                evidence_digest_hex: Some(hex::encode([0xEA; 32])),
+                idempotency_key: idempotency_key.to_owned(),
+                observed_at_unix: Some(1_800_001_000),
+            })
+            .expect("encode reserve appeal request"),
+        )
+    }
+
+    fn reserve_appeal_decision_body(decision_account: &AccountId, status: &str) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ReserveAppealDecisionRequestDto {
+                status: status.to_owned(),
+                decision_account: decision_account.to_string(),
+                rationale: "reserve evidence accepted".to_owned(),
+                observed_at_unix: Some(1_800_001_100),
+            })
+            .expect("encode reserve appeal decision request"),
+        )
+    }
+
+    fn reserve_lifecycle_policy_body(
+        authority_account: &AccountId,
+        grace_period_days: u16,
+        default_after_days: u16,
+    ) -> Bytes {
+        reserve_lifecycle_policy_body_at(
+            authority_account,
+            grace_period_days,
+            default_after_days,
+            1_800_001_200,
+            1_800_001_210,
+        )
+    }
+
+    fn reserve_lifecycle_policy_body_at(
+        authority_account: &AccountId,
+        grace_period_days: u16,
+        default_after_days: u16,
+        effective_at_unix: u64,
+        observed_at_unix: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ReserveLifecyclePolicyUpdateRequestDto {
+                authority_account: authority_account.to_string(),
+                grace_period_days,
+                default_after_days,
+                effective_at_unix,
+                reason: "staged reserve lifecycle policy".to_owned(),
+                idempotency_key: format!(
+                    "policy-{grace_period_days}-{default_after_days}-{effective_at_unix}"
+                ),
+                observed_at_unix: Some(observed_at_unix),
+            })
+            .expect("encode reserve lifecycle policy request"),
+        )
+    }
+
+    fn reserve_lifecycle_advance_body(
+        authority_account: &AccountId,
+        observed_at_unix: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ReserveLifecycleAdvanceRequestDto {
+                authority_account: authority_account.to_string(),
+                observed_at_unix,
+            })
+            .expect("encode reserve lifecycle advance request"),
+        )
+    }
+
     const ORDERBOOK_ORDER_URI: &str = "/v1/sorafs/orderbook/orders";
     const ORDERBOOK_CANCEL_URI: &str = "/v1/sorafs/orderbook/cancel";
     const ORDERBOOK_RECEIPT_URI: &str = "/v1/sorafs/orderbook/receipts";
+    const RESERVE_TOP_UP_URI: &str = "/v1/sorafs/reserve/top-up";
+    const RESERVE_WITHDRAW_URI: &str = "/v1/sorafs/reserve/withdraw";
+    const RESERVE_MOVEMENTS_URI: &str = "/v1/sorafs/reserve/movements";
+    const RESERVE_CREDIT_LINES_URI: &str = "/v1/sorafs/reserve/credit-lines";
+    const RESERVE_APPEALS_URI: &str = "/v1/sorafs/reserve/appeals";
+    const RESERVE_LIFECYCLE_POLICY_URI: &str = "/v1/sorafs/reserve/lifecycle/policy";
+    const RESERVE_LIFECYCLE_ADVANCE_URI: &str = "/v1/sorafs/reserve/lifecycle/advance";
 
     fn orderbook_uri(path: &'static str) -> Uri {
         Uri::from_static(path)
@@ -30514,6 +33368,244 @@ mod advert_tests {
         let uri = orderbook_uri(ORDERBOOK_RECEIPT_URI);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
         handle_post_sorafs_orderbook_receipt(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_reserve_lifecycle_update(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(RESERVE_LIFECYCLE_ROUTE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_lifecycle_update(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_reserve_top_up(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(RESERVE_TOP_UP_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_top_up(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_reserve_withdrawal(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(RESERVE_WITHDRAW_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_withdrawal(State(app), headers, method, uri, body).await
+    }
+
+    async fn get_reserve_movements(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        raw_query: Option<&str>,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = match raw_query {
+            Some(query) => format!("{RESERVE_MOVEMENTS_URI}?{query}")
+                .parse()
+                .expect("reserve movements URI"),
+            None => Uri::from_static(RESERVE_MOVEMENTS_URI),
+        };
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_reserve_movements(
+            State(app),
+            headers,
+            method,
+            uri,
+            axum::extract::RawQuery(raw_query.map(str::to_owned)),
+        )
+        .await
+    }
+
+    async fn get_reserve_credit_lines(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        raw_query: Option<&str>,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = match raw_query {
+            Some(query) => format!("{RESERVE_CREDIT_LINES_URI}?{query}")
+                .parse()
+                .expect("reserve credit-lines URI"),
+            None => Uri::from_static(RESERVE_CREDIT_LINES_URI),
+        };
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_reserve_credit_lines(
+            State(app),
+            headers,
+            method,
+            uri,
+            axum::extract::RawQuery(raw_query.map(str::to_owned)),
+        )
+        .await
+    }
+
+    async fn get_reserve_credit_line(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        provider_id: [u8; 32],
+    ) -> Response {
+        let method = Method::GET;
+        let provider_id_hex = hex::encode(provider_id);
+        let uri: Uri = format!("{RESERVE_CREDIT_LINES_URI}/providers/{provider_id_hex}")
+            .parse()
+            .expect("reserve credit-line URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_reserve_credit_line_provider(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(provider_id_hex),
+        )
+        .await
+    }
+
+    async fn post_reserve_movement_custody(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        movement_id_hex: String,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri: Uri = format!("{RESERVE_MOVEMENTS_URI}/{movement_id_hex}/custody")
+            .parse()
+            .expect("reserve movement custody URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_movement_custody(
+            State(app),
+            Path(movement_id_hex),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
+    async fn get_reserve_balance(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        provider_id: [u8; 32],
+    ) -> Response {
+        let method = Method::GET;
+        let provider_id_hex = hex::encode(provider_id);
+        let uri: Uri = format!("/v1/sorafs/reserve/balances/{provider_id_hex}")
+            .parse()
+            .expect("reserve balance URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_reserve_balance(State(app), headers, method, uri, Path(provider_id_hex))
+            .await
+    }
+
+    async fn post_reserve_appeal(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(RESERVE_APPEALS_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_appeal(State(app), headers, method, uri, body).await
+    }
+
+    async fn get_reserve_appeals(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        raw_query: Option<&str>,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = match raw_query {
+            Some(query) => format!("{RESERVE_APPEALS_URI}?{query}")
+                .parse()
+                .expect("reserve appeals URI"),
+            None => Uri::from_static(RESERVE_APPEALS_URI),
+        };
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_reserve_appeals(
+            State(app),
+            headers,
+            method,
+            uri,
+            axum::extract::RawQuery(raw_query.map(str::to_owned)),
+        )
+        .await
+    }
+
+    async fn post_reserve_appeal_decision(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        appeal_id_hex: String,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri: Uri = format!("{RESERVE_APPEALS_URI}/{appeal_id_hex}/decision")
+            .parse()
+            .expect("reserve appeal decision URI");
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_appeal_decision(
+            State(app),
+            Path(appeal_id_hex),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
+    async fn post_reserve_lifecycle_policy(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(RESERVE_LIFECYCLE_POLICY_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_lifecycle_policy(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_reserve_lifecycle_advance(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(RESERVE_LIFECYCLE_ADVANCE_URI);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_reserve_lifecycle_advance(State(app), headers, method, uri, body).await
+    }
+
+    async fn get_reserve_lifecycle_policy(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        raw_query: Option<&str>,
+    ) -> Response {
+        let method = Method::GET;
+        let uri = match raw_query {
+            Some(query) => format!("{RESERVE_LIFECYCLE_POLICY_URI}?{query}")
+                .parse()
+                .expect("reserve lifecycle policy URI"),
+            None => Uri::from_static(RESERVE_LIFECYCLE_POLICY_URI),
+        };
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &[]);
+        handle_get_sorafs_reserve_lifecycle_policy(
+            State(app),
+            headers,
+            method,
+            uri,
+            axum::extract::RawQuery(raw_query.map(str::to_owned)),
+        )
+        .await
     }
 
     async fn post_appeal_finance_report(
@@ -31400,6 +34492,1200 @@ mod advert_tests {
         let response = post_orderbook_order(app, &auth.buyer, orderbook_order_body(order)).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_update_endpoint_requires_canonical_request_auth() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+            [0x44; 32],
+            &auth.provider.account,
+            0,
+            7,
+            30,
+        ));
+
+        let response = handle_post_sorafs_reserve_lifecycle_update(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(RESERVE_LIFECYCLE_ROUTE),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_update_endpoint_rejects_signer_account_mismatch() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+            [0x45; 32],
+            &auth.provider.account,
+            0,
+            7,
+            30,
+        ));
+
+        let response = post_reserve_lifecycle_update(app, &auth.buyer, body).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_update_endpoint_records_provider_snapshot_and_events() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id = [0x46; 32];
+
+        let warning_response = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                0,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(warning_response.status(), StatusCode::ACCEPTED);
+
+        let grace_response = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                3,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(grace_response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(grace_response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle update body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode reserve lifecycle update body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.lifecycle.update.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let event = value
+            .get("event")
+            .and_then(Value::as_object)
+            .expect("reserve lifecycle event");
+        assert_eq!(event.get("sequence").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            event.get("previous_stage").and_then(Value::as_str),
+            Some("warning")
+        );
+        assert_eq!(
+            event.get("current_stage").and_then(Value::as_str),
+            Some("grace")
+        );
+
+        let provider_response = handle_get_sorafs_reserve_lifecycle_provider(
+            State(app.clone()),
+            Path(hex::encode(provider_id)),
+        )
+        .await;
+        assert_eq!(provider_response.status(), StatusCode::OK);
+        let body = body::to_bytes(provider_response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle provider body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode reserve lifecycle provider body");
+        let provider = value
+            .get("provider")
+            .and_then(Value::as_object)
+            .expect("reserve lifecycle provider");
+        let expected_provider_account = auth.provider.account.to_string();
+        assert_eq!(
+            provider.get("provider_account").and_then(Value::as_str),
+            Some(expected_provider_account.as_str())
+        );
+        assert_eq!(provider.get("stage").and_then(Value::as_str), Some("grace"));
+        assert_eq!(
+            provider
+                .get("lifecycle")
+                .and_then(|lifecycle| lifecycle.get("stage_label"))
+                .and_then(Value::as_str),
+            Some("grace")
+        );
+
+        let snapshot_response = handle_get_sorafs_reserve_lifecycle_snapshot(
+            State(app.clone()),
+            axum::extract::RawQuery(Some("limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(snapshot_response.status(), StatusCode::OK);
+        let body = body::to_bytes(snapshot_response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle snapshot body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode reserve lifecycle snapshot body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.lifecycle.snapshot.v1")
+        );
+        assert_eq!(value.get("provider_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("event_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("returned_event_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value.get("truncated_events").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let events_response = handle_get_sorafs_reserve_lifecycle_events(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("limit=10".to_owned())),
+        )
+        .await;
+        assert_eq!(events_response.status(), StatusCode::OK);
+        assert!(events_response.headers().contains_key(ETAG));
+        let body = body::to_bytes(events_response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle events body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode reserve lifecycle events body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.lifecycle.events.v1")
+        );
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("next_since").and_then(Value::as_u64), Some(1));
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_update_endpoint_maps_invalid_windows_to_bad_request() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+            [0x47; 32],
+            &auth.provider.account,
+            0,
+            30,
+            30,
+        ));
+
+        let response = post_reserve_lifecycle_update(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_provider_endpoint_rejects_malformed_provider_id() {
+        let (app, _dir, _auth) = sorafs_app_state_with_orderbook_auth();
+
+        let response =
+            handle_get_sorafs_reserve_lifecycle_provider(State(app), Path("not-hex".to_owned()))
+                .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn reserve_credit_line_endpoints_record_private_credit_state() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id = [0x4D; 32];
+
+        let update = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                10,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(update.status(), StatusCode::ACCEPTED);
+
+        let credit_line = get_reserve_credit_line(app.clone(), &auth.provider, provider_id).await;
+        assert_eq!(credit_line.status(), StatusCode::OK);
+        let body = body::to_bytes(credit_line.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve credit-line body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve credit-line");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.credit_line.provider.v1")
+        );
+        let credit_line = value
+            .get("credit_line")
+            .and_then(Value::as_object)
+            .expect("credit-line object");
+        assert_eq!(
+            credit_line.get("stage").and_then(Value::as_str),
+            Some("delinquent")
+        );
+        assert_eq!(
+            credit_line
+                .get("credit_draw_micro_xor")
+                .and_then(Value::as_str),
+            Some("120000000")
+        );
+        assert_eq!(
+            credit_line
+                .get("accrued_interest_micro_xor")
+                .and_then(Value::as_str),
+            Some("29589")
+        );
+        assert_eq!(
+            credit_line
+                .get("requires_governance_notification")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let list = get_reserve_credit_lines(app.clone(), &auth.provider, Some("limit=10")).await;
+        assert_eq!(list.status(), StatusCode::OK);
+        let body = body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve credit-lines body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve credit-lines");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.credit_lines.v1")
+        );
+        assert_eq!(
+            value
+                .get("returned_credit_line_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let forbidden = get_reserve_credit_line(app, &auth.buyer, provider_id).await;
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn reserve_appeal_endpoints_record_private_appeals_and_decisions() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id = [0x5A; 32];
+        let lifecycle = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                31,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(lifecycle.status(), StatusCode::ACCEPTED);
+        let appeal_body = reserve_appeal_body(provider_id, &auth.provider.account, "appeal-1");
+
+        let submitted = post_reserve_appeal(app.clone(), &auth.provider, appeal_body.clone()).await;
+        assert_eq!(submitted.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(submitted.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve appeal body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve appeal body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.appeal.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let appeal = value
+            .get("appeal")
+            .and_then(Value::as_object)
+            .expect("appeal object");
+        assert_eq!(
+            appeal.get("requested_stage").and_then(Value::as_str),
+            Some("grace")
+        );
+        assert_eq!(appeal.get("status").and_then(Value::as_str), Some("open"));
+        let appeal_id_hex = appeal
+            .get("appeal_id_hex")
+            .and_then(Value::as_str)
+            .expect("appeal id")
+            .to_owned();
+
+        let duplicate = post_reserve_appeal(app.clone(), &auth.provider, appeal_body).await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+
+        let list = get_reserve_appeals(app.clone(), &auth.provider, Some("limit=10")).await;
+        assert_eq!(list.status(), StatusCode::OK);
+        let body = body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve appeals body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve appeals body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.appeals.v1")
+        );
+        assert_eq!(
+            value.get("returned_appeal_count").and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let hidden = get_reserve_appeals(app.clone(), &auth.buyer, Some("limit=10")).await;
+        assert_eq!(hidden.status(), StatusCode::OK);
+        let body = body::to_bytes(hidden.into_body(), usize::MAX)
+            .await
+            .expect("collect hidden appeal body");
+        let value: Value = norito::json::from_slice(&body).expect("decode hidden appeals body");
+        assert_eq!(
+            value.get("returned_appeal_count").and_then(Value::as_u64),
+            Some(0)
+        );
+
+        let decision = post_reserve_appeal_decision(
+            app.clone(),
+            &auth.buyer,
+            appeal_id_hex.clone(),
+            reserve_appeal_decision_body(&auth.buyer.account, "accepted"),
+        )
+        .await;
+        assert_eq!(decision.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(decision.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve appeal decision body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode reserve appeal decision body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.appeal_decision.v1")
+        );
+        let appeal = value
+            .get("appeal")
+            .and_then(Value::as_object)
+            .expect("decided appeal object");
+        assert_eq!(
+            appeal.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            appeal.get("decision_account").and_then(Value::as_str),
+            Some(auth.buyer.account.to_string().as_str())
+        );
+
+        let provider_response = handle_get_sorafs_reserve_lifecycle_provider(
+            State(app.clone()),
+            Path(hex::encode(provider_id)),
+        )
+        .await;
+        assert_eq!(provider_response.status(), StatusCode::OK);
+        let body = body::to_bytes(provider_response.into_body(), usize::MAX)
+            .await
+            .expect("collect appeal-overridden provider body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode appeal-overridden provider body");
+        let provider = value
+            .get("provider")
+            .and_then(Value::as_object)
+            .expect("appeal-overridden provider");
+        assert_eq!(provider.get("stage").and_then(Value::as_str), Some("grace"));
+        assert_eq!(
+            provider
+                .get("applied_appeal_id_hex")
+                .and_then(Value::as_str),
+            Some(appeal_id_hex.as_str())
+        );
+
+        let credit_line = get_reserve_credit_line(app.clone(), &auth.provider, provider_id).await;
+        assert_eq!(credit_line.status(), StatusCode::OK);
+        let body = body::to_bytes(credit_line.into_body(), usize::MAX)
+            .await
+            .expect("collect appeal-overridden credit-line body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode appeal-overridden credit-line body");
+        let credit_line = value
+            .get("credit_line")
+            .and_then(Value::as_object)
+            .expect("appeal-overridden credit-line");
+        assert_eq!(
+            credit_line.get("stage").and_then(Value::as_str),
+            Some("grace")
+        );
+        assert_eq!(
+            credit_line
+                .get("applied_appeal_id_hex")
+                .and_then(Value::as_str),
+            Some(appeal_id_hex.as_str())
+        );
+
+        let decision_visible =
+            get_reserve_appeals(app.clone(), &auth.buyer, Some("limit=10")).await;
+        assert_eq!(decision_visible.status(), StatusCode::OK);
+
+        let missing = post_reserve_appeal_decision(
+            app,
+            &auth.buyer,
+            hex::encode([0x7A; 32]),
+            reserve_appeal_decision_body(&auth.buyer.account, "accepted"),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn reserve_appeal_endpoint_rejects_signer_account_mismatch() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_appeal_body([0x5B; 32], &auth.provider.account, "appeal-mismatch");
+
+        let response = post_reserve_appeal(app, &auth.buyer, body).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_policy_endpoint_records_signed_policy_state() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_lifecycle_policy_body(&auth.buyer.account, 7, 30);
+
+        let accepted = post_reserve_lifecycle_policy(app.clone(), &auth.buyer, body.clone()).await;
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let response_body = body::to_bytes(accepted.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle policy body");
+        let value: Value =
+            norito::json::from_slice(&response_body).expect("decode reserve policy body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.lifecycle_policy.update.v1")
+        );
+        let policy = value
+            .get("policy")
+            .and_then(Value::as_object)
+            .expect("policy object");
+        assert_eq!(
+            policy.get("grace_period_days").and_then(Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            policy.get("default_after_days").and_then(Value::as_u64),
+            Some(30)
+        );
+
+        let duplicate = post_reserve_lifecycle_policy(app.clone(), &auth.buyer, body).await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+
+        let snapshot =
+            get_reserve_lifecycle_policy(app.clone(), &auth.provider, Some("limit=10")).await;
+        assert_eq!(snapshot.status(), StatusCode::OK);
+        let response_body = body::to_bytes(snapshot.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle policy snapshot");
+        let value: Value =
+            norito::json::from_slice(&response_body).expect("decode reserve policy snapshot");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.lifecycle_policy.v1")
+        );
+        assert_eq!(
+            value.get("returned_policy_count").and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let invalid = post_reserve_lifecycle_policy(
+            app,
+            &auth.buyer,
+            reserve_lifecycle_policy_body(&auth.buyer.account, 30, 30),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_policy_reprojects_existing_provider_and_syncs_compliance() {
+        let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_gateway_denylist = Some(Arc::clone(&denylist));
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+
+        let lifecycle = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                6,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(lifecycle.status(), StatusCode::ACCEPTED);
+        assert!(
+            denylist
+                .check_provider(&provider_id, SystemTime::now())
+                .is_none(),
+            "provider should not be denylisted before the stricter policy takes effect"
+        );
+
+        let policy = post_reserve_lifecycle_policy(
+            app.clone(),
+            &auth.buyer,
+            reserve_lifecycle_policy_body_at(
+                &auth.buyer.account,
+                2,
+                5,
+                1_800_000_050,
+                1_800_000_200,
+            ),
+        )
+        .await;
+        assert_eq!(policy.status(), StatusCode::ACCEPTED);
+        let response_body = body::to_bytes(policy.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle policy reprojection body");
+        let value: Value =
+            norito::json::from_slice(&response_body).expect("decode reserve policy body");
+        assert_eq!(
+            value.get("reprojected_event_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("reprojected_events")
+                .and_then(Value::as_array)
+                .and_then(|events| events.first())
+                .and_then(|event| event.get("current_stage"))
+                .and_then(Value::as_str),
+            Some("default")
+        );
+
+        let hit = denylist
+            .check_provider(&provider_id, SystemTime::now())
+            .expect("policy reprojected default should sync gateway compliance denylist");
+        assert_eq!(
+            hit.entry().source_pack_id(),
+            Some("sorafs-reserve-lifecycle")
+        );
+        assert!(
+            hit.entry()
+                .reason()
+                .is_some_and(|reason| reason.contains("stage `default`"))
+        );
+
+        let order = post_orderbook_order(
+            app,
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                48,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(order.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_advance_ages_provider_and_syncs_service_flows() {
+        let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_gateway_denylist = Some(Arc::clone(&denylist));
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+        let initial_observed_at = 1_800_000_129;
+
+        let lifecycle = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                29,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(lifecycle.status(), StatusCode::ACCEPTED);
+        assert!(
+            denylist
+                .check_provider(&provider_id, SystemTime::now())
+                .is_none(),
+            "delinquent provider should not be advert-denylisted before default"
+        );
+
+        let advance = post_reserve_lifecycle_advance(
+            app.clone(),
+            &auth.buyer,
+            reserve_lifecycle_advance_body(&auth.buyer.account, initial_observed_at + 2 * 86_400),
+        )
+        .await;
+        assert_eq!(advance.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(advance.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle advance body");
+        let value: Value = norito::json::from_slice(&body).expect("decode advance body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.lifecycle.advance.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("advanced")
+        );
+        assert_eq!(
+            value.get("advanced_event_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .get("events")
+                .and_then(Value::as_array)
+                .and_then(|events| events.first())
+                .and_then(|event| event.get("current_stage"))
+                .and_then(Value::as_str),
+            Some("default")
+        );
+
+        let hit = denylist
+            .check_provider(&provider_id, SystemTime::now())
+            .expect("time-advanced default should sync gateway compliance denylist");
+        assert_eq!(
+            hit.entry().source_pack_id(),
+            Some("sorafs-reserve-lifecycle")
+        );
+
+        let order = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                49,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(order.status(), StatusCode::PRECONDITION_FAILED);
+
+        let noop = post_reserve_lifecycle_advance(
+            app,
+            &auth.buyer,
+            reserve_lifecycle_advance_body(
+                &auth.buyer.account,
+                initial_observed_at + 2 * 86_400 + 1,
+            ),
+        )
+        .await;
+        assert_eq!(noop.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(noop.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle noop body");
+        let value: Value = norito::json::from_slice(&body).expect("decode noop body");
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("noop"));
+        assert_eq!(
+            value.get("advanced_event_count").and_then(Value::as_u64),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_scheduler_tick_ages_provider_and_syncs_service_flows() {
+        let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_gateway_denylist = Some(Arc::clone(&denylist));
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+        let initial_observed_at = 1_800_000_129;
+
+        let lifecycle = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                29,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(lifecycle.status(), StatusCode::ACCEPTED);
+        assert!(
+            denylist
+                .check_provider(&provider_id, SystemTime::now())
+                .is_none(),
+            "scheduler should start from a non-default delinquent provider"
+        );
+
+        let events =
+            run_sorafs_reserve_lifecycle_scheduler_tick(&app, initial_observed_at + 2 * 86_400)
+                .expect("scheduler tick");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].current_stage, ReserveLifecycleStage::Default);
+        assert_eq!(events[0].lifecycle.days_past_due, 31);
+        let hit = denylist
+            .check_provider(&provider_id, SystemTime::now())
+            .expect("scheduler default should sync gateway compliance denylist");
+        assert_eq!(
+            hit.entry().source_pack_id(),
+            Some("sorafs-reserve-lifecycle")
+        );
+
+        let order = post_orderbook_order(
+            app.clone(),
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                50,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+        assert_eq!(order.status(), StatusCode::PRECONDITION_FAILED);
+
+        let noop =
+            run_sorafs_reserve_lifecycle_scheduler_tick(&app, initial_observed_at + 2 * 86_400 + 1)
+                .expect("scheduler noop tick");
+        assert!(noop.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_policy_endpoint_rejects_signer_account_mismatch() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_lifecycle_policy_body(&auth.provider.account, 7, 30);
+
+        let response = post_reserve_lifecycle_policy(app, &auth.buyer, body).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reserve_top_up_endpoint_requires_canonical_request_auth() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_movement_body(reserve_movement_request(
+            [0x48; 32],
+            &auth.provider.account,
+            &auth.buyer.account,
+            100,
+            "top-up-auth",
+        ));
+
+        let response = handle_post_sorafs_reserve_top_up(
+            State(app),
+            HeaderMap::new(),
+            Method::POST,
+            Uri::from_static(RESERVE_TOP_UP_URI),
+            body,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reserve_top_up_endpoint_rejects_signer_account_mismatch() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_movement_body(reserve_movement_request(
+            [0x49; 32],
+            &auth.provider.account,
+            &auth.buyer.account,
+            100,
+            "top-up-mismatch",
+        ));
+
+        let response = post_reserve_top_up(app, &auth.buyer, body).await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reserve_movement_endpoints_record_balances_and_private_readback() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id = [0x4A; 32];
+
+        let top_up_body = reserve_movement_body(reserve_movement_request(
+            provider_id,
+            &auth.provider.account,
+            &auth.buyer.account,
+            125,
+            "top-up-1",
+        ));
+        let top_up = post_reserve_top_up(app.clone(), &auth.provider, top_up_body.clone()).await;
+        assert_eq!(top_up.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(top_up.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve top-up body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve top-up body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.movement.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let movement = value
+            .get("movement")
+            .and_then(Value::as_object)
+            .expect("movement object");
+        assert_eq!(movement.get("kind").and_then(Value::as_str), Some("top_up"));
+        assert_eq!(
+            movement.get("custody_status").and_then(Value::as_str),
+            Some("intent_recorded")
+        );
+        assert_eq!(
+            movement
+                .get("balance_after_micro_xor")
+                .and_then(Value::as_str),
+            Some("125")
+        );
+        assert_eq!(
+            movement
+                .get("confirmed_balance_after_micro_xor")
+                .and_then(Value::as_str),
+            Some("0")
+        );
+        let transfer = value
+            .get("transfer_intent")
+            .and_then(Value::as_object)
+            .expect("transfer intent");
+        let expected_provider_account = auth.provider.account.to_string();
+        let expected_reserve_account = auth.buyer.account.to_string();
+        assert_eq!(
+            transfer.get("source_account").and_then(Value::as_str),
+            Some(expected_provider_account.as_str())
+        );
+        assert_eq!(
+            transfer.get("destination_account").and_then(Value::as_str),
+            Some(expected_reserve_account.as_str())
+        );
+
+        let duplicate = post_reserve_top_up(app.clone(), &auth.provider, top_up_body.clone()).await;
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        let body = body::to_bytes(duplicate.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve duplicate body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve duplicate body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("duplicate")
+        );
+
+        let withdrawal = post_reserve_withdrawal(
+            app.clone(),
+            &auth.provider,
+            reserve_movement_body(reserve_movement_request(
+                provider_id,
+                &auth.provider.account,
+                &auth.buyer.account,
+                40,
+                "withdraw-1",
+            )),
+        )
+        .await;
+        assert_eq!(withdrawal.status(), StatusCode::ACCEPTED);
+
+        let balance = get_reserve_balance(app.clone(), &auth.provider, provider_id).await;
+        assert_eq!(balance.status(), StatusCode::OK);
+        let body = body::to_bytes(balance.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve balance body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve balance body");
+        assert_eq!(
+            value
+                .get("balance")
+                .and_then(|balance| balance.get("balance_micro_xor"))
+                .and_then(Value::as_str),
+            Some("85")
+        );
+        assert_eq!(
+            value
+                .get("balance")
+                .and_then(|balance| balance.get("confirmed_balance_micro_xor"))
+                .and_then(Value::as_str),
+            Some("0")
+        );
+
+        let movements = get_reserve_movements(app.clone(), &auth.provider, Some("limit=10")).await;
+        assert_eq!(movements.status(), StatusCode::OK);
+        assert_eq!(
+            movements
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-store")
+        );
+        assert!(movements.headers().contains_key(ETAG));
+        let body = body::to_bytes(movements.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve movements body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve movements body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.movements.v1")
+        );
+        assert_eq!(value.get("count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("next_since").and_then(Value::as_u64), Some(1));
+
+        let reserve_view = get_reserve_movements(app, &auth.buyer, Some("limit=10")).await;
+        assert_eq!(reserve_view.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn reserve_movement_custody_endpoint_records_status_and_private_readback() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id = [0x4C; 32];
+        let tx_hash = [0x5C; 32];
+
+        let top_up = post_reserve_top_up(
+            app.clone(),
+            &auth.provider,
+            reserve_movement_body(reserve_movement_request(
+                provider_id,
+                &auth.provider.account,
+                &auth.buyer.account,
+                250,
+                "top-up-custody",
+            )),
+        )
+        .await;
+        assert_eq!(top_up.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(top_up.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve top-up body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve top-up body");
+        let movement_id_hex = value
+            .get("movement")
+            .and_then(|movement| movement.get("movement_id_hex"))
+            .and_then(Value::as_str)
+            .expect("movement id")
+            .to_owned();
+
+        let submitted = post_reserve_movement_custody(
+            app.clone(),
+            &auth.provider,
+            movement_id_hex.clone(),
+            reserve_movement_custody_body("submitted", tx_hash),
+        )
+        .await;
+        assert_eq!(submitted.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(submitted.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve custody body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve custody body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.reserve.movement_custody.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("submitted")
+        );
+        assert_eq!(
+            value
+                .get("movement")
+                .and_then(|movement| movement.get("custody_tx_hash_hex"))
+                .and_then(Value::as_str),
+            Some(hex::encode(tx_hash).as_str())
+        );
+        assert_eq!(
+            value
+                .get("movement")
+                .and_then(|movement| movement.get("custody_updated_at_unix"))
+                .and_then(Value::as_u64),
+            Some(1_800_000_900)
+        );
+        assert_eq!(
+            value
+                .get("movement")
+                .and_then(|movement| movement.get("confirmed_balance_after_micro_xor"))
+                .and_then(Value::as_str),
+            Some("0")
+        );
+
+        let confirmed = post_reserve_movement_custody(
+            app.clone(),
+            &auth.buyer,
+            movement_id_hex,
+            reserve_movement_custody_body("confirmed", tx_hash),
+        )
+        .await;
+        assert_eq!(confirmed.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(confirmed.into_body(), usize::MAX)
+            .await
+            .expect("collect confirmed reserve custody body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode confirmed reserve custody body");
+        assert_eq!(
+            value
+                .get("movement")
+                .and_then(|movement| movement.get("confirmed_balance_after_micro_xor"))
+                .and_then(Value::as_str),
+            Some("250")
+        );
+
+        let movements = get_reserve_movements(app, &auth.provider, Some("limit=10")).await;
+        assert_eq!(movements.status(), StatusCode::OK);
+        let body = body::to_bytes(movements.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve movements body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve movements body");
+        assert_eq!(
+            value
+                .get("movements")
+                .and_then(Value::as_array)
+                .and_then(|movements| movements.first())
+                .and_then(|movement| movement.get("custody_status"))
+                .and_then(Value::as_str),
+            Some("confirmed")
+        );
+    }
+
+    #[tokio::test]
+    async fn reserve_rejected_movement_syncs_gateway_compliance_denylist_until_appeal() {
+        let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_gateway_denylist = Some(Arc::clone(&denylist));
+        let provider_id = [0x4E; 32];
+        let tx_hash = [0x6E; 32];
+
+        let top_up = post_reserve_top_up(
+            app.clone(),
+            &auth.provider,
+            reserve_movement_body(reserve_movement_request(
+                provider_id,
+                &auth.provider.account,
+                &auth.buyer.account,
+                275,
+                "top-up-compliance",
+            )),
+        )
+        .await;
+        assert_eq!(top_up.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(top_up.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve top-up body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve top-up body");
+        let movement_id_hex = value
+            .get("movement")
+            .and_then(|movement| movement.get("movement_id_hex"))
+            .and_then(Value::as_str)
+            .expect("movement id")
+            .to_owned();
+
+        let rejected = post_reserve_movement_custody(
+            app.clone(),
+            &auth.provider,
+            movement_id_hex.clone(),
+            reserve_movement_custody_body("rejected", tx_hash),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::ACCEPTED);
+
+        let hit = denylist
+            .check_provider(&provider_id, SystemTime::now())
+            .expect("rejected reserve movement should be denylisted for gateway compliance");
+        assert_eq!(
+            hit.entry().source_pack_id(),
+            Some("sorafs-reserve-movement-custody")
+        );
+        assert_eq!(
+            hit.entry().review_reference(),
+            Some("sorafs-reserve-movement-custody-compliance-v1")
+        );
+        assert_eq!(
+            hit.entry().governance_reference(),
+            Some(format!("reserve-movement-custody:{movement_id_hex}").as_str())
+        );
+        assert!(
+            hit.entry()
+                .reason()
+                .is_some_and(|reason| reason.contains("custody rejected"))
+        );
+
+        let appeal_response = post_reserve_appeal(
+            app.clone(),
+            &auth.provider,
+            reserve_appeal_body(provider_id, &auth.provider.account, "movement-compliance"),
+        )
+        .await;
+        assert_eq!(appeal_response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(appeal_response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve appeal body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve appeal body");
+        let appeal_id_hex = value
+            .get("appeal")
+            .and_then(Value::as_object)
+            .and_then(|appeal| appeal.get("appeal_id_hex"))
+            .and_then(Value::as_str)
+            .expect("appeal id")
+            .to_owned();
+
+        let decision_response = post_reserve_appeal_decision(
+            app,
+            &auth.buyer,
+            appeal_id_hex,
+            reserve_appeal_decision_body(&auth.buyer.account, "accepted"),
+        )
+        .await;
+        assert_eq!(decision_response.status(), StatusCode::ACCEPTED);
+        assert!(
+            denylist
+                .check_provider(&provider_id, SystemTime::now())
+                .is_none(),
+            "accepted reserve appeal should clear the reserve movement compliance denylist entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn reserve_movement_custody_endpoint_rejects_unknown_movement() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+
+        let response = post_reserve_movement_custody(
+            app,
+            &auth.provider,
+            hex::encode([0x4D; 32]),
+            reserve_movement_custody_body("submitted", [0x6D; 32]),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn reserve_withdrawal_endpoint_rejects_underflow() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let body = reserve_movement_body(reserve_movement_request(
+            [0x4B; 32],
+            &auth.provider.account,
+            &auth.buyer.account,
+            1,
+            "withdraw-underflow",
+        ));
+
+        let response = post_reserve_withdrawal(app, &auth.provider, body).await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -33359,6 +37645,132 @@ mod advert_tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn orderbook_ask_rejects_defaulted_reserve_lifecycle_provider() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+        let lifecycle_response = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                31,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(lifecycle_response.status(), StatusCode::ACCEPTED);
+
+        let response = post_orderbook_order(
+            app,
+            &auth.provider,
+            orderbook_order_body(orderbook_order_fixture(
+                47,
+                OrderSideV1::Ask,
+                1_500_000,
+                &auth.provider,
+            )),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve lifecycle orderbook error body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode reserve lifecycle error body");
+        assert!(
+            value
+                .get("error")
+                .and_then(Value::as_str)
+                .is_some_and(|error| error.contains("reserve lifecycle stage `default`")),
+            "unexpected error body: {value:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reserve_lifecycle_syncs_gateway_compliance_denylist() {
+        let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .sorafs_gateway_denylist = Some(Arc::clone(&denylist));
+        let provider_id =
+            local_orderbook_provider_id_for_owner_account(&orderbook_owner_bytes(&auth.provider));
+
+        let lifecycle_response = post_reserve_lifecycle_update(
+            app.clone(),
+            &auth.provider,
+            reserve_lifecycle_update_body(reserve_lifecycle_update_request(
+                provider_id,
+                &auth.provider.account,
+                31,
+                7,
+                30,
+            )),
+        )
+        .await;
+        assert_eq!(lifecycle_response.status(), StatusCode::ACCEPTED);
+
+        let hit = denylist
+            .check_provider(&provider_id, SystemTime::now())
+            .expect("defaulted reserve provider should be denylisted for gateway compliance");
+        assert_eq!(
+            hit.entry().source_pack_id(),
+            Some("sorafs-reserve-lifecycle")
+        );
+        assert_eq!(
+            hit.entry().review_reference(),
+            Some("sorafs-reserve-lifecycle-compliance-v1")
+        );
+        assert_eq!(
+            hit.entry().governance_reference(),
+            Some(format!("reserve-lifecycle-provider:{}", hex::encode(provider_id)).as_str())
+        );
+        assert!(
+            hit.entry()
+                .reason()
+                .is_some_and(|reason| reason.contains("stage `default`"))
+        );
+
+        let appeal_response = post_reserve_appeal(
+            app.clone(),
+            &auth.provider,
+            reserve_appeal_body(provider_id, &auth.provider.account, "compliance-sync"),
+        )
+        .await;
+        assert_eq!(appeal_response.status(), StatusCode::ACCEPTED);
+        let body = body::to_bytes(appeal_response.into_body(), usize::MAX)
+            .await
+            .expect("collect reserve appeal body");
+        let value: Value = norito::json::from_slice(&body).expect("decode reserve appeal body");
+        let appeal_id_hex = value
+            .get("appeal")
+            .and_then(Value::as_object)
+            .and_then(|appeal| appeal.get("appeal_id_hex"))
+            .and_then(Value::as_str)
+            .expect("appeal id")
+            .to_owned();
+
+        let decision_response = post_reserve_appeal_decision(
+            app,
+            &auth.buyer,
+            appeal_id_hex,
+            reserve_appeal_decision_body(&auth.buyer.account, "accepted"),
+        )
+        .await;
+        assert_eq!(decision_response.status(), StatusCode::ACCEPTED);
+        assert!(
+            denylist
+                .check_provider(&provider_id, SystemTime::now())
+                .is_none(),
+            "accepted appeal override should remove the reserve-derived compliance denylist entry"
+        );
     }
 
     #[tokio::test]

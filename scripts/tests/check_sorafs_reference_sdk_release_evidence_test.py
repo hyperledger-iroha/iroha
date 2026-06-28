@@ -39,6 +39,7 @@ def base(schema: str) -> dict:
         "generated_at_unix": GENERATED_AT,
         "deployment_id": "reference-sdk-release-2026-06",
         "environment": "release",
+        "deployment_context_reviewed": True,
     }
 
 

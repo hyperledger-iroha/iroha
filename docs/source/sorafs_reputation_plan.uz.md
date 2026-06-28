@@ -3,7 +3,7 @@ lang: uz
 direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: needs-update
-source_hash: 9fb6bb3647b0bdf40180b53f4f8fda8928d12bd62c5f13bf565b0e0b234ead1e
+source_hash: e90824639bc20cd535be2f2037b825c934b591957995c2b83a434855eaa551d7
 source_last_modified: "2026-06-25T18:04:39+00:00"
 translation_last_reviewed: 2026-06-25
 ---

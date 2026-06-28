@@ -13,7 +13,7 @@ def artifact_fingerprint(
 
     if not isinstance(payload, Mapping):
         raise ValueError("artifact fingerprint payload must be an object")
-    if isinstance(fields, (str, bytes)) or not isinstance(fields, Sequence):
+    if isinstance(fields, (str, bytes, bytearray)) or not isinstance(fields, Sequence):
         raise ValueError("artifact fingerprint fields must be a sequence of strings")
 
     fingerprint: dict[str, Any] = {}
@@ -23,6 +23,10 @@ def artifact_fingerprint(
             raise ValueError("artifact fingerprint fields must be non-empty strings")
         if field != field.strip():
             raise ValueError("artifact fingerprint fields must be canonical strings")
+        if any(ord(character) < 32 or ord(character) == 127 for character in field):
+            raise ValueError(
+                "artifact fingerprint fields must not contain control characters"
+            )
         if field in seen_fields:
             raise ValueError("artifact fingerprint fields must not contain duplicates")
         seen_fields.add(field)

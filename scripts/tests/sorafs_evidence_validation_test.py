@@ -88,6 +88,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     required_or_observed_evidence_values_are_present,
     required_evidence_summary_is_valid,
     require_rollout_deployment_id,
+    require_rollout_deployment_context_review,
     require_rollout_environment,
     require_score_bps,
     require_status_in,
@@ -183,6 +184,72 @@ def test_build_evidence_artifact_rejects_malformed_error_buckets() -> None:
     assert artifact["errors"] == ["status must be `passed`"]
 
 
+def test_build_evidence_artifact_rejects_malformed_error_messages() -> None:
+    for validation_errors in ([""], [" status must be `passed`"], ["bad\nerror"]):
+        artifact = build_evidence_artifact(
+            Path("bad.json"),
+            "c" * 64,
+            {"schema": "example.schema.v1", "status": "failed"},
+            validation_errors,
+            ("status",),
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == [
+            "artifact validation errors must be non-empty canonical strings"
+        ]
+
+
+def test_build_evidence_artifact_rejects_malformed_summary_fields() -> None:
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        {"schema": 7, "status": "passed"},
+        [],
+        ("status",),
+    )
+
+    assert artifact["schema"] is None
+    assert artifact["status"] == "passed"
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact schema must be a non-empty canonical string"
+    ]
+
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": " failed"},
+        [],
+        ("schema",),
+    )
+
+    assert artifact["schema"] == "example.schema.v1"
+    assert artifact["status"] is None
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact status must be a non-empty canonical string"
+    ]
+
+
+def test_build_evidence_artifact_sanitizes_malformed_summary_fields_after_validation_errors() -> None:
+    validation_errors = ["schema must be a string"]
+
+    artifact = build_evidence_artifact(
+        Path("bad.json"),
+        "c" * 64,
+        {"schema": {"raw": "payload"}, "status": ["failed"]},
+        validation_errors,
+        ("schema",),
+    )
+
+    assert artifact["schema"] is None
+    assert artifact["status"] is None
+    assert artifact["valid"] is False
+    assert artifact["errors"] is validation_errors
+    assert artifact["errors"] == ["schema must be a string"]
+
+
 def test_build_evidence_artifact_rejects_malformed_payload_or_fingerprint_fields() -> None:
     validation_errors: list[str] = []
     artifact = build_evidence_artifact(
@@ -259,6 +326,44 @@ def test_build_evidence_artifact_rejects_malformed_sha256() -> None:
     assert artifact["errors"] == [
         "artifact sha256 must be a 64-character lowercase hex string"
     ]
+
+
+def test_build_evidence_artifact_rejects_malformed_paths() -> None:
+    artifact = build_evidence_artifact(
+        "bad.json",
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": "passed"},
+        [],
+        ("status",),
+    )
+
+    assert artifact["path"] == "<unknown>"
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["artifact path must be a path"]
+
+    artifact = build_evidence_artifact(
+        Path(" bad.json"),
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": "passed"},
+        [],
+        ("status",),
+    )
+
+    assert artifact["path"] == "<unknown>"
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["artifact path must be a canonical path"]
+
+    artifact = build_evidence_artifact(
+        Path("bad\nname.json"),
+        "c" * 64,
+        {"schema": "example.schema.v1", "status": "passed"},
+        [],
+        ("status",),
+    )
+
+    assert artifact["path"] == "<unknown>"
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["artifact path must be a canonical path"]
 
 
 def test_build_kinded_evidence_artifact_records_snapshot_fingerprint() -> None:
@@ -344,6 +449,27 @@ def test_build_kinded_evidence_artifact_rejects_malformed_error_buckets() -> Non
     assert artifact["errors"] == ["provider_id must be a non-empty string"]
 
 
+def test_build_kinded_evidence_artifact_rejects_malformed_error_messages() -> None:
+    for validation_errors in (
+        [""],
+        [" provider_id must be a non-empty string"],
+        ["bad\nerror"],
+    ):
+        artifact = build_kinded_evidence_artifact(
+            kind_name="provider",
+            path=Path("provider.json"),
+            digest="e" * 64,
+            payload={"provider_id": ""},
+            validation_errors=validation_errors,
+            fingerprint_fields=("provider_id",),
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == [
+            "artifact validation errors must be non-empty canonical strings"
+        ]
+
+
 def test_build_kinded_evidence_artifact_rejects_malformed_fingerprint_inputs() -> None:
     validation_errors: list[str] = []
     artifact = build_kinded_evidence_artifact(
@@ -408,6 +534,25 @@ def test_build_kinded_evidence_artifact_rejects_malformed_fingerprint_inputs() -
         "artifact fingerprint value keys must be non-empty strings"
     ]
 
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+        fingerprint_values={
+            "snapshot_id_hex": "a" * 64,
+            "bad\nkey": "b" * 64,
+        },
+    )
+
+    assert artifact["fingerprint"] == {"provider_id": "provider-a"}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact fingerprint value key must be a non-empty canonical string"
+    ]
+
 
 def test_build_kinded_evidence_artifact_rejects_malformed_kind_or_sha256() -> None:
     validation_errors: list[str] = []
@@ -446,6 +591,66 @@ def test_build_kinded_evidence_artifact_rejects_malformed_kind_or_sha256() -> No
         "artifact sha256 must be a 64-character lowercase hex string",
     ]
 
+    artifact = build_kinded_evidence_artifact(
+        kind_name=" provider",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["kind"] == "<unknown>"
+    assert artifact["sha256"] == "e" * 64
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact kind must be a non-empty canonical string",
+    ]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider\nbad",
+        path=Path("provider.json"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["kind"] == "<unknown>"
+    assert artifact["sha256"] == "e" * 64
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "artifact kind must be a non-empty canonical string",
+    ]
+
+
+def test_build_kinded_evidence_artifact_rejects_malformed_paths() -> None:
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path="provider.json",
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["path"] == "<unknown>"
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["artifact path must be a path"]
+
+    artifact = build_kinded_evidence_artifact(
+        kind_name="provider",
+        path=Path("provider.json\nbad"),
+        digest="e" * 64,
+        payload={"provider_id": "provider-a"},
+        validation_errors=[],
+        fingerprint_fields=("provider_id",),
+    )
+
+    assert artifact["path"] == "<unknown>"
+    assert artifact["valid"] is False
+    assert artifact["errors"] == ["artifact path must be a canonical path"]
+
 
 def test_record_evidence_artifact_appends_to_kind_bucket() -> None:
     buckets = init_evidence_artifact_buckets(("route", "manifest"))
@@ -471,11 +676,31 @@ def test_record_evidence_artifact_reports_missing_kind_bucket() -> None:
     assert errors == ["recognized evidence kind `manifest` has no artifact bucket"]
 
 
+def test_record_evidence_artifact_rejects_malformed_existing_bucket_rows() -> None:
+    buckets = {"route": ["bad"]}
+    artifact = {"valid": True, "path": "route.json"}
+    errors: list[str] = []
+
+    assert record_evidence_artifact(buckets, "route", artifact, errors) is False
+
+    assert buckets["route"] == ["bad"]
+    assert errors == [
+        (
+            "recognized evidence kind `route` artifact bucket must be a sequence "
+            "of artifact objects"
+        )
+    ]
+
+
 def test_record_evidence_artifact_rejects_malformed_inputs() -> None:
     errors: list[str] = []
     assert record_evidence_artifact("bad", "route", {"valid": True}, errors) is False
     assert record_evidence_artifact({}, "", {"valid": True}, errors) is False
     assert record_evidence_artifact({}, 7, {"valid": True}, errors) is False
+    assert record_evidence_artifact({}, " route", {"valid": True}, errors) is False
+    assert (
+        record_evidence_artifact({}, "route\nbad", {"valid": True}, errors) is False
+    )
 
     buckets = init_evidence_artifact_buckets(("route",))
     assert record_evidence_artifact(buckets, "route", "bad", errors) is False
@@ -485,6 +710,8 @@ def test_record_evidence_artifact_rejects_malformed_inputs() -> None:
         "recognized evidence artifacts by kind must be a mapping",
         "recognized evidence kind must be a non-empty string",
         "recognized evidence kind must be a non-empty string",
+        "recognized evidence kind must be a non-empty canonical string",
+        "recognized evidence kind must be a non-empty canonical string",
         "recognized `route` evidence artifact must be an object",
     ]
 
@@ -498,7 +725,9 @@ def test_evidence_artifact_is_valid_requires_explicit_true() -> None:
 
 def test_evidence_artifact_kind_returns_string_or_none() -> None:
     assert evidence_artifact_kind({"kind": "provider"}) == "provider"
-    assert evidence_artifact_kind({"kind": ""}) == ""
+    assert evidence_artifact_kind({"kind": ""}) is None
+    assert evidence_artifact_kind({"kind": " provider"}) is None
+    assert evidence_artifact_kind({"kind": "provider\nbad"}) is None
     assert evidence_artifact_kind({"kind": None}) is None
     assert evidence_artifact_kind({}) is None
 
@@ -556,6 +785,43 @@ def test_mark_required_evidence_invalid_repairs_malformed_row() -> None:
     }
 
 
+def test_mark_required_evidence_invalid_rejects_malformed_kind_labels() -> None:
+    required: dict[str, dict[str, object]] = {}
+
+    errors = mark_required_evidence_invalid(required, "bad\nkind")
+    errors.append("new")
+
+    assert "bad\nkind" not in required
+    assert required == {
+        "<unknown>": {
+            "valid": False,
+            "errors": [
+                "validation required evidence kind must be a non-empty canonical string",
+                "new",
+            ],
+            "artifacts": [],
+        }
+    }
+
+
+def test_mark_required_evidence_invalid_rejects_unhashable_kind_labels() -> None:
+    required: dict[str, dict[str, object]] = {}
+
+    errors = mark_required_evidence_invalid(required, ["bad"])
+    errors.append("new")
+
+    assert required == {
+        "<unknown>": {
+            "valid": False,
+            "errors": [
+                "validation required evidence kind must be a non-empty canonical string",
+                "new",
+            ],
+            "artifacts": [],
+        }
+    }
+
+
 def test_mark_required_evidence_summary_invalid_marks_every_row() -> None:
     required: dict[str, dict[str, object]] = {
         "provider": {"valid": True, "errors": [], "artifacts": []},
@@ -573,6 +839,26 @@ def test_mark_required_evidence_summary_invalid_marks_every_row() -> None:
     ]
 
 
+def test_mark_required_evidence_summary_invalid_rejects_malformed_error_labels() -> None:
+    required: dict[str, dict[str, object]] = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "bad\nkind": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    mark_required_evidence_summary_invalid(required, "bad\nsummary")
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation required summary error must be a non-empty canonical string"
+    ]
+    assert "bad\nkind" not in required
+    assert required["<unknown>"]["valid"] is False
+    assert required["<unknown>"]["errors"] == [
+        "validation required evidence kind must be a non-empty canonical string",
+        "validation required summary error must be a non-empty canonical string",
+    ]
+
+
 def test_mark_required_evidence_invalid_if_present_skips_unknown_kind() -> None:
     required: dict[str, dict[str, object]] = {
         "provider": {"valid": True, "errors": [], "artifacts": []},
@@ -585,11 +871,23 @@ def test_mark_required_evidence_invalid_if_present_skips_unknown_kind() -> None:
     assert required["provider"]["errors"] == ["provider failed"]
     assert mark_required_evidence_invalid_if_present(required, "optional") == []
     assert mark_required_evidence_invalid_if_present(required, None) == []
+    assert mark_required_evidence_invalid_if_present(required, "bad\nkind") == []
     assert set(required) == {"provider"}
 
 
 def test_required_evidence_summary_is_valid_requires_explicit_true() -> None:
-    assert required_evidence_summary_is_valid({"route": {"valid": True}}) is True
+    assert (
+        required_evidence_summary_is_valid(
+            {
+                "route": {
+                    "valid": True,
+                    "errors": [],
+                    "artifacts": [{"valid": True, "path": "route.json"}],
+                }
+            }
+        )
+        is True
+    )
     assert required_evidence_summary_is_valid({"route": {"valid": False}}) is False
     assert required_evidence_summary_is_valid({"route": {"valid": 1}}) is False
     assert required_evidence_summary_is_valid({"route": {}}) is False
@@ -600,6 +898,43 @@ def test_required_evidence_summary_is_valid_fails_closed_on_malformed_rows() -> 
     assert required_evidence_summary_is_valid("bad") is False
     assert required_evidence_summary_is_valid({"route": "bad"}) is False
     assert required_evidence_summary_is_valid({"route": None}) is False
+    assert required_evidence_summary_is_valid({"route": {"valid": True}}) is False
+    assert (
+        required_evidence_summary_is_valid(
+            {"route": {"valid": True, "errors": "bad", "artifacts": []}}
+        )
+        is False
+    )
+    assert (
+        required_evidence_summary_is_valid(
+            {"route": {"valid": True, "errors": [], "artifacts": "bad"}}
+        )
+        is False
+    )
+    assert (
+        required_evidence_summary_is_valid(
+            {"route": {"valid": True, "errors": [], "artifacts": []}}
+        )
+        is False
+    )
+    assert (
+        required_evidence_summary_is_valid(
+            {"route": {"valid": True, "errors": [], "artifacts": ["bad"]}}
+        )
+        is False
+    )
+    assert (
+        required_evidence_summary_is_valid(
+            {
+                "route": {
+                    "valid": True,
+                    "errors": [],
+                    "artifacts": [{"valid": False}],
+                }
+            }
+        )
+        is False
+    )
 
 
 def test_required_evidence_has_any_kind_matches_candidates() -> None:
@@ -626,6 +961,8 @@ def test_required_evidence_has_any_kind_fails_closed_on_malformed_kinds() -> Non
     )
     assert required_evidence_has_any_kind(("provider", None), ("provider",)) is False
     assert required_evidence_has_any_kind(("provider",), ("",)) is False
+    assert required_evidence_has_any_kind(("provider\nbad",), ("provider",)) is False
+    assert required_evidence_has_any_kind(("provider",), (" provider",)) is False
 
 
 def test_required_evidence_has_all_kinds_matches_candidates() -> None:
@@ -667,6 +1004,8 @@ def test_required_evidence_has_all_kinds_fails_closed_on_malformed_kinds() -> No
     )
     assert required_evidence_has_all_kinds((None,), ()) is False
     assert required_evidence_has_all_kinds(("billing_cycle",), ("",)) is False
+    assert required_evidence_has_all_kinds(("billing\ncycle",), ()) is False
+    assert required_evidence_has_all_kinds(("billing_cycle",), (" billing_cycle",)) is False
 
 
 def test_missing_required_evidence_values_preserves_required_order() -> None:
@@ -683,8 +1022,23 @@ def test_missing_required_evidence_values_preserves_required_order() -> None:
 
 def test_hashable_evidence_values_skips_falsey_and_unhashable_values() -> None:
     assert hashable_evidence_values(
-        ("provider-a", "", 0, ["provider-b"], {"provider_id": "provider-c"}, 3)
+        (
+            "provider-a",
+            "",
+            0,
+            False,
+            True,
+            ["provider-b"],
+            {"provider_id": "provider-c"},
+            3,
+        )
     ) == {"provider-a", 3}
+
+
+def test_hashable_evidence_values_rejects_malformed_string_values() -> None:
+    assert hashable_evidence_values(
+        ("provider-a", " provider-b", "provider-c\nbad", "provider-d\tbad")
+    ) == {"provider-a"}
 
 
 def test_hashable_evidence_values_rejects_scalar_or_mapping_containers() -> None:
@@ -697,8 +1051,20 @@ def test_hashable_evidence_values_rejects_scalar_or_mapping_containers() -> None
 def test_missing_required_evidence_values_skips_unhashable_observed_values() -> None:
     assert missing_required_evidence_values(
         ("provider-a", "provider-b"),
-        (["provider-a"], {"provider_id": "provider-b"}, "provider-a"),
+        (
+            ["provider-a"],
+            {"provider_id": "provider-b"},
+            "provider-a",
+            " provider-b",
+        ),
     ) == ["provider-b"]
+
+
+def test_missing_required_evidence_values_rejects_malformed_observed_strings() -> None:
+    assert missing_required_evidence_values(
+        ("provider-a", "provider-b"),
+        (" provider-a", "provider-b\nbad"),
+    ) == ["provider-a", "provider-b"]
 
 
 def test_missing_required_evidence_values_rejects_scalar_containers() -> None:
@@ -760,24 +1126,70 @@ def test_record_missing_required_evidence_value_errors_skips_complete_values() -
     assert required["provider"]["errors"] == []
 
 
+def test_record_missing_required_evidence_value_errors_rejects_malformed_labels() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    missing = record_missing_required_evidence_value_errors(
+        required,
+        "bad\nkind",
+        ("provider-a",),
+        set(),
+        lambda provider_id: f"missing provider/proof evidence for `{provider_id}`",
+    )
+
+    assert missing == ["provider-a"]
+    assert required["provider"]["valid"] is False
+    assert required["latest"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation evidence kind must be a non-empty canonical string"
+    ]
+
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+    missing = record_missing_required_evidence_value_errors(
+        required,
+        "provider",
+        ("provider\nbad",),
+        set(),
+        lambda provider_id: f"missing provider/proof evidence for `{provider_id}`",
+    )
+
+    assert missing == ["provider\nbad"]
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        (
+            "validation missing required evidence message must be a non-empty "
+            "canonical string"
+        )
+    ]
+
+
 def test_required_or_observed_evidence_values_are_present() -> None:
     assert required_or_observed_evidence_values_are_present(("provider-a",), set())
     assert required_or_observed_evidence_values_are_present((), {"provider-a"})
     assert not required_or_observed_evidence_values_are_present((), set())
 
 
-def test_required_or_observed_evidence_values_ignore_malformed_values() -> None:
+def test_required_or_observed_evidence_values_fail_closed_on_malformed_values() -> None:
     assert required_or_observed_evidence_values_are_present(
         ("provider-a",),
         ([],),
     )
-    assert required_or_observed_evidence_values_are_present(
+    assert not required_or_observed_evidence_values_are_present(
         (),
         ("provider-a", {"provider_id": "provider-b"}),
     )
     assert not required_or_observed_evidence_values_are_present(
-        ("", {"provider_id": "provider-a"}),
+        ("provider-a", {"provider_id": "provider-b"}),
         ([],),
+    )
+    assert not required_or_observed_evidence_values_are_present(
+        (),
+        (" provider-a", "provider-b\nbad"),
     )
     assert not required_or_observed_evidence_values_are_present("provider-a", set())
     assert not required_or_observed_evidence_values_are_present((), "provider-a")
@@ -823,6 +1235,26 @@ def test_record_missing_required_or_observed_evidence_error_marks_malformed_valu
     ]
 
 
+def test_record_missing_required_or_observed_evidence_error_marks_mixed_malformed_values() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    recorded = record_missing_required_or_observed_evidence_error(
+        required,
+        "provider",
+        (),
+        ("provider-a", {"provider_id": "provider-b"}),
+        "at least one provider proof must be verified",
+    )
+
+    assert recorded is True
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "at least one provider proof must be verified"
+    ]
+
+
 def test_record_missing_required_or_observed_evidence_error_skips_present_values() -> None:
     required = {
         "provider": {"valid": True, "errors": [], "artifacts": []},
@@ -852,9 +1284,49 @@ def test_record_missing_required_or_observed_evidence_error_skips_present_values
     assert required["provider"]["errors"] == []
 
 
+def test_record_missing_required_or_observed_evidence_error_rejects_malformed_labels() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    recorded = record_missing_required_or_observed_evidence_error(
+        required,
+        "bad\nkind",
+        (),
+        set(),
+        "at least one provider proof must be verified",
+    )
+
+    assert recorded is True
+    assert required["provider"]["valid"] is False
+    assert required["latest"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation evidence kind must be a non-empty canonical string"
+    ]
+
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+    recorded = record_missing_required_or_observed_evidence_error(
+        required,
+        "provider",
+        (),
+        set(),
+        "bad\nmessage",
+    )
+
+    assert recorded is True
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation missing evidence error must be a non-empty canonical string"
+    ]
+
+
 def test_distinct_evidence_values_are_consistent_allows_zero_or_one_value() -> None:
     assert distinct_evidence_values_are_consistent(set())
     assert distinct_evidence_values_are_consistent({3})
+    assert distinct_evidence_values_are_consistent(["provider-a", "provider-a"])
     assert not distinct_evidence_values_are_consistent({3, 4})
 
 
@@ -863,6 +1335,11 @@ def test_distinct_evidence_values_are_consistent_fails_closed_on_malformed_value
     assert not distinct_evidence_values_are_consistent("")
     assert not distinct_evidence_values_are_consistent("a")
     assert not distinct_evidence_values_are_consistent({"provider": "provider-a"})
+    assert not distinct_evidence_values_are_consistent([[]])
+    assert not distinct_evidence_values_are_consistent([{"provider": "provider-a"}])
+    assert not distinct_evidence_values_are_consistent([" provider-a"])
+    assert not distinct_evidence_values_are_consistent([True])
+    assert not distinct_evidence_values_are_consistent([0])
 
 
 def test_record_inconsistent_evidence_values_error_marks_summary_invalid() -> None:
@@ -907,6 +1384,24 @@ def test_record_inconsistent_evidence_values_error_marks_malformed_values() -> N
         "provider counts differ across rollout evidence"
     ]
 
+    required = {
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+    recorded = record_inconsistent_evidence_values_error(
+        required,
+        [" provider-a"],
+        "latest",
+        "provider counts differ across rollout evidence",
+    )
+
+    assert recorded is True
+    assert required["latest"]["valid"] is False
+    assert required["provider"]["valid"] is False
+    assert required["latest"]["errors"] == [
+        "provider counts differ across rollout evidence"
+    ]
+
 
 def test_record_inconsistent_evidence_values_error_skips_consistent_values() -> None:
     required = {
@@ -927,6 +1422,48 @@ def test_record_inconsistent_evidence_values_error_skips_consistent_values() -> 
     assert required["latest"]["errors"] == []
 
 
+def test_record_inconsistent_evidence_values_error_rejects_malformed_labels() -> None:
+    required = {
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    recorded = record_inconsistent_evidence_values_error(
+        required,
+        {3, 4},
+        "bad\nkind",
+        "provider counts differ across rollout evidence",
+    )
+
+    assert recorded is True
+    assert required["latest"]["valid"] is False
+    assert required["provider"]["valid"] is False
+    assert required["latest"]["errors"] == [
+        "validation evidence kind must be a non-empty canonical string"
+    ]
+
+    required = {
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+    recorded = record_inconsistent_evidence_values_error(
+        required,
+        {3, 4},
+        "latest",
+        "bad\nmessage",
+    )
+
+    assert recorded is True
+    assert required["latest"]["valid"] is False
+    assert required["provider"]["valid"] is False
+    assert required["latest"]["errors"] == [
+        (
+            "validation inconsistent evidence error must be a non-empty "
+            "canonical string"
+        )
+    ]
+
+
 def test_record_string_tuple_binding_errors_returns_normalized_binding() -> None:
     artifact = {"path": "cycle-bound.json", "valid": True, "errors": []}
     errors: list[str] = []
@@ -942,6 +1479,22 @@ def test_record_string_tuple_binding_errors_returns_normalized_binding() -> None
     assert binding == ("aa", "bb")
     assert artifact["valid"] is True
     assert artifact["errors"] == []
+    assert errors == []
+
+
+def test_require_string_tuple_in_normalizes_allowed_bindings() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_tuple_in(
+            ("aa", "BB"),
+            {("AA", "bb")},
+            errors,
+            message="cycle tuple must match",
+        )
+        == ("aa", "bb")
+    )
+
     assert errors == []
 
 
@@ -1016,6 +1569,44 @@ def test_require_string_tuple_in_rejects_malformed_containers() -> None:
     assert errors == ["cycle tuple", "cycle tuple"]
 
 
+def test_require_string_tuple_in_rejects_malformed_labels_before_binding() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_tuple_in(
+            ("AA", "BB"),
+            {("aa", "bb")},
+            errors,
+            message="bad\nmessage",
+        )
+        is None
+    )
+    assert (
+        require_string_tuple_in(
+            ("AA", "bad\nvalue"),
+            {("aa", "bb")},
+            errors,
+            message="cycle tuple",
+        )
+        is None
+    )
+    assert (
+        require_string_tuple_in(
+            ("AA", "BB"),
+            {("aa", "bad\nallowed")},
+            errors,
+            message="cycle tuple",
+        )
+        is None
+    )
+
+    assert errors == [
+        "validation message must be a non-empty canonical string",
+        "validation tuple value must be a non-empty canonical string",
+        "validation allowed tuple value must be a non-empty canonical string",
+    ]
+
+
 def test_record_string_value_binding_errors_returns_normalized_value() -> None:
     artifact = {"path": "public-head-bound.json", "valid": True, "errors": []}
     errors: list[str] = []
@@ -1031,6 +1622,22 @@ def test_record_string_value_binding_errors_returns_normalized_value() -> None:
     assert binding == "aa"
     assert artifact["valid"] is True
     assert artifact["errors"] == []
+    assert errors == []
+
+
+def test_require_string_value_in_normalizes_allowed_values() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_value_in(
+            "aa",
+            {"AA"},
+            errors,
+            message="public head must match",
+        )
+        == "aa"
+    )
+
     assert errors == []
 
 
@@ -1118,6 +1725,60 @@ def test_require_string_value_in_rejects_malformed_allowed_containers() -> None:
     ]
 
 
+def test_require_string_value_in_rejects_malformed_labels_before_binding() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_value_in(
+            "AA",
+            {"aa"},
+            errors,
+            message="bad\nmessage",
+        )
+        is None
+    )
+    assert (
+        require_string_value_in(
+            "bad\nvalue",
+            {"bad"},
+            errors,
+            message="public head must match",
+        )
+        is None
+    )
+    assert (
+        require_string_value_in(
+            "AA",
+            {"aa\nbad"},
+            errors,
+            message="public head must match",
+        )
+        is None
+    )
+
+    assert errors == [
+        "validation message must be a non-empty canonical string",
+        "validation value must be a non-empty canonical string",
+        "validation allowed value must be a non-empty canonical string",
+    ]
+
+
+def test_require_string_value_in_rejects_malformed_value_before_allowed_container() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_value_in(
+            "bad\nvalue",
+            {"aa": True},
+            errors,
+            message="public head must match",
+        )
+        is None
+    )
+
+    assert errors == ["validation value must be a non-empty canonical string"]
+
+
 def test_evidence_artifact_digest_set_collects_valid_digests() -> None:
     valid_artifact = {
         "valid": True,
@@ -1127,9 +1788,33 @@ def test_evidence_artifact_digest_set_collects_valid_digests() -> None:
         "valid": False,
         "fingerprint": {"root_digest_hex": "BB"},
     }
+
+    assert evidence_artifact_digest_set(
+        [valid_artifact, invalid_artifact],
+        "root_digest_hex",
+    ) == {"aa"}
+
+
+def test_evidence_artifact_digest_set_rejects_malformed_digest_values() -> None:
+    valid_artifact = {
+        "valid": True,
+        "fingerprint": {"root_digest_hex": "AA"},
+    }
+    padded_artifact = {
+        "valid": True,
+        "fingerprint": {"root_digest_hex": " BB"},
+    }
+    control_artifact = {
+        "valid": True,
+        "fingerprint": {"root_digest_hex": "CC\nbad"},
+    }
+    non_string_artifact = {
+        "valid": True,
+        "fingerprint": {"root_digest_hex": 7},
+    }
     missing_artifact = {
         "valid": True,
-        "fingerprint": {"root_digest_hex": None},
+        "fingerprint": {},
     }
     empty_artifact = {
         "valid": True,
@@ -1137,9 +1822,37 @@ def test_evidence_artifact_digest_set_collects_valid_digests() -> None:
     }
 
     assert evidence_artifact_digest_set(
-        [valid_artifact, invalid_artifact, missing_artifact, empty_artifact],
+        [valid_artifact, padded_artifact, control_artifact, non_string_artifact],
         "root_digest_hex",
-    ) == {"aa"}
+    ) == set()
+    assert evidence_artifact_digest_set(
+        [valid_artifact, missing_artifact],
+        "root_digest_hex",
+    ) == set()
+    assert evidence_artifact_digest_set(
+        [valid_artifact, empty_artifact],
+        "root_digest_hex",
+    ) == set()
+
+
+def test_evidence_artifact_digest_set_rejects_malformed_artifact_rows() -> None:
+    artifact = {
+        "valid": True,
+        "fingerprint": {"root_digest_hex": "AA"},
+    }
+
+    assert evidence_artifact_digest_set([artifact, "bad row"], "root_digest_hex") == set()
+    assert evidence_artifact_digest_set("not artifacts", "root_digest_hex") == set()
+
+
+def test_evidence_artifact_digest_set_rejects_malformed_field_labels() -> None:
+    artifact = {
+        "valid": True,
+        "fingerprint": {"bad\nfield": "AA"},
+    }
+
+    assert evidence_artifact_digest_set([artifact], "bad\nfield") == set()
+    assert evidence_artifact_digest_set([artifact], ["root_digest_hex"]) == set()
 
 
 def test_record_evidence_digest_mismatch_errors_marks_invalid() -> None:
@@ -1167,6 +1880,115 @@ def test_record_evidence_digest_mismatch_errors_marks_invalid() -> None:
     ]
 
 
+def test_record_evidence_digest_mismatch_errors_rejects_malformed_field_labels() -> None:
+    artifact = {
+        "kind": "commitment_root",
+        "path": "commitment-root.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bad\nfield": "BB"},
+    }
+    errors: list[str] = []
+
+    record_evidence_digest_mismatch_errors(
+        artifacts=[artifact],
+        digest_field="bad\nfield",
+        allowed_digests={"aa"},
+        errors=errors,
+        error="commitment_root root digest must match",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == [
+        "validation digest field must be a non-empty canonical string"
+    ]
+
+
+def test_record_evidence_digest_mismatch_errors_rejects_malformed_allowed_digest_inputs_before_mutation() -> None:
+    malformed_container_artifact = {
+        "kind": "commitment_root",
+        "path": "commitment-root.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"root_digest_hex": "BB"},
+    }
+    malformed_value_artifact = {
+        "kind": "commitment_root",
+        "path": "commitment-root-value.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"root_digest_hex": "BB"},
+    }
+    errors: list[str] = []
+
+    record_evidence_digest_mismatch_errors(
+        artifacts=[malformed_container_artifact],
+        digest_field="root_digest_hex",
+        allowed_digests="aa",
+        errors=errors,
+        error="commitment_root root digest must match",
+    )
+    record_evidence_digest_mismatch_errors(
+        artifacts=[malformed_value_artifact],
+        digest_field="root_digest_hex",
+        allowed_digests=[" aa"],
+        errors=errors,
+        error="commitment_root root digest must match",
+    )
+
+    assert malformed_container_artifact["valid"] is True
+    assert malformed_container_artifact["errors"] == []
+    assert malformed_value_artifact["valid"] is True
+    assert malformed_value_artifact["errors"] == []
+    assert errors == [
+        "validation anchor digests must be a collection of canonical strings",
+        "validation anchor digest must be a non-empty canonical string",
+    ]
+
+
+def test_record_evidence_digest_mismatch_errors_rejects_malformed_artifact_inputs_before_mutation() -> None:
+    malformed_container_artifact = {
+        "kind": "commitment_root",
+        "path": "commitment-root-container.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"root_digest_hex": "BB"},
+    }
+    malformed_row_artifact = {
+        "kind": "commitment_root",
+        "path": "commitment-root-row.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"root_digest_hex": "BB"},
+    }
+    errors: list[str] = []
+
+    record_evidence_digest_mismatch_errors(
+        artifacts=malformed_container_artifact,
+        digest_field="root_digest_hex",
+        allowed_digests={"aa"},
+        errors=errors,
+        error="commitment_root root digest must match",
+    )
+    record_evidence_digest_mismatch_errors(
+        artifacts=[malformed_row_artifact, "bad row"],
+        digest_field="root_digest_hex",
+        allowed_digests={"aa"},
+        errors=errors,
+        error="commitment_root root digest must match",
+    )
+
+    assert malformed_container_artifact["valid"] is True
+    assert malformed_container_artifact["errors"] == []
+    assert malformed_row_artifact["valid"] is True
+    assert malformed_row_artifact["errors"] == []
+    assert errors == [
+        "evidence digest mismatch artifacts must be a sequence of artifact objects",
+        "evidence digest mismatch artifacts must be a sequence of artifact objects",
+    ]
+
+
 def test_validate_bound_evidence_digest_references_accepts_valid_anchor() -> None:
     artifact = {
         "kind": "observability",
@@ -1191,6 +2013,54 @@ def test_validate_bound_evidence_digest_references_accepts_valid_anchor() -> Non
     assert artifact["valid"] is True
     assert artifact["errors"] == []
     assert errors == []
+
+
+def test_validate_bound_evidence_digest_references_rejects_malformed_anchor_digests_before_mutation() -> None:
+    malformed_container_artifact = {
+        "kind": "observability",
+        "path": "observability.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    malformed_value_artifact = {
+        "kind": "observability",
+        "path": "observability-value.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("feed_promotion", "observability"),
+        bound_artifacts=[("observability", malformed_container_artifact)],
+        valid_anchor_digests="",
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("feed_promotion", "observability"),
+        bound_artifacts=[("observability", malformed_value_artifact)],
+        valid_anchor_digests=["aa\nbad"],
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+
+    assert malformed_container_artifact["valid"] is True
+    assert malformed_container_artifact["errors"] == []
+    assert malformed_value_artifact["valid"] is True
+    assert malformed_value_artifact["errors"] == []
+    assert errors == [
+        "validation anchor digests must be a collection of canonical strings",
+        "validation anchor digest must be a non-empty canonical string",
+    ]
 
 
 def test_validate_bound_evidence_digest_references_accepts_kind_field_map() -> None:
@@ -1357,6 +2227,177 @@ def test_validate_bound_evidence_digest_references_rejects_malformed_artifact_pa
     ]
 
 
+def test_validate_bound_evidence_digest_references_rejects_malformed_templates_before_mutation() -> None:
+    artifact = {
+        "kind": "observability",
+        "path": "observability.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "BB"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", artifact)],
+        valid_anchor_digests={"aa"},
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{unexpected} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == [
+        (
+            "validation binding error template must use only plain kind_name "
+            "formatter fields"
+        )
+    ]
+
+
+def test_validate_bound_evidence_digest_references_rejects_malformed_missing_anchor_messages() -> None:
+    malformed_template_artifact = {
+        "kind": "observability",
+        "path": "observability.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    malformed_summary_artifact = {
+        "kind": "observability",
+        "path": "observability-summary.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", malformed_template_artifact)],
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", malformed_summary_artifact)],
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+        missing_anchor_summary_error="bad\nsummary",
+    )
+
+    assert malformed_template_artifact["valid"] is True
+    assert malformed_template_artifact["errors"] == []
+    assert malformed_summary_artifact["valid"] is True
+    assert malformed_summary_artifact["errors"] == []
+    assert errors == [
+        "validation missing-anchor error template must be a valid formatter template",
+        (
+            "validation missing-anchor summary error must be a non-empty "
+            "canonical string"
+        ),
+    ]
+
+
+def test_validate_bound_evidence_digest_references_rejects_malformed_kind_labels_before_mutation() -> None:
+    artifact = {
+        "kind": "observability",
+        "path": "observability.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "BB"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("bad\nkind", artifact)],
+        valid_anchor_digests={"aa"},
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == ["validation evidence kind must be a non-empty canonical string"]
+
+
+def test_validate_bound_evidence_digest_references_rejects_malformed_field_selectors() -> None:
+    artifact = {
+        "kind": "observability",
+        "path": "observability.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "BB"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", artifact)],
+        valid_anchor_digests={"aa"},
+        digest_field="bad\nfield",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", artifact)],
+        valid_anchor_digests={"aa"},
+        digest_field="bundle_digest_hex",
+        digest_field_by_kind=[("observability", "bundle_digest_hex")],
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", artifact)],
+        valid_anchor_digests={"aa"},
+        digest_field_by_kind={"observability": "bad\nfield"},
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", artifact)],
+        valid_anchor_digests={"aa"},
+        digest_field_by_kind={"other": "bundle_digest_hex"},
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == [
+        "validation digest field must be a non-empty canonical string",
+        "validation digest field map must be a mapping",
+        "validation digest field must be a non-empty canonical string",
+        "validation digest field must be a non-empty canonical string",
+    ]
+
+
 def test_validate_bound_evidence_digest_references_rejects_malformed_missing_anchor_pairs() -> None:
     artifact = {
         "kind": "observability",
@@ -1384,6 +2425,100 @@ def test_validate_bound_evidence_digest_references_rejects_malformed_missing_anc
     assert artifact["errors"] == []
     assert errors == [
         "missing-anchor evidence artifacts must be a sequence of (kind, artifact) pairs"
+    ]
+
+
+def test_validate_bound_evidence_digest_references_rejects_malformed_required_kind_sets_before_missing_anchor_mutation() -> None:
+    malformed_required_container_artifact = {
+        "kind": "observability",
+        "path": "observability-required-container.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    malformed_required_item_artifact = {
+        "kind": "observability",
+        "path": "observability-required-item.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    malformed_candidate_container_artifact = {
+        "kind": "observability",
+        "path": "observability-candidate-container.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    malformed_candidate_item_artifact = {
+        "kind": "observability",
+        "path": "observability-candidate-item.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {"bundle_digest_hex": "AA"},
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_digest_references(
+        required_kinds="observability",
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", malformed_required_container_artifact)],
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("bad\nkind",),
+        missing_anchor_required_kinds=("observability",),
+        bound_artifacts=[("observability", malformed_required_item_artifact)],
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds={"observability": True},
+        bound_artifacts=[("observability", malformed_candidate_container_artifact)],
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=("observability",),
+        missing_anchor_required_kinds=("bad\nkind",),
+        bound_artifacts=[("observability", malformed_candidate_item_artifact)],
+        valid_anchor_digests=set(),
+        digest_field="bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} bundle digest must match",
+        missing_anchor_error_template="{kind_name} bundle digest needs anchor",
+    )
+
+    for artifact in (
+        malformed_required_container_artifact,
+        malformed_required_item_artifact,
+        malformed_candidate_container_artifact,
+        malformed_candidate_item_artifact,
+    ):
+        assert artifact["valid"] is True
+        assert artifact["errors"] == []
+    assert errors == [
+        "validation required evidence kinds must be a collection of canonical strings",
+        "validation required evidence kind must be a non-empty canonical string",
+        (
+            "validation missing-anchor required evidence kinds must be a "
+            "collection of canonical strings"
+        ),
+        (
+            "validation missing-anchor required evidence kind must be a "
+            "non-empty canonical string"
+        ),
     ]
 
 
@@ -1508,6 +2643,65 @@ def test_validate_bound_evidence_tuple_references_skips_optional_missing_anchor(
     assert errors == []
 
 
+def test_validate_bound_evidence_tuple_references_rejects_malformed_anchor_bindings_before_mutation() -> None:
+    malformed_container_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    malformed_value_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound-value.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", malformed_container_artifact)],
+        valid_anchor_bindings="",
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="cycle anchor missing",
+    )
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", malformed_value_artifact)],
+        valid_anchor_bindings=[("aa", "bad\nbinding")],
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="cycle anchor missing",
+    )
+
+    assert malformed_container_artifact["valid"] is True
+    assert malformed_container_artifact["errors"] == []
+    assert malformed_value_artifact["valid"] is True
+    assert malformed_value_artifact["errors"] == []
+    assert errors == [
+        (
+            "validation anchor bindings must be a collection of canonical "
+            "string sequences"
+        ),
+        "validation anchor binding value must be a non-empty canonical string",
+    ]
+
+
 def test_validate_bound_evidence_tuple_references_rejects_malformed_artifact_pairs() -> None:
     errors: list[str] = []
 
@@ -1524,6 +2718,250 @@ def test_validate_bound_evidence_tuple_references_rejects_malformed_artifact_pai
 
     assert errors == [
         "bound evidence artifacts must be a sequence of (kind, artifact) pairs"
+    ]
+
+
+def test_validate_bound_evidence_tuple_references_rejects_malformed_required_kind_sets_before_missing_anchor_mutation() -> None:
+    malformed_required_container_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound-required-container.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    malformed_required_item_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound-required-item.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    malformed_candidate_container_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound-candidate-container.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    malformed_candidate_item_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound-candidate-item.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_tuple_references(
+        required_kinds="cycle_bound",
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", malformed_required_container_artifact)],
+        valid_anchor_bindings=set(),
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="cycle anchor missing",
+    )
+    validate_bound_evidence_tuple_references(
+        required_kinds=("bad\nkind",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", malformed_required_item_artifact)],
+        valid_anchor_bindings=set(),
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="cycle anchor missing",
+    )
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds={"cycle_bound": True},
+        bound_artifacts=[("cycle_bound", malformed_candidate_container_artifact)],
+        valid_anchor_bindings=set(),
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="cycle anchor missing",
+    )
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("bad\nkind",),
+        bound_artifacts=[("cycle_bound", malformed_candidate_item_artifact)],
+        valid_anchor_bindings=set(),
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="cycle anchor missing",
+    )
+
+    for artifact in (
+        malformed_required_container_artifact,
+        malformed_required_item_artifact,
+        malformed_candidate_container_artifact,
+        malformed_candidate_item_artifact,
+    ):
+        assert artifact["valid"] is True
+        assert artifact["errors"] == []
+    assert errors == [
+        "validation required evidence kinds must be a collection of canonical strings",
+        "validation required evidence kind must be a non-empty canonical string",
+        (
+            "validation missing-anchor required evidence kinds must be a "
+            "collection of canonical strings"
+        ),
+        (
+            "validation missing-anchor required evidence kind must be a "
+            "non-empty canonical string"
+        ),
+    ]
+
+
+def test_validate_bound_evidence_tuple_references_rejects_malformed_binding_fields() -> None:
+    artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", artifact)],
+        valid_anchor_bindings={("aa", "bb")},
+        binding_fields="statement_bundle_digest_hex",
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+    )
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", artifact)],
+        valid_anchor_bindings={("aa", "bb")},
+        binding_fields=("statement_bundle_digest_hex", "bad\nfield"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == [
+        "validation binding fields must be a sequence of strings",
+        "validation binding field must be a non-empty canonical string",
+    ]
+
+
+def test_validate_bound_evidence_tuple_references_rejects_malformed_templates_before_mutation() -> None:
+    artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "CC",
+        },
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", artifact)],
+        valid_anchor_bindings={("aa", "bb")},
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{unexpected} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+    )
+
+    assert artifact["valid"] is True
+    assert artifact["errors"] == []
+    assert errors == [
+        (
+            "validation binding error template must use only plain kind_name "
+            "formatter fields"
+        )
+    ]
+
+
+def test_validate_bound_evidence_tuple_references_rejects_malformed_missing_anchor_messages() -> None:
+    malformed_template_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    malformed_summary_artifact = {
+        "kind": "cycle_bound",
+        "path": "cycle-bound-summary.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "statement_bundle_digest_hex": "AA",
+            "reconciliation_digest_hex": "BB",
+        },
+    }
+    errors: list[str] = []
+
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", malformed_template_artifact)],
+        valid_anchor_bindings=set(),
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name cycle tuple needs anchor",
+    )
+    validate_bound_evidence_tuple_references(
+        required_kinds=("cycle_bound",),
+        missing_anchor_required_kinds=("cycle_bound",),
+        bound_artifacts=[("cycle_bound", malformed_summary_artifact)],
+        valid_anchor_bindings=set(),
+        binding_fields=("statement_bundle_digest_hex", "reconciliation_digest_hex"),
+        errors=errors,
+        binding_error_template="{kind_name} cycle tuple must match",
+        missing_anchor_error_template="{kind_name} cycle tuple needs anchor",
+        missing_anchor_summary_error="bad\nsummary",
+    )
+
+    assert malformed_template_artifact["valid"] is True
+    assert malformed_template_artifact["errors"] == []
+    assert malformed_summary_artifact["valid"] is True
+    assert malformed_summary_artifact["errors"] == []
+    assert errors == [
+        "validation missing-anchor error template must be a valid formatter template",
+        (
+            "validation missing-anchor summary error must be a non-empty "
+            "canonical string"
+        ),
     ]
 
 
@@ -1595,6 +3033,40 @@ def test_record_consistent_evidence_value_reports_malformed_values() -> None:
     ]
 
 
+def test_record_consistent_evidence_value_rejects_malformed_labels() -> None:
+    values: dict[str, str] = {}
+    errors: list[str] = []
+
+    record_consistent_evidence_value(
+        values,
+        "bad\nkey",
+        "aa",
+        "publish",
+        errors,
+    )
+    record_consistent_evidence_value(
+        values,
+        "snapshot_id_hex",
+        "aa",
+        "bad\ncontext",
+        errors,
+    )
+    record_consistent_evidence_value(
+        values,
+        "snapshot_id_hex",
+        "bad\nvalue",
+        "publish",
+        errors,
+    )
+
+    assert values == {}
+    assert errors == [
+        "validation evidence key must be a non-empty canonical string",
+        "validation evidence context must be a non-empty canonical string",
+        "validation evidence value must be a non-empty canonical string",
+    ]
+
+
 def test_record_consistent_deployment_context_records_summary() -> None:
     values: dict[str, str] = {}
     errors: list[str] = []
@@ -1617,6 +3089,20 @@ def test_record_consistent_deployment_context_records_summary() -> None:
         "environment": "staging",
     }
     assert errors == []
+
+
+def test_deployment_context_summary_rejects_malformed_values() -> None:
+    assert deployment_context_summary("bad") == {}
+    assert deployment_context_summary(None) == {}
+    assert deployment_context_summary({"deployment_id": 1, "environment": "prod"}) == {
+        "environment": "prod"
+    }
+    assert deployment_context_summary(
+        {
+            "deployment_id": "prod\nbad",
+            "environment": " prod",
+        }
+    ) == {}
 
 
 def test_record_consistent_deployment_context_reports_mixed_context() -> None:
@@ -1663,6 +3149,52 @@ def test_record_consistent_deployment_context_reports_mixed_context() -> None:
     ]
 
 
+def test_record_consistent_deployment_context_rejects_malformed_labels() -> None:
+    values: dict[str, str] = {}
+    errors: list[str] = []
+    bad_context = {
+        "path": "bad-context.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "sorafs-staging-a",
+            "environment": "staging",
+        },
+    }
+    bad_value = {
+        "path": "bad-value.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "sorafs\nstaging",
+            "environment": "staging",
+        },
+    }
+
+    record_consistent_deployment_context(values, bad_context, "bad\ncontext", errors)
+    record_consistent_deployment_context(values, bad_value, "gateway", errors)
+
+    assert values == {"environment": "staging"}
+    assert bad_context["valid"] is False
+    assert bad_value["valid"] is False
+    assert bad_context["errors"] == [
+        "validation evidence context must be a non-empty canonical string"
+    ]
+    assert bad_value["errors"] == [
+        "validation evidence value must be a non-empty canonical string"
+    ]
+    assert errors == [
+        (
+            "bad-context.json: validation evidence context must be a non-empty "
+            "canonical string"
+        ),
+        (
+            "bad-value.json: validation evidence value must be a non-empty "
+            "canonical string"
+        ),
+    ]
+
+
 def test_record_observed_evidence_value_records_truthy_values() -> None:
     provider_ids: set[str] = set()
     provider_counts: set[int] = set()
@@ -1682,6 +3214,9 @@ def test_record_observed_evidence_value_skips_unhashable_values() -> None:
 
     record_observed_evidence_value(values, ["provider-a"])
     record_observed_evidence_value(values, {"provider_id": "provider-a"})
+    record_observed_evidence_value(values, True)
+    record_observed_evidence_value(values, " provider-b")
+    record_observed_evidence_value(values, "provider-c\nbad")
     record_observed_evidence_value(values, "provider-a")
 
     assert values == {"provider-a"}
@@ -1760,32 +3295,39 @@ def test_record_snapshot_bound_evidence_artifact_routes_valid_records() -> None:
     assert snapshot_bound_artifacts == [provider_record]
 
 
-def test_record_snapshot_bound_evidence_artifact_ignores_malformed_anchor_values() -> None:
+def test_record_snapshot_bound_evidence_artifact_rejects_malformed_anchor_values() -> None:
     valid_snapshot_bindings: set[tuple[str, str]] = set()
     snapshot_bound_artifacts: list[dict[str, object]] = []
 
-    record_snapshot_bound_evidence_artifact(
-        kind_name="publish",
-        artifact={"kind": "publish"},
-        snapshot_id=["AA"],
-        merkle_root="BB",
-        valid=True,
-        anchor_kinds=("publish", "latest"),
-        bound_kinds=("provider", "metrics"),
-        valid_snapshot_bindings=valid_snapshot_bindings,
-        snapshot_bound_artifacts=snapshot_bound_artifacts,
+    malformed_cases = (
+        ("publish", ["AA"], "BB", "snapshot_id_hex"),
+        ("latest", "AA", {"root": "BB"}, "merkle_root_hex"),
+        ("publish", " AA", "BB", "snapshot_id_hex"),
+        ("latest", "AA", "BB\nbad", "merkle_root_hex"),
     )
-    record_snapshot_bound_evidence_artifact(
-        kind_name="latest",
-        artifact={"kind": "latest"},
-        snapshot_id="AA",
-        merkle_root={"root": "BB"},
-        valid=True,
-        anchor_kinds=("publish", "latest"),
-        bound_kinds=("provider", "metrics"),
-        valid_snapshot_bindings=valid_snapshot_bindings,
-        snapshot_bound_artifacts=snapshot_bound_artifacts,
-    )
+    for kind_name, snapshot_id, merkle_root, label_name in malformed_cases:
+        artifact: dict[str, object] = {
+            "path": f"{kind_name}.json",
+            "kind": kind_name,
+            "valid": True,
+            "errors": [],
+        }
+        record_snapshot_bound_evidence_artifact(
+            kind_name=kind_name,
+            artifact=artifact,
+            snapshot_id=snapshot_id,
+            merkle_root=merkle_root,
+            valid=True,
+            anchor_kinds=("publish", "latest"),
+            bound_kinds=("provider", "metrics"),
+            valid_snapshot_bindings=valid_snapshot_bindings,
+            snapshot_bound_artifacts=snapshot_bound_artifacts,
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == [
+            f"{label_name} must be a non-empty canonical string"
+        ]
 
     assert valid_snapshot_bindings == set()
     assert snapshot_bound_artifacts == []
@@ -1794,11 +3336,22 @@ def test_record_snapshot_bound_evidence_artifact_ignores_malformed_anchor_values
 def test_record_snapshot_bound_evidence_artifact_rejects_malformed_kind_containers() -> None:
     valid_snapshot_bindings: set[tuple[str, str]] = set()
     snapshot_bound_artifacts: list[dict[str, object]] = []
-    provider_record = {"kind": "provider"}
+    anchor_record: dict[str, object] = {
+        "path": "publish.json",
+        "kind": "publish",
+        "valid": True,
+        "errors": [],
+    }
+    provider_record: dict[str, object] = {
+        "path": "provider.json",
+        "kind": "provider",
+        "valid": True,
+        "errors": [],
+    }
 
     record_snapshot_bound_evidence_artifact(
         kind_name="publish",
-        artifact={"kind": "publish"},
+        artifact=anchor_record,
         snapshot_id="AA",
         merkle_root="BB",
         valid=True,
@@ -1818,6 +3371,77 @@ def test_record_snapshot_bound_evidence_artifact_rejects_malformed_kind_containe
         valid_snapshot_bindings=valid_snapshot_bindings,
         snapshot_bound_artifacts=snapshot_bound_artifacts,
     )
+
+    assert valid_snapshot_bindings == set()
+    assert snapshot_bound_artifacts == []
+    assert anchor_record["valid"] is False
+    assert provider_record["valid"] is False
+    assert anchor_record["errors"] == [
+        "snapshot binding kind containers must be sequences of canonical strings"
+    ]
+    assert provider_record["errors"] == [
+        "snapshot binding kind containers must be sequences of canonical strings"
+    ]
+
+
+def test_record_snapshot_bound_evidence_artifact_rejects_malformed_kind_labels() -> None:
+    valid_snapshot_bindings: set[tuple[str, str]] = set()
+    snapshot_bound_artifacts: list[dict[str, object]] = []
+
+    for kind_name in ("", "publish\nbad", " provider", 7):
+        artifact: dict[str, object] = {
+            "path": "publish.json",
+            "kind": kind_name,
+            "valid": True,
+            "errors": [],
+        }
+
+        record_snapshot_bound_evidence_artifact(
+            kind_name=kind_name,
+            artifact=artifact,
+            snapshot_id="AA",
+            merkle_root="BB",
+            valid=True,
+            anchor_kinds=("publish",),
+            bound_kinds=("provider",),
+            valid_snapshot_bindings=valid_snapshot_bindings,
+            snapshot_bound_artifacts=snapshot_bound_artifacts,
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == [
+            "snapshot binding evidence kind must be a non-empty canonical string"
+        ]
+
+    assert valid_snapshot_bindings == set()
+    assert snapshot_bound_artifacts == []
+
+
+def test_record_snapshot_bound_evidence_artifact_rejects_malformed_valid_flags() -> None:
+    valid_snapshot_bindings: set[tuple[str, str]] = set()
+    snapshot_bound_artifacts: list[dict[str, object]] = []
+
+    for valid in ("yes", 1, None):
+        artifact: dict[str, object] = {
+            "path": "publish.json",
+            "kind": "publish",
+            "valid": True,
+            "errors": [],
+        }
+        record_snapshot_bound_evidence_artifact(
+            kind_name="publish",
+            artifact=artifact,
+            snapshot_id="AA",
+            merkle_root="BB",
+            valid=valid,
+            anchor_kinds=("publish",),
+            bound_kinds=("provider",),
+            valid_snapshot_bindings=valid_snapshot_bindings,
+            snapshot_bound_artifacts=snapshot_bound_artifacts,
+        )
+
+        assert artifact["valid"] is False
+        assert artifact["errors"] == ["artifact valid flag must be a boolean"]
 
     assert valid_snapshot_bindings == set()
     assert snapshot_bound_artifacts == []
@@ -1901,6 +3525,132 @@ def test_validate_snapshot_bound_evidence_artifacts_records_missing_anchor() -> 
     assert required["latest"]["errors"] == ["required anchor missing"]
 
 
+def test_validate_snapshot_bound_evidence_artifacts_rejects_malformed_kind_containers() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    validate_snapshot_bound_evidence_artifacts(
+        required=required,
+        required_kinds="provider",
+        bound_kinds={"provider": True},
+        valid_snapshot_bindings=set(),
+        snapshot_bound_artifacts=[],
+        required_anchor_kind="latest",
+        binding_error="binding must match anchor",
+        binding_summary_error="summary binding must match anchor",
+        missing_anchor_error="missing anchor",
+        missing_anchor_summary_error="summary missing anchor",
+        missing_required_anchor_error="required anchor missing",
+    )
+
+    for row in required.values():
+        assert row["valid"] is False
+        assert row["errors"] == [
+            "snapshot binding kind containers must be sequences of canonical strings"
+        ]
+
+
+def test_validate_snapshot_bound_evidence_artifacts_rejects_malformed_binding_containers() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    validate_snapshot_bound_evidence_artifacts(
+        required=required,
+        required_kinds=("provider", "latest"),
+        bound_kinds=("provider",),
+        valid_snapshot_bindings={"aa": "bb"},
+        snapshot_bound_artifacts=[],
+        required_anchor_kind="latest",
+        binding_error="binding must match anchor",
+        binding_summary_error="summary binding must match anchor",
+        missing_anchor_error="missing anchor",
+        missing_anchor_summary_error="summary missing anchor",
+        missing_required_anchor_error="required anchor missing",
+    )
+
+    for row in required.values():
+        assert row["valid"] is False
+        assert row["errors"] == [
+            "snapshot binding pairs must be a sequence of canonical string pairs"
+        ]
+
+
+def test_validate_snapshot_bound_evidence_artifacts_rejects_malformed_bound_artifacts() -> None:
+    malformed_container_required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+    malformed_row_required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    validate_snapshot_bound_evidence_artifacts(
+        required=malformed_container_required,
+        required_kinds=("provider", "latest"),
+        bound_kinds=("provider",),
+        valid_snapshot_bindings={("aa", "bb")},
+        snapshot_bound_artifacts="provider",
+        required_anchor_kind="latest",
+        binding_error="binding must match anchor",
+        binding_summary_error="summary binding must match anchor",
+        missing_anchor_error="missing anchor",
+        missing_anchor_summary_error="summary missing anchor",
+        missing_required_anchor_error="required anchor missing",
+    )
+    validate_snapshot_bound_evidence_artifacts(
+        required=malformed_row_required,
+        required_kinds=("provider", "latest"),
+        bound_kinds=("provider",),
+        valid_snapshot_bindings=set(),
+        snapshot_bound_artifacts=["provider"],
+        required_anchor_kind="latest",
+        binding_error="binding must match anchor",
+        binding_summary_error="summary binding must match anchor",
+        missing_anchor_error="missing anchor",
+        missing_anchor_summary_error="summary missing anchor",
+        missing_required_anchor_error="required anchor missing",
+    )
+
+    for required in (malformed_container_required, malformed_row_required):
+        for row in required.values():
+            assert row["valid"] is False
+            assert row["errors"] == [
+                "snapshot bound artifacts must be a sequence of artifact objects"
+            ]
+
+
+def test_validate_snapshot_bound_evidence_artifacts_rejects_malformed_labels() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+        "latest": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    validate_snapshot_bound_evidence_artifacts(
+        required=required,
+        required_kinds=("provider", "latest"),
+        bound_kinds=("provider",),
+        valid_snapshot_bindings=set(),
+        snapshot_bound_artifacts=[],
+        required_anchor_kind="latest",
+        binding_error="",
+        binding_summary_error="summary binding must match anchor",
+        missing_anchor_error="missing anchor",
+        missing_anchor_summary_error="summary missing anchor",
+        missing_required_anchor_error="required anchor missing",
+    )
+
+    for row in required.values():
+        assert row["valid"] is False
+        assert row["errors"] == [
+            "validation binding error must be a non-empty canonical string"
+        ]
+
+
 def test_finalize_custom_required_evidence_rows_fails_closed() -> None:
     required = {
         "provider": {"valid": False, "errors": [], "artifacts": [{"valid": True}]},
@@ -1919,9 +3669,27 @@ def test_finalize_custom_required_evidence_rows_fails_closed() -> None:
     assert required["metrics"]["artifacts"] == []
     assert required["metrics"]["errors"] == [
         "required `metrics` errors must be a list",
-        "missing required `metrics` evidence",
+        "required `metrics` artifacts must be a sequence",
     ]
     assert required["transport"]["valid"] is False
+
+
+def test_finalize_custom_required_evidence_rows_rejects_malformed_artifact_rows() -> None:
+    required = {
+        "provider": {
+            "valid": True,
+            "errors": [],
+            "artifacts": [{"valid": True, "path": "provider.json"}, "bad"],
+        },
+    }
+
+    finalize_custom_required_evidence_rows(required, evidence_label="evidence")
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["artifacts"] == []
+    assert required["provider"]["errors"] == [
+        "required `provider` artifacts must be a sequence of artifact objects"
+    ]
 
 
 def test_finalize_custom_required_evidence_rows_rejects_error_shape_drift() -> None:
@@ -1950,10 +3718,37 @@ def test_finalize_custom_required_evidence_rows_rejects_malformed_rows() -> None
     }
 
 
+def test_finalize_custom_required_evidence_rows_rejects_malformed_evidence_label() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": [{"valid": True}]},
+    }
+
+    finalize_custom_required_evidence_rows(required, evidence_label=" evidence")
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation evidence label must be a non-empty canonical string"
+    ]
+
+
+def test_finalize_custom_required_evidence_rows_rejects_malformed_kind_labels() -> None:
+    required = {
+        1: {"valid": True, "errors": [], "artifacts": [{"valid": True}]},
+    }
+
+    finalize_custom_required_evidence_rows(required, evidence_label="evidence")
+
+    assert 1 not in required
+    assert required["<unknown>"]["valid"] is False
+    assert required["<unknown>"]["errors"] == [
+        "validation required evidence kind must be a non-empty canonical string"
+    ]
+
+
 def test_record_custom_required_evidence_artifact_updates_existing_rows() -> None:
     artifact = {"valid": False, "path": "provider.json"}
     required = {
-        "provider": {"valid": False, "errors": "bad", "artifacts": "bad"},
+        "provider": {"valid": False, "errors": "bad", "artifacts": []},
         "latest": {"valid": False, "errors": [], "artifacts": []},
     }
 
@@ -1978,7 +3773,7 @@ def test_record_custom_required_evidence_artifact_updates_existing_rows() -> Non
     assert required["latest"]["artifacts"] == []
 
 
-def test_record_custom_required_evidence_artifact_repairs_malformed_row() -> None:
+def test_record_custom_required_evidence_artifact_rejects_malformed_row_before_append() -> None:
     artifact = {"valid": True, "path": "provider.json"}
     required = {"provider": "bad"}
 
@@ -1992,7 +3787,7 @@ def test_record_custom_required_evidence_artifact_repairs_malformed_row() -> Non
     assert required["provider"] == {
         "valid": False,
         "errors": ["required `provider` row must be an object"],
-        "artifacts": [artifact],
+        "artifacts": [],
     }
 
 
@@ -2017,11 +3812,97 @@ def test_record_custom_required_evidence_artifact_rejects_error_shape_drift() ->
     ) is True
 
     assert required["provider"]["errors"] == [
-        "required `provider` artifact errors must be a sequence of strings"
+        "required `provider` artifact errors must be a sequence of canonical strings"
     ]
     assert required["metrics"]["errors"] == [
-        "required `metrics` artifact errors must be a sequence of strings"
+        "required `metrics` artifact errors must be a sequence of canonical strings"
     ]
+
+
+def test_record_custom_required_evidence_artifact_rejects_malformed_artifact_rows_before_append() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    assert record_custom_required_evidence_artifact(
+        required,
+        "provider",
+        "bad",
+        ("provider proof failed",),
+    ) is True
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["artifacts"] == []
+    assert required["provider"]["errors"] == [
+        "required `provider` artifact must be an object"
+    ]
+
+
+def test_record_custom_required_evidence_artifact_rejects_malformed_existing_artifacts_before_append() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": "bad"},
+        "metrics": {"valid": True, "errors": [], "artifacts": ["bad"]},
+    }
+
+    assert record_custom_required_evidence_artifact(
+        required,
+        "provider",
+        {"valid": True, "path": "provider.json"},
+        (),
+    ) is True
+    assert record_custom_required_evidence_artifact(
+        required,
+        "metrics",
+        {"valid": True, "path": "metrics.json"},
+        (),
+    ) is True
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["artifacts"] == "bad"
+    assert required["provider"]["errors"] == [
+        "required `provider` artifacts must be a sequence"
+    ]
+    assert required["metrics"]["valid"] is False
+    assert required["metrics"]["artifacts"] == ["bad"]
+    assert required["metrics"]["errors"] == [
+        "required `metrics` artifacts must be a sequence of artifact objects"
+    ]
+
+
+def test_record_custom_required_evidence_artifact_rejects_malformed_error_text() -> None:
+    required = {
+        "provider": {"valid": False, "errors": [], "artifacts": []},
+    }
+
+    assert record_custom_required_evidence_artifact(
+        required,
+        "provider",
+        {"valid": False, "path": "provider.json"},
+        ("", " provider proof failed"),
+    ) is True
+
+    assert required["provider"]["errors"] == [
+        "required `provider` artifact errors must be a sequence of canonical strings"
+    ]
+
+
+def test_record_custom_required_evidence_artifact_rejects_malformed_kind_label() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+
+    assert record_custom_required_evidence_artifact(
+        required,
+        " provider",
+        {"valid": False, "path": "provider.json"},
+        (),
+    ) is False
+
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation required evidence kind must be a non-empty canonical string"
+    ]
+    assert required["provider"]["artifacts"] == []
 
 
 def test_evidence_artifact_fingerprint_returns_mapping_or_empty() -> None:
@@ -2036,6 +3917,8 @@ def test_evidence_artifact_detail_returns_mapping_or_empty() -> None:
     detail = {"digest_hex": "a" * 64}
 
     assert evidence_artifact_detail({"cycle": detail}, "cycle") is detail
+    assert evidence_artifact_detail({" cycle": detail}, " cycle") == {}
+    assert evidence_artifact_detail({"cycle\nbad": detail}, "cycle\nbad") == {}
     assert evidence_artifact_detail({"cycle": []}, "cycle") == {}
     assert evidence_artifact_detail({}, "cycle") == {}
 
@@ -2045,6 +3928,10 @@ def test_evidence_artifact_schema_returns_string_or_unknown() -> None:
         "sorafs.example.v1"
     )
     assert evidence_artifact_schema({"schema": ""}) == "<unknown>"
+    assert evidence_artifact_schema({"schema": " sorafs.example.v1"}) == "<unknown>"
+    assert evidence_artifact_schema({"schema": "sorafs.example.v1\nbad"}) == (
+        "<unknown>"
+    )
     assert evidence_artifact_schema({"schema": None}) == "<unknown>"
     assert evidence_artifact_schema({}) == "<unknown>"
 
@@ -2064,6 +3951,18 @@ def test_count_evidence_artifacts_rejects_malformed_buckets_without_traceback() 
     assert count_evidence_artifacts({"routes": "bad"}) == 0
     assert count_evidence_artifacts({"routes": b"bad"}) == 0
     assert count_evidence_artifacts({"routes": None}) == 0
+    assert count_evidence_artifacts({"routes": ["bad"]}) == 0
+    assert count_evidence_artifacts({"routes": [{"valid": True}, "bad"]}) == 0
+    assert (
+        count_evidence_artifacts(
+            {
+                "routes": [{"valid": True}],
+                "metrics": ["bad"],
+            }
+        )
+        == 0
+    )
+    assert count_evidence_artifacts({"bad\nkind": [{"valid": True}]}) == 0
 
 
 def test_count_recognized_evidence_artifacts_counts_custom_rows() -> None:
@@ -2077,6 +3976,8 @@ def test_count_recognized_evidence_artifacts_rejects_strings_without_traceback()
     assert count_recognized_evidence_artifacts("bad") == 0
     assert count_recognized_evidence_artifacts(b"bad") == 0
     assert count_recognized_evidence_artifacts(None) == 0
+    assert count_recognized_evidence_artifacts(["bad"]) == 0
+    assert count_recognized_evidence_artifacts(({"path": "one.json"}, "bad")) == 0
 
 
 def test_recognized_evidence_artifacts_are_valid_requires_explicit_true() -> None:
@@ -2099,6 +4000,9 @@ def test_count_evidence_files_rejects_strings_without_traceback() -> None:
     assert count_evidence_files("evidence.json") == 0
     assert count_evidence_files(b"evidence.json") == 0
     assert count_evidence_files(None) == 0
+    assert count_evidence_files(["evidence.json"]) == 0
+    assert count_evidence_files([Path("one.json"), "two.json"]) == 0
+    assert count_evidence_files([Path("one.json"), object()]) == 0
 
 
 def test_init_evidence_artifact_buckets_returns_empty_kind_lists() -> None:
@@ -2114,6 +4018,8 @@ def test_init_evidence_artifact_buckets_rejects_malformed_kind_names() -> None:
     assert init_evidence_artifact_buckets(()) == {}
     assert init_evidence_artifact_buckets(("route", "route")) == {}
     assert init_evidence_artifact_buckets(("route", 1)) == {}
+    assert init_evidence_artifact_buckets((" route",)) == {}
+    assert init_evidence_artifact_buckets(("route\nbad",)) == {}
 
 
 def test_evidence_gate_status_reflects_summary_errors() -> None:
@@ -2125,6 +4031,12 @@ def test_evidence_gate_status_fails_closed_on_malformed_errors() -> None:
     assert evidence_gate_status(None) == "blocked"
     assert evidence_gate_status("") == "blocked"
     assert evidence_gate_status(b"") == "blocked"
+    assert evidence_gate_status(()) == "blocked"
+    assert evidence_gate_status(("old",)) == "blocked"
+    assert evidence_gate_status([7]) == "blocked"
+    assert evidence_gate_status([""]) == "blocked"
+    assert evidence_gate_status([" status"]) == "blocked"
+    assert evidence_gate_status(["status\nbad"]) == "blocked"
 
 
 def test_record_evidence_validation_errors_adds_path_prefixes() -> None:
@@ -2173,6 +4085,81 @@ def test_record_evidence_validation_errors_rejects_non_string_entry() -> None:
     ]
 
 
+def test_record_evidence_validation_errors_rejects_non_path_before_messages() -> None:
+    errors: list[str] = []
+
+    record_evidence_validation_errors(
+        "evidence.json",
+        ["schema must be a string"],
+        errors,
+    )
+
+    assert errors == ["evidence validation path must be a path"]
+
+
+def test_record_evidence_validation_errors_rejects_malformed_path_label() -> None:
+    errors: list[str] = []
+
+    record_evidence_validation_errors(
+        Path("bad\nname.json"),
+        ["schema must be a string"],
+        errors,
+    )
+
+    assert errors == ["evidence validation path must be a canonical path"]
+
+
+def test_record_evidence_validation_errors_rejects_malformed_messages() -> None:
+    for validation_errors in ([""], [" status"], ["status "], ["status\nbad"]):
+        errors: list[str] = []
+
+        record_evidence_validation_errors(
+            Path("evidence.json"),
+            validation_errors,
+            errors,
+        )
+
+        assert errors == [
+            "evidence.json: validation errors must be non-empty canonical strings"
+        ]
+
+
+def test_record_evidence_validation_errors_rejects_malformed_error_container() -> None:
+    for errors in ("", (), {"error": "old"}, ["old", 7]):
+        try:
+            record_evidence_validation_errors(
+                Path("evidence.json"),
+                ["schema must be a string"],
+                errors,
+            )
+        except ValueError as error:
+            assert (
+                "evidence validation summary errors must be a list of strings"
+                in str(error)
+            )
+        else:
+            raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_record_evidence_validation_errors_rejects_malformed_existing_summary_error_text() -> None:
+    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+        try:
+            record_evidence_validation_errors(
+                Path("evidence.json"),
+                ["schema must be a string"],
+                errors,
+            )
+        except ValueError as error:
+            assert (
+                "evidence validation summary errors must contain non-empty canonical strings"
+                in str(error)
+            )
+        else:
+            raise AssertionError(
+                f"accepted malformed summary error text {errors!r}"
+            )
+
+
 def test_record_explicit_evidence_validation_errors_only_records_explicit_paths(
     tmp_path: Path,
 ) -> None:
@@ -2196,6 +4183,23 @@ def test_record_explicit_evidence_validation_errors_only_records_explicit_paths(
     )
 
     assert errors == [f"{explicit}: schema must be a string"]
+
+
+def test_record_explicit_evidence_validation_errors_rejects_malformed_identities(
+    tmp_path: Path,
+) -> None:
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text("{}", encoding="utf-8")
+    errors: list[str] = []
+
+    record_explicit_evidence_validation_errors(
+        explicit,
+        [explicit.resolve()],
+        ["schema must be a string"],
+        errors,
+    )
+
+    assert errors == ["explicit evidence identities must be a set of paths"]
 
 
 def test_build_required_evidence_summary_reports_present_valid_and_missing() -> None:
@@ -2248,14 +4252,58 @@ def test_build_required_evidence_summary_reports_invalid_release_artifacts() -> 
     assert errors == ["archive release evidence has invalid artifact(s)"]
 
 
+def test_build_required_evidence_summary_rejects_malformed_artifact_rows() -> None:
+    scalar_errors: list[str] = []
+    mixed_errors: list[str] = []
+
+    scalar_summary = build_required_evidence_summary(
+        ("archive",),
+        {"archive": ["bad"]},
+        {"archive": "sorafs.archive.v1"},
+        scalar_errors,
+        evidence_label="release",
+    )
+    mixed_summary = build_required_evidence_summary(
+        ("archive",),
+        {"archive": [{"valid": True, "path": "release.json"}, "bad"]},
+        {"archive": "sorafs.archive.v1"},
+        mixed_errors,
+        evidence_label="release",
+    )
+
+    for summary in (scalar_summary, mixed_summary):
+        assert summary["archive"]["present"] is False
+        assert summary["archive"]["valid"] is False
+        assert summary["archive"]["artifact_count"] == 0
+        assert summary["archive"]["artifacts"] == []
+        assert summary["archive"]["errors"] == [
+            "required `archive` artifacts must be a sequence of artifact objects"
+        ]
+    assert scalar_errors == [
+        "required archive release artifacts must be a sequence of artifact objects"
+    ]
+    assert mixed_errors == [
+        "required archive release artifacts must be a sequence of artifact objects"
+    ]
+
+
 def test_build_required_evidence_summary_rejects_missing_schema_metadata() -> None:
     errors: list[str] = []
     artifact = {"valid": True, "path": "ready.json", "errors": []}
 
     summary = build_required_evidence_summary(
-        ("ready", "blank"),
-        {"ready": [artifact], "blank": [artifact]},
-        {"blank": ""},
+        ("ready", "blank", "padded", "control"),
+        {
+            "ready": [artifact],
+            "blank": [artifact],
+            "padded": [artifact],
+            "control": [artifact],
+        },
+        {
+            "blank": "",
+            "padded": " sorafs.padded.v1",
+            "control": "sorafs.control.v1\nbad",
+        },
         errors,
         evidence_label="rollout",
     )
@@ -2276,9 +4324,27 @@ def test_build_required_evidence_summary_rejects_missing_schema_metadata() -> No
         "artifacts": [artifact],
         "errors": ["required `blank` schema must be configured"],
     }
+    assert summary["padded"] == {
+        "schema": None,
+        "present": True,
+        "valid": False,
+        "artifact_count": 1,
+        "artifacts": [artifact],
+        "errors": ["required `padded` schema must be configured"],
+    }
+    assert summary["control"] == {
+        "schema": None,
+        "present": True,
+        "valid": False,
+        "artifact_count": 1,
+        "artifacts": [artifact],
+        "errors": ["required `control` schema must be configured"],
+    }
     assert errors == [
         "required ready rollout schema must be configured",
         "required blank rollout schema must be configured",
+        "required padded rollout schema must be configured",
+        "required control rollout schema must be configured",
     ]
 
 
@@ -2417,11 +4483,22 @@ def test_build_required_evidence_summary_rejects_malformed_required_kinds() -> N
         )
         == {}
     )
+    assert (
+        build_required_evidence_summary(
+            ("ready\nbad",),
+            {"ready": [artifact]},
+            {"ready": "sorafs.ready.v1"},
+            errors,
+            evidence_label="matrix",
+        )
+        == {}
+    )
 
     assert errors == [
         "rollout required evidence kinds must be a sequence of strings",
         "release required evidence kinds must be a sequence of strings",
         "canary required evidence kinds must be a sequence of strings",
+        "matrix required evidence kinds must be a sequence of strings",
     ]
 
 
@@ -2516,6 +4593,8 @@ def test_required_evidence_kind_names_rejects_malformed_containers() -> None:
     assert required_evidence_kind_names("route") == []
     assert required_evidence_kind_names({"route": True}) == []
     assert required_evidence_kind_names(("route", 1)) == []
+    assert required_evidence_kind_names((" route",)) == []
+    assert required_evidence_kind_names(("route\nbad",)) == []
 
 
 def test_required_evidence_kind_names_rejects_empty_or_duplicate_kinds() -> None:
@@ -2551,8 +4630,12 @@ def test_evidence_schema_by_kind_rejects_malformed_kind_registry() -> None:
     assert evidence_schema_by_kind("route") == {}
     assert evidence_schema_by_kind({1: Kind("sorafs.route.v1")}) == {}
     assert evidence_schema_by_kind({"": Kind("sorafs.route.v1")}) == {}
+    assert evidence_schema_by_kind({" route": Kind("sorafs.route.v1")}) == {}
+    assert evidence_schema_by_kind({"route\nbad": Kind("sorafs.route.v1")}) == {}
     assert evidence_schema_by_kind({"route": MissingSchema()}) == {}
     assert evidence_schema_by_kind({"route": Kind("")}) == {}
+    assert evidence_schema_by_kind({"route": Kind(" sorafs.route.v1")}) == {}
+    assert evidence_schema_by_kind({"route": Kind("sorafs.route.v1\nbad")}) == {}
     assert evidence_schema_by_kind({"route": Kind(1)}) == {}
     assert evidence_schema_by_kind(
         {
@@ -2575,6 +4658,14 @@ def test_require_object_reports_non_object_values() -> None:
 
     assert require_object([], "payload.routes[0]", errors) == {}
     assert errors == ["payload.routes[0] must be an object"]
+
+
+def test_require_object_rejects_malformed_path_labels() -> None:
+    errors: list[str] = []
+
+    assert require_object([], "payload\nroutes[0]", errors) == {}
+
+    assert errors == ["validation path must be a non-empty canonical string"]
 
 
 def test_require_object_array_returns_indexed_object_records() -> None:
@@ -2603,8 +4694,23 @@ def test_require_object_array_reports_missing_or_empty_arrays() -> None:
 def test_require_object_array_reports_non_object_items() -> None:
     errors: list[str] = []
 
-    assert require_object_array({"routes": ["bad"]}, "routes", errors) == [(0, {})]
+    assert require_object_array({"routes": ["bad"]}, "routes", errors) == []
     assert errors == ["routes[0] must be an object"]
+
+
+def test_require_object_array_returns_empty_for_mixed_malformed_items() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_object_array(
+            {"routes": [{"name": "healthz"}, "bad", {"name": "status"}]},
+            "routes",
+            errors,
+        )
+        == []
+    )
+
+    assert errors == ["routes[1] must be an object"]
 
 
 def test_require_object_array_rejects_malformed_payloads() -> None:
@@ -2615,30 +4721,63 @@ def test_require_object_array_rejects_malformed_payloads() -> None:
     assert errors == ["payload must be an object"]
 
 
-def test_require_string_returns_stripped_non_empty_values() -> None:
+def test_require_object_array_rejects_malformed_labels_before_lookup() -> None:
     errors: list[str] = []
 
-    assert require_string({"field": " value "}, "field", errors) == "value"
+    assert require_object_array({"bad\nroutes": []}, "bad\nroutes", errors) == []
+
+    assert errors == ["validation field must be a non-empty canonical string"]
+
+
+def test_require_string_returns_canonical_non_empty_values() -> None:
+    errors: list[str] = []
+
+    assert require_string({"field": "value"}, "field", errors) == "value"
     assert errors == []
 
 
-def test_require_string_reports_blank_or_non_string_values() -> None:
+def test_require_string_reports_malformed_or_non_string_values() -> None:
     errors: list[str] = []
 
+    assert require_string({"field": " value "}, "field", errors) == ""
+    assert require_string({"field": "value\nbad"}, "field", errors) == ""
     assert require_string({"field": "   "}, "field", errors) == ""
     assert require_string({"count": 1}, "count", errors) == ""
     assert errors == [
-        "field must be a non-empty string",
-        "count must be a non-empty string",
+        "field must be a non-empty canonical string",
+        "field must be a non-empty canonical string",
+        "field must be a non-empty canonical string",
+        "count must be a non-empty canonical string",
     ]
 
 
-def test_require_string_type_returns_string_values_without_trimming() -> None:
+def test_require_string_type_returns_canonical_string_values() -> None:
     errors: list[str] = []
 
-    assert require_string_type({"schema": ""}, "schema", errors) == ""
-    assert require_string_type({"schema": " value "}, "schema", errors) == " value "
+    assert require_string_type({"schema": "value"}, "schema", errors) == "value"
     assert errors == []
+
+
+def test_require_string_type_rejects_malformed_string_values() -> None:
+    errors: list[str] = []
+
+    assert require_string_type({"schema": ""}, "schema", errors) is None
+    assert require_string_type({"schema": " value "}, "schema", errors) is None
+    assert (
+        require_string_type(
+            {"schema": "value\nbad"},
+            "schema",
+            errors,
+            path="artifact.schema",
+        )
+        is None
+    )
+
+    assert errors == [
+        "schema must be a non-empty canonical string",
+        "schema must be a non-empty canonical string",
+        "artifact.schema must be a non-empty canonical string",
+    ]
 
 
 def test_require_string_type_reports_non_string_values_with_path() -> None:
@@ -2653,6 +4792,28 @@ def test_require_string_type_reports_non_string_values_with_path() -> None:
     assert errors == [
         "schema must be a string",
         "artifact.schema must be a string",
+    ]
+
+
+def test_require_string_helpers_reject_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_string({"bad\nfield": "value"}, "bad\nfield", errors) == ""
+    assert require_string_type({"bad\nschema": "v1"}, "bad\nschema", errors) is None
+    assert (
+        require_string_type(
+            {"schema": "v1"},
+            "schema",
+            errors,
+            path="artifact\nschema",
+        )
+        is None
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
     ]
 
 
@@ -2694,6 +4855,30 @@ def test_require_count_value_equal_reports_mismatched_count() -> None:
     )
 
     assert errors == ["logged_session_count must equal session_count"]
+
+
+def test_require_count_value_equal_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_count_value_equal(
+        {"bad\ncount": 2},
+        "bad\ncount",
+        3,
+        "session_count",
+        errors,
+    )
+    require_count_value_equal(
+        {"logged_session_count": 2},
+        "logged_session_count",
+        3,
+        "bad\nexpected",
+        errors,
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation count label must be a non-empty canonical string",
+    ]
 
 
 def test_require_count_value_equal_skips_invalid_expected_count() -> None:
@@ -2741,6 +4926,35 @@ def test_require_known_schema_reports_type_and_unknown_schema_errors() -> None:
     ]
 
 
+def test_require_known_schema_rejects_malformed_schema_before_lookup() -> None:
+    errors: list[str] = []
+    kinds = {"sorafs.test.v1": "test-kind"}
+
+    assert (
+        require_known_schema(
+            {"schema": " sorafs.test.v1"},
+            kinds,
+            "SoraFS test artifact",
+            errors,
+        )
+        is None
+    )
+    assert (
+        require_known_schema(
+            {"schema": "sorafs.test.v1\nbad"},
+            kinds,
+            "SoraFS test artifact",
+            errors,
+        )
+        is None
+    )
+
+    assert errors == [
+        "schema must be a non-empty canonical string",
+        "schema must be a non-empty canonical string",
+    ]
+
+
 def test_require_known_schema_rejects_malformed_schema_registry() -> None:
     errors: list[str] = []
 
@@ -2773,6 +4987,7 @@ def test_validate_standard_evidence_payload_runs_shared_wrapper_checks() -> None
             "status": "passed",
             "deployment_id": "prod-sorafs-1",
             "environment": "production",
+            "deployment_context_reviewed": True,
             "responseBody": "payload leaked",
         },
         {"sorafs.test.v1": Kind()},
@@ -2789,6 +5004,73 @@ def test_validate_standard_evidence_payload_runs_shared_wrapper_checks() -> None
         "responseBody must not be present in rollout evidence",
         "kind-specific failure",
     ]
+
+
+def test_validate_standard_evidence_payload_requires_reviewed_deployment_context_marker() -> None:
+    class Kind:
+        name = "route"
+
+    called = False
+
+    def validate_kind(
+        _kind: Kind,
+        _payload: dict[str, object],
+        _errors: list[str],
+    ) -> None:
+        nonlocal called
+        called = True
+
+    kind_name, errors = validate_standard_evidence_payload(
+        {
+            "schema": "sorafs.test.v1",
+            "status": "passed",
+            "deployment_id": "prod-sorafs-1",
+            "environment": "production",
+        },
+        {"sorafs.test.v1": Kind()},
+        "SoraFS test artifact",
+        set(),
+        "rollout evidence",
+        validate_kind,
+        require_reviewed_deployment_context=True,
+    )
+
+    assert kind_name == "route"
+    assert called is True
+    assert errors == ["deployment_context_reviewed must be true"]
+
+
+def test_validate_standard_evidence_payload_rejects_malformed_context_option() -> None:
+    class Kind:
+        name = "route"
+
+    called = False
+
+    def validate_kind(
+        _kind: Kind,
+        _payload: dict[str, object],
+        _errors: list[str],
+    ) -> None:
+        nonlocal called
+        called = True
+
+    for require_context in ("yes", 1, None):
+        kind_name, errors = validate_standard_evidence_payload(
+            {"schema": "sorafs.test.v1", "status": "passed"},
+            {"sorafs.test.v1": Kind()},
+            "SoraFS test artifact",
+            set(),
+            "rollout evidence",
+            validate_kind,
+            require_reviewed_deployment_context=require_context,
+        )
+
+        assert kind_name is None
+        assert errors == [
+            "validation require_reviewed_deployment_context must be a boolean"
+        ]
+
+    assert called is False
 
 
 def test_validate_standard_evidence_payload_rejects_malformed_payload() -> None:
@@ -2864,12 +5146,75 @@ def test_require_string_equal_supports_path_and_unquoted_expected_label() -> Non
     assert errors == ["artifact.schema must be sorafs.test.v1"]
 
 
+def test_require_string_equal_rejects_malformed_quote_option() -> None:
+    errors: list[str] = []
+
+    for quote_expected in ("yes", 1, None):
+        require_string_equal(
+            {"schema": "other"},
+            "schema",
+            "expected",
+            errors,
+            quote_expected=quote_expected,
+        )
+
+    assert errors == ["validation quote_expected must be a boolean"] * 3
+
+
 def test_require_string_equal_rejects_malformed_payloads() -> None:
     errors: list[str] = []
 
     require_string_equal("bad", "schema", "expected", errors)
 
     assert errors == ["payload must be an object"]
+
+
+def test_require_string_equal_rejects_malformed_values_before_compare() -> None:
+    errors: list[str] = []
+
+    require_string_equal({"schema": ""}, "schema", "expected", errors)
+    require_string_equal({"schema": 7}, "schema", "expected", errors)
+    require_string_equal({"schema": " expected"}, "schema", "expected", errors)
+    require_string_equal(
+        {"schema": "expected\nbad"},
+        "schema",
+        "expected",
+        errors,
+        path="artifact.schema",
+    )
+
+    assert errors == [
+        "schema must be a non-empty canonical string",
+        "schema must be a non-empty canonical string",
+        "schema must be a non-empty canonical string",
+        "artifact.schema must be a non-empty canonical string",
+    ]
+
+
+def test_require_string_equal_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_string_equal({"bad\nfield": "expected"}, "bad\nfield", "expected", errors)
+    require_string_equal(
+        {"schema": "expected"},
+        "schema",
+        "expected",
+        errors,
+        path="artifact\nschema",
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
+def test_require_string_equal_rejects_malformed_expected_value_before_compare() -> None:
+    errors: list[str] = []
+
+    require_string_equal({"schema": "expected\nbad"}, "schema", "expected\nbad", errors)
+
+    assert errors == ["validation expected value must be a non-empty canonical string"]
 
 
 def test_require_string_value_equal_accepts_matching_values() -> None:
@@ -2906,7 +5251,7 @@ def test_require_string_value_equal_reports_mismatches() -> None:
     assert errors == ["proof.provider_id must match provider.provider_id"]
 
 
-def test_require_string_value_equal_reports_blank_or_non_string_values() -> None:
+def test_require_string_value_equal_reports_malformed_or_non_string_values() -> None:
     errors: list[str] = []
 
     assert (
@@ -2931,13 +5276,53 @@ def test_require_string_value_equal_reports_blank_or_non_string_values() -> None
     )
     assert (
         require_string_value_equal(
+            " provider-a",
+            "proof.provider_id",
+            "provider-a",
+            "provider.provider_id",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_value_equal(
+            "provider-a\nbad",
+            "proof.provider_id",
+            "provider-a",
+            "provider.provider_id",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_value_equal(
             "provider-a",
             "proof.provider_id",
             {},
             "provider.provider_id",
             errors,
         )
-        == "provider-a"
+        == ""
+    )
+    assert (
+        require_string_value_equal(
+            "provider-a",
+            "proof.provider_id",
+            " provider-a",
+            "provider.provider_id",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_value_equal(
+            "provider-a",
+            "proof.provider_id",
+            "provider-a\nbad",
+            "provider.provider_id",
+            errors,
+        )
+        == ""
     )
     assert (
         require_string_value_equal(
@@ -2947,14 +5332,60 @@ def test_require_string_value_equal_reports_blank_or_non_string_values() -> None
             "provider.provider_id",
             errors,
         )
-        == "provider-a"
+        == ""
     )
 
     assert errors == [
-        "proof.provider_id must be a non-empty string",
-        "proof.provider_id must be a non-empty string",
-        "provider.provider_id must be a non-empty string",
-        "provider.provider_id must be a non-empty string",
+        "proof.provider_id must be a non-empty canonical string",
+        "proof.provider_id must be a non-empty canonical string",
+        "proof.provider_id must be a non-empty canonical string",
+        "proof.provider_id must be a non-empty canonical string",
+        "provider.provider_id must be a non-empty canonical string",
+        "provider.provider_id must be a non-empty canonical string",
+        "provider.provider_id must be a non-empty canonical string",
+        "provider.provider_id must be a non-empty canonical string",
+    ]
+
+
+def test_require_string_value_equal_rejects_malformed_labels_before_compare() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_value_equal(
+            "provider-a",
+            "proof\nprovider_id",
+            "provider-a",
+            "provider.provider_id",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_value_equal(
+            "provider-a",
+            "proof.provider_id",
+            "provider-a",
+            "provider\nprovider_id",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_value_equal(
+            "provider-b",
+            "proof.provider_id",
+            "provider-a",
+            "provider.provider_id",
+            errors,
+            message="bad\nmessage",
+        )
+        == ""
+    )
+
+    assert errors == [
+        "validation value label must be a non-empty canonical string",
+        "validation expected label must be a non-empty canonical string",
+        "validation message must be a non-empty canonical string",
     ]
 
 
@@ -2988,6 +5419,52 @@ def test_require_string_in_reports_disallowed_values() -> None:
     )
 
     assert errors == ["manual_trigger_route_state must be `wired` or `retired`"]
+
+
+def test_require_string_in_rejects_malformed_quote_option() -> None:
+    errors: list[str] = []
+
+    for quote_values in ("yes", 1, None):
+        assert (
+            require_string_in(
+                {"manual_trigger_route_state": "missing"},
+                "manual_trigger_route_state",
+                ("wired", "retired"),
+                errors,
+                quote_values=quote_values,
+            )
+            == ""
+        )
+
+    assert errors == ["validation quote_values must be a boolean"] * 3
+
+
+def test_require_string_in_rejects_noncanonical_values_before_membership() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": " wired"},
+            "manual_trigger_route_state",
+            ("wired", "retired"),
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": "wired\nbad"},
+            "manual_trigger_route_state",
+            ("wired", "retired"),
+            errors,
+        )
+        == ""
+    )
+
+    assert errors == [
+        "validation value must be a non-empty canonical string",
+        "validation value must be a non-empty canonical string",
+    ]
 
 
 def test_require_string_in_rejects_malformed_allowed_containers() -> None:
@@ -3029,6 +5506,45 @@ def test_require_string_in_rejects_malformed_allowed_containers() -> None:
             "sequence of strings"
         ),
         "manual_trigger_route_state allowed values must be a sequence of strings",
+    ]
+
+
+def test_require_string_in_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_in(
+            {"bad\nstate": "wired"},
+            "bad\nstate",
+            ("wired",),
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": "wired"},
+            "manual_trigger_route_state",
+            ("wired",),
+            errors,
+            path="archive\nstate",
+        )
+        == ""
+    )
+    assert (
+        require_string_in(
+            {"manual_trigger_route_state": "wired"},
+            "manual_trigger_route_state",
+            ("wired\nbad",),
+            errors,
+        )
+        == ""
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+        "validation allowed value must be a non-empty canonical string",
     ]
 
 
@@ -3136,6 +5652,21 @@ def test_require_rollout_deployment_id_rejects_invalid_shape() -> None:
         "deployment_id must be 1-128 ASCII letters, digits, '.', '_' or '-' "
         "and start/end with a letter or digit",
         "deployment_id must be a non-empty string",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_noncanonical_values() -> None:
+    errors: list[str] = []
+
+    assert require_rollout_deployment_id({"deployment_id": " prod-lane"}, errors) == ""
+    assert (
+        require_rollout_deployment_id({"deployment_id": "prod-lane\nbad"}, errors)
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must be a non-empty canonical string",
+        "deployment_id must be a non-empty canonical string",
     ]
 
 
@@ -3280,6 +5811,37 @@ def test_require_rollout_environment_rejects_unreviewed_labels() -> None:
     ]
 
 
+def test_require_rollout_environment_rejects_noncanonical_values() -> None:
+    errors: list[str] = []
+
+    assert require_rollout_environment({"environment": " production"}, errors) == ""
+    assert require_rollout_environment({"environment": "prod\nbad"}, errors) == ""
+
+    assert errors == [
+        "environment must be a non-empty canonical string",
+        "environment must be a non-empty canonical string",
+    ]
+
+
+def test_require_rollout_deployment_context_review_requires_explicit_true() -> None:
+    errors: list[str] = []
+
+    require_rollout_deployment_context_review(
+        {"deployment_context_reviewed": True},
+        errors,
+    )
+    require_rollout_deployment_context_review(
+        {"deployment_context_reviewed": False},
+        errors,
+    )
+    require_rollout_deployment_context_review({}, errors)
+
+    assert errors == [
+        "deployment_context_reviewed must be true",
+        "deployment_context_reviewed must be true",
+    ]
+
+
 def test_require_passed_status_accepts_passed_status() -> None:
     errors: list[str] = []
 
@@ -3339,6 +5901,31 @@ def test_require_status_in_reports_disallowed_statuses() -> None:
     ]
 
 
+def test_require_status_in_rejects_malformed_values_before_membership() -> None:
+    errors: list[str] = []
+
+    assert require_status_in({"status": " verified"}, ("verified",), errors) == ""
+    assert require_status_in({"status": "verified\nbad"}, ("verified",), errors) == ""
+    assert require_status_in({"status": ""}, ("verified",), errors) == ""
+    assert (
+        require_status_in(
+            {"status": 7},
+            ("accepted", "published"),
+            errors,
+            path="snapshot.status",
+            allow_absent=True,
+        )
+        == ""
+    )
+
+    assert errors == [
+        "status must be a non-empty canonical string",
+        "status must be a non-empty canonical string",
+        "status must be a non-empty canonical string",
+        "snapshot.status must be a non-empty canonical string",
+    ]
+
+
 def test_require_status_in_rejects_malformed_allowed_containers() -> None:
     errors: list[str] = []
 
@@ -3362,11 +5949,81 @@ def test_require_status_in_rejects_malformed_allowed_containers() -> None:
         )
         == ""
     )
+    assert require_status_in({"status": "verified"}, (" verified",), errors) == ""
+    assert (
+        require_status_in(
+            {"status": "verified"},
+            ("ready\nbad",),
+            errors,
+            path="bad.status",
+        )
+        == ""
+    )
 
     assert errors == [
         "status allowed statuses must be a sequence of strings",
         "snapshot.status allowed statuses must be a sequence of strings",
         "optional.status allowed statuses must be a sequence of strings",
+        "validation allowed status must be a non-empty canonical string",
+        "validation allowed status must be a non-empty canonical string",
+    ]
+
+
+def test_require_status_in_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_status_in(
+            {"bad\nstatus": "verified"},
+            ("verified",),
+            errors,
+            field="bad\nstatus",
+        )
+        == ""
+    )
+    assert (
+        require_status_in(
+            {"status": "verified"},
+            ("verified",),
+            errors,
+            path="artifact\nstatus",
+        )
+        == ""
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
+def test_require_status_in_rejects_malformed_allow_absent_flag() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_status_in(
+            {},
+            ("accepted", "published"),
+            errors,
+            path="snapshot.status",
+            allow_absent="yes",
+        )
+        == ""
+    )
+    assert (
+        require_status_in(
+            {"status": "accepted"},
+            ("accepted", "published"),
+            errors,
+            path="snapshot.status",
+            allow_absent=1,
+        )
+        == ""
+    )
+
+    assert errors == [
+        "snapshot.status allow_absent must be a boolean",
+        "snapshot.status allow_absent must be a boolean",
     ]
 
 
@@ -3390,6 +6047,9 @@ def test_is_hex_accepts_exact_hex_lengths() -> None:
 def test_is_hex_rejects_wrong_length_or_non_hex_values() -> None:
     assert not is_hex("abcd", 8)
     assert not is_hex("not-hex!", 8)
+    assert not is_hex("a", True)
+    assert not is_hex("a", 0)
+    assert not is_hex(1, 1)
 
 
 def test_require_hex_returns_lowercase_hex_values() -> None:
@@ -3410,6 +6070,18 @@ def test_require_hex_reports_missing_or_invalid_values() -> None:
     assert errors == [
         "digest must be 12 hex characters",
         "missing must be a non-empty string",
+    ]
+
+
+def test_require_hex_rejects_padded_values_before_normalization() -> None:
+    errors: list[str] = []
+
+    assert require_hex({"digest": " ABCDEF012345"}, "digest", 12, errors) == ""
+    assert require_hex({"digest": "ABCDEF012345\n"}, "digest", 12, errors) == ""
+
+    assert errors == [
+        "digest must be 12 hex characters",
+        "digest must be 12 hex characters",
     ]
 
 
@@ -3435,6 +6107,36 @@ def test_require_hex_rejects_malformed_payloads() -> None:
     assert errors == ["payload must be an object"]
 
 
+def test_require_hex_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_hex({"bad\ndigest": "ABCDEF012345"}, "bad\ndigest", 12, errors) == ""
+    assert (
+        require_hex(
+            {"digest": "ABCDEF012345"},
+            "digest",
+            12,
+            errors,
+            path="items\n[0].digest",
+        )
+        == ""
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
+def test_require_hex_rejects_malformed_length_before_lookup() -> None:
+    errors: list[str] = []
+
+    for length in (True, False, "12", 12.0, 0, -1):
+        assert require_hex({"digest": "a"}, "digest", length, errors) == ""
+
+    assert errors == ["validation hex length must be a positive integer"] * 6
+
+
 def test_require_policy_digest_normalizes_valid_digest() -> None:
     errors: list[str] = []
 
@@ -3447,9 +6149,11 @@ def test_require_policy_digest_reports_missing_or_bad_digest() -> None:
 
     assert require_policy_digest({}, errors) == ""
     assert require_policy_digest({"policy_digest_hex": "not-hex"}, errors) == ""
+    assert require_policy_digest({"policy_digest_hex": " " + ("ab" * 32)}, errors) == ""
 
     assert errors == [
         "policy_digest_hex must be a non-empty string",
+        "policy_digest_hex must be 64 hex characters",
         "policy_digest_hex must be 64 hex characters",
     ]
 
@@ -3482,6 +6186,23 @@ def test_require_optional_hex_rejects_malformed_payloads() -> None:
     require_optional_hex("bad", "digest", 12, errors)
 
     assert errors == ["payload must be an object"]
+
+
+def test_require_optional_hex_rejects_malformed_label_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_optional_hex({"bad\ndigest": "ABCDEF012345"}, "bad\ndigest", 12, errors)
+
+    assert errors == ["validation field must be a non-empty canonical string"]
+
+
+def test_require_optional_hex_rejects_malformed_length_before_lookup() -> None:
+    errors: list[str] = []
+
+    for length in (True, False, "12", 12.0, 0, -1):
+        require_optional_hex({"digest": None}, "digest", length, errors)
+
+    assert errors == ["validation hex length must be a positive integer"] * 6
 
 
 def test_require_hex_string_array_accepts_optional_arrays() -> None:
@@ -3529,7 +6250,7 @@ def test_require_hex_string_array_reports_length_invalid_and_duplicate_values() 
         expected_length=2,
         expected_length_label="digest_count",
         unique=True,
-    ) == ["abcdef012345", "abcdef012345"]
+    ) == []
 
     assert errors == [
         "digests length must equal digest_count",
@@ -3538,15 +6259,47 @@ def test_require_hex_string_array_reports_length_invalid_and_duplicate_values() 
     ]
 
 
+def test_require_hex_string_array_returns_empty_on_dirty_values() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_hex_string_array(
+            {"digests": ["ABCDEF012345", "abcdef012345"]},
+            "digests",
+            12,
+            errors,
+            unique=True,
+        )
+        == []
+    )
+    assert (
+        require_hex_string_array(
+            {"digests": ["ABCDEF012345", "bad"]},
+            "digests",
+            12,
+            errors,
+        )
+        == []
+    )
+
+    assert errors == [
+        "digests[1] must be unique",
+        "digests[1] must be 12 hex characters",
+    ]
+
+
 def test_require_hex_string_array_uses_path_override() -> None:
     errors: list[str] = []
 
-    require_hex_string_array(
-        {"siblings_hex": [1]},
-        "siblings_hex",
-        12,
-        errors,
-        path="proof.siblings_hex",
+    assert (
+        require_hex_string_array(
+            {"siblings_hex": [1]},
+            "siblings_hex",
+            12,
+            errors,
+            path="proof.siblings_hex",
+        )
+        == []
     )
 
     assert errors == ["proof.siblings_hex[0] must be 12 hex characters"]
@@ -3558,6 +6311,105 @@ def test_require_hex_string_array_rejects_malformed_payloads() -> None:
     assert require_hex_string_array("bad", "siblings_hex", 12, errors) == []
 
     assert errors == ["payload must be an object"]
+
+
+def test_require_hex_string_array_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_hex_string_array(
+            {"bad\nsiblings": ["ABCDEF012345"]},
+            "bad\nsiblings",
+            12,
+            errors,
+        )
+        == []
+    )
+    assert (
+        require_hex_string_array(
+            {"siblings_hex": ["ABCDEF012345"]},
+            "siblings_hex",
+            12,
+            errors,
+            path="proof\nsiblings_hex",
+        )
+        == []
+    )
+    assert (
+        require_hex_string_array(
+            {"siblings_hex": ["ABCDEF012345"]},
+            "siblings_hex",
+            12,
+            errors,
+            expected_length=2,
+            expected_length_label="bad\ncount",
+        )
+        == []
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+        "validation count label must be a non-empty canonical string",
+    ]
+
+
+def test_require_hex_string_array_rejects_malformed_lengths_before_compare() -> None:
+    errors: list[str] = []
+
+    for length in (True, False, "12", 12.0, 0, -1):
+        assert (
+            require_hex_string_array(
+                {"siblings_hex": ["a"]}, "siblings_hex", length, errors
+            )
+            == []
+        )
+    for expected_length in (True, False, "1", 1.0, -1):
+        assert (
+            require_hex_string_array(
+                {"siblings_hex": ["ABCDEF012345"]},
+                "siblings_hex",
+                12,
+                errors,
+                expected_length=expected_length,
+            )
+            == []
+        )
+
+    assert errors == ["validation hex length must be a positive integer"] * 6 + [
+        "siblings_hex expected length must be a non-negative integer"
+    ] * 5
+
+
+def test_require_hex_string_array_rejects_malformed_boolean_options() -> None:
+    errors: list[str] = []
+
+    for non_empty in ("yes", 1, None):
+        assert (
+            require_hex_string_array(
+                {"siblings_hex": []},
+                "siblings_hex",
+                12,
+                errors,
+                non_empty=non_empty,
+            )
+            == []
+        )
+    for unique in ("yes", 1, None):
+        assert (
+            require_hex_string_array(
+                {"siblings_hex": ["ABCDEF012345", "ABCDEF012345"]},
+                "siblings_hex",
+                12,
+                errors,
+                unique=unique,
+            )
+            == []
+        )
+
+    assert errors == ["siblings_hex non_empty must be a boolean"] * 3 + [
+        "siblings_hex unique must be a boolean"
+    ] * 3
 
 
 def test_require_bool_true_accepts_true() -> None:
@@ -3598,6 +6450,23 @@ def test_require_bool_true_rejects_malformed_payloads() -> None:
     assert errors == ["payload must be an object"]
 
 
+def test_require_bool_true_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_bool_true({"bad\nfield": True}, "bad\nfield", errors)
+    require_bool_true(
+        {"ready": True},
+        "ready",
+        errors,
+        path="route\nready",
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
 def test_require_false_accepts_false() -> None:
     errors: list[str] = []
 
@@ -3621,6 +6490,27 @@ def test_require_false_rejects_malformed_payloads() -> None:
     require_false("bad", "included", errors)
 
     assert errors == ["payload must be an object"]
+
+
+def test_require_false_helpers_reject_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_false({"bad\nfield": False}, "bad\nfield", errors)
+    require_false_or_absent({"bad\noptional": False}, "bad\noptional", errors)
+    require_false_or_governed({"bad\ngoverned": False}, "bad\ngoverned", "ok", errors)
+    require_false_or_governed(
+        {"execution_enabled": True, "bad\napproval": True},
+        "execution_enabled",
+        "bad\napproval",
+        errors,
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+    ]
 
 
 def test_require_false_or_absent_accepts_false_or_missing_values() -> None:
@@ -3748,6 +6638,14 @@ def test_require_numeric_integer_helpers_reject_malformed_payloads() -> None:
     assert errors == ["payload must be an object"] * 6
 
 
+def test_require_positive_int_rejects_malformed_label_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_positive_int({"bad\nfield": 3}, "bad\nfield", errors) == 0
+
+    assert errors == ["validation field must be a non-empty canonical string"]
+
+
 def test_require_minimum_int_accepts_values_at_or_above_minimum() -> None:
     errors: list[str] = []
 
@@ -3773,6 +6671,14 @@ def test_require_minimum_int_reuses_positive_integer_validation() -> None:
         "provider_count must be a positive integer",
         "provider_count must be at least 3",
     ]
+
+
+def test_require_minimum_int_rejects_malformed_label_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_minimum_int({"bad\ncount": 2}, "bad\ncount", 3, errors) == 0
+
+    assert errors == ["validation field must be a non-empty canonical string"]
 
 
 def test_require_string_not_equal_accepts_other_values() -> None:
@@ -3806,6 +6712,51 @@ def test_require_string_not_equal_rejects_disallowed_value() -> None:
     )
 
     assert errors == ["proof_system must be production proof backend"]
+
+
+def test_require_string_not_equal_reports_default_disallowed_value_error() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_not_equal(
+            {"proof_system": "transcript_digest_v1"},
+            "proof_system",
+            "transcript_digest_v1",
+            errors,
+        )
+        == "transcript_digest_v1"
+    )
+
+    assert errors == ["proof_system must not be `transcript_digest_v1`"]
+
+
+def test_require_string_not_equal_rejects_malformed_labels_before_compare() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_string_not_equal(
+            {"proof_system": "transcript_digest_v1"},
+            "proof_system",
+            "transcript_digest\nv1",
+            errors,
+        )
+        == ""
+    )
+    assert (
+        require_string_not_equal(
+            {"proof_system": "transcript_digest_v1"},
+            "proof_system",
+            "transcript_digest_v1",
+            errors,
+            message="bad\nmessage",
+        )
+        == ""
+    )
+
+    assert errors == [
+        "validation disallowed value must be a non-empty canonical string",
+        "validation message must be a non-empty canonical string",
+    ]
 
 
 def test_require_minimum_value_accepts_values_at_or_above_minimum() -> None:
@@ -3842,6 +6793,44 @@ def test_require_minimum_value_supports_custom_messages() -> None:
     assert errors == ["result_count must be at least quorum"]
 
 
+def test_require_minimum_value_rejects_malformed_label_before_compare() -> None:
+    errors: list[str] = []
+
+    assert require_minimum_value(1, "bad\ncount", 2, errors) == 0
+
+    assert errors == ["validation threshold label must be a non-empty canonical string"]
+
+
+def test_require_minimum_value_rejects_malformed_numeric_inputs() -> None:
+    errors: list[str] = []
+
+    for value in (True, False, "1", 1.0):
+        assert require_minimum_value(value, "provider_count", 2, errors) == 0
+    for minimum in (True, False, "2", 2.0):
+        assert require_minimum_value(3, "provider_count", minimum, errors) == 0
+
+    assert errors == ["provider_count must be an integer"] * 4 + [
+        "provider_count minimum threshold must be an integer"
+    ] * 4
+
+
+def test_require_minimum_value_rejects_malformed_custom_messages() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_minimum_value(
+            1,
+            "result_count",
+            2,
+            errors,
+            message="bad\nmessage",
+        )
+        == 0
+    )
+
+    assert errors == ["validation message must be a non-empty canonical string"]
+
+
 def test_require_maximum_value_accepts_values_at_or_below_maximum() -> None:
     errors: list[str] = []
 
@@ -3876,6 +6865,44 @@ def test_require_maximum_value_supports_custom_messages() -> None:
     assert errors == ["quorum must be <= panel_size"]
 
 
+def test_require_maximum_value_rejects_malformed_label_before_compare() -> None:
+    errors: list[str] = []
+
+    assert require_maximum_value(8, "bad\nquorum", 7, errors) == 0
+
+    assert errors == ["validation threshold label must be a non-empty canonical string"]
+
+
+def test_require_maximum_value_rejects_malformed_numeric_inputs() -> None:
+    errors: list[str] = []
+
+    for value in (True, False, "8", 8.0):
+        assert require_maximum_value(value, "quorum", 7, errors) == 0
+    for maximum in (True, False, "7", 7.0):
+        assert require_maximum_value(6, "quorum", maximum, errors) == 0
+
+    assert errors == ["quorum must be an integer"] * 4 + [
+        "quorum maximum threshold must be an integer"
+    ] * 4
+
+
+def test_require_maximum_value_rejects_malformed_custom_messages() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_maximum_value(
+            8,
+            "quorum",
+            7,
+            errors,
+            message="bad\nmessage",
+        )
+        == 0
+    )
+
+    assert errors == ["validation message must be a non-empty canonical string"]
+
+
 def test_require_non_negative_int_returns_zero_and_positive_integers() -> None:
     errors: list[str] = []
 
@@ -3893,6 +6920,14 @@ def test_require_non_negative_int_rejects_bool_and_negative_values() -> None:
         "flag must be a non-negative integer",
         "negative must be a non-negative integer",
     ]
+
+
+def test_require_non_negative_int_rejects_malformed_label_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_non_negative_int({"bad\nfield": 3}, "bad\nfield", errors) == 0
+
+    assert errors == ["validation field must be a non-empty canonical string"]
 
 
 def test_require_zero_count_accepts_zero_counts() -> None:
@@ -3969,6 +7004,96 @@ def test_require_int_range_reports_invalid_values_with_path_or_custom_message() 
     ]
 
 
+def test_require_int_range_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_int_range(
+            {"bad\nscore": 5},
+            "bad\nscore",
+            errors,
+            min_value=0,
+            max_value=10,
+        )
+        == 0
+    )
+    assert (
+        require_int_range(
+            {"score": 5},
+            "score",
+            errors,
+            min_value=0,
+            max_value=10,
+            path="provider\nscore",
+        )
+        == 0
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
+def test_require_int_range_rejects_malformed_thresholds() -> None:
+    errors: list[str] = []
+
+    for min_value in (True, False, "0", 0.0):
+        assert (
+            require_int_range(
+                {"score": 5},
+                "score",
+                errors,
+                min_value=min_value,
+                max_value=10,
+            )
+            == 0
+        )
+    for max_value in (True, False, "10", 10.0):
+        assert (
+            require_int_range(
+                {"score": 5},
+                "score",
+                errors,
+                min_value=0,
+                max_value=max_value,
+            )
+            == 0
+        )
+    assert (
+        require_int_range(
+            {"score": 5},
+            "score",
+            errors,
+            min_value=10,
+            max_value=0,
+        )
+        == 10
+    )
+
+    assert errors == ["validation minimum threshold must be an integer"] * 4 + [
+        "validation maximum threshold must be an integer"
+    ] * 4 + ["validation maximum threshold must be >= minimum threshold"]
+
+
+def test_require_int_range_rejects_malformed_custom_messages() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_int_range(
+            {"count": 11},
+            "count",
+            errors,
+            min_value=1,
+            max_value=10,
+            message="bad\nmessage",
+        )
+        == 1
+    )
+
+    assert errors == ["validation message must be a non-empty canonical string"]
+
+
 def test_require_advancing_int_pair_accepts_strictly_advancing_values() -> None:
     errors: list[str] = []
 
@@ -3995,6 +7120,28 @@ def test_require_advancing_int_pair_rejects_invalid_or_non_advancing_values() ->
     ]
 
 
+def test_require_advancing_int_pair_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_advancing_int_pair(
+        {"bad\nsince": 0, "next_since": 1},
+        "bad\nsince",
+        "next_since",
+        errors,
+    ) == (0, 0)
+    assert require_advancing_int_pair(
+        {"since": 0, "bad\nnext": 1},
+        "since",
+        "bad\nnext",
+        errors,
+    ) == (0, 0)
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+    ]
+
+
 def test_require_score_bps_accepts_scores_in_range() -> None:
     errors: list[str] = []
 
@@ -4014,6 +7161,14 @@ def test_require_score_bps_reports_invalid_or_out_of_range_scores() -> None:
         "flag must be a non-negative integer",
         "score must be <= 10000",
     ]
+
+
+def test_require_score_bps_rejects_malformed_label_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_score_bps({"bad\nscore": 10_001}, "bad\nscore", errors)
+
+    assert errors == ["validation field must be a non-empty canonical string"]
 
 
 def test_require_2xx_status_accepts_success_status_codes() -> None:
@@ -4052,6 +7207,23 @@ def test_require_2xx_status_uses_path_override_in_errors() -> None:
     )
 
     assert errors == ["routes[0].status_code must be a 2xx status"]
+
+
+def test_require_2xx_status_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_2xx_status({"bad\nfield": 200}, "bad\nfield", errors)
+    require_2xx_status(
+        {"status_code": 200},
+        "status_code",
+        errors,
+        path="routes\n[0].status_code",
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
 
 
 def test_require_status_and_number_helpers_reject_malformed_payloads() -> None:
@@ -4116,6 +7288,29 @@ def test_require_non_negative_number_uses_path_override_in_errors() -> None:
     assert errors == ["routes[0].latency_ms must be a non-negative number"]
 
 
+def test_require_non_negative_number_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_non_negative_number({"bad\nfield": 1.0}, "bad\nfield", errors)
+        == 0.0
+    )
+    assert (
+        require_non_negative_number(
+            {"latency_ms": 1.0},
+            "latency_ms",
+            errors,
+            path="routes\n[0].latency_ms",
+        )
+        == 0.0
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
 def test_require_maximum_number_accepts_values_at_or_below_maximum() -> None:
     errors: list[str] = []
 
@@ -4164,6 +7359,43 @@ def test_require_maximum_number_reuses_non_negative_number_validation() -> None:
     ]
 
 
+def test_require_maximum_number_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_maximum_number({"bad\nfield": 20}, "bad\nfield", 10, errors) == 0.0
+    )
+    assert (
+        require_maximum_number(
+            {"latency_ms": 20},
+            "latency_ms",
+            10,
+            errors,
+            path="routes\n[0].latency_ms",
+        )
+        == 0.0
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
+def test_require_maximum_number_rejects_malformed_thresholds() -> None:
+    errors: list[str] = []
+
+    for maximum in (True, False, "10", float("nan"), float("inf"), -1.0):
+        assert (
+            require_maximum_number({"latency_ms": 1}, "latency_ms", maximum, errors)
+            == 1.0
+        )
+
+    assert errors == [
+        "latency_ms maximum threshold must be a non-negative number"
+    ] * 6
+
+
 def test_require_maximum_int_accepts_values_at_or_below_maximum() -> None:
     errors: list[str] = []
 
@@ -4206,6 +7438,44 @@ def test_require_maximum_int_reuses_integer_validation() -> None:
     ]
 
 
+def test_require_maximum_int_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert require_maximum_int({"bad\nlag": 11}, "bad\nlag", 10, errors) == 0
+    assert (
+        require_maximum_int(
+            {"lag": 11},
+            "lag",
+            10,
+            errors,
+            path="checker\nlag",
+        )
+        == 0
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation path must be a non-empty canonical string",
+    ]
+
+
+def test_require_maximum_int_rejects_malformed_thresholds() -> None:
+    errors: list[str] = []
+
+    for minimum in (True, False, "0", 0.0):
+        assert (
+            require_maximum_int({"lag": 1}, "lag", 10, errors, minimum=minimum)
+            == 0
+        )
+    for maximum in (True, False, "10", 10.0):
+        assert require_maximum_int({"lag": 1}, "lag", maximum, errors) == 0
+    assert require_maximum_int({"lag": 1}, "lag", 0, errors, minimum=1) == 1
+
+    assert errors == ["validation minimum threshold must be an integer"] * 4 + [
+        "validation maximum threshold must be an integer"
+    ] * 4 + ["validation maximum threshold must be >= minimum threshold"]
+
+
 def test_require_count_equal_returns_total_when_passed_matches() -> None:
     errors: list[str] = []
 
@@ -4233,6 +7503,45 @@ def test_require_count_equal_reports_total_or_passed_mismatches() -> None:
     ]
 
 
+def test_require_count_equal_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_count_equal(
+            {"bad\ntotal": 2, "passed": 2},
+            "bad\ntotal",
+            "passed",
+            errors,
+        )
+        == 0
+    )
+    assert (
+        require_count_equal(
+            {"total": 2, "bad\npassed": 2},
+            "total",
+            "bad\npassed",
+            errors,
+        )
+        == 0
+    )
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+    ]
+
+
+def test_require_count_equal_rejects_bool_passed_counts() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_count_equal({"total": 1, "passed": True}, "total", "passed", errors)
+        == 1
+    )
+
+    assert errors == ["passed must equal total"]
+
+
 def test_require_count_match_accepts_equal_counts() -> None:
     errors: list[str] = []
 
@@ -4257,6 +7566,26 @@ def test_require_count_match_reports_passed_count_mismatch() -> None:
     assert errors == ["passed must equal total"]
 
 
+def test_require_count_match_rejects_malformed_labels_before_lookup() -> None:
+    errors: list[str] = []
+
+    require_count_match({"bad\ntotal": 2, "passed": 2}, "bad\ntotal", "passed", errors)
+    require_count_match({"total": 2, "bad\npassed": 2}, "total", "bad\npassed", errors)
+
+    assert errors == [
+        "validation field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+    ]
+
+
+def test_require_count_match_rejects_bool_passed_counts() -> None:
+    errors: list[str] = []
+
+    require_count_match({"total": 1, "passed": True}, "total", "passed", errors)
+
+    assert errors == ["passed must equal total"]
+
+
 def test_require_count_helpers_reject_malformed_payloads() -> None:
     errors: list[str] = []
 
@@ -4265,6 +7594,35 @@ def test_require_count_helpers_reject_malformed_payloads() -> None:
     require_count_match(None, "total", "passed", errors)
 
     assert errors == ["payload must be an object"] * 3
+
+
+def test_require_count_value_equal_rejects_bool_counts() -> None:
+    errors: list[str] = []
+
+    require_count_value_equal(
+        {"logged_session_count": True},
+        "logged_session_count",
+        1,
+        "session_count",
+        errors,
+    )
+
+    assert errors == ["logged_session_count must equal session_count"]
+
+
+def test_require_count_value_equal_rejects_malformed_expected_counts() -> None:
+    errors: list[str] = []
+
+    for expected_count in (True, False, "1", 1.0, -1):
+        require_count_value_equal(
+            {"logged_session_count": 1},
+            "logged_session_count",
+            expected_count,
+            "session_count",
+            errors,
+        )
+
+    assert errors == ["session_count must be a positive integer"] * 5
 
 
 def test_require_count_length_match_accepts_matching_collection_lengths() -> None:
@@ -4283,6 +7641,48 @@ def test_require_count_length_match_reports_length_mismatches() -> None:
     )
 
     assert errors == ["artifact_count must equal artifacts length"]
+
+
+def test_require_count_length_match_rejects_malformed_labels_before_compare() -> None:
+    errors: list[str] = []
+
+    require_count_length_match(1, [(0, {})], "bad\ncount", "artifacts", errors)
+    require_count_length_match(1, [(0, {})], "artifact_count", "bad\nartifacts", errors)
+
+    assert errors == [
+        "validation count label must be a non-empty canonical string",
+        "validation collection label must be a non-empty canonical string",
+    ]
+
+
+def test_require_count_length_match_rejects_malformed_counts() -> None:
+    errors: list[str] = []
+
+    for count in (True, False, "1", 1.0, -1):
+        require_count_length_match(
+            count, [(0, {})], "artifact_count", "artifacts", errors
+        )
+
+    assert errors == [
+        "artifact_count must be a non-negative integer count"
+    ] * 5
+
+
+def test_require_count_length_match_rejects_malformed_collections() -> None:
+    errors: list[str] = []
+
+    require_count_length_match(3, "abc", "artifact_count", "artifacts", errors)
+    require_count_length_match(3, b"abc", "artifact_count", "artifacts", errors)
+    require_count_length_match(
+        1,
+        {"artifact": {"valid": True}},
+        "artifact_count",
+        "artifacts",
+        errors,
+    )
+    require_count_length_match(1, object(), "artifact_count", "artifacts", errors)
+
+    assert errors == ["artifacts must be a sequence"] * 4
 
 
 def test_require_sum_equal_accepts_matching_part_counts() -> None:
@@ -4314,6 +7714,61 @@ def test_require_sum_equal_reports_sum_mismatches() -> None:
     ]
 
 
+def test_require_sum_equal_rejects_malformed_labels_before_compare() -> None:
+    errors: list[str] = []
+
+    require_sum_equal(
+        3,
+        (("bad\napproved", 1), ("rejected_appeal_count", 2)),
+        "appeal_probe_count",
+        errors,
+    )
+    require_sum_equal(
+        3,
+        (("approved_appeal_count", 1), ("rejected_appeal_count", 2)),
+        "bad\ntotal",
+        errors,
+    )
+
+    assert errors == [
+        "validation count label must be a non-empty canonical string",
+        "validation total label must be a non-empty canonical string",
+    ]
+
+
+def test_require_sum_equal_rejects_malformed_total_counts() -> None:
+    errors: list[str] = []
+
+    for total in (True, False, "1", 1.0, -1):
+        require_sum_equal(
+            total,
+            (("approved_appeal_count", 1), ("rejected_appeal_count", 0)),
+            "appeal_probe_count",
+            errors,
+            skip_zero_total=True,
+        )
+
+    assert errors == [
+        "appeal_probe_count must be a non-negative integer count"
+    ] * 5
+
+
+def test_require_sum_equal_rejects_malformed_part_counts() -> None:
+    errors: list[str] = []
+
+    for part_count in (True, "1", 1.0, -1):
+        require_sum_equal(
+            1,
+            (("approved_appeal_count", part_count), ("rejected_appeal_count", 0)),
+            "appeal_probe_count",
+            errors,
+        )
+
+    assert errors == [
+        "approved_appeal_count must be paired with a non-negative integer count"
+    ] * 4
+
+
 def test_require_sum_equal_can_skip_zero_total() -> None:
     errors: list[str] = []
 
@@ -4326,6 +7781,21 @@ def test_require_sum_equal_can_skip_zero_total() -> None:
     )
 
     assert errors == []
+
+
+def test_require_sum_equal_rejects_malformed_skip_zero_option() -> None:
+    errors: list[str] = []
+
+    for skip_zero_total in ("yes", 1, None):
+        require_sum_equal(
+            0,
+            (("accepted_valid_proof_count", 1), ("rejected_invalid_proof_count", 2)),
+            "proof_probe_count",
+            errors,
+            skip_zero_total=skip_zero_total,
+        )
+
+    assert errors == ["validation skip_zero_total must be a boolean"] * 3
 
 
 def test_require_recent_timestamp_accepts_fresh_timestamps() -> None:
@@ -4402,6 +7872,57 @@ def test_require_recent_timestamp_uses_path_override_for_age_errors() -> None:
         "publish.generated_at_unix must not be in the future",
         "latest.generated_at_unix is older than 30 seconds",
     ]
+
+
+def test_require_recent_timestamp_rejects_malformed_path_before_compare() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_recent_timestamp(
+            {"generated_at_unix": 101},
+            "generated_at_unix",
+            errors,
+            now_unix=100,
+            max_age_secs=30,
+            path="publish\ngenerated_at_unix",
+        )
+        == 0
+    )
+
+    assert errors == ["validation path must be a non-empty canonical string"]
+
+
+def test_require_recent_timestamp_rejects_malformed_thresholds() -> None:
+    errors: list[str] = []
+
+    for now_unix in (True, False, "100", 100.0, -1):
+        assert (
+            require_recent_timestamp(
+                {"generated_at_unix": 90},
+                "generated_at_unix",
+                errors,
+                now_unix=now_unix,
+                max_age_secs=30,
+            )
+            == 0
+        )
+    for max_age_secs in (True, False, "30", 30.0, -1):
+        assert (
+            require_recent_timestamp(
+                {"generated_at_unix": 90},
+                "generated_at_unix",
+                errors,
+                now_unix=100,
+                max_age_secs=max_age_secs,
+            )
+            == 0
+        )
+
+    assert errors == [
+        "generated_at_unix current time must be a non-negative integer timestamp"
+    ] * 5 + [
+        "generated_at_unix maximum age must be a non-negative integer"
+    ] * 5
 
 
 def test_require_recent_timestamp_returns_zero_after_positive_int_failure() -> None:
@@ -4496,6 +8017,80 @@ def test_require_string_coverage_reports_missing_field_label() -> None:
     assert errors == ["routes must include name `healthz`"]
 
 
+def test_require_string_coverage_rejects_noncanonical_present_values() -> None:
+    errors: list[str] = []
+
+    require_string_coverage(
+        {"metrics": [" healthz "]},
+        "metrics",
+        "",
+        ("healthz",),
+        errors,
+    )
+    require_string_coverage(
+        {"routes": [{"name": "status\nbad"}]},
+        "routes",
+        "name",
+        ("status",),
+        errors,
+    )
+
+    assert errors == [
+        "validation value must be a non-empty canonical string",
+        "metrics must include value `healthz`",
+        "validation name must be a non-empty canonical string",
+        "routes must include name `status`",
+    ]
+
+
+def test_require_string_coverage_rejects_malformed_present_rows() -> None:
+    errors: list[str] = []
+
+    require_string_coverage(
+        {
+            "routes": [
+                {"name": "status"},
+                {},
+                "healthz",
+                {"name": ""},
+                {"name": " metrics "},
+                {"name": 7},
+            ]
+        },
+        "routes",
+        "name",
+        ("status",),
+        errors,
+    )
+
+    assert errors == [
+        "validation name must be a non-empty canonical string",
+        "routes[2] must be an object with `name`",
+        "validation name must be a non-empty canonical string",
+        "validation name must be a non-empty canonical string",
+        "validation name must be a non-empty canonical string",
+    ]
+
+
+def test_require_string_coverage_rejects_malformed_scalar_rows() -> None:
+    errors: list[str] = []
+
+    require_string_coverage(
+        {"metrics": ["healthz", {}, 7, "", " latency "]},
+        "metrics",
+        "",
+        ("healthz",),
+        errors,
+    )
+
+    assert errors == [
+        "metrics[1] must be a string",
+        "metrics[2] must be a string",
+        "validation value must be a non-empty canonical string",
+        "validation value must be a non-empty canonical string",
+    ]
+
+
 def test_require_string_coverage_rejects_malformed_required_values() -> None:
     errors: list[str] = []
 
@@ -4526,3 +8121,62 @@ def test_require_string_coverage_rejects_malformed_required_values() -> None:
         "routes required values must be a sequence of strings",
         "routes required values must be a sequence of strings",
     ]
+
+
+def test_require_string_coverage_rejects_malformed_labels_before_scan() -> None:
+    errors: list[str] = []
+
+    require_string_coverage(
+        {"bad\nroutes": [{"name": "status"}]},
+        "bad\nroutes",
+        "name",
+        ("status",),
+        errors,
+    )
+    require_string_coverage(
+        {"routes": [{"bad\nname": "status"}]},
+        "routes",
+        "bad\nname",
+        ("status",),
+        errors,
+    )
+    require_string_coverage(
+        {"routes": [{"name": "status"}]},
+        "routes",
+        "name",
+        ("status\nbad",),
+        errors,
+    )
+
+    assert errors == [
+        "validation array field must be a non-empty canonical string",
+        "validation field must be a non-empty canonical string",
+        "validation required value must be a non-empty canonical string",
+    ]
+
+
+def test_require_string_coverage_rejects_malformed_boolean_options() -> None:
+    errors: list[str] = []
+
+    for allow_scalar_items in ("yes", 1, None):
+        require_string_coverage(
+            {"routes": ["status"]},
+            "routes",
+            "",
+            ("status",),
+            errors,
+            allow_scalar_items=allow_scalar_items,
+        )
+    for trim_values in ("yes", 1, None):
+        require_string_coverage(
+            {"routes": ["status"]},
+            "routes",
+            "",
+            ("status",),
+            errors,
+            trim_values=trim_values,
+        )
+
+    assert errors == ["validation allow_scalar_items must be a boolean"] * 3 + [
+        "validation trim_values must be a boolean"
+    ] * 3

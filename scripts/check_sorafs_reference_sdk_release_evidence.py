@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -472,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -486,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

@@ -23,9 +23,11 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
+    emit_runner_exception,
     run_command_plan,
     require_existing_dirs,
     require_existing_files,
@@ -80,7 +82,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         try:
             source_entries.append(split_source_entry_spec(spec))
         except ValueError as error:
-            errors.append(str(error))
+            errors.append(error_diagnostic_label(error))
 
     present_source_kinds = {source_kind for source_kind, _ in source_entries}
     for source_kind in REQUIRED_TRANSPARENCY_SOURCE_KINDS:
@@ -392,7 +394,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         raise SystemExit(2) from error
     expanded_args = normalize_iroha_arg_values(expanded_args)
     return parser.parse_args(expanded_args)

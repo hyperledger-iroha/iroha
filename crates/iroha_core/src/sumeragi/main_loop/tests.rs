@@ -69,8 +69,8 @@ use iroha_data_model::{
     isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
     merge::MergeCommitteeSignature,
     nexus::{
-        DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, LaneStorageProfile,
-        LaneVisibility,
+        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneFastpqProofMaterial, LaneId,
+        LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
         staking::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     },
     parameter::TransactionParameters,
@@ -2315,6 +2315,32 @@ fn sample_da_record_for_default_lane(proof_digest: Option<Hash>) -> DaCommitment
     let mut record = sample_da_record(proof_digest);
     record.lane_id = LaneId::new(0);
     record
+}
+
+fn install_stale_runtime_lane_geometry(state: &State, stale_lane: LaneId) {
+    let authoritative_catalog = LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()])
+        .expect("authoritative default lane catalog");
+    let stale_geometry_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: stale_lane,
+                alias: "stale-proposal-lane".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+        ],
+    )
+    .expect("stale runtime geometry catalog");
+    let mut nexus = state.nexus.write();
+    nexus.enabled = true;
+    nexus.lane_catalog = authoritative_catalog;
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_geometry_catalog);
+    assert!(
+        nexus.lane_config.entry(stale_lane).is_some(),
+        "fixture must retain stale runtime geometry for removed lane"
+    );
 }
 
 fn sample_da_receipt_for_record(record: &DaCommitmentRecord) -> DaIngestReceipt {
@@ -44362,6 +44388,257 @@ async fn quorum_retransmit_targets_widen_when_selected_targets_lack_stake_quorum
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn quorum_retransmit_targets_ignore_stale_unknown_lane_stake_when_nexus_enabled() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let canonical_roster = actor.effective_commit_topology();
+    assert_eq!(canonical_roster.len(), 4, "test requires a 4-peer topology");
+    let topology = super::network_topology::Topology::new(canonical_roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB7; Hash::LENGTH]));
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (observed_signer, observed_peer) = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .find(|(_, peer)| *peer != &local_peer)
+        .map(|(signer_idx, peer)| {
+            (
+                ValidatorIndex::try_from(signer_idx).expect("signer index fits u32"),
+                peer.clone(),
+            )
+        })
+        .expect("test requires a remote signer");
+    actor.vote_log.insert(
+        default_vote_log_key(Phase::Commit, height, view, epoch, observed_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: observed_signer,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+    assert_eq!(
+        min_votes_for_commit, 3,
+        "test expects the default four-peer topology commit quorum",
+    );
+    let expected_full_targets: BTreeSet<_> = canonical_roster
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .cloned()
+        .collect();
+    let inferred_missing_peer = canonical_roster
+        .iter()
+        .find(|peer| *peer != &local_peer && *peer != &observed_peer)
+        .expect("test requires an inferred missing remote peer")
+        .clone();
+    {
+        let mut block = actor.state.world.public_lane_validators.block();
+        for peer in &canonical_roster {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_id.clone(),
+                peer_id: peer.clone(),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+
+        let stale_account_id = AccountId::new(inferred_missing_peer.public_key().clone());
+        let stale_record = PublicLaneValidatorRecord {
+            lane_id: LaneId::new(42),
+            validator: stale_account_id.clone(),
+            peer_id: inferred_missing_peer.clone(),
+            stake_account: stale_account_id.clone(),
+            total_stake: Numeric::new(10_000, 0),
+            self_stake: Numeric::new(10_000, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        block.insert((stale_record.lane_id, stale_account_id), stale_record);
+        block.commit();
+    }
+
+    let disabled_nexus_targets: BTreeSet<_> = actor
+        .quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            view,
+            &canonical_roster,
+            min_votes_for_commit,
+            1,
+        )
+        .into_iter()
+        .collect();
+    assert!(
+        !disabled_nexus_targets.contains(&observed_peer),
+        "without active-lane filtering the inflated stale lane stake makes the inferred target set look sufficient"
+    );
+    assert!(
+        disabled_nexus_targets.len() < expected_full_targets.len(),
+        "test setup must prove stale stake suppresses full-fanout widening before Nexus filtering"
+    );
+
+    actor.state.nexus.write().enabled = true;
+    let enabled_nexus_targets: BTreeSet<_> = actor
+        .quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            view,
+            &canonical_roster,
+            min_votes_for_commit,
+            1,
+        )
+        .into_iter()
+        .collect();
+    assert_eq!(
+        enabled_nexus_targets, expected_full_targets,
+        "Nexus-active retransmit selection must ignore stale unknown-lane stake and widen to all remote validators",
+    );
+    assert!(
+        enabled_nexus_targets.contains(&observed_peer),
+        "active-lane widening must include already observed voters so partial vote sets can merge",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn npos_stake_roster_for_qc_ignores_stale_unknown_lane_when_nexus_enabled() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let canonical_roster = actor.effective_commit_topology();
+    assert_eq!(canonical_roster.len(), 4, "test requires a 4-peer topology");
+    let topology = super::network_topology::Topology::new(canonical_roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
+    let active_lane_peers: Vec<_> = canonical_roster
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .take(2)
+        .cloned()
+        .collect();
+    assert_eq!(
+        active_lane_peers.len(),
+        2,
+        "test requires two remote active-lane validators"
+    );
+    let active_lane_set: BTreeSet<_> = active_lane_peers.iter().cloned().collect();
+    assert!(
+        !active_lane_set.contains(&local_peer),
+        "test setup keeps the local peer only on the stale lane"
+    );
+
+    {
+        let mut block = actor.state.world.public_lane_validators.block();
+        let existing: Vec<_> = block.iter().map(|(key, _)| key.clone()).collect();
+        for key in existing {
+            block.remove(key);
+        }
+
+        for peer in &active_lane_peers {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_id.clone(),
+                peer_id: peer.clone(),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+
+        let stale_account_id = AccountId::new(local_peer.public_key().clone());
+        let stale_record = PublicLaneValidatorRecord {
+            lane_id: LaneId::new(42),
+            validator: stale_account_id.clone(),
+            peer_id: local_peer.clone(),
+            stake_account: stale_account_id.clone(),
+            total_stake: Numeric::new(10_000, 0),
+            self_stake: Numeric::new(10_000, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        block.insert((stale_record.lane_id, stale_account_id), stale_record);
+        block.commit();
+    }
+
+    let height = u64::try_from(actor.state.committed_height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let disabled_roster: BTreeSet<_> = actor
+        .npos_stake_roster_for_qc(&topology, &topology, &topology, height)
+        .into_iter()
+        .collect();
+    assert!(
+        disabled_roster.contains(&local_peer),
+        "test setup must prove the unscoped NPoS QC roster still sees stale unknown-lane validators"
+    );
+    assert!(
+        active_lane_set.is_subset(&disabled_roster),
+        "test setup must include active single-lane validators before Nexus filtering"
+    );
+
+    actor.state.nexus.write().enabled = true;
+    let enabled_roster: BTreeSet<_> = actor
+        .npos_stake_roster_for_qc(&topology, &topology, &topology, height)
+        .into_iter()
+        .collect();
+    assert_eq!(
+        enabled_roster, active_lane_set,
+        "Nexus-enabled NPoS QC roster derivation must ignore active records on unknown lanes"
+    );
+    assert!(
+        !enabled_roster.contains(&local_peer),
+        "a stale local-lane record must not re-enter the QC roster through local-scope fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn quorum_retransmit_targets_expand_to_full_fanout_near_commit_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -70483,6 +70760,66 @@ async fn assemble_proposal_rejects_invalid_da_commitment_file() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_stale_geometry_da_commitment_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.da.max_commitments_per_block = 1;
+    actor.config.da.max_proof_openings_per_block = 1;
+
+    let stale_lane = LaneId::new(1);
+    install_stale_runtime_lane_geometry(actor.state.as_ref(), stale_lane);
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let manifest = b"manifest-for-stale-geometry-da-commitment";
+    let mut record = sample_da_record(Some(Hash::prehashed([0x91; 32])));
+    record.lane_id = stale_lane;
+    record.manifest_hash = ManifestDigest::new(*blake3_hash(manifest).as_bytes());
+    write_da_commitment_spool_file(&spool_dir, &record, [0x92; 32]);
+    write_da_manifest_spool_file(&spool_dir, &record, manifest, [0x93; 32]);
+    let receipt = sample_da_receipt_for_record(&record);
+    write_da_receipt_spool_file(&spool_dir, &receipt, record.sequence, [0x94; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("stale runtime-only DA commitment lane must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("DA commitment active lane validation failed"),
+        "expected DA commitment active-lane validation failure, got {message}"
+    );
+    assert!(
+        message.contains("configured lane catalog"),
+        "error should identify the inactive lane catalog: {message}"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .da
+            .sealed_commitments
+            .contains(&iroha_data_model::da::commitment::DaCommitmentKey::from_record(&record)),
+        "stale-lane commitment must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn assemble_proposal_rejects_mismatched_da_manifest_file() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -70641,6 +70978,63 @@ async fn assemble_proposal_rejects_invalid_da_pin_intent_file() {
             intent.sequence
         )),
         "invalid pin intent must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_stale_geometry_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let stale_lane = LaneId::new(1);
+    install_stale_runtime_lane_geometry(actor.state.as_ref(), stale_lane);
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        stale_lane,
+        1,
+        4,
+        StorageTicketId::new([0x94; 32]),
+        ManifestDigest::new([0x95; 32]),
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0x96; 32]);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("stale runtime-only DA pin intent lane must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid DA pin intent in spool"),
+        "expected DA pin-intent validation failure, got {message}"
+    );
+    assert!(
+        message.contains("configured lane catalog"),
+        "error should identify the inactive lane catalog: {message}"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
+            intent.lane_id.as_u32(),
+            intent.epoch,
+            intent.sequence
+        )),
+        "stale-lane pin intent must not be marked sealed after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -162143,6 +162537,178 @@ async fn commit_qc_rejects_shrunk_embedded_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn npos_commit_qc_rejects_embedded_roster_with_stale_unknown_lane_validator() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let canonical_roster = actor.effective_commit_topology();
+    assert_eq!(canonical_roster.len(), 4, "test requires a 4-peer topology");
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
+    let active_lane_peers: Vec<_> = canonical_roster
+        .iter()
+        .filter(|peer| *peer != &local_peer)
+        .take(2)
+        .cloned()
+        .collect();
+    assert_eq!(
+        active_lane_peers.len(),
+        2,
+        "test requires two remote active-lane validators"
+    );
+    let active_lane_set: BTreeSet<_> = active_lane_peers.iter().cloned().collect();
+
+    {
+        let mut block = actor.state.world.public_lane_validators.block();
+        let existing: Vec<_> = block.iter().map(|(key, _)| key.clone()).collect();
+        for key in existing {
+            block.remove(key);
+        }
+
+        for peer in &active_lane_peers {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_id.clone(),
+                peer_id: peer.clone(),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+
+        let stale_account_id = AccountId::new(local_peer.public_key().clone());
+        let stale_record = PublicLaneValidatorRecord {
+            lane_id: LaneId::new(42),
+            validator: stale_account_id.clone(),
+            peer_id: local_peer.clone(),
+            stake_account: stale_account_id.clone(),
+            total_stake: Numeric::new(10_000, 0),
+            self_stake: Numeric::new(10_000, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        block.insert((stale_record.lane_id, stale_account_id), stale_record);
+        block.commit();
+    }
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let stale_roster = super::roster::canonicalize_roster_for_mode(
+        active_lane_peers
+            .iter()
+            .cloned()
+            .chain(std::iter::once(local_peer.clone()))
+            .collect(),
+        ConsensusMode::Npos,
+    );
+    let stale_roster_set: BTreeSet<_> = stale_roster.iter().cloned().collect();
+    assert!(
+        stale_roster_set.contains(&local_peer),
+        "test QC must embed the stale unknown-lane local validator"
+    );
+    let disabled_roster: BTreeSet<_> = actor
+        .npos_stake_roster_for_qc(
+            &canonical_topology,
+            &canonical_topology,
+            &canonical_topology,
+            height,
+        )
+        .into_iter()
+        .collect();
+    assert_eq!(
+        disabled_roster, stale_roster_set,
+        "test setup must prove the stale embedded roster matches unscoped NPoS derivation"
+    );
+
+    actor.state.nexus.write().enabled = true;
+    let enabled_roster: BTreeSet<_> = actor
+        .npos_stake_roster_for_qc(
+            &canonical_topology,
+            &canonical_topology,
+            &canonical_topology,
+            height,
+        )
+        .into_iter()
+        .collect();
+    assert_eq!(
+        enabled_roster, active_lane_set,
+        "enabled-Nexus authoritative roster should contain only active catalog-lane validators"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; Hash::LENGTH]));
+    let stale_topology = super::network_topology::Topology::new(stale_roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..stale_topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, stale_topology.as_ref().len());
+    let mut qc = crate::sumeragi::consensus::Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: super::NPOS_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&stale_roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: stale_roster,
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    bind_qc_to_actor_chain_order(&mut qc, actor, &harness.key_pairs);
+    let qc_key = Actor::qc_tally_key(&qc);
+
+    actor
+        .handle_qc(qc)
+        .expect("handle stale unknown-lane embedded NPoS commit QC");
+
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "stale unknown-lane embedded roster must not drive payload recovery"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "stale unknown-lane embedded roster must not request the block"
+    );
+    assert!(
+        actor.vote_roster_cache.get(&block_hash).is_none(),
+        "stale unknown-lane embedded roster must not seed the vote-roster cache"
+    );
+    assert_ne!(
+        actor.highest_qc.map(|qc| qc.subject_block_hash),
+        Some(block_hash),
+        "stale unknown-lane embedded roster must not advance highest QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_qc_rejects_embedded_roster_with_missing_pop() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -169808,6 +170374,117 @@ fn validate_qc_against_votes_accepts_npos_missing_vote_after_stake_and_aggregate
             ValidatorIndex::try_from(1_u32).expect("validator index parses"),
             ValidatorIndex::try_from(2_u32).expect("validator index parses"),
         ]
+    );
+}
+
+#[test]
+fn validate_qc_against_votes_active_lane_filter_ignores_stale_unknown_lane_stake() {
+    let chain: ChainId = "qc-npos-active-lane-filter"
+        .parse()
+        .expect("chain id parses");
+    let (keypairs, raw_topology) = sample_bls_topology(3);
+    let validator_set = canonical_validator_set_for_mode(&raw_topology, ConsensusMode::Npos);
+    let topology = super::network_topology::Topology::new(validator_set.clone());
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let stale_lane = LaneId::new(42);
+
+    {
+        let mut block = world.public_lane_validators.block();
+        for peer in topology.as_ref() {
+            let account_id = AccountId::new(peer.public_key().clone());
+            let record = PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: account_id.clone(),
+                peer_id: peer.clone(),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            };
+            block.insert((record.lane_id, account_id), record);
+        }
+
+        let stale_peer = topology.as_ref().first().expect("signer present");
+        let stale_account_id = AccountId::new(stale_peer.public_key().clone());
+        let stale_record = PublicLaneValidatorRecord {
+            lane_id: stale_lane,
+            validator: stale_account_id.clone(),
+            peer_id: stale_peer.clone(),
+            stake_account: stale_account_id.clone(),
+            total_stake: Numeric::new(10_000, 0),
+            self_stake: Numeric::new(10_000, 0),
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        };
+        block.insert((stale_record.lane_id, stale_account_id), stale_record);
+        block.commit();
+    }
+
+    let world_view = world.view();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8F; Hash::LENGTH]));
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 4,
+        view: 0,
+        epoch: 0,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: super::NPOS_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0b0000_0001],
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let pops = BTreeMap::new();
+    super::validate_qc_against_votes_with_active_lanes(
+        &BTreeMap::new(),
+        &qc,
+        &topology,
+        &world_view,
+        &pops,
+        &chain,
+        ConsensusMode::Npos,
+        None,
+        super::NPOS_TAG,
+        None,
+        Some(true),
+        None,
+    )
+    .expect("raw fallback still sees the inflated stale-lane stake");
+
+    let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+    assert_eq!(
+        super::validate_qc_against_votes_with_active_lanes(
+            &BTreeMap::new(),
+            &qc,
+            &topology,
+            &world_view,
+            &pops,
+            &chain,
+            ConsensusMode::Npos,
+            None,
+            super::NPOS_TAG,
+            None,
+            Some(true),
+            Some(&active_lane_ids),
+        ),
+        Err(super::QcValidationError::StakeQuorumMissing),
+        "active-lane QC validation must not count stake from unknown retired lanes"
     );
 }
 

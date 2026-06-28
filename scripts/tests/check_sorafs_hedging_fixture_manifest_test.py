@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 
@@ -217,6 +218,14 @@ def test_summary_out_same_as_manifest_fails_before_write(
     assert captured.out == ""
 
 
+def test_preflight_sanitizes_non_path_summary_out_label() -> None:
+    errors = MODULE.validate_fixture_manifest_preflight(
+        Namespace(manifest=Path("fixture_manifest.json"), summary_out=object())
+    )
+
+    assert errors == ["--summary-out `<non-path>` must be a path"]
+
+
 def test_summary_out_directory_fails_before_write(
     tmp_path: Path,
     capsys,
@@ -304,6 +313,31 @@ def test_summary_out_parent_chain_symlink_fails_before_write(
     assert captured.out == ""
 
 
+def test_inspect_regular_file_sanitizes_noncanonical_path_and_error(
+    monkeypatch,
+) -> None:
+    errors: list[str] = []
+
+    def is_file(path: Path) -> bool:
+        if str(path) == "bad\nmanifest":
+            raise OSError("denied\nsecret")
+        return False
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+
+    assert MODULE.inspect_regular_file(Path("bad\nmanifest"), "manifest", errors) is None
+    assert errors == [
+        "failed to inspect manifest `<non-canonical-path>`: <non-canonical-error>"
+    ]
+
+
+def test_inspect_directory_sanitizes_non_path_label() -> None:
+    errors: list[str] = []
+
+    assert MODULE.inspect_directory(object(), "generated fixture root", errors) is None
+    assert errors == ["generated fixture root `<non-path>` must be a path"]
+
+
 def test_manifest_read_error_writes_blocked_summary_without_traceback(
     tmp_path: Path,
     monkeypatch,
@@ -363,6 +397,22 @@ def test_manifest_rejects_non_standard_json_constants(
     assert any("non-standard JSON constant `NaN`" in error for error in result["errors"])
 
 
+def test_load_manifest_sanitizes_noncanonical_path_decode_error(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "bad\nmanifest.json"
+    manifest.write_text("[]", encoding="utf-8")
+    errors: list[str] = []
+
+    payload, digest = MODULE.load_manifest(manifest, errors)
+
+    assert payload == {}
+    assert digest is None
+    assert errors == [
+        "manifest is not valid bounded JSON object: <non-canonical-error>"
+    ]
+
+
 def test_default_mode_fails_closed_when_generated_bytes_are_missing(
     tmp_path: Path,
     monkeypatch,
@@ -391,15 +441,15 @@ def test_full_mode_rejects_unreadable_generated_fixture_without_traceback(
     validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
-    original_read_bytes = Path.read_bytes
+    original_open = Path.open
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
 
-    def read_bytes(path: Path) -> bytes:
+    def open_path(path: Path, *args, **kwargs):
         if path == target:
             raise OSError("generated fixture read denied")
-        return original_read_bytes(path)
+        return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(Path, "open", open_path)
 
     rc = MODULE.main(
         [
@@ -422,6 +472,75 @@ def test_full_mode_rejects_unreadable_generated_fixture_without_traceback(
     )
 
 
+def test_read_file_bytes_sanitizes_noncanonical_path_and_error(
+    monkeypatch,
+) -> None:
+    errors: list[str] = []
+
+    def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
+        assert max_bytes == 16
+        if str(path) == "bad\nfixture.to":
+            raise OSError("read denied\nsecret")
+        return b"fixture"
+
+    monkeypatch.setattr(MODULE, "read_evidence_bytes", read_evidence_bytes)
+
+    assert (
+        MODULE.read_file_bytes(
+            Path("bad\nfixture.to"),
+            "generated Norito fixture",
+            errors,
+            max_bytes=16,
+        )
+        is None
+    )
+    assert errors == [
+        "failed to read generated Norito fixture `<non-canonical-path>`: "
+        "<non-canonical-error>"
+    ]
+
+
+def test_read_file_bytes_uses_typed_oversize_error(monkeypatch) -> None:
+    errors: list[str] = []
+
+    def read_evidence_bytes(_path: Path, max_bytes: int) -> bytes:
+        raise MODULE.EvidenceFileTooLargeError(max_bytes)
+
+    monkeypatch.setattr(MODULE, "read_evidence_bytes", read_evidence_bytes)
+
+    assert (
+        MODULE.read_file_bytes(
+            Path("fixture.to"),
+            "generated Norito fixture",
+            errors,
+            max_bytes=16,
+        )
+        is None
+    )
+    assert errors == ["generated Norito fixture exceeds 16 bytes: fixture.to"]
+
+
+def test_generated_json_sidecar_missing_path_sanitizes_label() -> None:
+    errors: list[str] = []
+
+    assert MODULE.load_generated_json_sidecar(Path("bad\nsidecar.json"), errors) is None
+    assert errors == ["missing generated JSON fixture: <non-canonical-path>"]
+
+
+def test_generated_json_sidecar_sanitizes_noncanonical_path_decode_error(
+    tmp_path: Path,
+) -> None:
+    sidecar = tmp_path / "bad\nsidecar.json"
+    sidecar.write_text("[]", encoding="utf-8")
+    errors: list[str] = []
+
+    assert MODULE.load_generated_json_sidecar(sidecar, errors) is None
+    assert errors == [
+        "<non-canonical-path> is not a valid bounded JSON object: "
+        "<non-canonical-error>"
+    ]
+
+
 def test_manifest_only_rejects_drifted_validation_command(tmp_path: Path) -> None:
     payload = base_manifest()
     payload["fixtures"][0]["validation_command"] = "sorafs-validate hedging --statement wrong.to"
@@ -442,6 +561,35 @@ def test_manifest_only_rejects_drifted_validation_command(tmp_path: Path) -> Non
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["status"] == "blocked"
     assert any("validation_command must be" in error for error in result["errors"])
+
+
+def test_validation_command_tokenize_error_is_sanitized(monkeypatch) -> None:
+    errors: list[str] = []
+    entry = {
+        "name": "bad_command",
+        "kind": "billing-statement",
+        "expected_status": "accepted",
+        "validation_command": "sorafs-validate hedging --statement 'unterminated",
+    }
+
+    def split_raises(_command: str):
+        raise ValueError("unterminated\nquote")
+
+    monkeypatch.setattr(MODULE.shlex, "split", split_raises)
+
+    MODULE.validate_expected_status(
+        entry,
+        Path("fixtures/sorafs_manifest/hedging/statement.to"),
+        "sorafs-validate",
+        1,
+        {},
+        errors,
+    )
+
+    assert errors == [
+        "bad_command validation_command is not shell-tokenizable: "
+        "<non-canonical-error>"
+    ]
 
 
 def test_manifest_only_rejects_negative_case_drift(tmp_path: Path) -> None:
@@ -646,6 +794,38 @@ def test_full_mode_resolves_repo_relative_validator_binary(
     assert {entry["validator"] for entry in result["entries"]} == {"checked"}
 
 
+def test_validator_execution_error_is_sanitized(monkeypatch, tmp_path: Path) -> None:
+    errors: list[str] = []
+    result: dict = {}
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    entry = {
+        "name": "bad_exec",
+        "kind": "billing-statement",
+        "expected_status": "accepted",
+        "validation_command": (
+            "sorafs-validate hedging --statement "
+            "fixtures/sorafs_manifest/hedging/statement.to"
+        ),
+    }
+
+    def run_raises(*_args, **_kwargs):
+        raise OSError("launch denied\nsecret")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", run_raises)
+
+    MODULE.validate_expected_status(
+        entry,
+        Path("fixtures/sorafs_manifest/hedging/statement.to"),
+        str(validator),
+        1,
+        result,
+        errors,
+    )
+
+    assert result == {}
+    assert errors == ["bad_exec validator execution failed: <non-canonical-error>"]
+
+
 def test_full_mode_rejects_command_injection_before_validator_exec(
     tmp_path: Path,
     monkeypatch,
@@ -821,6 +1001,39 @@ def test_full_mode_rejects_non_object_json_sidecar_with_shared_loader(
     assert result["status"] == "blocked"
     assert any(
         "evidence root must be a JSON object" in error
+        for error in result["errors"]
+    )
+
+
+def test_full_mode_rejects_oversized_norito_with_shared_byte_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+    monkeypatch.setattr(MODULE, "MAX_NORITO_BYTES", 4)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["status"] == "blocked"
+    assert any(
+        "generated Norito fixture exceeds 4 bytes" in error
         for error in result["errors"]
     )
 

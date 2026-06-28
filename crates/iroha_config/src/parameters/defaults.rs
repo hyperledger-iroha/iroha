@@ -1188,6 +1188,16 @@ pub mod sorafs {
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
         }
 
+        /// Reserve lifecycle scheduler defaults.
+        pub mod reserve_lifecycle {
+            /// Enable config-backed SFM-6 reserve lifecycle advancement.
+            pub const ENABLED: bool = false;
+            /// Default reserve lifecycle scheduler cadence (seconds).
+            pub const INTERVAL_SECONDS: u64 = 60 * 60;
+            /// Default delay before the first reserve lifecycle scheduler tick (seconds).
+            pub const INITIAL_DELAY_SECONDS: u64 = 0;
+        }
+
         /// Stream token issuance defaults.
         pub mod tokens {
             use std::path::PathBuf;

@@ -1581,6 +1581,7 @@ fn validate_soracloud_fhe_public_key_proof_native_envelope_bytes(
     )
 }
 
+#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
 ) -> Result<(), InstructionExecutionError> {
@@ -1591,6 +1592,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_bytes(
     )
 }
 
+#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_execution_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
 ) -> Result<(), InstructionExecutionError> {

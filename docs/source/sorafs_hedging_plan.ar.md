@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_hedging_plan.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: ae882e53784da0d68c08e955438666d32157831f46f2f1d06f599f4567e2e4ba
+source_hash: 89499e368934e755c75d39de12b92d69e1b59664f5107d9b89127e12c771021f
 source_last_modified: "2026-06-26T00:58:45+00:00"
 translation_last_reviewed: 2026-01-30
 ---

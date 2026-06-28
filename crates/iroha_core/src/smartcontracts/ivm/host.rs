@@ -2019,10 +2019,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         use std::collections::{BTreeMap, btree_map::Entry};
 
         let mut lane_for_dataspace = BTreeMap::new();
-        for entry in state.nexus().lane_config.entries() {
-            lane_for_dataspace
-                .entry(entry.dataspace_id)
-                .or_insert(entry.lane_id);
+        let nexus = state.nexus();
+        for lane in nexus.lane_catalog.lanes() {
+            let Some(dataspace_id) = crate::state::nexus_active_lane_dataspace(lane.id, nexus)
+            else {
+                continue;
+            };
+            lane_for_dataspace.entry(dataspace_id).or_insert(lane.id);
         }
 
         if lane_for_dataspace.is_empty() {

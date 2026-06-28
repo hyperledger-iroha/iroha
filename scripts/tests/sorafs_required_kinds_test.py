@@ -53,6 +53,22 @@ def test_empty_required_kind_fails() -> None:
         raise AssertionError("empty required kind was accepted")
 
 
+def test_malformed_required_kind_name_text_fails() -> None:
+    for value in (" feed_collector", "feed_collector ", "feed\ncollector"):
+        try:
+            parse_required_kinds(
+                [value],
+                allowed_kinds=ALLOWED,
+                default_required=DEFAULT,
+            )
+        except ValueError as error:
+            assert "--require-kind entries must be non-empty canonical strings" in str(
+                error
+            )
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"malformed required kind {value!r} was accepted")
+
+
 def test_duplicate_required_kind_fails() -> None:
     try:
         parse_required_kinds(
@@ -80,7 +96,12 @@ def test_unknown_required_kind_fails() -> None:
 
 
 def test_malformed_required_kind_values_fail() -> None:
-    for raw_values in ("feed_collector", b"feed_collector", {"kind": "feed_collector"}):
+    for raw_values in (
+        "feed_collector",
+        b"feed_collector",
+        bytearray(b"feed_collector"),
+        {"kind": "feed_collector"},
+    ):
         try:
             parse_required_kinds(
                 raw_values,
@@ -107,7 +128,13 @@ def test_non_string_required_kind_value_fails() -> None:
 
 
 def test_malformed_allowed_kind_registry_fails() -> None:
-    for allowed_kinds in ("feed_collector", {"": object()}, {7: object()}):
+    for allowed_kinds in (
+        "feed_collector",
+        {"": object()},
+        {" feed_collector": object()},
+        {"feed_collector\n": object()},
+        {7: object()},
+    ):
         try:
             parse_required_kinds(
                 [],
@@ -123,8 +150,11 @@ def test_malformed_allowed_kind_registry_fails() -> None:
 def test_malformed_default_required_kinds_fail() -> None:
     for default_required, expected in (
         ("feed_collector", "must be a sequence"),
+        (bytearray(b"feed_collector"), "must be a sequence"),
         ({"feed_collector": True}, "must be a sequence"),
-        (("feed_collector", ""), "must be non-empty strings"),
+        (("feed_collector", ""), "must be non-empty canonical strings"),
+        (("feed_collector", " billing_cycle"), "must be non-empty canonical strings"),
+        (("feed_collector", "billing\ncycle"), "must be non-empty canonical strings"),
         (("feed_collector", "unknown"), "unknown default required evidence kind"),
         (("feed_collector", "feed_collector"), "duplicate default required evidence kind"),
     ):

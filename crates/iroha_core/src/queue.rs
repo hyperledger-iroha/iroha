@@ -29,6 +29,8 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
 use indexmap::IndexSet;
+#[cfg(test)]
+use iroha_config::parameters::actual::LaneConfig as LaneGeometry;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
 };
@@ -6327,7 +6329,6 @@ pub mod tests {
         nexus.routing_policy.default_lane = lane_id;
         nexus.routing_policy.default_dataspace = dataspace_id;
         nexus.fees.base_fee = Numeric::zero();
-        state.set_nexus(nexus.clone()).expect("set Nexus config");
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
@@ -6360,6 +6361,7 @@ pub mod tests {
             RoutingDecision::default()
         );
 
+        state.set_nexus(nexus.clone()).expect("set Nexus config");
         assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
         assert_eq!(
             *queue
@@ -8627,7 +8629,7 @@ pub mod tests {
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test(config_factory(), &time_source);
@@ -9570,7 +9572,7 @@ pub mod tests {
             StateTelemetry::new(metrics.clone(), true),
         ));
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -9620,14 +9622,22 @@ pub mod tests {
         #[cfg(feature = "telemetry")]
         let metrics = Arc::new(Metrics::default());
         #[cfg(feature = "telemetry")]
-        let state = Arc::new(State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        ));
+        let state = {
+            let mut state = State::with_telemetry(
+                world,
+                kura.clone(),
+                query_handle.clone(),
+                StateTelemetry::new(metrics.clone(), true),
+            );
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let state = {
+            let mut state = State::new(world, kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -9729,14 +9739,22 @@ pub mod tests {
         #[cfg(feature = "telemetry")]
         let metrics = Arc::new(Metrics::default());
         #[cfg(feature = "telemetry")]
-        let state = Arc::new(State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        ));
+        let state = {
+            let mut state = State::with_telemetry(
+                world,
+                kura.clone(),
+                query_handle.clone(),
+                StateTelemetry::new(metrics.clone(), true),
+            );
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let state = {
+            let mut state = State::new(world, kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -9819,7 +9837,9 @@ pub mod tests {
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test_with_router_for_routes(
@@ -9862,7 +9882,9 @@ pub mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test_with_router_for_routes(
@@ -11598,6 +11620,23 @@ pub mod tests {
         }
     }
 
+    fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        // These queue unit tests use synthetic routers/catalogs that are not valid
+        // runtime Nexus configurations. Keep the state snapshot aligned with the
+        // queue so sync checks do not replace the explicit test router.
+        *state.nexus.write() = nexus;
+    }
+
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -11653,7 +11692,7 @@ pub mod tests {
     fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         // Prepare a representative transaction so we can size the lane capacity to its TEU weight.
@@ -11666,6 +11705,8 @@ pub mod tests {
 
         let test_lane = LaneId::new(7);
         let test_dataspace = DataSpaceId::new(1);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let state = Arc::new(state);
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -11677,10 +11718,6 @@ pub mod tests {
             router,
             &[(test_lane, test_dataspace)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
         let queue = Arc::new(queue_inner);
 
         let first_hash = first_tx.as_ref().hash();
@@ -11700,6 +11737,10 @@ pub mod tests {
             2,
             "expected both transactions before TEU gating"
         );
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let deferred = queue.enforce_lane_teu_limits(&mut guards);
         assert_eq!(
@@ -11721,6 +11762,7 @@ pub mod tests {
         assert_eq!(guards[0].routing().lane_id, test_lane);
 
         drop(guards);
+        *queue.nexus_limits.write() = QueueLimits::from_nexus(&state.nexus_snapshot());
         let deferred_tx = deferred.into_iter().next().expect("deferred tx present");
         queue
             .push(deferred_tx, state.view())
@@ -11950,15 +11992,17 @@ pub mod tests {
             }
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let lane_a = LaneId::new(1);
         let lane_b = LaneId::new(2);
         let dataspace_a = DataSpaceId::new(11);
         let dataspace_b = DataSpaceId::new(12);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(lane_a, dataspace_a), (lane_b, dataspace_b)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let first_tx = accepted_tx_by_someone(&time_source);
         let second_tx = accepted_tx_by_someone(&time_source);
@@ -11983,10 +12027,6 @@ pub mod tests {
             router,
             &[(lane_a, dataspace_a), (lane_b, dataspace_b)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: lane_b_bounds,
-            per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
-        };
         let queue = Arc::new(queue_inner);
 
         queue
@@ -11998,6 +12038,10 @@ pub mod tests {
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: lane_b_bounds,
+            per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
+        };
 
         let mut consumed = BTreeMap::new();
         let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
@@ -12014,17 +12058,19 @@ pub mod tests {
 
     #[test]
     fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
+        let test_lane = LaneId::new(11);
+        let test_dataspace = DataSpaceId::new(5);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let first_tx = accepted_tx_by_someone(&time_source);
         let lane_capacity = Queue::compute_teu_weight(&first_tx);
         assert!(lane_capacity > 0, "expected positive TEU weight");
 
-        let test_lane = LaneId::new(11);
-        let test_dataspace = DataSpaceId::new(5);
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -12036,10 +12082,6 @@ pub mod tests {
             router,
             &[(test_lane, test_dataspace)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
         let queue = Arc::new(queue_inner);
 
         queue
@@ -12053,6 +12095,10 @@ pub mod tests {
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let mut consumed = BTreeMap::new();
         consumed.insert(test_lane, lane_capacity);
@@ -12077,16 +12123,18 @@ pub mod tests {
         where
             F: FnMut(&mut Vec<TransactionGuard>),
         {
+            let test_lane = LaneId::new(17);
+            let test_dataspace = DataSpaceId::new(4);
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+            let mut state = State::new(world_with_test_domains(), kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+            let state = Arc::new(state);
             let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
             let lane_capacity = Queue::compute_teu_weight(first_tx);
             assert!(lane_capacity > 0, "expected positive TEU weight");
 
-            let test_lane = LaneId::new(17);
-            let test_dataspace = DataSpaceId::new(4);
             let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
                 lane: test_lane,
                 dataspace: test_dataspace,
@@ -12098,10 +12146,6 @@ pub mod tests {
                 router,
                 &[(test_lane, test_dataspace)],
             );
-            *queue_inner.nexus_limits.write() = QueueLimits {
-                fallback: scheduling,
-                per_lane: BTreeMap::from([(test_lane, scheduling)]),
-            };
             let queue = Arc::new(queue_inner);
 
             queue
@@ -12114,6 +12158,10 @@ pub mod tests {
             let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
             assert_eq!(guards.len(), 2, "expected both transactions before gating");
             reorder(&mut guards);
+            *queue.nexus_limits.write() = QueueLimits {
+                fallback: scheduling,
+                per_lane: BTreeMap::from([(test_lane, scheduling)]),
+            };
 
             let mut consumed = BTreeMap::new();
             let deferred =
@@ -12477,13 +12525,15 @@ pub mod tests {
             }
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let expected_lane = LaneId::new(5);
         let expected_dataspace = DataSpaceId::new(13);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected_lane, expected_dataspace)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
@@ -12561,11 +12611,19 @@ pub mod tests {
 
     #[test]
     fn proposal_pop_refreshes_stale_routing_metadata() {
+        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(
+            &mut state,
+            &[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (refreshed.lane_id, refreshed.dataspace_id),
+            ],
+        );
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),

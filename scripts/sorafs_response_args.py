@@ -9,7 +9,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from sorafs_path_identity import resolve_path_identity
+from sorafs_path_identity import (
+    error_diagnostic_label,
+    path_diagnostic_label,
+    resolve_path_identity,
+)
 
 
 MAX_RESPONSE_ARGFILE_BYTES = 256 * 1024
@@ -20,12 +24,24 @@ CANONICAL_DECIMAL_INTEGER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)\Z")
 
 def _require_string_sequence(values: Any, *, label: str) -> Sequence[Any]:
     if (
-        isinstance(values, (str, bytes))
+        isinstance(values, (str, bytes, bytearray))
         or isinstance(values, Mapping)
         or not isinstance(values, Sequence)
     ):
         raise ValueError(f"{label} must be a sequence of strings")
     return values
+
+
+def _require_argument_string(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"argument `{value}` must be a string")
+    if (
+        not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ValueError("argument must be a non-empty canonical string")
+    return value
 
 
 def require_expanded_arg_limit(expanded: Sequence[str]) -> None:
@@ -96,13 +112,13 @@ def expand_response_args(
 
     expanded: list[str] = []
     for arg in _require_string_sequence(args, label="arguments"):
-        if not isinstance(arg, str):
-            raise ValueError(f"argument `{arg}` must be a string")
+        arg = _require_argument_string(arg)
         if not arg.startswith("@") or arg == "@":
             expanded.append(arg)
             require_expanded_arg_limit(expanded)
             continue
         path = Path(arg[1:]).expanduser()
+        path_label = path_diagnostic_label(path)
         resolve_errors: list[str] = []
         resolved = resolve_path_identity(
             path,
@@ -113,23 +129,40 @@ def expand_response_args(
         if resolved is None:
             raise ValueError(resolve_errors[-1])
         if resolved in seen:
-            raise ValueError(f"recursive @ARGFILE reference `{path}`")
+            raise ValueError(f"recursive @ARGFILE reference `{path_label}`")
         try:
             if not path.is_file():
-                raise ValueError(f"@ARGFILE `{path}` must exist and be a file")
+                raise ValueError(
+                    f"@ARGFILE `{path_label}` must exist and be a file"
+                )
             size = path.stat().st_size
         except (OSError, RuntimeError) as error:
-            raise ValueError(f"failed to stat @ARGFILE `{path}`: {error}") from error
+            raise ValueError(
+                "failed to stat @ARGFILE `{}`: {}".format(
+                    path_label,
+                    error_diagnostic_label(error, path_label=path_label),
+                )
+            ) from error
         if size > MAX_RESPONSE_ARGFILE_BYTES:
             raise ValueError(
-                f"@ARGFILE `{path}` exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes"
+                f"@ARGFILE `{path_label}` exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes"
             )
         try:
             contents = path.read_bytes().decode("utf-8")
         except (OSError, RuntimeError) as error:
-            raise ValueError(f"failed to read @ARGFILE `{path}`: {error}") from error
+            raise ValueError(
+                "failed to read @ARGFILE `{}`: {}".format(
+                    path_label,
+                    error_diagnostic_label(error, path_label=path_label),
+                )
+            ) from error
         except UnicodeDecodeError as error:
-            raise ValueError(f"@ARGFILE `{path}` must be UTF-8: {error}") from error
+            raise ValueError(
+                "@ARGFILE `{}` must be UTF-8: {}".format(
+                    path_label,
+                    error_diagnostic_label(error, path_label=path_label),
+                )
+            ) from error
         file_args: list[str] = []
         for line_number, line in enumerate(contents.splitlines(), 1):
             try:
@@ -138,12 +171,14 @@ def expand_response_args(
                     line_args, label="response-file line arguments"
                 )
                 for line_arg in line_args:
-                    if not isinstance(line_arg, str):
-                        raise ValueError(f"argument `{line_arg}` must be a string")
-                file_args.extend(line_args)
+                    file_args.append(_require_argument_string(line_arg))
             except ValueError as error:
                 raise ValueError(
-                    f"@ARGFILE `{path}` line {line_number}: {error}"
+                    "@ARGFILE `{}` line {}: {}".format(
+                        path_label,
+                        line_number,
+                        error_diagnostic_label(error, path_label=path_label),
+                    )
                 ) from error
         expanded.extend(
             expand_response_args(

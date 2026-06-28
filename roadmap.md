@@ -3505,7 +3505,48 @@ and completed history lives in [`status.md`](./status.md).
   snapshot/proof/provider records, request/response bodies, bearer tokens,
   signed transactions, private keys, and other payload-bearing fields. Snapshot
   binding failures are marked on the offending artifact before required-kind
-  summary validity is reported. The gate now also
+  summary validity is reported, and malformed snapshot-binding validation
+  inputs now fail closed on required/bound kind containers, binding-pair
+  containers, snapshot-bound artifact row containers, and diagnostic labels
+  before artifact/anchor matching. Custom
+  required-evidence rows now also reject malformed evidence labels, required-kind
+  labels, record-time artifact rows, artifact row containers, and artifact error
+  strings before formatting rollout summary diagnostics. Custom required
+  artifact recording also rejects malformed existing rows or artifact buckets
+  before appending new evidence, so dirty row state cannot be normalized by a
+  later valid artifact. The checker now exports the required top-level payload
+  fields as `EVIDENCE_REQUIRED_FIELDS`, and the collection harness includes the
+  checker-backed `evidence_contract` map in dry-run output for publish/latest,
+  provider, events, verify, metrics, transport, and consumption artifacts.
+  Standard artifact summaries sanitize malformed `schema`/`status` fields and
+  fail otherwise-clean artifacts before those fields can enter rollout reports.
+  Required evidence summaries now also reject artifact buckets containing
+  non-object rows as malformed gate input, so scalar or mixed row sequences
+  cannot be reported as present-but-invalid evidence. Required summary
+  readiness now also requires empty error lists, non-empty artifact-row
+  sequences, and explicitly valid artifact rows before a gate can report ready.
+  Recognized artifact recording now rejects existing artifact buckets containing
+  non-object rows before appending new evidence, so dirty bucket state cannot be
+  normalized by a later valid artifact.
+  Recognized artifact counts now only count mapping artifact rows, so malformed
+  scalar or mixed row sequences cannot inflate standard or custom rollout
+  summary totals.
+  Gate status selection now only reports `ready` for an actual empty `list[str]`
+  of canonical summary errors; malformed status containers or diagnostics stay
+  blocked.
+  Scalar binding checks now validate values before normalization or
+  allowed-container inspection, so malformed values report the canonical value
+  diagnostic even when allowed bindings are malformed too.
+  Digest-reference checks now canonicalize anchor/allowed digest collections
+  before truthiness, missing-anchor, or artifact-mutation branches run, so
+  malformed anchor containers and malformed anchor digest values fail closed as
+  gate-configuration errors instead of being treated as absent anchors or
+  artifact mismatches.
+  Tuple-bound reference checks now apply the same canonicalization to
+  multi-field anchor bindings before missing-anchor or artifact-mutation
+  branches run, so malformed anchor-binding containers and tuple values fail as
+  gate-configuration errors instead of producing misleading artifact failures.
+  The gate now also
   fails closed on invalid recognized artifacts, including stale duplicate
   evidence for an otherwise valid kind and invalid optional artifacts outside a
   narrowed `--require-kind` subset. `scripts/run_sorafs_reputation_rollout_evidence.py`
@@ -3516,7 +3557,9 @@ and completed history lives in [`status.md`](./status.md).
   SoraFS rollout/release checker and collection runner to keep checked-in
   operator argfile examples; every tool must use the shared bounded response
   file expander and shared shell-like response-line parser for reviewed
-  `@ARGFILE` inputs, checker and collection-runner threshold, timeout, limit,
+  `@ARGFILE` inputs, and malformed scalar, bytearray, mapping, non-string,
+  empty, padded, or control-character argument tokens fail closed before
+  character-wise expansion, checker and collection-runner threshold, timeout, limit,
   and deterministic-clock arguments must use shared argparse integer parsers for
   positive and non-negative operator-supplied values; those parsers now require
   canonical ASCII decimal spellings and reject plus signs, whitespace,
@@ -3524,20 +3567,26 @@ and completed history lives in [`status.md`](./status.md).
   static coverage that pins the current runner positive/non-negative option
   classes, and collection runners that expose narrowed `--require-kind` gates
   must use the shared required-kind parser with their checker's `KIND_BY_NAME`
-  and default set, while scalar/mapping raw values, non-string entries,
-  malformed allowed-kind registries, and malformed default required-kind sets
-  fail closed before character-wise parsing or unchecked defaults can satisfy a
-  narrowed gate,
+  and default set, while scalar/bytearray/mapping raw values, non-string
+  entries, padded/control-character kind names, malformed allowed-kind
+  registries, and malformed default required-kind sets fail closed before
+  character-wise parsing, trim-normalized entries, or unchecked defaults can
+  satisfy a narrowed gate,
   every checked-in SoraFS argfile example must expand through the shared
   bounded response parser, with argfile resolve, stat, read, UTF-8, parse,
   recursion, size, depth, and expansion-limit failures reported as stable
-  operator diagnostics instead of tracebacks; every collection runner must keep
+  operator diagnostics instead of tracebacks, and argfile stat/read/UTF-8 plus
+  response-line parser exception text must route through the shared
+  path/error-label sanitizer so malformed multi-line diagnostics cannot leak
+  through reviewed `@ARGFILE` expansion; every collection runner must keep
   a collection-named reviewed argfile example, and every runner example must
   parse through its own runner parser when loaded as the reviewed `@ARGFILE`
   plus `--dry-run`; runner
   `main` functions must convert argparse `SystemExit` failures into numeric
   exit codes for tests and operator wrappers, runner examples must include a
-  `--dry-run` review command, every runner must preflight its verifier and
+  `--dry-run` review command, runner dry-run plan rendering must reject
+  non-object plan shapes before writing stdout and sanitize caught JSON render
+  exceptions before returning plan diagnostics, every runner must preflight its verifier and
   summary/output targets plus runner input files/directories through shared
   helpers before emitting dry-run plans, including precise missing file versus
   directory diagnostics, existing file and directory ancestors for output paths,
@@ -3545,24 +3594,53 @@ and completed history lives in [`status.md`](./status.md).
   output-directory identity collisions, duplicate or aliased input paths across
   all runner input flags, local directory inputs, malformed input path
   containers or duplicate-identity maps, resolver failures, filesystem
-  inspection failures, and malformed preflight diagnostic containers or labels
-  failing before filesystem inspection;
+  inspection failures, and malformed preflight diagnostic containers, existing
+  diagnostic text, or labels failing before filesystem inspection; runner
+  stderr error emitters must reject malformed diagnostic containers and
+  noncanonical diagnostic text before printing partial headings or
+  character-split errors, and runner stderr notices must reject malformed or
+  multi-line messages before writing partial operator output; runner and
+  checker collected validation errors from caught malformed spec parsers must
+  route through the shared error diagnostic sanitizer before entering stderr or
+  rollout summaries, so raw multi-line exception text cannot be appended to
+  gate diagnostics, and transparency runner generated-artifact annotation
+  read/write failures must sanitize path and exception labels before returning
+  collected diagnostics;
   every runner must execute
   plans through the shared command-plan runner so malformed scalar or mapping
-  command plans are rejected before output-directory creation, and duplicate
-  planned artifacts, planned artifact/output-directory identity collisions,
-  output-directory creation failures, subprocess launch failures, symlink
+  command plans, malformed step labels, non-Path step artifacts, empty command
+  lists, empty or non-canonical command executables, embedded-NUL or
+  control-character command entries, and non-string command vectors are
+  rejected before output-directory creation, and duplicate
+  planned artifacts, malformed or duplicate/aliased reserved-output path
+  containers or entries failing before planned-artifact inspection, planned
+  artifact/output-directory identity collisions, output-directory creation
+  failures, subprocess launch failures, symlink
   planned artifacts, symlink planned-artifact parent chains, pre-existing
   planned artifacts, missing expected artifacts, zero-byte expected artifacts,
   and expected-artifact inspection failures surface as structured errors
-  instead of tracebacks; every checker
+  instead of tracebacks, with subprocess launch exception text routed through
+  the shared diagnostic sanitizer before stderr output so raw multi-line OS
+  messages cannot leak through command-plan execution; every checker
   must preflight and write its optional summary output through the
   shared helper before/after evidence validation so output-parent creation and
   summary-write failures, summary-output target/parent inspection failures,
   summary-output symlinks plus symlinked or non-directory parent chains, and
   summary/evidence identity collisions surface as structured errors instead of
-  tracebacks, malformed preflight diagnostic containers and labels fail closed
-  before filesystem inspection, including explicit evidence, evidence discovered through
+  tracebacks, checker summaries must be JSON objects before rendering and
+  summary text must be a string before optional output writes, and checker
+  summary render exceptions must be sanitized before entering collected
+  diagnostics, malformed
+  preflight diagnostic containers, existing diagnostic text, and labels fail
+  closed before filesystem inspection, and checker stderr error emitters reject
+  malformed diagnostic containers before printing partial headings or
+  character-split errors,
+  checker stderr notices reject malformed or multi-line messages before partial
+  operator output, checker evidence input preflight rejects malformed
+  `--evidence`/`--evidence-dir` containers, non-Path `--evidence-dir` entries,
+  and non-Path/non-spec `--evidence` entries before they can satisfy the
+  evidence-source requirement or trigger summary-output inspection,
+  including explicit evidence, evidence discovered through
   `--evidence-dir`, and reputation's
   kind-prefixed explicit evidence syntax, and the hedging fixture-manifest checker
   must use the same shared summary-output preflight before manifest reads,
@@ -3570,97 +3648,181 @@ and completed history lives in [`status.md`](./status.md).
   narrowed `--require-kind` entries through direct shared-parser calls before
   evidence validation, every checker must use shared evidence-file discovery
   that rejects reserved output-path reuse, duplicate explicit evidence paths,
-  overlapping `--evidence-dir` scans, and files provided by both `--evidence`
-  and `--evidence-dir`, while malformed scalar or mapping evidence/reserved-output
-  path collections, diagnostic containers, labels, evidence directory inspection
-  failures, and JSON scan failures surface as structured errors instead of
-  tracebacks, and every
+  overlapping `--evidence-dir` scans, files provided by both `--evidence`
+  and `--evidence-dir`, and malformed explicit-evidence identity sets, while
+  malformed scalar or mapping evidence/reserved-output path collections or
+  reserved-output entries failing before evidence inspection,
+  diagnostic containers, labels, sanitized evidence directory and conflict
+  path/error labels, evidence directory inspection failures, and JSON scan
+  failures surface as structured errors instead of tracebacks, and every
   checker must use shared path-identity
   helpers instead of raw `Path.resolve()` calls so resolver failures surface as
-  structured gate errors, and malformed path-identity diagnostic containers,
-  labels, or failure templates, including unknown formatter fields or malformed
-  formatter syntax, fail closed before filesystem identity checks can traceback,
+  structured gate errors with sanitized malformed path/error labels, and
+  checker preflight filesystem inspectors now reuse the same sanitized
+  path/error labels for malformed non-path inputs and noncanonical inspection
+  failures before summary-output or evidence-source validation can leak raw
+  path text, checker preflight non-inspection diagnostics for evidence inputs,
+  summary/evidence collisions, summary parent creation, and summary writes now
+  use the same sanitized path/error labels, collection-runner preflight
+  filesystem inspectors now apply the
+  same shared sanitized labels before verifier, input, output-directory,
+  summary-output, and planned-artifact validation can leak raw malformed
+  path/error diagnostics, and the remaining non-inspection runner diagnostics
+  for missing inputs, duplicate identities, malformed reserved outputs,
+  command-plan artifacts, and output-directory creation now use the same
+  sanitized path/error labels, and the hedging fixture-manifest checker now
+  applies the same sanitized path/error labels to malformed summary targets,
+  manifest inspection/read failures, generated fixture byte reads, generated
+  sidecar misses, manifest/generated sidecar bounded JSON decode failures, and
+  generated fixture root scan failures,
+  shared evidence discovery and bounded JSON loading now delegate all path/error
+  diagnostic labels to the same path-identity helper instead of carrying local
+  sanitizer copies,
+  malformed path-identity diagnostic containers, existing diagnostic text,
+  labels, or failure templates, including unknown formatter fields, malformed
+  formatter syntax, padded templates, and control-character templates, fail
+  closed before filesystem identity checks can traceback, and failure-template
+  validation uses a typed internal error branch instead of parsing exception
+  message prefixes,
   every checker must load and digest
   bounded JSON evidence through the shared object-only loader so artifact hashes
   bind to the same bytes that were parsed before required-kind validity is
   reported, and filesystem, runtime, UTF-8, JSON, size, and object-shape
   failures become path-qualified evidence errors instead of tracebacks while
-  malformed bounded-JSON diagnostic containers are rejected before helper-local
-  error recording can raise; the
+  malformed bounded-JSON diagnostic containers or existing diagnostic text are
+  rejected before helper-local error recording can raise, bounded byte-reader
+  oversize failures use a typed `ValueError` subclass so checkers do not parse
+  exception text to identify file-size limits, path/error fragments plus
+  duplicate-key diagnostics use sanitized canonical labels for malformed values,
+  and malformed summary-error sinks, existing summary-error text,
+  validation path labels, or blank/control-character validation messages for
+  shared evidence validation recording fail closed before path-qualified errors
+  can partially append; the
   hedging fixture-manifest checker must also use the shared bounded object
-  loader for manifest and generated JSON sidecar parsing, every
+  loader for manifest and generated JSON sidecar parsing and the shared bounded
+  byte reader for generated Norito fixture bytes, every
   fingerprint-emitting checker must use the shared
   selected-field fingerprint helper with explicit local field tuples so
   summaries stay payload-free and cross-artifact binding fields remain pinned;
   fingerprint field tuples must contain only canonical, non-empty, duplicate-free
-  string field names so padded or repeated fields cannot drift summary shape,
+  string field names and reject scalar or bytearray field containers before
+  iteration, so padded, control-character, byte-wise, or repeated fields cannot
+  drift summary shape,
+  and the shared sensitive-field scanner rejects malformed diagnostic sinks,
+  starting path labels, evidence labels, mapping/scalar sensitive-key
+  containers, and padded/control-character sensitive-key names before payload
+  scanning can partially append or traceback, while shared
+  artifact-error mirroring rejects malformed summary-error sinks, artifact error
+  text, summary-error text, and artifact path labels before mutating artifact
+  rows,
   basic checker object/string/positive-integer field validation now uses shared
-  helper primitives across all rollout/release gates, including AI pre-screen
-  execution summary object validation,
+  helper primitives across all rollout/release gates, and shared object,
+  object-array, basic string, schema string-type, positive-int, string-equality,
+  bool-true, non-negative-int, and count-equality helper labels reject malformed
+  diagnostic text before payload lookup or object-item traversal, with basic
+  string fields now requiring canonical non-empty payload values instead of
+  trimming padded/control-character evidence into downstream checks, including AI
+  pre-screen execution summary object validation,
   string-equality, including reputation canary schema exactness with
   context-specific diagnostics and AI pre-screen indexed route-schema
   exactness, bool-true, path-qualified indexed bool-true, transparency
   publication publisher-identity policy flags, non-negative-int,
   count-equality, including hedging reconciliation line-item parity, and
   moderation evidence-viewer logged-session parity, string-membership
-  validation for PoR manual trigger route states, string-exclusion validation
-  for the PoP privacy proof backend, and string-value equality validation for
-  reputation provider proof identity now use shared helpers in every gate that
-  needs them,
+  validation for PoR manual trigger route states, exact string-equality
+  validation with canonical payload values, string-exclusion validation for the
+  PoP privacy proof backend, and string-value equality validation for
+  reputation provider proof identity now use shared helpers with canonical
+  field, path, expected-value, disallowed-value, comparison-label, and
+  allowed-value labels in every gate that needs them,
   false/false-or-absent/false-or-governed and non-negative-number validation
-  now use shared helper primitives across the gates that enforce payload
-  redaction, governance-gated hedge execution, and latency/lag ceilings,
+  now use shared helper primitives with canonical helper-label guards before
+  payload lookup across the gates that enforce payload redaction,
+  governance-gated hedge execution, and latency/lag ceilings,
   optional false fields must be exact `false` when present, including
-  path-qualified route latency checks,
-  optional hex, score-bps, and count-match checks now use shared helper
-  primitives for the gates that need those narrower evidence contracts,
-  inclusive integer-range validation now uses a shared helper for reputation
+  path-qualified route latency checks and maximum-number ceiling diagnostics,
+  status-set helper labels reject malformed field/path text before status
+  lookup or allowed-status diagnostics, optional hex, exact hex, and
+  hex-string-array checks now use shared helper primitives with canonical
+  field/path/count-label guards plus non-bool positive hex lengths,
+  non-negative expected array lengths, and boolean required/unique option flags
+  for the gates that need those narrower evidence contracts, sum-count
+  zero-total bypasses and string-coverage scalar/trim controls now require
+  exact boolean helper options, standard wrapper deployment-context enforcement
+  now rejects malformed helper options, snapshot-bound artifact recording now
+  rejects malformed valid flags and malformed kind containers before
+  anchor/bound routing, string diagnostic quote switches now require exact
+  booleans, default disallowed-string diagnostics no longer hit an undefined
+  helper label, and score-bps helper labels reject malformed diagnostic text
+  before payload lookup,
+  inclusive integer-range validation now uses a shared helper with canonical
+  field/path label guards and non-bool integer range thresholds for reputation
   basis-point fields while preserving the existing operator diagnostics,
-  reputation event cursor advancement now uses a shared integer-pair helper,
-  array count/length validation now uses a shared helper for route, probe,
-  artifact, and reputation event arrays,
-  count-sum validation now uses a shared helper for appeal and proof probe
-  accounting,
+  reputation event cursor advancement now uses a shared integer-pair helper
+  with canonical current/next field labels,
+  array count/length validation now uses shared helpers with canonical
+  count/collection labels, non-bool non-negative count/length inputs, non-bool
+  integer count and expected-count equality checks, and malformed
+  collection-container rejection for route, probe, artifact, and reputation
+  event arrays,
+  count-sum validation now uses a shared helper with canonical part/total
+  labels plus non-bool, non-negative total and part-count checks for appeal and
+  proof probe accounting,
   zero-count validation now uses a shared helper for fail-closed mismatch,
   stale, missing-block, and unexpected-failure counters,
   minimum integer and computed minimum/maximum threshold validation now uses
-  shared helpers for rollout count gates plus governance DAG block/payload
-  counts, moderation panel and peer counts, moderation sortition quorum
-  ceilings, reserve bake timestamp ordering, reserve policy dimensions,
-  reference SDK target/package counts, orderbook reconciliation peers, hedging
-  bridge ABI floors, and computed canary coverage floors,
-  maximum numeric and integer threshold validation now uses shared helpers for
-  route-indexed latency ceilings, single-field rollout latency and lag ceilings,
+  shared helpers with canonical field, computed-threshold label, and custom
+  threshold-message guards plus non-bool integer computed-value and threshold
+  inputs for rollout
+  count gates plus governance DAG block/payload counts, moderation panel and
+  peer counts, moderation sortition quorum ceilings, reserve bake timestamp
+  ordering, reserve policy dimensions, reference SDK target/package counts,
+  orderbook reconciliation peers, hedging bridge ABI floors, and computed
+  canary coverage floors,
+  maximum numeric and integer threshold validation now uses shared helpers with
+  canonical payload field/path labels plus finite non-bool numeric and integer
+  limit guards for route-indexed latency ceilings, single-field rollout latency
+  and lag ceilings,
   governance DAG pin/head age, reputation metrics snapshot age and ingest lag,
   hedging feed/divergence, appeal settlement, reserve lifecycle, orderbook
   matcher/stream lag, PoP verifier service ceilings, moderation evidence-viewer
-  URL TTL, and reference SDK smoke ceilings,
+  URL TTL, and reference SDK smoke ceilings, with timestamp freshness helpers
+  also requiring non-bool non-negative current-time and max-age thresholds,
   passed-status validation now uses a shared helper in every rollout/release
   gate that requires a literal passed state, including reputation canary
   artifacts with their context-specific status labels,
 	  mixed status-set validation now uses a shared helper for AI pre-screen
 	  verified/passed evidence and reputation publish/latest
-	  accepted/published/ready/ok snapshot states, rejecting malformed allowed-status
-	  containers before substring or mapping-key membership can satisfy status gates,
+	  accepted/published/ready/ok snapshot states, rejecting malformed
+	  optional-status flags, allowed-status containers, noncanonical
+	  allowed-status labels, and
+	  noncanonical observed status values before substring or mapping-key
+	  membership can satisfy status gates,
 	  shared string enum validation now rejects malformed allowed-value
-	  containers before substring or mapping-key membership can satisfy reviewed
-	  route-state checks,
+	  containers plus noncanonical payload values before substring,
+	  character-wise, trimmed-value, or mapping-key membership can satisfy
+	  reviewed route-state checks,
 	  schema string type validation now uses a shared helper in the same rollout
-	  gates while preserving their artifact-specific unknown-schema diagnostics,
+	  gates while preserving their artifact-specific unknown-schema diagnostics
+	  for canonical unknown schemas and rejecting blank, padded, or
+	  control-character schema values before unknown-schema lookup,
   schema recognition now uses a shared helper in standard rollout/release gates
   while preserving artifact-specific unknown-schema labels,
 	  environment-bearing rollout/release gates now use the shared reviewed
-	  environment validator so `dev`, `test`, `mock`, `local`, and similar
-	  unreviewed labels cannot satisfy production evidence,
+	  environment validator so padded/control-character values plus `dev`,
+	  `test`, `mock`, `local`, and similar unreviewed labels cannot satisfy
+	  production evidence,
 	  deployment-id-bearing rollout/release gates now use the shared reviewed
 	  deployment-id validator so missing, malformed, placeholder, compact
-	  handoff-marker, compact non-production marker, or otherwise non-reviewed
-	  ids cannot anchor artifact
+	  handoff-marker, compact non-production marker, padded/control-character
+	  value, or otherwise non-reviewed ids cannot anchor artifact
 	  fingerprints, and the shared required-evidence summary now rejects mixed
 	  reviewed `deployment_id`/`environment` contexts across the same
 	  rollout/release bundle while invalidating the required-kind matrix with a
 	  row-level deployment-context diagnostic, marking the mismatched artifact
-	  invalid, and keeping stable `errors: []` row buckets,
+	  invalid, and keeping stable `errors: []` row buckets, and deployment-context
+	  summary emission now routes through a shared canonical-label helper so
+	  malformed containers or values cannot leak into summary JSON,
   `iroha_config` binding checks now flow through a shared helper across the
   rollout gates that require config-backed production behavior so environment
   or ad-hoc config sources cannot re-enter evidence validation locally,
@@ -3675,35 +3837,47 @@ and completed history lives in [`status.md`](./status.md).
   evidence, and reserve-rent policy/matrix anchors, so accepted decisions and
   policy-bound artifacts prove the same `policy_digest_hex` contract,
   route and probe HTTP status validation now uses a shared 2xx-status helper
-  across every rollout gate that checks deployed endpoints,
+  with canonical field/path label guards across every rollout gate that checks
+  deployed endpoints,
   route/probe plus artifact/stream/event non-empty object-array validation now
-  uses a shared helper while each gate keeps its local endpoint and artifact
-  policy checks,
+  uses a shared helper with canonical field labels while each gate keeps its
+  local endpoint and artifact policy checks, and malformed item rows now make
+  the helper return no indexed records so placeholder objects cannot feed
+  downstream count or route policy checks,
   timestamp freshness validation now uses a shared helper with explicit
-  per-call freshness windows and optional path-qualified diagnostics for
-  reputation publish/latest snapshot checks,
-  hex digest validation now uses shared exact-length helpers with lowercase
-  normalization across every rollout/release checker that binds digest fields,
+  per-call freshness windows and canonical optional path-qualified diagnostics
+  for reputation publish/latest snapshot checks,
+  hex digest validation now uses shared exact-length helpers that reject padded
+  or control-character values before lowercase normalization across every
+  rollout/release checker that binds digest fields,
   hex-string array validation now uses a shared helper for proof sibling and
-  statement digest lists with optional count and uniqueness checks,
+  statement digest lists with optional count and uniqueness checks, and dirty
+  arrays with malformed, duplicate, or length-mismatched rows now return no
+  normalized values for downstream binding,
 	  checker string coverage requirements, including AI pre-screen operator route
-	  names, now flow through a shared validation helper, with the transparency
+	  names, now flow through a shared validation helper with canonical array,
+	  item, observed-value, and required-value labels, with the transparency
 	  checker explicitly pinned to its stricter dict-only exact-value mode, and
-	  malformed required-value containers now fail closed before character-wise or
-	  mapping-key coverage checks can satisfy required labels,
+	  malformed observed values, required-value containers, or required-value
+	  labels now fail closed before trimmed-value, character-wise, or mapping-key
+	  coverage checks can satisfy required labels,
 	  cross-artifact summary invalidation now uses shared artifact-error recording
 	  instead of checker-local nested helpers across every checker, including
 	  reputation snapshot-bound errors with a separate required-kind summary
 	  message, snapshot-bound anchor/bound classification now normalizes kind
-	  containers before scalar or mapping-key membership can classify artifacts, and
-	  artifact-error summary labels now use a shared path-label helper
+	  containers before scalar or mapping-key membership can classify artifacts,
+	  scalar and tuple binding helpers now canonicalize diagnostic messages,
+	  binding values, allowed binding values, formatter templates, missing-anchor
+	  summary errors, evidence-kind labels, digest field selectors, per-kind
+	  digest field maps, and tuple binding field lists before artifact errors can
+	  be recorded, and artifact-error summary labels now use a shared path-label helper
   and shared artifact-error recording rejects non-object artifact rows, so
   malformed artifact rows report `<unknown>` instead of raising on direct
   path indexing or mutation, while the shared artifact accessors and
-  evidence-count helpers
-  now fail closed on non-object rows, malformed summary buckets, and scalar
-  string/byte containers before validity, kind, fingerprint, detail, schema, or
-  count lookups can traceback or report bogus character counts; shared
+  evidence-count helpers now fail closed on non-object rows, noncanonical
+  artifact kind/detail-field/schema labels, malformed summary buckets, and
+  scalar string/byte containers before validity, kind, fingerprint, detail,
+  schema, or count lookups can traceback or report bogus character counts; shared
   validation-error recording now also rejects malformed error containers before
   strings can be split into per-character summary errors, and gate-status
   selection treats malformed error containers as `blocked` instead of `ready`;
@@ -3713,37 +3887,47 @@ and completed history lives in [`status.md`](./status.md).
   standard status, hex, optional-hex, boolean/negative, numeric/range, count,
   object-array, string-equality, hex-array, config/governance, and
   string-coverage validators now reject malformed payload containers before
-  direct field lookups can raise,
+  direct field lookups can raise, integer-range validators canonicalize
+  custom range diagnostics before emitting them, and timestamp validators fail
+  closed before returning observed timestamps when diagnostic paths are malformed,
   standard artifact builders now normalize malformed validation-error buckets
   before artifact rows can publish scalar strings, non-string entries, or
-  missing error lists, reject malformed payloads, fingerprint-field lists, and
-  explicit fingerprint-value maps before artifact construction can traceback,
-  require canonical lowercase SHA-256 artifact digests and non-empty kinded row
-  names before rows can be marked valid, and standard artifact recording now
-  rejects malformed bucket maps, kind names, and artifact rows before appending
-  to recognized evidence buckets,
-	  required-summary validity now also fails closed on malformed summary
-	  containers or rows instead of raising before reputation summaries can report,
-	  required-summary kind-list construction now rejects malformed scalar,
-	  mapping, empty, duplicate, or non-string required-kind containers before
-	  summary rows or metadata can be built from characters, object keys, or
-	  ambiguous duplicate rows, standard required-kind summary names reuse the
-	  same non-empty/unique normalization before publishing `required_kinds`,
-	  standard schema-map extraction now rejects malformed kind registries before
-	  non-string names or blank/non-string schema metadata can seed summary
-	  rows, standard artifact-bucket initialization now reuses the same
-	  non-empty/unique kind normalization before buckets can be materialized from
-	  characters, mapping keys, or duplicate names,
-	  required-summary
-	  schema metadata now fails closed per row when a required kind is missing
-	  from the schema map or maps to a blank/non-string schema, and malformed
-	  artifact/schema metadata maps fail closed before summary construction can
-	  traceback, required-summary
-	  artifact buckets now reject scalar or mapping containers before character or
-	  object-key counts can satisfy required-evidence presence and record
-	  row-local malformed-artifact-bucket diagnostics, and required-kind
-	  predicates now reject malformed scalar, mapping, or non-string kind containers
-	  before character-wise or mapping-key membership can satisfy binding gates; shared
+  missing error lists, reject blank, padded, or control-character validation
+  messages before malformed diagnostics can leak into summary rows, reject
+  malformed payloads, fingerprint-field lists, and explicit fingerprint-value
+  maps before artifact construction can traceback,
+  validate explicit fingerprint override keys before merging any override
+  values, require canonical artifact paths, canonical lowercase SHA-256
+  artifact digests, and canonical non-empty kinded row names before rows can
+  be marked valid, and standard
+  artifact recording now rejects malformed bucket maps, noncanonical kind
+  names, and artifact rows before appending to recognized evidence buckets,
+  required-summary validity now also fails closed on malformed summary
+  containers or rows instead of raising before reputation summaries can report,
+  required-summary row invalidation now canonicalizes required-row kind names,
+  rejects unhashable direct kind labels, moves malformed row keys to a safe
+  `<unknown>` bucket, and validates summary errors before row mutation,
+  required-summary kind-list construction now rejects malformed scalar,
+  mapping, empty, duplicate, non-string, padded, or control-character
+  required-kind containers before summary rows or metadata can be built from
+  characters, object keys, noncanonical labels, or ambiguous duplicate rows,
+  standard required-kind summary names reuse the same canonical non-empty/unique
+  normalization before publishing `required_kinds`, standard schema-map
+  extraction now rejects malformed kind registries before noncanonical names or
+  blank/non-string/noncanonical schema metadata can seed summary rows, standard
+  artifact-bucket initialization now reuses the same canonical non-empty/unique
+  kind normalization before buckets can be materialized from characters,
+  mapping keys, noncanonical names, or duplicate names, required-summary schema
+  metadata now fails closed per row when a required kind is missing from the
+  schema map or maps to a blank, padded/control-character, or non-string schema,
+  and malformed artifact/schema metadata maps fail closed before summary
+  construction can traceback, required-summary
+  artifact buckets now reject scalar or mapping containers before character or
+  object-key counts can satisfy required-evidence presence and record row-local
+  malformed-artifact-bucket diagnostics, and required-kind predicates now reject
+  malformed scalar, mapping, blank, padded/control-character, or non-string kind
+  containers before character-wise or mapping-key membership can satisfy binding
+  gates; shared
   evidence-value collection helpers now also reject scalar strings/bytes and
   mapping containers before value membership can split into characters or treat
   object keys as observed evidence; cross-artifact distinctness checks now
@@ -3759,21 +3943,27 @@ and completed history lives in [`status.md`](./status.md).
 	  that anchor downstream evidence to source, config, policy, manifest, proof,
 	  receipt, roster, or workflow artifacts; shared scalar and tuple binding
 	  helpers now reject empty string components plus malformed value and allowed-set
-	  containers before substring, character-wise, or mapping-key membership can satisfy
-	  downstream bindings, and valid artifact digest collection ignores empty
-	  fingerprint values so empty digest anchors cannot satisfy downstream
+	  containers and normalize validated allowed values into the same lowercase
+	  membership space as observed values before substring, character-wise, or
+	  mapping-key membership can satisfy downstream bindings, and valid artifact
+	  digest collection ignores empty, non-string, padded, or control-character
+	  fingerprint values so malformed digest anchors cannot satisfy downstream
 	  references, while bound-reference helpers now normalize `(kind, artifact)`
-	  pair containers before scalar or mapping-key iteration can classify downstream
-	  references; the shared string equality helper now
-	  rejects direct blank/non-string values before comparing cross-artifact
-	  identities,
+	  pair containers plus fingerprint field selectors before scalar or
+	  mapping-key iteration can classify downstream references; the shared string
+	  equality and inequality helpers now reject direct blank, non-string,
+	  padded, or control-character values plus malformed comparison
+	  labels/messages before returning provider/proof identity values,
   reputation optional provider ID/count observation, required/observed
-  matching, and fallback presence checks now use a shared truthy hashable
-  evidence-value normalizer so malformed observed values cannot traceback or
-  drift behind local set-add/truthiness guards, and scalar cross-artifact
-  consistency recording now only stores non-empty string values so malformed
-  snapshot id/root values cannot become canonical state or leak through
-  mismatch diagnostics,
+  matching, and fallback presence checks now use a shared truthy non-bool
+  hashable evidence-value normalizer with canonical string-value, required-row
+  kind, and evidence-message guards so malformed observed values cannot
+  traceback or drift behind local set-add/truthiness guards, distinct-value
+  consistency now rejects malformed one-item collections before provider-count
+  mismatch reporting can be skipped, and scalar cross-artifact consistency
+  recording now only stores canonical non-empty string values with canonical
+  context/key labels so malformed snapshot id/root values cannot become
+  canonical state or leak through mismatch diagnostics,
   reputation custom artifact row construction now uses a shared kinded
   artifact builder so path/SHA/fingerprint/valid/error fields cannot drift,
   bounded JSON parse-and-digest coverage now includes every rollout/release
@@ -3794,8 +3984,9 @@ and completed history lives in [`status.md`](./status.md).
   reporting now flow through shared preflight emitters so operator-facing
   diagnostics cannot drift back to checker-local print loops,
   checker caught argument errors now also flow through shared `ERROR:` line
-  emitters with deterministic exit code `2` instead of argparse usage dumps or
-  `SystemExit` leaks from handled `ValueError` paths,
+  exception emitters with deterministic exit code `2` and sanitized malformed
+  exception text instead of argparse usage dumps, raw `str(error)` diagnostics,
+  or `SystemExit` leaks from handled `ValueError` paths,
   bounded evidence JSON loading rejects duplicate top-level or nested object
   keys, direct non-byte decode inputs, and non-standard `NaN`/`Infinity`
   constants before digest-bound payload validation, and shared numeric rollout
@@ -3841,9 +4032,10 @@ and completed history lives in [`status.md`](./status.md).
   collection-runner stderr error-line, incomplete-input block, and command-run
   notice reporting now flow through shared runner preflight emitters so
   operator-facing diagnostics cannot drift back to runner-local print loops,
-  collection-runner caught argument errors now use shared `ERROR:` line emitters
-  and deterministic exit code `2` instead of argparse usage dumps from handled
-  `ValueError` paths,
+  collection-runner caught argument errors now use shared `ERROR:` line
+  exception emitters with sanitized malformed exception text and deterministic
+  exit code `2` instead of argparse usage dumps or raw `str(error)` diagnostics
+  from handled `ValueError` paths,
   standard required-kind summary finalization now uses a shared helper across
   rollout/release gates so present/valid/artifact-count rows and missing or
   invalid diagnostics cannot drift, and required summary validity now uses the
@@ -3853,8 +4045,8 @@ and completed history lives in [`status.md`](./status.md).
   predicate for artifact rows,
   standard required-kind summary name lists now use a shared helper across
   rollout/release gates so required-kind materialization cannot drift,
-  standard required-kind schema lookups now use a shared helper across
-  rollout/release gates so required summary schema rows cannot drift,
+  standard required-kind schema lookups now use a shared canonical-label helper
+  across rollout/release gates so required summary schema rows cannot drift,
   standard artifact bucket initialization now uses a shared helper across
   rollout/release gates so evidence classification starts from identical
   per-kind buckets,
@@ -3867,6 +4059,10 @@ and completed history lives in [`status.md`](./status.md).
   standard artifact fingerprint access now uses a shared fail-closed helper
   across rollout/release gates, including reputation snapshot binding, so
   malformed fingerprint fields cannot drift,
+  standard artifact digest-set derivation now fails closed on malformed
+  artifact containers, non-object rows, missing digest fields, and
+  noncanonical digest values so Pop credential root/revocation anchor sets
+  cannot be partially derived from dirty evidence buckets,
   reputation artifact kind lookups now use a shared fail-closed helper for
   snapshot-bound invalidation so malformed custom rows cannot drift from the
   standard artifact accessor pattern, and existing-row invalidation for
@@ -3895,9 +4091,12 @@ and completed history lives in [`status.md`](./status.md).
   checker-local membership branches;
   the fallback requirement for at least one verified provider proof now uses
   shared required-or-observed presence and error-recording helpers so omitted
-  provider allowlists and empty observed provider sets cannot drift locally,
-	  reputation required summary readiness now uses a shared explicit-true helper
-	  so malformed or truthy non-boolean row validity cannot satisfy the gate,
+  provider allowlists, empty observed provider sets, and mixed dirty aggregate
+  value collections cannot drift locally,
+	  reputation required summary readiness now uses a shared fail-closed helper
+	  so malformed or truthy non-boolean row validity, malformed row errors,
+	  empty or malformed artifact buckets, and invalid artifact rows cannot
+	  satisfy the gate,
 	  reputation custom required-row artifact recording and finalization now use
 	  shared helpers so row list recovery, missing-row diagnostics, and per-row
 	  artifact validity cannot drift locally, malformed row error buckets and
@@ -3919,14 +4118,27 @@ and completed history lives in [`status.md`](./status.md).
   still retains its custom artifact row shape, but snapshot anchor/bound
   classification and downstream binding validation now use shared
   snapshot-binding helpers, and snapshot anchor recording now requires
-  non-empty string `snapshot_id_hex`/`merkle_root_hex` values before lowercase
-  normalization so malformed anchors cannot traceback or become valid bindings,
+  canonical non-empty string `snapshot_id_hex`/`merkle_root_hex` values before
+  lowercase normalization and mirrors malformed anchor values into artifact
+  errors so malformed anchors cannot traceback or become valid bindings, while
+  malformed snapshot-binding `kind_name` values now invalidate the artifact
+  before anchor/bound routing instead of being silently ignored,
+  shared artifact-error recording now rebuilds dirty existing artifact error
+  buckets before appending canonical diagnostics,
+  standard digest-mismatch artifact recording now rejects malformed artifact
+  containers or mixed non-object rows before mutating artifact validity/error
+  buckets,
+  standard scalar and tuple bound-reference missing-anchor checks now reject
+  malformed required-kind and missing-anchor kind collections before mutating
+  bound artifacts,
   standard recognized-artifact summary counts now use a shared helper across
-  rollout/release gates, and reputation's custom recognized-list summary count
-  now uses the shared list counter while its final recognized-list validity
-  aggregate uses the shared explicit-true helper,
+  rollout/release gates and fail closed across the whole artifacts-by-kind map
+  on malformed buckets or noncanonical kind labels, and reputation's custom
+  recognized-list summary count now uses the shared list counter while its
+  final recognized-list validity aggregate uses the shared explicit-true helper,
   standard evidence-file summary counts now use a shared helper across
-  rollout/release gates so discovered-file counting cannot drift,
+  rollout/release gates so discovered-file counting cannot drift, and malformed
+  scalar or mixed non-Path evidence-file rows cannot inflate summary counts,
   evidence-file discovery and missing-directory diagnostics now stay centralized
   in the shared path helper, including reputation's custom loader,
   standard ready/blocked summary status calculation now uses a shared helper
@@ -3934,22 +4146,33 @@ and completed history lives in [`status.md`](./status.md).
   standard path-qualified validation-error recording now uses a shared helper
   across rollout/release gates so explicit-path and recognized-artifact
   diagnostics cannot drift, while reputation intentionally retains its custom
-  per-kind summary error flow,
+  per-kind summary error flow, and shared checker stderr emitters now reject
+  empty, padded, or control-character diagnostics before printing any
+  `ERROR:` line or block heading, while shared checker summary rendering now
+  rejects malformed top-level or nested summary keys before stdout or
+  `--summary-out` writes,
   explicit unrecognized evidence path diagnostics now use a shared helper
   across standard rollout/release gates so explicit-path detection and
   path-qualified validation error recording cannot drift,
+  standard string coverage validation now rejects malformed present rows before
+  coverage can pass, so object coverage arrays cannot hide scalar entries or
+  missing/noncanonical field values and scalar coverage arrays cannot hide
+  object/non-string rows,
   standard payload wrapper validation now uses a shared helper across
   rollout/release gates so schema recognition, reviewed deployment context,
-  sensitive-field walking, and kind-specific callback dispatch cannot drift,
+  explicit `deployment_context_reviewed` markers, sensitive-field walking, and
+  kind-specific callback dispatch cannot drift,
   evidence file discovery now owns missing-directory diagnostics and every
   checker calls the shared discovery helper directly so directory existence,
-  duplicate detection, and resolver failure handling cannot drift,
+  duplicate detection, resolver failure handling, and existing diagnostic
+  text canonicalization cannot drift,
   every checker must use the shared punctuation-insensitive sensitive-field
   walker for camel-case, hyphenated, and high-risk compound
   secret/body/header key variants while preserving payload-free
   digest/absence metadata, bounding nesting depth with a structured error
-  instead of recursion tracebacks, rejecting malformed sensitive-key
-  configuration and non-string payload keys before key normalization can raise,
+  instead of recursion tracebacks, rejecting malformed sensitive-field
+  diagnostic sinks, malformed sensitive-key configuration, and non-string
+  payload keys before key normalization can raise,
   and requiring inclusion markers to be exactly `false`, including bare
   `included` markers, and all examples must carry
   runtime-only or payload-free evidence handling guidance without
@@ -4063,7 +4286,9 @@ and completed history lives in [`status.md`](./status.md).
   bind back to a valid proof-generation `proof_summary_digest_hex` in the same
   evidence bundle, with binding failures marked on the offending artifact
   through the shared scalar binding error recorder before required-kind summary
-  validity is reported. PDP remains fail-closed in embedded Torii proof streaming until
+  validity is reported. The PDP collection planner now emits the
+  checker-backed `evidence_contract` map for the selected required kinds during
+  dry-run review. PDP remains fail-closed in embedded Torii proof streaming until
   provider transport, live signature/inclusion verification, regenerated
   negative fixture artifacts, governance archival, repair handoff, and deployed
   evidence that passes the gate land.
@@ -4086,7 +4311,10 @@ and completed history lives in [`status.md`](./status.md).
   release evidence paths, supports
   `@ARGFILE`, forwards age, release-target, downstream-package, and
   smoke-duration thresholds, and emits a dry-run-visible verifier command plus
-  operator example args. Remaining SF-11
+  operator example args. The SF-11 plan now also publishes the operator,
+  metrics, and binding-generation guides for packaging, telemetry extraction,
+  C FFI header synchronization, selector parity, and downstream package
+  evidence handoff. Remaining SF-11
   work is per-target published archives, signed release manifests, downstream
   SDK package publication, and live operator smoke evidence that passes this
   gate, rather than local admission renewal/revocation, signing, governance
@@ -4113,7 +4341,8 @@ and completed history lives in [`status.md`](./status.md).
   the matching collection planner accepts reviewed staged evidence paths,
   supports `@ARGFILE`, forwards age, route-latency, scheduler-lag,
   report-latency, provider-count, and challenge-count thresholds, and emits a
-  dry-run-visible verifier command plus operator example args. Remaining SF-9
+  dry-run-visible verifier command, checker-backed `evidence_contract` map for
+  the selected required kinds, plus operator example args. Remaining SF-9
   work is live drand/VRF/auditor run evidence that passes this gate, a
   deployment-specific SQL/Parquet archive decision, and governance archive
   handoff evidence, not the local Torii runtime, status/export/report endpoints,
@@ -4132,7 +4361,8 @@ and completed history lives in [`status.md`](./status.md).
   matching collection planner accepts reviewed staged
   evidence paths, supports `@ARGFILE`, forwards age,
   route-latency, hot/warm deadline, provider-count, and receipt-count
-  thresholds, and emits a dry-run-visible verifier command plus operator
+  thresholds, and emits a dry-run-visible verifier command, checker-backed
+  `evidence_contract` map for the selected required kinds, plus operator
   example args. Remaining SF-14 work is live multi-provider receipt evidence,
   governed provider ML-DSA key distribution, reputation weighting evidence, and
   governance approval that passes this gate, not local receipt capture,
@@ -4573,7 +4803,11 @@ and completed history lives in [`status.md`](./status.md).
   `cycle_digest_hex` from the same rollout bundle; publication cycles that
   fail source-entry binding do not anchor downstream rollout evidence, and
   source-batch/cycle binding failures are recorded through the shared scalar
-  binding error recorder.
+  binding error recorder. The transparency checker now exports those required
+  top-level evidence payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
+  collection harness includes the checker-backed `evidence_contract` map in
+  dry-run output so operators can review the exact SFM-4c artifact contract
+  before contacting live services.
   `scripts/run_sorafs_transparency_rollout_evidence.py` now provides the
   operator collection harness for those gates: it requires every supported
   source-entry kind, privacy source-event/publish-due payloads, proof-token
@@ -4687,7 +4921,11 @@ and completed history lives in [`status.md`](./status.md).
   receipts, local config-backed order admission policy for minimum order
   quantity and price tick, and local runtime metric emission for order flow,
   depth, matcher lag, settlement
-  backlog, escrow runway, API error ratios, and mirror divergence. The SFM-2
+  backlog, escrow runway, API error ratios, and mirror divergence. Local
+  snapshots now also expose a deterministic `OrderbookSettlementLedger` derived
+  from accepted receipt and channel state so replay/checkpoint restores can
+  prove buyer debits, provider credits, retained fees, and remaining locked
+  escrow without changing the canonical replay payload. The SFM-2
   rollout evidence gate now validates payload-free contract surface, durable
   matcher service, streaming-settlement service, authenticated API gateway,
   durable event streams, SDK release, observability, contract/mirror
@@ -4701,9 +4939,12 @@ and completed history lives in [`status.md`](./status.md).
   staged evidence paths, supports `@ARGFILE`, forwards
   age, route-latency, stream-lag, matcher-lag, and reconciliation-peer
   thresholds, and emits a dry-run-visible verifier command plus operator
-  example args,
+  example args. It now also mirrors the checker's required payload fields in
+  dry-run `evidence_contract` output so operators can preflight live orderbook
+  artifact shape before collection,
   but still needs the on-chain contract surface, durable matcher service,
-  daemonized settlement receipt service with escrow custody mutation,
+  daemonized settlement receipt service with contract/on-chain escrow custody
+  mutation,
   on-chain/governance-backed admission policy, contract-backed capability
   policy authorization, contract forwarding,
   durable contract/matcher-backed WebSocket/SSE streams,
@@ -4748,7 +4989,8 @@ and completed history lives in [`status.md`](./status.md).
   `TranscriptDigestV1` until the selected privacy verifier lands. The matching
   collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness and
-  latency thresholds, and emits a dry-run-visible verifier command plus
+  latency thresholds, and emits a dry-run-visible verifier command,
+  checker-backed `evidence_contract` map for the selected required kinds, plus
   operator example args. The remaining SFM-4b1 work is the privacy-preserving
   membership proof backend, issuer/registry services, juror client storage and
   proof generation, moderation sortition/commit-reveal integration, service
@@ -4820,7 +5062,8 @@ and completed history lives in [`status.md`](./status.md).
   report `ready`. The matching collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
   latency, settlement-lag, and peer-count thresholds, and emits a dry-run-visible
-  verifier command plus operator example args. SFM-4b2 still needs hosted
+  verifier command, checker-backed `evidence_contract` map for the selected
+  required kinds, plus operator example args. SFM-4b2 still needs hosted
   live/public dashboard evidence and multi-peer end-to-end ledger reconciliation
   evidence that passes this gate;
   SFM-4b4 now has SoraFS-specific moderation ballot context/commit/reveal
@@ -4910,7 +5153,10 @@ and completed history lives in [`status.md`](./status.md).
   collection planner now
   accept reviewed staged evidence paths, support `@ARGFILE`, forward gate
   thresholds, preflight the verifier script and output targets, and emit a
-  dry-run-visible verifier command plus operator example args. A checked-in
+  dry-run-visible verifier command plus operator example args. The planner now
+  also mirrors the checker's required payload fields in dry-run
+  `evidence_contract` output so operators can preflight staged billing artifact
+  shape before collection. A checked-in
   SFM-5 Grafana dashboard and Prometheus alert/test pack now
   defines the hedging/billing observability contract for feed lag/divergence,
   exposure drift, statement generation failures, acknowledgement backlog, and
@@ -4930,7 +5176,11 @@ and completed history lives in [`status.md`](./status.md).
   bad manifests return blocked summaries instead of reading outside the fixture
   root. The checker also converts manifest read/hash failures, generated
   fixture read failures, and generated inventory scan failures into blocked
-  summaries with structured errors instead of tracebacks. Full mode also runs
+  summaries with structured errors instead of tracebacks. Validator-command
+  tokenization and validator process-launch failures also route through the
+  shared error diagnostic sanitizer, so malformed shell-parser or OS exception
+  text becomes `<non-canonical-error>` instead of raw multi-line diagnostics.
+  Full mode also runs
   the pinned `sorafs-validate hedging` command
   contract without shell execution and compares each generated payload against
   the manifest's accepted or rejected outcome, verifies the kind-specific
@@ -4949,19 +5199,80 @@ and completed history lives in [`status.md`](./status.md).
   that passes the gate; SFM-6
   currently ships the
   reserve policy, quote/ledger, lifecycle projection, matrix, digest,
-  dashboard, alert tooling, fail-closed rollout evidence gate, and matching
-  collection planner. The SFM-6 gate now also requires quote matrices to bind
-  to a valid policy digest, ledger digests to bind to that policy/matrix tuple,
+  dashboard, alert tooling, fail-closed rollout evidence gate, matching
+  collection planner, and a local `sorafs_node` reserve lifecycle runtime that
+  persists provider summaries, derives ledger/lifecycle projections from the
+  shared policy math, keeps sequenced lifecycle events for replay, and records
+  idempotent local top-up/withdrawal movement intents with provider balances
+  plus submitted/confirmed/rejected custody status evidence and
+  lifecycle-derived credit-line draw/accrual state, with privacy-safe
+  transparency/governance source entries derived from accepted local reserve
+  lifecycle, movement, appeal, and lifecycle-policy records,
+  plus Torii reserve runtime metrics for lifecycle-stage counts, credit-line
+  usage, defaults, appeal backlog, movement custody state, chain-reconciled
+  movement state, and reserve service request/rate-limit counters,
+  plus signed Torii lifecycle update/readback/event routes with SSE/WebSocket
+  streams and signed reserve top-up, withdrawal, private movement-history, and
+  private balance readback routes plus a signed movement custody-status update
+  route that rewinds local provider balances for rejected movement evidence
+  and advances a separate chain-confirmed reserve balance for confirmed
+  custody evidence,
+  private credit-line readback routes, and signed local reserve
+  appeal submission/decision plus lifecycle-policy update/readback routes that
+  apply effective policy windows to later local lifecycle projections,
+  with `iroha app sorafs reserve
+  top-up|withdraw|movements|status|custody|credit-lines|credit-status|appeal-submit|appeals|appeal-decide|policy-update|policy` wrapping those signed local paths
+  for operators, and accepted local appeal decisions with requested stages now
+  apply lifecycle overrides to provider summaries, credit-line state, lifecycle
+  events, and transparency readback. Local reserve lifecycle stages now also
+  publish reserve-adjusted reputation snapshots through the existing reputation
+  pipeline while preserving prior provider metrics/score where available, and
+  local orderbook ask admission now rejects providers whose reserve lifecycle
+  projection disables adverts while accepted appeal overrides can restore that
+  admission, and Torii reserve lifecycle/appeal/custody routes sync
+  advert-disabled reserve providers and rejected reserve custody movements into
+  the gateway compliance provider denylist using reserve-scoped source metadata
+  so static/operator denylist entries are preserved; later accepted reserve
+  appeals clear reserve-owned movement-custody entries when no higher-priority
+  lifecycle default remains. Already-effective lifecycle-policy updates now
+  reproject retained provider summaries into new lifecycle replay events,
+  refresh local credit-line state, and re-run the reserve gateway compliance
+  projection for affected providers. A signed local lifecycle-advance route now
+  deterministically ages retained provider summaries by whole elapsed days at an
+  operator-supplied observation timestamp, emits replay events, refreshes
+  credit-line state, and feeds the same gateway compliance and orderbook
+  admission projection. A config-backed reserve lifecycle scheduler now invokes
+  the same local advancement path on an opt-in cadence from
+  `torii.sorafs.storage.reserve_lifecycle`, with parsed initial-delay and
+  interval settings. The SFM-6 gate now also requires quote
+  matrices to bind to a valid policy digest, ledger digests to bind to that policy/matrix tuple,
   and lifecycle, signed-route, movement, credit-line, appeal, metrics,
   provider-bake, and governance artifacts to carry the same payload-free
-  `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple before
-  promotion can report `ready`, with policy-digest binding failures recorded
+  `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple, and
+  provider-bake artifacts must prove the config-backed scheduler canary ran,
+  advanced defaulting providers, synced gateway compliance, and preserved
+  orderbook rejection, and reserve-movement artifacts must prove live chain
+  submission coverage, submitted transaction-hash readback, automatic finality
+  polling, confirmed-status polling, timeout rejection, submitted, confirmed,
+  and rejected custody evidence plus confirmed-balance readback and
+  confirmed-withdrawal underflow rejection, and credit-line artifacts must
+  prove live account-state mutation/readback, accrual posting, manual-tier
+  non-mutation, and account-state reconciliation, and governance artifacts must
+  prove source-entry publication, downstream compliance application, consumer
+  coverage, handoff verification, and non-reserve entry preservation before
+  promotion can report `ready`, with metrics artifacts now required to include
+  the actual runtime `torii_sorafs_reserve_*` families consumed by the reserve
+  dashboards and alerts, with policy-digest binding failures recorded
   on the offending artifact through the shared scalar binding error recorder
   and tuple binding failures recorded through the shared string-tuple binding
-  error recorder before required-kind summary validity is reported, but still needs the
-  signed reserve lifecycle service/API, runtime reserve movements,
-  live credit-line mutation/accrual, and live provider bake evidence that
-  passes the gate; SF-12 currently
+  error recorder before required-kind summary validity is reported. The
+  reserve/rent collection planner now mirrors the checker's required payload
+  fields in dry-run `evidence_contract` output so operators can preflight live
+  artifact shape before collection, but SFM-6 still needs
+  live chain custody submission and automatic finality polling for signed movement intents,
+  live account mutation for local credit-line state, broader downstream
+  compliance application of governance source entries, and live provider bake
+  evidence, including scheduled lifecycle canaries, that passes the gate; SF-12 currently
   ships governance log schemas, reference
   validation/signing, governance DAG block/head reference CLI validation,
   filesystem publishers, PoR publication hooks, Taikai cache bundles, public
@@ -4994,7 +5305,9 @@ and completed history lives in [`status.md`](./status.md).
   planner accepts reviewed staged evidence paths,
   supports `@ARGFILE`, forwards age, route-latency, pin-lag, head-age, block,
   and payload-kind thresholds, and emits a dry-run-visible verifier command
-  plus operator example args, but still needs the always-on ingest/publisher services,
+  plus operator example args. It now also mirrors the checker's required
+  payload fields in dry-run `evidence_contract` output so operators can
+  preflight live publication artifact shape before collection, but SF-12 still needs the always-on ingest/publisher services,
   IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
   live-head/public-checkpoint publication and recovery operator commands,
   runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
@@ -5031,7 +5344,8 @@ and completed history lives in [`status.md`](./status.md).
   matching collection planner accepts reviewed staged evidence
   paths, supports `@ARGFILE`, forwards age, route-latency, event-lag,
   repair-latency, and auditor-count thresholds, and emits a dry-run-visible
-  verifier command plus operator example args. Remaining repair production work
+  verifier command, checker-backed `evidence_contract` map for the selected
+  required kinds, plus operator example args. Remaining repair production work
   is live PoR/PoTR failure, repair, escalation, and governance handoff evidence
   with the deployed auditor roster and coordinator that passes this gate.
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof

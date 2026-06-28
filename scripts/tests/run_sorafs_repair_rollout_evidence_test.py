@@ -98,6 +98,35 @@ def test_dry_run_prints_complete_repair_rollout_plan(tmp_path: Path, capsys) -> 
     assert plan["external_evidence"]["failure_capture"] == [
         str(tmp_path / "payloads" / "failure-capture.json")
     ]
+    assert plan["evidence_contract"]["auditor_roster"]["schema"] == (
+        "sorafs.repair.auditor_roster_canary.v1"
+    )
+    assert (
+        "roster_digest_hex"
+        in plan["evidence_contract"]["auditor_roster"]["required_payload_fields"]
+    )
+    assert (
+        "evidence_bundle_digest_hex"
+        in plan["evidence_contract"]["failure_capture"]["required_payload_fields"]
+    )
+    assert (
+        "statuses_observed"
+        in plan["evidence_contract"]["worker_lifecycle"]["required_payload_fields"]
+    )
+    assert (
+        "sse_delivery_verified"
+        in plan["evidence_contract"]["event_streams"]["required_payload_fields"]
+    )
+    assert (
+        "handoff_targets"
+        in plan["evidence_contract"]["governance_handoff"]["required_payload_fields"]
+    )
+    assert (
+        "iroha_config_bound"
+        in plan["evidence_contract"]["governance_approval"][
+            "required_payload_fields"
+        ]
+    )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_repair_rollout_evidence.py" in verifier[1]
@@ -118,6 +147,7 @@ def test_response_file_dry_run_prints_complete_repair_plan(tmp_path: Path, capsy
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["auditor_roster"]
+    assert "auditor_api" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_repair_plan(
@@ -131,6 +161,7 @@ def test_split_response_file_dry_run_prints_complete_repair_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.repair.rollout_evidence_collection_plan.v1"
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
+    assert "observability" in plan["evidence_contract"]
 
 
 def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -177,6 +208,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["auditor_roster"]
+    assert list(plan["evidence_contract"]) == ["auditor_roster"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "auditor_roster" in verifier

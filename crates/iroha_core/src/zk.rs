@@ -35866,9 +35866,9 @@ mod kagemusha_non_native_limb_circuit_tests {
         assert_eq!(layout.opening_len, 128);
         assert_eq!(layout.rounds, 7);
         assert_eq!(layout.generator_fold_counts, vec![64, 32, 16, 8, 4, 2, 1]);
-        assert_eq!(layout.fixed_windows, 64);
-        assert_eq!(layout.fixed_window_bits, 4);
-        assert_eq!(layout.scalar_bits_covered, 256);
+        assert_eq!(layout.fixed_windows, 255);
+        assert_eq!(layout.fixed_window_bits, 1);
+        assert_eq!(layout.scalar_bits_covered, 255);
         assert_eq!(layout.windowed_msm_count, 262);
     }
 
@@ -35880,21 +35880,21 @@ mod kagemusha_non_native_limb_circuit_tests {
         .expect("production-width fixed-window table plan");
 
         assert_eq!(plan.opening_len, 128);
-        assert_eq!(plan.fixed_windows, 64);
-        assert_eq!(plan.fixed_window_bits, 4);
-        assert_eq!(plan.table_rows_per_window, 16);
+        assert_eq!(plan.fixed_windows, 255);
+        assert_eq!(plan.fixed_window_bits, 1);
+        assert_eq!(plan.table_rows_per_window, 2);
         assert_eq!(plan.round_accumulator_terms, 21);
         assert_eq!(plan.generator_fold_terms, 508);
         assert_eq!(plan.final_msm_terms, 3);
         assert_eq!(plan.scalar_mul_terms, 532);
-        assert_eq!(plan.naive_window_table_witnesses, 34_048);
-        assert_eq!(plan.naive_selection_table_witnesses, 34_048);
-        assert_eq!(plan.naive_point_table_copies, 68_096);
-        assert_eq!(plan.naive_point_table_rows, 1_089_536);
+        assert_eq!(plan.naive_window_table_witnesses, 135_660);
+        assert_eq!(plan.naive_selection_table_witnesses, 135_660);
+        assert_eq!(plan.naive_point_table_copies, 271_320);
+        assert_eq!(plan.naive_point_table_rows, 542_640);
         assert_eq!(plan.shared_table_families, 532);
-        assert_eq!(plan.shared_shifted_window_tables, 34_048);
-        assert_eq!(plan.shared_point_table_rows, 544_768);
-        assert_eq!(plan.duplicated_selection_rows_eliminated, 544_768);
+        assert_eq!(plan.shared_shifted_window_tables, 135_660);
+        assert_eq!(plan.shared_point_table_rows, 271_320);
+        assert_eq!(plan.duplicated_selection_rows_eliminated, 271_320);
         assert_eq!(
             plan.naive_point_table_copies / plan.shared_table_families,
             plan.fixed_windows * 2
@@ -35923,8 +35923,8 @@ mod kagemusha_non_native_limb_circuit_tests {
         assert_eq!(schedule[0].round_index, Some(0));
         assert_eq!(schedule[0].pair_index, None);
         assert_eq!(schedule[0].first_shifted_window_table, 0);
-        assert_eq!(schedule[0].shifted_window_table_count, 64);
-        assert_eq!(schedule[0].table_rows_per_window, 16);
+        assert_eq!(schedule[0].shifted_window_table_count, 255);
+        assert_eq!(schedule[0].table_rows_per_window, 2);
 
         let first_generator = &schedule[3];
         assert_eq!(
@@ -35933,7 +35933,7 @@ mod kagemusha_non_native_limb_circuit_tests {
         );
         assert_eq!(first_generator.round_index, Some(0));
         assert_eq!(first_generator.pair_index, Some(0));
-        assert_eq!(first_generator.first_shifted_window_table, 192);
+        assert_eq!(first_generator.first_shifted_window_table, 765);
 
         let last = schedule.last().expect("schedule has final term");
         assert_eq!(last.family_index, 531);
@@ -36000,13 +36000,13 @@ mod kagemusha_non_native_limb_circuit_tests {
         .expect("production-width fixed-window table plan");
 
         assert_eq!(manifest.opening_len, 128);
-        assert_eq!(manifest.fixed_windows, 64);
-        assert_eq!(manifest.fixed_window_bits, 4);
-        assert_eq!(manifest.table_rows_per_window, 16);
+        assert_eq!(manifest.fixed_windows, 255);
+        assert_eq!(manifest.fixed_window_bits, 1);
+        assert_eq!(manifest.table_rows_per_window, 2);
         assert_eq!(manifest.table_families, 532);
-        assert_eq!(manifest.shared_shifted_window_tables, 34_048);
-        assert_eq!(manifest.shared_point_table_rows, 544_768);
-        assert_eq!(manifest.duplicated_selection_rows_eliminated, 544_768);
+        assert_eq!(manifest.shared_shifted_window_tables, 135_660);
+        assert_eq!(manifest.shared_point_table_rows, 271_320);
+        assert_eq!(manifest.duplicated_selection_rows_eliminated, 271_320);
         assert_eq!(manifest.table_families, plan.shared_table_families);
         assert_eq!(
             manifest.schedule_digest,

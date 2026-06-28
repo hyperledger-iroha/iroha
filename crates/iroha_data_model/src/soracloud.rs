@@ -4331,6 +4331,7 @@ impl SoracloudFheInputAdmissionProofV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the envelope version is unsupported
     /// or the nested proof attachment is malformed.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         if self.schema_version != SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1 {
             return Err(SoracloudManifestError::UnsupportedVersion {

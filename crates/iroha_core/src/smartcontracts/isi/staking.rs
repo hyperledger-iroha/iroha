@@ -1584,7 +1584,7 @@ pub(crate) fn apply_slash_to_validator(
         .get(&validator_key)
         .map(|record| {
             ensure_public_lane_validator_record_matches_key(&validator_key, record)?;
-            Ok(record.stake_account.clone())
+            Ok::<_, Error>(record.stake_account.clone())
         })
         .transpose()?
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
@@ -3573,14 +3573,14 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let lane_id = LaneId::new(159);
+        let lane_id = LaneId::new(59);
         let (_sink, validator, reward_asset, _) = configure_reward_fixture(&mut stx, lane_id, 500);
         let record = stx
             .world
             .public_lane_validators
             .get_mut(&(lane_id, validator.clone()))
             .expect("validator record");
-        record.lane_id = LaneId::new(160);
+        record.lane_id = LaneId::new(60);
         record.status = PublicLaneValidatorStatus::Active;
 
         let err = RecordPublicLaneRewards {
@@ -3599,7 +3599,7 @@ mod tests {
         .expect_err("mismatched validator row must not receive rewards");
 
         assert!(
-            matches!(err, Error::InvariantViolation(msg) if msg.contains("not active")),
+            matches!(err, Error::InvariantViolation(ref msg) if msg.contains("not active")),
             "unexpected error: {err:?}"
         );
         assert!(

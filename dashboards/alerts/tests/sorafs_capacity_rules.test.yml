@@ -194,6 +194,63 @@ tests:
               summary: "Reserve ledger reserve top-up mismatch"
   - interval: 1m
     input_series:
+      - series: 'torii_sorafs_reserve_defaulted_providers'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_reserve_credit_shortfall_micro_xor{provider_id="provider-a"}'
+        values: '5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000'
+      - series: 'torii_sorafs_reserve_appeal_backlog'
+        values: '11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11'
+      - series: 'torii_sorafs_reserve_chain_reconciled_movements{status="rejected"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_reserve_service_rate_limit_total{route="top_up",reason="quota"}'
+        values: '0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
+    alert_rule_test:
+      - alertname: SoraFSReserveRuntimeDefaults
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSReserveRuntimeDefaults
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Reserve runtime reports defaulted providers"
+      - alertname: SoraFSReserveRuntimeCreditShortfall
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Reserve runtime reports uncovered credit shortfall"
+      - alertname: SoraFSReserveAppealBacklogHigh
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraFSReserveAppealBacklogHigh
+        eval_time: 17m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Reserve appeal backlog above operator threshold"
+      - alertname: SoraFSReserveMovementRejected
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              status: rejected
+              severity: warning
+            exp_annotations:
+              summary: "Reserve movement rejected during chain reconciliation"
+      - alertname: SoraFSReserveServiceRateLimited
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              reason: quota
+              route: top_up
+              severity: warning
+            exp_annotations:
+              summary: "Reserve service rate limits are firing"
+  - interval: 1m
+    input_series:
       - series: 'torii_sorafs_gc_runs_total{result="error"}'
         values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
       - series: 'torii_sorafs_gc_blocked_total{reason="repair_active"}'
