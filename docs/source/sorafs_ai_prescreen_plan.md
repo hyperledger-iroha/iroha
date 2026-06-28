@@ -29,6 +29,7 @@ local commit/reveal executor canary evidence tooling,
 local payload-free operator workflow canary evidence tooling,
 local AI pre-screening rollout evidence gate tooling,
 local AI pre-screening rollout evidence collection planning,
+local AI pre-screening dry-run evidence-contract export,
 standalone persistent model-registry service foundation, deterministic local
 runner CLI output, HTTP service mode, unary gRPC service mode, supervised
 bundle generation, HTTP canary evidence, deterministic local committee
@@ -823,7 +824,9 @@ Completed local foundations:
   offending artifacts in the emitted summary.
 - Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
   collection planner/runner that composes existing runner, committee, operator,
-  notification, executor, and transparency canaries before invoking the gate.
+  notification, executor, and transparency canaries before invoking the gate;
+  its dry-run JSON includes an `evidence_contract` map with the schema and
+  required payload fields for every SFM-4a evidence kind.
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.
@@ -861,5 +864,6 @@ payload-free commit/reveal coordination status, local commit/reveal executor
 CLI automation, local supervised commit/reveal executor job bundle generation,
 local commit/reveal executor canary evidence tooling, local operator workflow
 canary evidence tooling, local AI pre-screening rollout evidence gate and
-collection planner, documented operator role-provisioning runbook, GAR policy
-plumbing, bounded denylist catalog readback, or observability fixtures.
+collection planner/dry-run evidence-contract export, documented operator
+role-provisioning runbook, GAR policy plumbing, bounded denylist catalog
+readback, or observability fixtures.

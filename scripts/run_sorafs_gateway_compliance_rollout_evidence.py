@@ -22,6 +22,7 @@ from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_GATEWAYS,
     DEFAULT_MIN_HONEY_PROBES,
     DEFAULT_REQUIRED_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
     SUMMARY_SCHEMA,
 )
@@ -60,6 +61,8 @@ class CommandPlan:
 
 EVIDENCE_OPTIONS_BY_KIND = {
     "feed_promotion": "feed_promotion_evidence",
+    "controller_runtime": "controller_runtime_evidence",
+    "moderation_toggle": "moderation_toggle_evidence",
     "gateway_reload": "gateway_reload_evidence",
     "enforcement_probe": "enforcement_probe_evidence",
     "honey_audit": "honey_audit_evidence",
@@ -71,6 +74,8 @@ EVIDENCE_OPTIONS_BY_KIND = {
 
 EVIDENCE_FLAGS_BY_KIND = {
     "feed_promotion": "--feed-promotion-evidence",
+    "controller_runtime": "--controller-runtime-evidence",
+    "moderation_toggle": "--moderation-toggle-evidence",
     "gateway_reload": "--gateway-reload-evidence",
     "enforcement_probe": "--enforcement-probe-evidence",
     "honey_audit": "--honey-audit-evidence",
@@ -166,6 +171,13 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             kind: [str(path) for path in paths]
             for kind, paths in evidence_paths_by_kind(args).items()
             if paths
+        },
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in args.required_kinds
         },
         "steps": [
             {

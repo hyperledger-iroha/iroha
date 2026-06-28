@@ -166,6 +166,10 @@ LaneConfigEntry {
   routes, settlements, and permission-scope routes keep their existing
   precedence. Valid elastic lanes must be public, autoscale-managed, correctly
   aliased, created at a positive height, and bound to the default dataspace.
+  Their Torii route-authority set is inherited from the live commit topology
+  after filtering for active consensus keys unless an explicit lane manifest
+  binding exists, so consensus-created elastic lanes are immediately routable
+  without giving ordinary public or restricted lanes a commit-topology fallback.
   The configured default lane itself must stay outside the autoscale-owned
   elastic id range so it remains a stable base anchor. Live-state routing also
   requires `nexus.enabled = true` and `autoscale.enabled = true` and filters
@@ -191,11 +195,12 @@ LaneConfigEntry {
   publication: it first performs side-effect-free validation, then reconciles
   lane storage geometry outside the state writer lock, and only then publishes
   the committed Nexus catalog/runtime state under the writer lock. Manual lane
-  lifecycle uses the same lock order: fallible Kura/tiered geometry
-  reconciliation runs before writer-locked catalog publication, and world-backed
-  cleanup for reset lanes runs after both the lifecycle storage lock and writer
-  lock are released, so concurrent commits cannot deadlock by holding world
-  storage while waiting on lifecycle storage. DA commitment, shard/receipt
+  lifecycle uses the same commit-serialization lock and lock order for geometry
+  reconciliation and writer-locked catalog publication. World-backed cleanup for
+  reset lanes runs after the lifecycle storage lock, writer lock, and
+  commit-serialization lock are released, so already-built block overlays cannot
+  deadlock by holding world storage while waiting to enter commit. DA
+  commitment, shard/receipt
   cursor, confidential-compute
   receipt, and pin-intent indexes prepared while applying a block are staged on
   the same side of commit validation, so those runtime and world indexes cannot
@@ -272,9 +277,11 @@ LaneConfigEntry {
   pruning explicit cache entries whose target lane no longer exists. Scale-in
   uses the same resolved
   default-route capacity and complete historical sample-window preconditions as
-  scale-out, and only retires when that capacity is strictly above
-  `autoscale.min_lanes`, so stale routing state or unrelated manual lanes cannot
-  retire an elastic lane.
+  scale-out, and only retires when that capacity is strictly above the base
+  default-route lane, so stale routing state or unrelated manual lanes cannot
+  retire an elastic lane. The `autoscale.min_lanes` and `autoscale.max_lanes`
+  values bound the autoscaler-owned elastic id range; they do not count
+  unrelated public-profile base lanes as default-route capacity.
 - Autoscale utilization samples count committed fragments, not just external
   transaction envelopes. Current-block decisions use the in-flight execution
   counter, and historical window samples read the persisted committed-fragment
@@ -316,6 +323,12 @@ LaneConfigEntry {
   pin cooldown after a failed scaling attempt. When configured windows
   conflict, a hot longer scale-out window takes precedence over a cold shorter
   scale-in window so capacity is added rather than retired in the same block.
+  Scale-out treats either sustained p95 latency above the scale-out latency
+  threshold or sustained p95 utilization above the scale-out utilization
+  threshold as enough pressure to add managed capacity. Scale-in stays
+  conjunctive and retires capacity only when both p95 latency and p95
+  utilization are at or below their scale-in thresholds for the full cold
+  window.
 - Native AMX participant votes are prefiltered before they enter proposer
   session caches. The received vote message variant must match the signed
   attestation phase, remote sender `PeerId` must match the vote signer, the

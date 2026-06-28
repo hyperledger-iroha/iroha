@@ -445,6 +445,60 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
     assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
 
 
+def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
+    path = write_json(tmp_path / "typed.json", transport_evidence())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"metrics={path}",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert any(
+        "belongs to `transport`, not explicit kind `metrics`" in error
+        for error in payload["load_errors"]
+    )
+
+
+def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
+    path = write_json(tmp_path / "typed.json", transport_evidence())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"transport={path}",
+                "--evidence",
+                f"metrics={path}",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert any(
+        "explicit kind `metrics` conflicts with explicit kind `transport`" in error
+        for error in payload["load_errors"]
+    )
+
+
 def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
     monkeypatch,
 ) -> None:
@@ -503,7 +557,7 @@ def test_explicit_malformed_json_reports_shared_load_error(
     )
 
 
-def test_explicit_missing_file_reports_shared_load_error(
+def test_explicit_missing_file_reports_discovery_error(
     tmp_path: Path, capsys
 ) -> None:
     path = tmp_path / "missing.json"
@@ -512,7 +566,6 @@ def test_explicit_missing_file_reports_shared_load_error(
 
     captured = capsys.readouterr()
     summary = json.loads(captured.out)
-    assert any(
-        error.startswith(f"{path}: failed to load evidence JSON:")
-        for error in summary["load_errors"]
-    )
+    assert summary["load_errors"] == [
+        f"evidence file `{path}` must exist and be a file"
+    ]

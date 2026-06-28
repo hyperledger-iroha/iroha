@@ -48,16 +48,97 @@ DEFAULT_TRACKED_FIXTURE = (
 )
 
 
-def load_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+def read_open_flags() -> int:
+    """Return descriptor flags for fail-closed JSON fixture reads."""
+
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
-def write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-        handle.write("\n")
+def write_open_flags() -> int:
+    """Return descriptor flags for fail-closed JSON fixture writes."""
+
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def validate_codegen_path(path: Path, label: str) -> None:
+    """Reject symlinked codegen fixture paths and parent chains before I/O."""
+
+    if not isinstance(path, Path):
+        raise ValueError(f"{label} must be a path")
+    try:
+        if path.is_symlink():
+            raise ValueError(f"{label} `{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                raise ValueError(f"{label} parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                raise ValueError(
+                    f"{label} parent `{parent}` must be a directory when it exists"
+                )
+    except ValueError:
+        raise
+    except OSError as error:
+        raise ValueError(f"failed to inspect {label} `{path}`: {error}") from error
+
+
+def ensure_codegen_directory(path: Path, label: str) -> None:
+    """Create a codegen fixture directory after rejecting symlink parents."""
+
+    validate_codegen_path(path, label)
+    path.mkdir(parents=True, exist_ok=True)
+    validate_codegen_path(path, label)
+    if not path.is_dir():
+        raise ValueError(f"{label} `{path}` must be a directory")
+
+
+def require_codegen_file(path: Path, label: str) -> Path:
+    """Return an existing regular codegen fixture file after path validation."""
+
+    validate_codegen_path(path, label)
+    if not path.is_file():
+        raise ValueError(f"{label} `{path}` must exist and be a file")
+    return path
+
+
+def load_json(path: Path, *, label: str = "JSON fixture") -> dict:
+    require_codegen_file(path, label)
+    fd = -1
+    try:
+        fd = os.open(path, read_open_flags())
+        handle = os.fdopen(fd, "r", encoding="utf-8")
+        fd = -1
+        with handle:
+            return json.load(handle)
+    except OSError as error:
+        raise ValueError(f"failed to read {label} `{path}`: {error}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def write_json(path: Path, payload: dict, *, label: str = "JSON fixture") -> None:
+    validate_codegen_path(path, label)
+    ensure_codegen_directory(path.parent, f"{label} parent directory")
+    validate_codegen_path(path, label)
+    fd = -1
+    try:
+        fd = os.open(path, write_open_flags(), 0o666)
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+    except OSError as error:
+        raise ValueError(f"failed to write {label} `{path}`: {error}") from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def run_manifest_stub(
@@ -138,9 +219,9 @@ def build_fixture_example(
 
 
 def update_register_pin_example(example_path: Path, fixture_example: dict) -> None:
-    data = load_json(example_path)
+    data = load_json(example_path, label="RegisterPinManifest example")
     data["fixture_example"] = fixture_example
-    write_json(example_path, data)
+    write_json(example_path, data, label="RegisterPinManifest example")
 
 
 def main() -> int:
@@ -184,20 +265,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    fixture_meta = load_json(args.fixture_dir / "metadata.json")
-    chunker_fixture = load_json(args.chunker_fixture)
+    try:
+        fixture_meta = load_json(
+            args.fixture_dir / "metadata.json",
+            label="orchestrator fixture metadata",
+        )
+        chunker_fixture = load_json(args.chunker_fixture, label="chunker fixture")
 
-    payload_path = (REPO_ROOT / fixture_meta["payload_path"]).resolve()
-    if not payload_path.exists():
-        raise SystemExit(f"payload path missing: {payload_path}")
+        payload_path = require_codegen_file(
+            REPO_ROOT / fixture_meta["payload_path"],
+            "payload path",
+        )
 
-    plan_path = (args.fixture_dir / fixture_meta["plan_file"]).resolve()
-    if not plan_path.exists():
-        raise SystemExit(f"plan file missing: {plan_path}")
+        plan_path = require_codegen_file(
+            args.fixture_dir / fixture_meta["plan_file"],
+            "plan file",
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
     retention_epoch = fixture_meta.get("retention_epoch", fixture_meta["now_unix_secs"])
     report_path = args.report_dir / f"{fixture_meta['fixture']}.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_report = Path(tmpdir) / "manifest_report.json"
@@ -211,8 +299,8 @@ def main() -> int:
             retention_epoch=retention_epoch,
             json_out=tmp_report,
         )
-        manifest_report = load_json(tmp_report)
-        write_json(report_path, manifest_report)
+        manifest_report = load_json(tmp_report, label="generated manifest report")
+        write_json(report_path, manifest_report, label="manifest report")
 
     fixture_example = build_fixture_example(
         fixture_meta,
@@ -221,7 +309,7 @@ def main() -> int:
         report_path,
     )
     update_register_pin_example(args.register_pin_example, fixture_example)
-    write_json(args.tracked_fixture_out, fixture_example)
+    write_json(args.tracked_fixture_out, fixture_example, label="tracked fixture")
     print(
         f"[android-codegen] updated fixture example in "
         f"{args.register_pin_example.relative_to(REPO_ROOT)}"

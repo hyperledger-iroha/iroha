@@ -15,6 +15,9 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
+    DEFAULT_REQUIRED_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
+    KIND_BY_NAME,
     REQUIRED_TRANSPARENCY_SOURCE_KINDS,
     SUMMARY_SCHEMA,
 )
@@ -262,6 +265,13 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "external_evidence": {
             "governance_dag": str(args.governance_dag_evidence),
             "end_to_end_workflow": str(args.e2e_evidence),
+        },
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in DEFAULT_REQUIRED_KINDS
         },
         "steps": [
             {

@@ -260,11 +260,33 @@ fi
 persist_path=""
 if command -v python3 >/dev/null 2>&1; then
   persist_path="$(python3 - "$policy_path" <<'PY'
-import json, sys
+import json
+import os
+import stat
+import sys
+
 path = sys.argv[1]
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
 try:
-    with open(path, 'r', encoding='utf-8') as fh:
-        data = json.load(fh)
+    if os.path.islink(path):
+        raise OSError("policy path must not be a symlink")
+    path_stat = os.lstat(path)
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise OSError("policy path must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            raise OSError("policy path must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            fd = -1
+            data = json.load(fh)
+    finally:
+        if fd >= 0:
+            os.close(fd)
     persist = data.get("scoreboard", {}).get("persist_path")
     if isinstance(persist, str) and persist.strip():
         print(persist.strip())

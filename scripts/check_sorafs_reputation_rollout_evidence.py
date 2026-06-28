@@ -69,6 +69,7 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
+from sorafs_path_identity import path_diagnostic_label  # noqa: E402
 from sorafs_evidence_sensitivity import visit_sensitive_fields  # noqa: E402
 
 
@@ -85,16 +86,16 @@ class EvidenceKind:
     """One SFM-3 rollout evidence class."""
 
     name: str
-    schema: str | None
+    schema: str
     required: bool = True
 
 
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
-    EvidenceKind("publish", None),
-    EvidenceKind("latest", None),
-    EvidenceKind("provider", None),
-    EvidenceKind("events", None),
-    EvidenceKind("verify", None),
+    EvidenceKind("publish", "sorafs.reputation.publish_snapshot_summary.v1"),
+    EvidenceKind("latest", "sorafs.reputation.latest_snapshot_summary.v1"),
+    EvidenceKind("provider", "sorafs.reputation.provider_proof.v1"),
+    EvidenceKind("events", "sorafs.reputation.events_watch.v1"),
+    EvidenceKind("verify", "sorafs.reputation.provider_proof_verification.v1"),
     EvidenceKind("metrics", "sorafs.reputation.metrics_canary.v1"),
     EvidenceKind("transport", "sorafs.reputation.transport_canary.v1"),
     EvidenceKind("consumption", "sorafs.reputation.routing_incentive_consumption.v1"),
@@ -272,10 +273,27 @@ def load_evidence(
         explicit_entries.append((explicit_kind, path))
 
     explicit_kinds_by_path: dict[Path, str | None] = {}
+    explicit_paths_by_path: dict[Path, Path] = {}
     for explicit_kind, path in explicit_entries:
         resolved = resolve_evidence_path(path, errors)
-        if resolved is not None and resolved not in explicit_kinds_by_path:
-            explicit_kinds_by_path[resolved] = explicit_kind
+        if resolved is None:
+            continue
+        if resolved in explicit_kinds_by_path:
+            previous_kind = explicit_kinds_by_path[resolved]
+            if previous_kind != explicit_kind:
+                previous_path = explicit_paths_by_path[resolved]
+                errors.append(
+                    "evidence file `{}` explicit kind `{}` conflicts with "
+                    "explicit kind `{}` from `{}`".format(
+                        path_diagnostic_label(path),
+                        explicit_kind or "<inferred>",
+                        previous_kind or "<inferred>",
+                        path_diagnostic_label(previous_path),
+                    )
+                )
+            continue
+        explicit_kinds_by_path[resolved] = explicit_kind
+        explicit_paths_by_path[resolved] = path
 
     files = discover_evidence_files(
         evidence_dirs,
@@ -302,6 +320,14 @@ def load_evidence(
         if isinstance(schema, str) and schema not in SCHEMA_TO_KIND and explicit:
             errors.append(f"{path}: unknown schema `{schema}`")
             continue
+        if isinstance(schema, str) and schema in SCHEMA_TO_KIND and explicit_kind:
+            schema_kind = SCHEMA_TO_KIND[schema].name
+            if schema_kind != explicit_kind:
+                errors.append(
+                    f"{path}: schema `{schema}` belongs to `{schema_kind}`, "
+                    f"not explicit kind `{explicit_kind}`"
+                )
+                continue
         kind = artifact_kind(path, payload, explicit_kind)
         if kind is None:
             if explicit:

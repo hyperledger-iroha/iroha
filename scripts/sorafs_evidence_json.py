@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
+from sorafs_evidence_paths import validate_evidence_parent_chain
 from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
 
 CHUNK_BYTES = 1024 * 1024
@@ -82,6 +84,44 @@ def json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str
     return payload
 
 
+def validate_evidence_file_for_read(path: Path) -> None:
+    """Reject unsafe evidence file paths before opening them."""
+
+    path_label = _evidence_path_label(path)
+    try:
+        if path.is_symlink():
+            raise ValueError(f"evidence file `{path_label}` must not be a symlink")
+        parent_errors: list[str] = []
+        if not validate_evidence_parent_chain(
+            path,
+            parent_errors,
+            label="evidence file",
+        ):
+            raise ValueError(parent_errors[0])
+        if not path.is_file():
+            raise ValueError(
+                f"evidence file `{path_label}` must exist and be a file"
+            )
+    except ValueError:
+        raise
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(
+            f"evidence file `{path_label}` cannot be inspected: "
+            f"{_error_label(error, path=path, path_label=path_label)}"
+        ) from error
+
+
+def evidence_read_open_flags() -> int:
+    """Return platform read flags that refuse a final symlink when available."""
+
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
 def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
     """Read bounded evidence bytes from disk."""
 
@@ -93,14 +133,22 @@ def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
         or max_bytes <= 0
     ):
         raise ValueError("evidence byte limit must be positive")
+    validate_evidence_file_for_read(path)
     chunks: list[bytes] = []
     size = 0
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(CHUNK_BYTES), b""):
-            size += len(chunk)
-            if size > max_bytes:
-                raise EvidenceFileTooLargeError(max_bytes)
-            chunks.append(chunk)
+    fd = os.open(path, evidence_read_open_flags())
+    try:
+        handle = os.fdopen(fd, "rb")
+        fd = -1
+        with handle:
+            for chunk in iter(lambda: handle.read(CHUNK_BYTES), b""):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise EvidenceFileTooLargeError(max_bytes)
+                chunks.append(chunk)
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return b"".join(chunks)
 
 

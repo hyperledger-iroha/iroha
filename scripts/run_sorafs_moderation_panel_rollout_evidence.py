@@ -21,6 +21,7 @@ from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_PANEL_SIZE,
     DEFAULT_MIN_PEERS,
     DEFAULT_REQUIRED_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
     SUMMARY_SCHEMA,
 )
@@ -174,6 +175,13 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for kind, paths in evidence_paths_by_kind(args).items()
             if paths
         },
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in args.required_kinds
+        },
         "steps": [
             {
                 "label": step.label,
@@ -271,18 +279,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
-    except ValueError as error:
-        emit_runner_exception(error)
-        raise SystemExit(2) from error
-    return parser.parse_args(expanded_args)
-
-
-def main(argv: list[str] | None = None) -> int:
-    try:
-        args = parse_args(argv)
-    except SystemExit as error:
-        return error.code if isinstance(error.code, int) else 1
-    try:
+        args = parser.parse_args(expanded_args)
         args.required_kinds = parse_required_evidence_kinds(
             args.require_kind,
             allowed_kinds=KIND_BY_NAME,
@@ -290,7 +287,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as error:
         emit_runner_exception(error)
-        return 2
+        raise SystemExit(2) from error
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+    except SystemExit as error:
+        return error.code if isinstance(error.code, int) else 1
 
     errors = validate_inputs(args)
     if errors:

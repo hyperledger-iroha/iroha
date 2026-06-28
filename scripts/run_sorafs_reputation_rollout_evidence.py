@@ -224,10 +224,15 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     return plan
 
 
-def plan_json(plan: Sequence[CommandPlan]) -> dict[str, object]:
+def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
         "schema": "sorafs.reputation.rollout_evidence_collection_plan.v1",
         "verifier_summary_schema": SUMMARY_SCHEMA,
+        "external_evidence": {
+            "metrics": str(args.metrics_evidence),
+            "transport": str(args.transport_evidence),
+            "consumption": str(args.consumption_evidence),
+        },
         "evidence_contract": {
             kind: {
                 "schema": KIND_BY_NAME[kind].schema,
@@ -345,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     if args.dry_run:
-        plan_errors = write_runner_plan(plan_json(plan))
+        plan_errors = write_runner_plan(plan_json(plan, args))
         if plan_errors:
             emit_runner_error_lines(plan_errors)
             return 2

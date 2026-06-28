@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b38c7412f3d48f9c093cb4dd79df4d3a0752792e988e5e85f637e53fc134deec
+source_hash: 5da57a041e75f21d25dded27190506f6a2c86eaf7ecd7b1bd79691b08da349de
 source_last_modified: "2026-06-25T17:14:40+00:00"
 translation_last_reviewed: 2026-06-25
 ---

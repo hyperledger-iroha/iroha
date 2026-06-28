@@ -24,10 +24,47 @@ BURN_IN_LOG_LIST=""
 require_nonempty_file() {
   local path="$1"
   local label="$2"
-  if [[ ! -s "${path}" ]]; then
-    echo "[sorafs-adoption] ${label} missing or empty: ${path}" >&2
-    exit 1
-  fi
+  SORAFS_ADOPTION_REQUIRED_PATH="${path}" \
+  SORAFS_ADOPTION_REQUIRED_LABEL="${label}" \
+  python3 <<'PY'
+import os
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(os.environ["SORAFS_ADOPTION_REQUIRED_PATH"])
+label = os.environ["SORAFS_ADOPTION_REQUIRED_LABEL"]
+
+def fail(message: str) -> None:
+    sys.exit(f"[sorafs-adoption] {message}: {path}")
+
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+try:
+    if path.is_symlink():
+        fail(f"{label} must not be a symlink")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            fail(f"{label} parent must not be a symlink")
+        if parent.exists() and not parent.is_dir():
+            fail(f"{label} parent must be a directory")
+    path_stat = path.lstat()
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(f"{label} must be a regular file")
+    if path_stat.st_size <= 0:
+        fail(f"{label} missing or empty")
+    fd = os.open(path, read_open_flags())
+    try:
+        if os.fstat(fd).st_size <= 0:
+            fail(f"{label} missing or empty")
+    finally:
+        os.close(fd)
+except FileNotFoundError:
+    fail(f"{label} missing or empty")
+except OSError as exc:
+    sys.exit(f"[sorafs-adoption] failed to inspect {label}: {path}: {exc}")
+PY
 }
 
 if [[ -n "${BURN_IN_LABEL}" ]]; then
@@ -128,22 +165,90 @@ import json
 import os
 import pathlib
 import shlex
+import stat
 
 fixture_dir = pathlib.Path(os.environ["SORAFS_FIXTURE_DIR"])
 repo_root = pathlib.Path(os.environ["SORAFS_REPO_ROOT"])
 config_path = pathlib.Path(os.environ["SORAFS_CONFIG_PATH"])
 
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def validate_adoption_path(path: pathlib.Path, label: str) -> None:
+    if path.is_symlink():
+        raise SystemExit(f"[sorafs-adoption] {label} must not be a symlink: {path}")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            raise SystemExit(
+                f"[sorafs-adoption] {label} parent must not be a symlink: {parent}"
+            )
+        if parent.exists() and not parent.is_dir():
+            raise SystemExit(
+                f"[sorafs-adoption] {label} parent must be a directory: {parent}"
+            )
+
+def ensure_adoption_directory(path: pathlib.Path, label: str) -> None:
+    validate_adoption_path(path, label)
+    path.mkdir(parents=True, exist_ok=True)
+    validate_adoption_path(path, label)
+    if not path.is_dir():
+        raise SystemExit(f"[sorafs-adoption] {label} must be a directory: {path}")
+
+def require_adoption_file(path: pathlib.Path, label: str) -> pathlib.Path:
+    validate_adoption_path(path, label)
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError as exc:
+        raise SystemExit(f"[sorafs-adoption] {label} missing: {path}") from exc
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise SystemExit(f"[sorafs-adoption] {label} must be a regular file: {path}")
+    if path_stat.st_size <= 0:
+        raise SystemExit(f"[sorafs-adoption] {label} missing or empty: {path}")
+    return path
+
 def read_json(path: pathlib.Path):
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    require_adoption_file(path, "fixture JSON")
+    fd = os.open(path, read_open_flags())
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def write_adoption_text(path: pathlib.Path, body: str, label: str) -> None:
+    validate_adoption_path(path, label)
+    ensure_adoption_directory(path.parent, f"{label} parent directory")
+    validate_adoption_path(path, label)
+    fd = os.open(path, write_open_flags(), 0o666)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(body)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 metadata = read_json(fixture_dir / "metadata.json")
 options = read_json(fixture_dir / "options.json")
 providers = read_json(fixture_dir / "providers.json")
 
-plan_path = (fixture_dir / metadata["plan_file"]).resolve()
-telemetry_path = (fixture_dir / metadata["telemetry_file"]).resolve()
-payload_path = (repo_root / metadata["payload_path"]).resolve()
+plan_path = require_adoption_file(fixture_dir / metadata["plan_file"], "plan file")
+telemetry_path = require_adoption_file(
+    fixture_dir / metadata["telemetry_file"],
+    "telemetry file",
+)
+payload_path = require_adoption_file(repo_root / metadata["payload_path"], "payload file")
 assume_now = metadata.get("now_unix_secs", 0) or 0
 
 provider_concurrency = options.get("global_parallel_limit") or options.get("max_parallel") or 2
@@ -164,26 +269,27 @@ if provider_count < 2:
 else:
     min_providers = min(provider_count, 3)
 
-def write_line(handle, key, value):
-    handle.write(f"{key}={value}\n")
-
-with config_path.open("w", encoding="utf-8") as handle:
-    write_line(handle, "PLAN", shlex.quote(str(plan_path)))
-    write_line(handle, "TELEMETRY", shlex.quote(str(telemetry_path)))
-    write_line(handle, "ASSUME_NOW", str(assume_now))
-    write_line(handle, "PAYLOAD", shlex.quote(str(payload_path)))
-    if (max_peers := options.get("max_peers")):
-        write_line(handle, "MAX_PEERS", str(int(max_peers)))
-    if (max_parallel := options.get("max_parallel") or options.get("global_parallel_limit")):
-        write_line(handle, "MAX_PARALLEL", str(int(max_parallel)))
-    if (retry_budget := options.get("retry_budget") or options.get("per_chunk_retry_limit")):
-        write_line(handle, "RETRY_BUDGET", str(int(retry_budget)))
-    if (failure_threshold := options.get("provider_failure_threshold")):
-        write_line(handle, "PROVIDER_FAILURE_THRESHOLD", str(int(failure_threshold)))
-    write_line(handle, "MIN_PROVIDERS", str(int(min_providers)))
-    quoted = " ".join(shlex.quote(spec) for spec in provider_specs)
-    handle.write(f"PROVIDERS=({quoted})\n")
+config_lines = [
+    f"PLAN={shlex.quote(str(plan_path))}\n",
+    f"TELEMETRY={shlex.quote(str(telemetry_path))}\n",
+    f"ASSUME_NOW={assume_now}\n",
+    f"PAYLOAD={shlex.quote(str(payload_path))}\n",
+]
+if (max_peers := options.get("max_peers")):
+    config_lines.append(f"MAX_PEERS={int(max_peers)}\n")
+if (max_parallel := options.get("max_parallel") or options.get("global_parallel_limit")):
+    config_lines.append(f"MAX_PARALLEL={int(max_parallel)}\n")
+if (retry_budget := options.get("retry_budget") or options.get("per_chunk_retry_limit")):
+    config_lines.append(f"RETRY_BUDGET={int(retry_budget)}\n")
+if (failure_threshold := options.get("provider_failure_threshold")):
+    config_lines.append(f"PROVIDER_FAILURE_THRESHOLD={int(failure_threshold)}\n")
+config_lines.append(f"MIN_PROVIDERS={int(min_providers)}\n")
+quoted = " ".join(shlex.quote(spec) for spec in provider_specs)
+config_lines.append(f"PROVIDERS=({quoted})\n")
+write_adoption_text(config_path, "".join(config_lines), "fixture config")
 PY
+
+require_nonempty_file "${CONFIG_PATH}" "fixture config"
 
 # shellcheck disable=SC1090
 source "${CONFIG_PATH}"
@@ -341,6 +447,49 @@ import json
 import os
 from pathlib import Path
 
+def write_open_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def validate_adoption_path(path: Path, label: str) -> None:
+    if path.is_symlink():
+        raise SystemExit(f"[sorafs-adoption] {label} must not be a symlink: {path}")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            raise SystemExit(
+                f"[sorafs-adoption] {label} parent must not be a symlink: {parent}"
+            )
+        if parent.exists() and not parent.is_dir():
+            raise SystemExit(
+                f"[sorafs-adoption] {label} parent must be a directory: {parent}"
+            )
+
+def ensure_adoption_directory(path: Path, label: str) -> None:
+    validate_adoption_path(path, label)
+    path.mkdir(parents=True, exist_ok=True)
+    validate_adoption_path(path, label)
+    if not path.is_dir():
+        raise SystemExit(f"[sorafs-adoption] {label} must be a directory: {path}")
+
+def write_adoption_json(path: Path, payload: dict, label: str) -> None:
+    validate_adoption_path(path, label)
+    ensure_adoption_directory(path.parent, f"{label} parent directory")
+    validate_adoption_path(path, label)
+    fd = os.open(path, write_open_flags(), 0o666)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
 def parse_float(name: str, default=None):
     raw = os.environ.get(name)
     if raw is None:
@@ -398,7 +547,7 @@ if day_raw:
     except ValueError:
         payload["day_index"] = None
 
-note_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+write_adoption_json(note_path, payload, "burn-in note")
 PY
 fi
 

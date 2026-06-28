@@ -2,6 +2,2325 @@
 
 Last updated: 2026-06-28
 
+## 2026-06-28 Nexus autoscale strict localnet hardening
+
+- Fixed the strict autoscale localnet failure where deterministic scale-out
+  reached quorum but the elastic lane never scaled back in under the stricter
+  transition assertions. The pre-fix strict run failed after 4 attempts and
+  844.95s: scale-out reached quorum, lane 1 remained provisioned on all peers,
+  and scale-in transitions stayed at 0/4.
+- Scale-out now treats either sustained p95 latency pressure or sustained p95
+  utilization pressure as sufficient to add managed capacity. Scale-in remains
+  conservative and still requires both latency and utilization to stay at or
+  below their cold thresholds for the full window.
+- Fixed public-profile scale-in eligibility by separating the autoscale elastic
+  id range lower bound from the default-route scale-in floor. Public profiles
+  that reserve base lanes below `autoscale.min_lanes` can now retire a valid
+  managed elastic lane while preserving those base lanes; unrelated manual lanes
+  still do not create retire eligibility.
+- Retuned the strict localnet autoscale profiles so they prove
+  utilization-driven scale-out and cold-window scale-in under four-peer localnet
+  timing. The public-profile strict test now owns only the single elastic slot
+  under test.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale_scale_out_triggered -- --nocapture`
+    passed: 2 tests, 0 failures.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_strict_expand_contract_transitions_in_localnet -- --nocapture`
+    passed after the fix: 1 test, 0 failures, 281 filtered out, finished in
+    120.43s after a 5m50s build; scale-in transitions were observed on 4/4
+    peers after expansion.
+  - Public-profile strict pre-fix evidence: the test first over-expanded to a
+    second elastic lane when the test profile allowed it, then still failed with
+    only lane 3 present because the scale-in floor compared capacity against
+    the elastic id lower bound.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale_transition_retires_public_profile_elastic_lane_when_window_is_cold -- --nocapture`
+    passed: 1 test, 0 failures.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale_transition_scale_in_ignores_unrelated_manual_lanes_at_min_capacity -- --nocapture`
+    passed: 1 test, 0 failures.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_public_profile_strict_expand_contract_transitions_in_localnet -- --nocapture`
+    passed after the scale-in floor fix: 1 test, 0 failures, 281 filtered out,
+    finished in 134.64s after a 5m49s build; public-profile scale-in
+    transitions were observed on quorum peers after expansion.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale -- --nocapture`
+    passed after the final fixes: 160 tests, 0 failures, 5606 filtered out,
+    finished in 88.12s after a 3m13s build.
+  - `rustfmt --edition 2024 --check` on the touched Rust files,
+    `git diff --check`, conflict-marker scan, and `git diff --name-only -- Cargo.lock`
+    passed.
+  - Full workspace testing, full integration testing, long autoscale soak,
+    repeated localnet matrix runs, and live Taira/Minamoto validation have not
+    been run in this slice.
+
+## 2026-06-28 SoraFS repair live-operator guard
+
+- Extended the rollout-gate static contract so SF-8b live operator-evidence
+  capture, deployed auditor-roster, SF-9 coordinator runbook, production
+  PoR/PoTR failure capture, production governance handoff, and repair promotion
+  evidence remain documented as open until deployed repair evidence passes the
+  SF-8b gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching unshipped repair
+  live-operator routes and subcommands while preserving the signed auditor
+  report/slash endpoints, worker claim/heartbeat/complete/fail endpoints,
+  local status and event-stream routes, `iroha sorafs repair`,
+  `iroha sorafs gc`, `sorafs-validate repair`, local repair telemetry, and the
+  fail-closed SF-8b rollout evidence gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_live_operator_evidence_work_stays_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_repair_live_operator_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 165 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1462 tests completed with 0 failures.
+  - Cargo validation was not started because a separate Cargo process was
+    already active during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS PoTR live-rollout guard
+
+- Extended the rollout-gate static contract so SF-14 live multi-provider probe
+  rollout, governed provider PQ/ML-DSA key distribution, reputation-weight
+  governance, governance approval, and PoTR promotion evidence remain
+  documented as open until deployed PoTR evidence passes the SF-14 gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching unshipped PoTR
+  live-rollout routes and subcommands while preserving ranged gateway receipt
+  capture, `Sora-PoTR-*` headers, embedded-node receipt recording, local
+  receipt validation, `/v1/sorafs/proof/stream` with `proof_kind=potr`,
+  `sorafs_cli proof stream --proof-kind=potr`, proof-stream metrics, and
+  deadline-breach alert fixtures.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_potr_live_rollout_and_provider_key_work_stays_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_potr_live_rollout_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 163 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1460 tests completed with 0 failures.
+  - Cargo validation was not started because separate Cargo/Rust processes were
+    already active during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS PoR live-deployment guard
+
+- Extended the rollout-gate static contract so SF-9 live external drand, VRF,
+  auditor-feed deployment, production archive/warehouse handoff,
+  proof-bundle inspection, and promotion evidence remain documented as open
+  until deployed PoR evidence passes the SF-9 gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching unshipped PoR
+  live-deployment routes and subcommands while preserving the local
+  status/export/report/ingestion routes, capacity PoR challenge/proof/verdict
+  routes, storage PoR sampling, retired manual-trigger route,
+  `sorafs_cli por` commands, `sorafs-validate por`, and scheduler
+  observability.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_por_live_deployment_and_archive_work_stays_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_por_live_deployment_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 161 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1458 tests completed with 0 failures.
+  - Cargo validation was not started because separate Cargo/Rust processes were
+    already active during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS PoP credential runtime-service guard
+
+- Extended the rollout-gate static contract so the SFM-4b1 enrollment portal,
+  credential issuer daemon, credential registry service, juror wallet/client,
+  privacy-preserving proof generator, deployed verifier service, service
+  CLI/API, and production promotion evidence remain documented as open until
+  the PoP credential rollout evidence passes with a production proof backend.
+- Added a Torii/OpenAPI/CLI absence guard for matching PoP runtime-service
+  routes and subcommands while preserving `sorafs-validate pop`, the local
+  issued-credential bundle helper, reference SDK/bridge validators, and the
+  fail-closed transcript-digest production verifier.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pop_credentials_runtime_services_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_pop_credentials_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 159 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1456 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because a separate Cargo/Rust process was
+    already active during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS CLI/SDK distribution guard
+
+- Extended the rollout-gate static contract so SF-6 signed CLI distribution,
+  Homebrew/npm/crates.io/Go-module publication, live deployment capture,
+  live-governance proposal/council-signature runbook capture, and release
+  promotion evidence remain documented as open until signed release cuts and
+  live-network governance evidence exist.
+- Added a Torii/OpenAPI/CLI absence guard for matching CLI/SDK distribution and
+  live-governance promotion surfaces while preserving the shipped local
+  `sorafs_cli` command families, release signing scripts, CLI release checks,
+  gateway self-cert tooling, SDK parity guards, and fixture smoke checks.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_cli_sdk_distribution_and_live_governance_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_cli_sdk_distribution_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 157 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1454 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because a separate Cargo/Rust process was
+    already active during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS reputation live ingest/publisher guard
+
+- Extended the rollout-gate static contract so the SFM-3 live reputation ingest
+  pipeline, scoring engine, snapshot publisher, regional public API/GraphQL
+  gateway, S3/IPFS publication, governance-approved first production snapshot,
+  rollback exercise, and production promotion evidence remain documented as
+  open until the live reputation rollout evidence passes.
+- Added a Torii/OpenAPI/CLI absence guard for matching reputation live-service
+  and promotion surfaces while preserving the shipped local reputation
+  latest/provider/snapshot/weights APIs, event polling, SSE/WebSocket,
+  `publish|snapshot|fetch|watch|verify` CLI commands, SDK helpers, dashboard,
+  and evidence-gate tooling.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reputation_live_ingest_publisher_services_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_reputation_live_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 155 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1452 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started for this Python/docs-only slice; a
+    separate Cargo/Rust process was active at final process check and was left
+    untouched.
+
+## 2026-06-28 SoraFS moderation-panel parent service guard
+
+- Extended the rollout-gate static contract so the parent SFM-4b moderation
+  appeal intake service, persisted case lifecycle, panel sortition/roster
+  service, decision publication, portal/jury workflow, durable public decision
+  trail, and deployed moderation-panel promotion evidence remain documented as
+  open until the live SFM-4b evidence bundle passes the rollout gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching moderation-panel parent
+  service routes and portal-style subcommands while preserving the shipped local
+  `ballots*` lifecycle API, local Governance DAG publication, local appeal
+  finance helpers, local operator workflow, and adjacent canary tooling.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_moderation_panel_parent_services_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_moderation_panel_parent_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 153 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1450 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS AI pre-screening deployed workflow guard
+
+- Extended the rollout-gate static contract so SFM-4a deployed juror
+  notification transport evidence, deployed commit/reveal executor evidence,
+  and the end-to-end ingest/quarantine/appeal/transparency release workflow
+  remain documented as open until the live AI pre-screening evidence bundle
+  passes the rollout gate.
+- Added a Torii/OpenAPI/CLI absence guard for deployed AI pre-screening
+  workflow and promotion surfaces while preserving the shipped local model
+  registry, runner, committee, operator workflow, juror notification, local
+  commit/reveal executor, transparency, Governance DAG, and rollout-evidence
+  tooling.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_ai_prescreen_deployed_workflow_services_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_ai_prescreen_deployed_workflow_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 151 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1448 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS reserve/rent live control-plane guard
+
+- Extended the rollout-gate static contract so SFM-6 live custody submission,
+  automatic finality polling, live credit-line account mutation, broader
+  downstream governance-source application, and live provider-bake evidence
+  remain documented as open until deployed evidence passes the reserve/rent
+  gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching reserve live-control
+  routes and production subcommands while preserving the shipped signed local
+  reserve lifecycle, movement, custody, credit-line, appeal, policy,
+  scheduler, and evidence-gate tooling.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_reserve_rent_live_control_plane_stays_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_reserve_rent_live_control_plane_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 149 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1446 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS gateway compliance service surface guard
+
+- Extended the rollout-gate static contract so the SFM-4 always-on compliance
+  controller daemon, persisted production catalog/history service,
+  moderation-toggle service, appeal override workflow, deployed SFM-4c receipt
+  publication, and staged multi-gateway production promotion evidence remain
+  documented as open until the deployed service evidence passes the gateway
+  compliance gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching gateway compliance
+  controller, toggle, override, feed-sync, acknowledgement, history, and
+  promotion service surfaces while preserving the shipped local denylist bundle
+  tooling, GAR/proof-token helpers, honey-audit evidence, and rollout evidence
+  checkers.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_gateway_compliance_controller_services_stay_unshipped_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_gateway_compliance_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 147 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1444 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS transparency deployed-service surface guard
+
+- Extended the rollout-gate static contract so deployed transparency
+  source-entry producers, publisher identities/anchoring, proof API hardening,
+  public receipt explorer rollout, proof-token producer/explorer linking, and
+  deployed moderation ledger publication service work remain documented as
+  open until captured deployed evidence passes the SFM-4c transparency gate.
+- Added a Torii/OpenAPI/CLI absence guard for generic `/v1/transparency/*`,
+  deployed transparency service routes, and production-service subcommands while
+  preserving the shipped local `/v1/sorafs/transparency/*` readback, source
+  entry, privacy aggregate, proof-token, explorer, and canary surfaces.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_transparency_deployed_services_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_transparency_deployed_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 145 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1442 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS appeal finance public promotion surface guard
+
+- Extended the rollout-gate static contract so the SFM-4b2 standalone pricing
+  daemon, hosted/public dashboard promotion surface, and multi-peer ledger
+  reconciliation promotion surface remain documented as open until deployed
+  evidence passes the appeal-finance gate.
+- Added a Torii/OpenAPI/CLI absence guard for matching public-promotion routes
+  and operator subcommands while preserving the shipped local appeal finance
+  config, quote, deposit, settlement, report, rollup, and receipt APIs.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_appeal_finance_live_dashboard_and_reconciliation_stay_open_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_appeal_finance_public_promotion_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 143 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1440 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS commit-reveal production-service surface guard
+
+- Extended the rollout-gate static contract so the SFM-4b4 moderation voting
+  contract, durable ballot orchestrator, juror CLI/portal, challenge monitor,
+  contract/ledger workflow, and public decision/challenge DAG remain documented
+  as unshipped until those production services exist.
+- Added a Torii/OpenAPI/CLI absence guard for matching commit/reveal production
+  service routes and operator subcommands while preserving the shipped local
+  `/v1/sorafs/moderation/ballots*` endpoints, local Governance DAG event
+  publication, and payload-free executor canary tooling.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_commit_reveal_production_services_stay_unshipped_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_commit_reveal_production_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 141 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1438 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS evidence-viewer service surface guard
+
+- Extended the rollout-gate static contract so the SFM-4b3 browser evidence
+  viewer, streaming backend, watermark engine, WebAuthn/session flow, access
+  logger, transparency exporter, and related service routes remain documented
+  as unshipped until those services exist.
+- Added a Torii/OpenAPI/CLI absence guard for matching evidence-viewer routes
+  and operator subcommands while preserving the payload-free moderation-panel
+  evidence-viewer canary and Taikai media validation harness as adjacent
+  foundations rather than production viewer readiness.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_evidence_viewer_runtime_services_stay_unshipped_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_evidence_viewer_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 139 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1436 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS hedging and billing service surface guard
+
+- Extended the rollout-gate static contract so SFM-5 hedging/billing collector,
+  `hedgingd`, `billingd`, statement publisher, REST API, service-management
+  CLI, automated hedge execution, and runtime metric-emission service surfaces
+  remain documented as unshipped until those services exist.
+- Added a Torii/OpenAPI/CLI absence guard for matching hedging and billing
+  service routes and operator subcommands while preserving the shipped
+  Norito-first payloads, `sorafs-validate hedging`/`billing` validators,
+  fixture generator, checked-in fixtures, and rollout-evidence tooling.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_hedging_runtime_services_stay_unshipped_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_hedging_billing_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 137 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1434 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS orderbook contract and daemon surface guard
+
+- Extended the rollout-gate static contract so SFM-2 orderbook on-chain
+  contract, durable matcher, daemonized settlement receipt, escrow custody,
+  contract-backed stream, and live dashboard service surfaces remain documented
+  as unshipped until those production services exist.
+- Added a Torii/OpenAPI/CLI absence guard for matching orderbook public routes
+  and operator subcommands while preserving the shipped local mirror,
+  request-authenticated local order/cancel/receipt routes, bounded readbacks,
+  local SSE/WebSocket streams, and local Governance DAG receipt publication.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_orderbook_contract_and_daemon_work_stays_unshipped_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_orderbook_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 135 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1432 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS governance DAG public-service guard
+
+- Extended the rollout-gate static contract so SF-12 governance DAG public
+  IPFS/IPNS publishing, live-head/public-checkpoint commands, runtime mirror
+  service, and runtime/IPFS dashboard API remain documented as unshipped until
+  the corresponding services exist.
+- Added a Torii/OpenAPI/CLI absence guard for the matching public governance
+  DAG route families and operator subcommands, preserving the shipped local
+  filesystem, CAR queue, runtime signed-DAG, checkpoint, and read-only dashboard
+  surfaces without implying public IPFS/IPNS readiness.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_governance_dag_ipfs_ipns_work_stays_unshipped_in_docs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_governance_dag_public_service_surface_is_not_exposed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 133 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1430 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS SF-10 active fixture-generator guard
+
+- Extended the rollout-gate static contract so `docs/source/sorafs_proto_plan.md`
+  documents only active fixture generator/stub binaries that exist in the
+  current crates, and keeps the required fixture-refresh workflow tied to
+  Norito plus `sorafs-validate` instead of retired generator names or a separate
+  `sora-proto` codec.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_proto_plan_documents_only_active_fixture_generators -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 131 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1428 tests completed with 0 failures.
+  - Shell syntax validation passed for changed shell scripts.
+  - `python3 -m py_compile` passed for 44 changed/untracked Python files.
+  - Embedded Python heredoc compilation passed for 28 heredocs in changed shell
+    scripts.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS transparency and evidence-viewer route guard
+
+- Extended the rollout-gate static contract so generic public
+  `/v1/transparency/*` routes and evidence-viewer
+  `/v1/evidence/{session,manifest,log,audit}` routes stay out of Torii/OpenAPI
+  until the deployed transparency builder, public explorer, and evidence-viewer
+  authorization services exist.
+- Added a docs scan that allows those route families only inside explicit
+  not-shipped warnings, preventing SoraFS docs from implying the generic
+  public explorer or evidence-viewer session APIs are production-ready.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_public_routes_stay_warning_only scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_public_routes_are_not_exposed_by_torii -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 130 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1427 tests completed with 0 failures.
+  - Shell syntax validation passed for changed shell scripts.
+  - `python3 -m py_compile` passed for 44 changed/untracked Python files.
+  - Embedded Python heredoc compilation passed for 28 heredocs in changed shell
+    scripts.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS PDP and moderation unshipped-surface guard
+
+- Extended the rollout-gate static contract so embedded Torii keeps
+  `proof_kind=pdp` fail-closed with `BAD_REQUEST` before provider-protocol
+  request handling, and the OpenAPI route continues to describe PDP proof
+  streaming as reserved until SF-13 provider transport ships.
+- Added a docs scan that keeps unshipped `sorafs pdp ...` and moderation
+  portal commands such as `sorafs moderation jury-accept` and
+  `sorafs moderation open-case` warning-only, so operator docs cannot present
+  absent PDP/provider or moderation portal CLI handlers as production-ready.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_unshipped_sorafs_operator_commands_stay_warning_only scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_proof_stream_remains_fail_closed_until_provider_protocol_ships -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 128 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1425 tests completed with 0 failures.
+  - Shell syntax validation passed for changed shell scripts.
+  - `python3 -m py_compile` passed for 44 changed/untracked Python files.
+  - Embedded Python heredoc compilation passed for 28 heredocs in changed shell
+    scripts.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS PoP production-verifier documentation guard
+
+- Extended the rollout-gate static contract for SFM-4b1 PoP credentials so the
+  production `verify_pop_membership_proof_v1` boundary remains fail-closed for
+  transcript-digest policy proofs until a privacy-preserving verifier backend
+  lands.
+- Added a SoraFS docs scan that allows unshipped `sorafs pop
+  sync|status|prove|revoke` command names only inside explicit not-shipped
+  warnings, preventing operator docs from presenting the absent service CLI as
+  production-ready.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pop_credentials_docs_do_not_publish_unshipped_operator_commands scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pop_membership_production_verifier_remains_fail_closed -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 126 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1423 tests completed with 0 failures.
+  - Shell syntax validation passed for changed shell scripts.
+  - `python3 -m py_compile` passed for 44 changed/untracked Python files.
+  - Embedded Python heredoc compilation passed for 28 heredocs in changed shell
+    scripts.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS operator helper file-I/O and path-resolution guard
+
+- Added a rollout-gate contract that scans SoraFS operator helpers under
+  `scripts/`, `ci/`, and `.github/` so plain `open(...)`,
+  `.read_text(...)`, `.write_text(...)`, `shutil.copy`, unreviewed
+  recursive scans, and unreviewed `tarfile.open(...)` cannot be reintroduced
+  after the no-follow hardening pass. The only accepted recursive scans remain
+  the reviewed hedging fixture inventory, evidence discovery helper, and
+  deterministic release packager stage walk; the only accepted tar writer is
+  the deterministic `sorafs-validate` release packager.
+- The same contract now rejects raw `Path.resolve(...)` and
+  `os.path.realpath(...)` in SoraFS operator helpers, except for
+  `__file__` bootstrap resolution and the shared path-identity helper's single
+  canonical resolution boundary.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 124 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1421 tests completed with 0 failures.
+  - Shell syntax validation passed for changed shell scripts.
+  - `python3 -m py_compile` passed for 44 changed/untracked Python files.
+  - Embedded Python heredoc compilation passed for 28 heredocs in changed shell
+    scripts.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS shell helper no-follow JSON I/O
+
+- Tightened `scripts/release_sorafs_cli.sh`,
+  `scripts/sorafs_direct_mode_smoke.sh`, and
+  `scripts/telemetry/run_sorafs_gateway_probe.sh` so generated sign summaries,
+  direct-mode policy JSON, and gateway probe reports are no longer parsed
+  through plain Python `open`. Each helper now rejects symlinked JSON inputs,
+  opens with no-follow descriptor flags, checks regular-file state with
+  `lstat` and `fstat`, and only then derives token hashes, persistence paths,
+  or dashboard probe annotations.
+- Tightened `scripts/package_sorafs_validate_release.sh` so the release package
+  manifest JSON is written through a no-follow descriptor after rejecting
+  symlinked leaves and parent chains.
+- Extended the rollout-gate contract to pin the no-follow read/write helpers
+  and forbid reintroducing the plain `open(...)` paths.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n scripts/release_sorafs_cli.sh scripts/sorafs_direct_mode_smoke.sh scripts/telemetry/run_sorafs_gateway_probe.sh scripts/package_sorafs_validate_release.sh`
+    passed.
+  - embedded Python heredoc compilation for those four scripts passed: 7
+    heredocs compiled.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 122 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1419 tests completed with 0 failures.
+  - shell syntax for changed `.sh` files passed.
+  - embedded Python heredoc compilation for changed shell scripts passed:
+    28 heredocs compiled.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Full helper execution was not run because these scripts invoke Cargo,
+    release packaging, direct-mode smoke, or telemetry probe workflows, and an
+    external Cargo process was already active during this shell/Python slice.
+
+## 2026-06-28 Nexus autoscale elastic-lane route authority
+
+- Fixed the multi-peer autoscale localnet regression where scale-out reached
+  the deterministic transition quorum but subsequent routed traffic to the
+  newly created elastic lane failed with `route_unavailable` /
+  `missing_authoritative_binding`, leaving scale-in stuck because lane 1 had no
+  authoritative route set.
+- Valid Nexus-managed autoscale elastic lanes now inherit route authority from
+  the live commit topology, filtered to peers with active consensus keys, when
+  no explicit lane manifest binding exists. Explicit manifest bindings still
+  take precedence, and malformed or non-autoscale lanes still fail closed
+  instead of falling back to the commit topology.
+- Added state regressions covering the managed-elastic inheritance path and the
+  malformed-lane fail-closed path, and documented the route-authority rule in
+  `docs/source/nexus_lanes.md`.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - Pre-fix evidence: the exact four-peer autoscale localnet test failed after
+    scale-out because lane 1 lacked an authoritative binding; expansion reached
+    3/3 transition observations, but routed top-ups returned 503
+    `route_unavailable` and contraction never reached any peer.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::nexus_autoscale_expands_and_contracts_lanes_in_localnet -- --nocapture`
+    passed after the fix: 1 test, 0 failures, 281 filtered out, finished in
+    231.46s after a 5m52s build.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib authoritative_lane_ -- --nocapture`
+    passed: 7 tests, 0 failures, 5756 filtered out.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_torii --lib authoritative_lane_peers -- --nocapture`
+    passed: 5 tests, 0 failures, 2909 filtered out.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale -- --nocapture`
+    passed: 157 tests, 0 failures, 5606 filtered out.
+  - Full workspace testing, full integration testing, repeated strict/public
+    localnet autoscale matrix runs, and live Taira/Minamoto validation have not
+    been run in this slice.
+
+## 2026-06-28 SoraFS docs portal package summary no-follow read
+
+- Tightened `ci/package_docs_portal_sorafs.sh` so the final package-summary
+  emitter no longer reads the intermediate package rows through plain Python
+  `open`. The summary input is now rejected when symlinked, opened with
+  no-follow descriptor flags, checked as a regular file with `lstat` and
+  `fstat`, and only then converted into the portal/OpenAPI/SBOM package summary.
+- Extended the rollout-gate contract to pin the docs portal packager's
+  no-follow summary reader and forbid reintroducing `with open(summary_path,
+  ...)`.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/package_docs_portal_sorafs.sh` passed.
+  - embedded Python heredoc compilation for `ci/package_docs_portal_sorafs.sh`
+    passed: 2 heredocs compiled.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 121 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1418 tests completed with 0 failures.
+  - shell syntax for changed `.sh` files passed.
+  - embedded Python heredoc compilation for changed shell scripts passed:
+    23 heredocs compiled.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - The full docs portal packaging script was not run because it builds portal
+    artifacts and release packages; this slice validated the changed shell and
+    embedded Python paths directly.
+
+## 2026-06-28 SoraFS pin-register SDK guard no-follow source reads
+
+- Tightened `ci/check_sorafs_pin_register_sdk_guard.sh` and
+  `ci/check_sorafs_pin_register_swift_sdk.sh` so the pin-register SDK guard
+  source probes no longer read workflow, script, SDK, or Swift test files
+  through `Path.read_text`. Real file reads now reject symlinked leaves and
+  parent chains, require regular files with `lstat`, open through no-follow
+  descriptors, and verify descriptor type with `fstat` while preserving the
+  main guard's in-memory negative-control overrides.
+- Extended the rollout-gate contract to pin the no-follow source-read helpers
+  for both pin-register guards and forbid reintroducing `.read_text(...)`.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/check_sorafs_pin_register_sdk_guard.sh ci/check_sorafs_pin_register_swift_sdk.sh`
+    passed.
+  - embedded Python heredoc compilation for both pin-register guard scripts
+    passed: 2 heredocs compiled.
+  - `bash ci/check_sorafs_pin_register_sdk_guard.sh` passed.
+  - `bash ci/check_sorafs_pin_register_swift_sdk.sh` passed under Apple Swift
+    6.2.3.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 120 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1417 tests completed with 0 failures.
+  - shell syntax for changed `.sh` files passed.
+  - embedded Python heredoc compilation for changed shell scripts passed:
+    21 heredocs compiled.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this shell/Python/Swift guard slice.
+
+## 2026-06-28 SoraFS fixture gate alias JSON no-follow I/O
+
+- Tightened `ci/check_sorafs_fixtures.sh` so the SF1 canonical-alias probe no
+  longer parses fixture JSON through `Path.read_text`. The embedded check now
+  rejects symlinked fixture JSON, opens each alias source with no-follow
+  descriptor flags, verifies regular-file state with `lstat` and `fstat`, and
+  feeds `json.load` from the descriptor handle.
+- Extended the rollout-gate contract to pin the fixture gate's no-follow alias
+  JSON helper and forbid the previous `json.loads(path.read_text())` path.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/check_sorafs_fixtures.sh` passed.
+  - embedded Python heredoc compilation for `ci/check_sorafs_fixtures.sh`
+    passed: 1 heredoc compiled.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 119 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1416 tests completed with 0 failures.
+  - shell syntax for changed `.sh` files passed.
+  - embedded Python heredoc compilation for changed shell scripts passed:
+    16 heredocs compiled.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - The full `ci/check_sorafs_fixtures.sh` gate was not run because it invokes
+    Cargo and an external Cargo process was already active during this slice.
+
+## 2026-06-28 SoraFS reference FFI header gate no-follow I/O
+
+- Tightened `ci/check_sorafs_reference_ffi_header.sh` so the SoraFS reference
+  C header contract gate no longer reads the Rust FFI source or generated C
+  header through `Path.read_text`, and no longer builds negative-control
+  workspaces with plain `cp`. Contract reads and negative-control copies now use
+  no-follow descriptor opens with regular-file and `fstat` checks before the
+  Rust/header export, signature, selector, and C/C++ syntax checks run.
+- Extended the rollout-gate contract to pin the header gate's no-follow read
+  and copy helpers and to forbid the previous `read_text`/`cp` paths.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/check_sorafs_reference_ffi_header.sh` passed.
+  - embedded Python heredoc compilation for
+    `ci/check_sorafs_reference_ffi_header.sh` passed: 2 heredocs compiled.
+  - `ci/check_sorafs_reference_ffi_header.sh` passed.
+  - `ci/check_sorafs_reference_ffi_header.sh --negative-control-missing-header`,
+    `--negative-control-bad-signature`, `--negative-control-constant-drift`,
+    and `--negative-control-missing-rust-export` all rejected the expected
+    drift.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 118 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1415 tests completed with 0 failures.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this shell/Python/docs-only slice.
+
+## 2026-06-28 SoraFS gateway denylist gate no-follow I/O
+
+- Tightened `ci/check_sorafs_gateway_denylist.sh` so the gateway denylist CI
+  gate no longer copies sample/evidence JSON or reads generated reports through
+  plain `cp`, shell `-s`, `ls | head`, or Python `open`. Sample snapshots,
+  generated old snapshots, bundle selection, diff reports, evidence summaries,
+  and optional evidence copies now validate symlink-free parent chains and use
+  no-follow descriptor opens with regular-file and `fstat` checks.
+- Extended the rollout-gate contract to pin the denylist gate's no-follow copy,
+  read, write, bundle-discovery, and evidence-copy helpers.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/check_sorafs_gateway_denylist.sh` passed.
+  - embedded Python heredoc compilation for
+    `ci/check_sorafs_gateway_denylist.sh` passed: 6 heredocs compiled.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 117 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1414 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - shell syntax for changed `.sh` files passed.
+  - embedded Python heredoc compilation passed for
+    `ci/check_sorafs_gateway_denylist.sh`,
+    `ci/check_sorafs_orchestrator_adoption.sh`,
+    `ci/sdk_sorafs_orchestrator.sh`, and
+    `scripts/package_sorafs_validate_release.sh`.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this shell/Python/docs-only slice.
+
+## 2026-06-28 SoraFS orchestrator SDK parity gate no-follow I/O
+
+- Tightened `ci/sdk_sorafs_orchestrator.sh` so the SDK parity smoke harness no
+  longer copies fixture snapshots or writes/read parity summaries through plain
+  shell redirection, `cp`, `open`, or `Path.write_text`. Fixture snapshot reads,
+  generated summary/matrix writes, results TSV initialization, and results TSV
+  appends now validate parent chains and use no-follow descriptor opens.
+- Extended the rollout-gate contract to pin the SDK parity harness helpers for
+  no-follow read, write, append, fixture copy, summary, and matrix paths.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/sdk_sorafs_orchestrator.sh` passed.
+  - embedded Python heredoc compilation for
+    `ci/sdk_sorafs_orchestrator.sh` passed: 3 heredocs compiled.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 116 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1413 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - shell syntax for changed `.sh` files passed.
+  - embedded Python heredoc compilation passed for
+    `ci/sdk_sorafs_orchestrator.sh`, `ci/check_sorafs_orchestrator_adoption.sh`,
+    and `scripts/package_sorafs_validate_release.sh`.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started for this shell/Python/docs-only slice; an
+    external Cargo/Rust process was active during focused validation.
+
+## 2026-06-28 SoraFS orchestrator adoption gate no-follow I/O
+
+- Tightened `ci/check_sorafs_orchestrator_adoption.sh` so the orchestrator
+  adoption CI gate rejects symlinked fixtures, generated config, burn-in logs,
+  reports, and parent chains before trusting them. The shared non-empty file
+  check now verifies regular files with `lstat`, opens through no-follow
+  descriptors, and measures size through `fstat`; embedded Python JSON/config
+  and burn-in-note writes now use no-follow descriptor opens.
+- Extended the rollout-gate contract to pin the adoption gate's no-follow read,
+  write, and regular-file validation helpers and forbid the previous
+  `Path.open`/`write_text` patterns.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n ci/check_sorafs_orchestrator_adoption.sh` passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 115 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1412 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    embedded Python heredoc compilation for
+    `ci/check_sorafs_orchestrator_adoption.sh`, `git diff --check`,
+    `git diff --exit-code -- Cargo.lock`, and conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this shell/Python/docs-only slice.
+
+## 2026-06-28 SoraFS Android codegen fixture replay no-follow I/O
+
+- Tightened `scripts/android_codegen_replay_sorafs_fixture.py` so the Android
+  codegen SoraFS fixture replay rejects symlinked JSON inputs, generated-output
+  targets, parent chains, and subprocess fixture inputs before I/O. JSON reads
+  and writes now use descriptor no-follow opens where available, and payload/plan
+  files are validated before the manifest-stub subprocess is launched.
+- Added focused helper coverage for no-follow JSON reads/writes, symlinked input
+  rejection, symlinked output-parent rejection, and symlinked payload rejection,
+  plus a rollout-gate contract assertion to pin the replay helper behavior.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/android_codegen_replay_sorafs_fixture_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 119 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1411 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/android_codegen_replay_sorafs_fixture.py scripts/tests/android_codegen_replay_sorafs_fixture_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m py_compile $(git diff --name-only -- '*.py') $(git ls-files --others --exclude-standard -- '*.py')`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS orchestrator fixture generator no-follow I/O
+
+- Tightened `scripts/build_sorafs_orchestrator_fixture.py` so the documented
+  SoraFS orchestrator fixture regeneration path rejects symlinked inputs,
+  outputs, parent chains, and output directories before I/O. Chunker fixture
+  reads, generated JSON writes, and payload-size lookup now use descriptor
+  no-follow opens with `fstat` for size.
+- Added focused coverage for symlinked chunker fixtures, symlinked output
+  directories, no-follow generated JSON writes, and descriptor payload-size
+  lookup, and extended the rollout-gate contract to pin the helper behavior.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/build_sorafs_orchestrator_fixture_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 117 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1405 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/build_sorafs_orchestrator_fixture.py scripts/tests/build_sorafs_orchestrator_fixture_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS runner artifact size no-follow descriptor
+
+- Tightened shared SoraFS runner artifact-size inspection so the final size
+  measurement opens the artifact through descriptor no-follow flags where
+  available and uses `fstat` on that descriptor. This closes the swap window
+  between the existing symlink/parent-chain checks and the size read.
+- Added regression coverage for no-follow descriptor flags and sanitized
+  descriptor-open failures, and extended the rollout-gate contract to forbid
+  direct `path.stat().st_size` in the shared runner helper.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 241 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1400 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this Python/docs-only slice.
+
+## 2026-06-28 SoraFS validate release archive output guard
+
+- Tightened the `sorafs-validate` release packager's embedded archive writer so
+  the tar/gzip output path is validated before creation and opened with
+  descriptor no-follow flags where available. Symlinked output-directory parents
+  now fail before archive bytes can be written through the link.
+- Added a non-Cargo regression for symlinked `--out-dir` rejection before archive
+  creation and extended the rollout-gate contract to pin the archive-output
+  guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n scripts/package_sorafs_validate_release.sh` passed.
+  - `python3 -m pytest scripts/tests/package_sorafs_validate_release_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 115 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1398 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/package_sorafs_validate_release_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this shell/Python/docs-only slice.
+
+## 2026-06-28 SoraFS validate release archive symlink guard
+
+- Tightened `scripts/package_sorafs_validate_release.sh` so the embedded
+  deterministic tar/gzip archiver rejects symlinked stage roots, symlinked
+  parent chains, and symlinked or non-regular staged entries before release
+  package commitments are derived. Staged files are now read through descriptor
+  no-follow flags where available.
+- Added non-Cargo packager tests with a fake `sorafs-validate` binary for both
+  successful regular staging and symlinked staged-entry rejection, and extended
+  the rollout-gate contract to pin the embedded archive guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `bash -n scripts/package_sorafs_validate_release.sh` passed.
+  - `python3 -m pytest scripts/tests/package_sorafs_validate_release_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 114 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1397 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/package_sorafs_validate_release_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running during this shell/Python/docs-only slice.
+
+## 2026-06-28 SoraFS transparency annotation no-follow writer
+
+- Tightened `run_sorafs_transparency_rollout_evidence.py` so generated canary
+  artifacts are rewritten with reviewed deployment context through descriptor
+  `O_NOFOLLOW` opens where available, after a fresh parent-chain check. This
+  removes the remaining direct `Path.write_text` rewrite from the transparency
+  annotation path.
+- Added regression coverage for descriptor no-follow flags, sanitized `os.open`
+  write failures, final-path symlink swaps, and parent-chain symlink swaps
+  between artifact read and context rewrite, and extended the rollout-gate
+  contract to pin the helper.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 125 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1394 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/run_sorafs_transparency_rollout_evidence.py scripts/tests/run_sorafs_transparency_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+
+## 2026-06-28 SoraFS checker summary no-follow writer
+
+- Tightened shared SoraFS checker summary writing so `--summary-out` is opened
+  through descriptor flags with `O_NOFOLLOW` where the platform exposes it,
+  after the existing symlink and parent-chain preflight. This removes the final
+  `Path.write_text` write boundary from checker summary emission.
+- Added regression coverage for descriptor-mode summary writes, no-follow flag
+  propagation, and `os.open` write-failure diagnostics, and extended the
+  rollout-gate contract to forbid reintroducing `summary_out.write_text`.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 185 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1391 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_checker_preflight.py scripts/tests/sorafs_checker_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started for this Python/docs-only slice.
+
+## 2026-06-28 SoraFS runner artifact size symlink guard
+
+- Tightened shared SoraFS runner artifact-size inspection so direct helper calls
+  reject symlink leaves and symlinked parent chains before the final size
+  `stat`. This closes the remaining runner preflight path where artifact
+  post-run validation could otherwise follow a replaced path at the size-check
+  layer.
+- Added direct regression coverage for symlinked artifacts and
+  symlink-parented artifacts, and extended the rollout-gate contract to pin the
+  size inspector's local symlink and parent-chain checks.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 238 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1390 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started for this Python/docs-only slice.
+
+## 2026-06-28 SoraFS hedging fixture inventory symlink guard
+
+- Tightened the hedging fixture-manifest checker so generated fixture roots,
+  root parent chains, and generated inventory candidates reject symlinks before
+  `rglob` results or per-fixture bytes can be trusted as production fixture
+  evidence. The checker now reuses the shared evidence parent-chain guard for
+  manifest, generated sidecar, generated byte, and inventory candidate
+  inspection.
+- Added regression coverage for symlinked generated fixture roots,
+  symlink-parented generated fixture roots, and symlinked inventory entries, and
+  extended the rollout-gate contract to pin the scanner helper and shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 152 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1388 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/check_sorafs_hedging_fixture_manifest.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running before and after this Python/docs-only slice.
+
+## 2026-06-28 Nexus multilane integration fixture refresh
+
+- Updated the `nexus::multilane_kura_layout` integration fixture so the
+  non-universal governance dataspace advertises its `manifest_hash`, matching
+  the current canonical dataspace-id derivation policy instead of relying on a
+  bare explicit numeric id.
+- Added fresh non-localnet multilane integration evidence for router behavior,
+  queue/storage pipeline setup, Kura storage layout provisioning, and the
+  helper-only autoscale localnet quorum/staleness/storage fallback gates.
+- Validation status:
+  - no Cargo, rustc, or Codex-owned processes were killed, signaled,
+    restarted, or interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::multilane_router -- --nocapture`
+    passed: 5 tests completed with 0 failures in 4.38s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::multilane_pipeline -- --nocapture`
+    passed: 1 test completed with 0 failures in 0.06s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::multilane_kura_layout -- --nocapture`
+    passed: 1 test completed with 0 failures in 0.10s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p integration_tests --test nexus_and_streaming nexus::autoscale_localnet::tests:: -- --nocapture`
+    passed: 46 tests completed with 0 failures in 0.01s after a 6m04s build.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_torii --test torii_nexus_sorafs nexus_lifecycle_endpoint:: -- --nocapture`
+    passed: 13 tests completed with 0 failures in 9.94s after a 6m02s build.
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/state.rs integration_tests/tests/nexus/multilane_kura_layout.rs`,
+    `git diff --check -- crates/iroha_core/src/state.rs integration_tests/tests/nexus/multilane_kura_layout.rs docs/source/nexus_lanes.md status.md`,
+    anchored conflict-marker scan on the same files, and
+    `git diff --name-only -- Cargo.lock` passed.
+  - Full workspace, full integration suite, multi-peer localnet autoscale tests,
+    and live Taira/Minamoto validation were not run in this slice.
+
+## 2026-06-28 SoraFS response argfile no-follow guard
+
+- Tightened shared reviewed `@ARGFILE` expansion so response-file leaves and
+  parent chains must be symlink-free before parsing. The bounded argfile reader
+  now opens through descriptor no-follow flags where available, checks the
+  descriptor size before streaming, and keeps the streamed byte-count cap.
+- Added regression coverage for symlink argfiles, symlink-parented argfiles,
+  no-follow open flags, and the descriptor-based read-failure path, and extended
+  the rollout-gate contract to pin the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 144 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1385 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_response_args.py scripts/tests/sorafs_response_args_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running before and after this Python/docs-only slice.
+
+## 2026-06-28 SoraFS bounded JSON pre-read file guard
+
+- Tightened shared bounded evidence JSON loading so `read_evidence_bytes`
+  inspects evidence files before opening them. Direct loader calls now reject
+  symlink leaves, symlinked parent chains, and non-file paths before byte
+  reading, parsing, or digesting can proceed, and the final path component is
+  opened with no-follow descriptor flags where the platform exposes them.
+- Added regression coverage for symlinked evidence paths, directory-valued
+  evidence paths, symlink-parented evidence paths through the recorded-error
+  wrapper, evidence-file inspection failures, descriptor no-follow flags, and
+  hedging fixture read-failure injection at the shared loader boundary, and
+  extended the rollout-gate contract to pin the pre-read guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 178 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1382 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_evidence_json.py scripts/tests/sorafs_evidence_json_test.py scripts/tests/check_sorafs_hedging_fixture_manifest_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running before and after this Python/docs-only slice.
+
+## 2026-06-28 SoraFS evidence directory scan guard
+
+- Tightened shared JSON evidence directory scanning so direct helper calls must
+  pass evidence-directory inspection before `rglob` runs. File-valued paths,
+  symlink directories, and directories reached through symlinked parents now
+  fail closed with structured evidence-directory errors even when callers bypass
+  higher-level discovery.
+- Added regression coverage for direct scan calls against file paths, symlinked
+  directories, and symlink-parented directories, and extended the rollout-gate
+  contract to pin the internal inspection guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 184 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1377 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running before and after this Python/docs-only slice.
+
+## 2026-06-28 SoraFS explicit evidence membership guard
+
+- Tightened shared explicit evidence membership checks so empty identity sets
+  return before filesystem resolution, and candidate paths must pass
+  evidence-file inspection before canonical identity comparison. Symlinked
+  candidate files or files reached through symlinked parents can no longer be
+  classified as explicit evidence through raw path resolution.
+- Added regression coverage for symlinked candidates, symlink-parented
+  candidates, and empty identity sets with resolver-hostile paths, and extended
+  the rollout-gate contract to pin the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 181 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1374 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`,
+    `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running before and after this Python/docs-only slice.
+
+## 2026-06-28 SoraFS explicit evidence identity guard
+
+- Tightened shared explicit evidence identity construction so already-recorded
+  discovery errors stop identity derivation, and explicit paths must pass
+  evidence-file inspection before canonical resolution. Invalid explicit
+  symlinks can no longer make a directory-discovered target look like an
+  operator-supplied explicit evidence file.
+- Added regression coverage for symlinked explicit identity inputs and the
+  discovery-error short-circuit, and extended the rollout-gate contract to pin
+  the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 178 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1371 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started for this Python/docs-only evidence helper
+    slice.
+
+## 2026-06-28 SoraFS reserved-output identity symlink guard
+
+- Tightened shared evidence discovery so reserved output paths reject symlink
+  leaves, symlinked parent chains, and inspection failures before canonical
+  identity resolution or evidence scanning. This keeps summary/output targets
+  from being trusted through unsafe aliases during rollout gate preflight.
+- Added regression coverage for reserved-output symlinks, symlinked reserved
+  output parents, symlink-inspection failures, and early stops in both evidence
+  discovery and reserved-output conflict preflight, and extended the
+  rollout-gate contract to pin the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 176 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1369 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because an external Cargo/Rust process was
+    already running after the Python/static checks.
+
+## 2026-06-28 SoraFS evidence parent-chain guard
+
+- Tightened shared evidence discovery so evidence files and evidence
+  directories must sit under symlink-free parent chains before they can be
+  scanned, resolved, compared with reserved outputs, or admitted into rollout
+  gate parsing.
+- Added regression coverage for explicit evidence files, evidence directories,
+  parent-chain inspection failures, and reserved-output conflict preflight
+  through symlinked evidence parents, and extended the rollout-gate contract to
+  pin the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 171 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1364 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_evidence_paths.py scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started for this Python/docs-only evidence helper
+    slice.
+
+## 2026-06-28 Nexus manual lifecycle commit serialization
+
+- Manual Nexus lane lifecycle geometry reconciliation and writer-locked catalog
+  publication now take the same `state_commit_lock` used by block commits, so a
+  manual add/retire cannot publish its lane catalog while an ordinary block
+  commit is inside its validation/publication critical section.
+- The lock is scoped to storage geometry plus catalog/runtime publication; the
+  world-backed reset cleanup still runs after the lifecycle storage, writer, and
+  commit-serialization locks are released. This preserves the existing
+  deadlock-avoidance rule for already-built `StateBlock` overlays that may hold
+  world storage while waiting to enter commit.
+- Added regression coverage that prebuilds a `StateBlock`, publishes a manual
+  lifecycle lane update, and only then releases the block commit, proving
+  world-backed lifecycle cleanup does not retain the commit-serialization lock
+  while it waits for the prebuilt block overlay to drain.
+- `docs/source/nexus_lanes.md` now documents the manual lifecycle lock scope
+  alongside autoscale commit-boundary behavior.
+- Validation status:
+  - no Cargo, rustc, or Codex-owned processes were killed, signaled,
+    restarted, or interrupted.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib state_commit_lock_order_tests -- --nocapture`
+    passed: 5 tests completed with 0 failures in 3.93s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib apply_lane_lifecycle -- --nocapture`
+    passed: 51 tests completed with 0 failures in 41.47s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale -- --nocapture`
+    passed: 155 tests completed with 0 failures in 85.34s.
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/state.rs`,
+    `git diff --check -- crates/iroha_core/src/state.rs docs/source/nexus_lanes.md status.md`,
+    anchored conflict-marker scan on the same files, and
+    `git diff --name-only -- Cargo.lock` passed.
+  - Full workspace, multi-peer localnet, and live Taira/Minamoto validation
+    were not run in this slice, so Nexus multilane production readiness remains
+    open beyond this focused lock-order evidence.
+
+## 2026-06-28 SoraFS runner output-directory runtime revalidation
+
+- Tightened shared command-plan execution so every successful step revalidates
+  `--out-dir` as an existing non-symlink directory under a symlink-free parent
+  chain. Commands that remove the evidence directory or replace it with a
+  symlink now fail closed even when they do not produce an expected artifact.
+- Added regression coverage for command-created output-directory symlinks and
+  command-removed output directories, and extended the rollout-gate contract to
+  pin the post-command guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 236 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1359 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner expected-artifact parent revalidation
+
+- Tightened shared command-plan execution so expected artifacts revalidate their
+  parent chains after each command returns, rejecting symlinked parents
+  introduced during execution before artifact type/size checks trust the output.
+- Added regression coverage for a command that writes an expected artifact
+  through a newly created symlinked parent, and extended the rollout-gate
+  contract to pin the post-command guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 234 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1357 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/sorafs_runner_preflight.py scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner reserved-output symlink guard
+
+- Tightened shared command-plan artifact validation so reserved output paths
+  must be real non-symlink paths under symlink-free parent chains before
+  planned artifact identities are resolved. Malformed reserved outputs now stop
+  artifact inspection before symlinked artifacts can add secondary diagnostics.
+- Added regression coverage for symlinked reserved outputs, symlinked reserved
+  output parents, reserved-output symlink-inspection failures, and early return
+  before artifact inspection, and extended the rollout-gate contract to pin the
+  shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 233 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1356 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner existing-output ancestor guard
+
+- Tightened shared SoraFS runner preflight so existing `--out-dir` directories
+  and existing `--summary-out` files must also sit under symlink-free parent
+  chains. The existing-output path now matches the missing-output creation
+  guard instead of trusting paths reached through symlinked ancestors.
+- Added regression coverage for pre-existing output directories, summary files,
+  and nested summary files routed through symlinked parent chains, and extended
+  the rollout-gate contract to pin the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 229 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1352 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+
+## 2026-06-28 SoraFS runner verifier symlink guard
+
+- Tightened shared SoraFS runner preflight so the verifier script path must be
+  a real non-symlink file under symlink-free parent directories before dry-run
+  plan construction or command execution can trust it.
+- Added regression coverage for verifier symlink leaves, symlinked verifier
+  parents, symlinked verifier ancestor chains, and verifier symlink-inspection
+  failures, and extended the rollout-gate contract to pin the shared guard.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 226 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1349 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner input ancestor symlink guard
+
+- Tightened shared SoraFS runner preflight so reviewed input files and
+  directories must sit under symlink-free parent chains before identity
+  resolution or file/directory type checks run. This closes the remaining input
+  alias path where a non-symlink leaf could still be reached through a symlinked
+  ancestor.
+- Added regression coverage for symlinked immediate parents and symlinked
+  ancestor chains across both input files and input directories, and extended
+  the rollout-gate contract to pin the shared parent-chain preflight.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 222 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1345 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+
+## 2026-06-28 SoraFS runner input symlink guard
+
+- Tightened shared SoraFS runner preflight so existing input file and directory
+  paths must not be symlink leaves before identity resolution or type
+  inspection. This prevents collection dry-runs from accepting reviewed input
+  paths that actually follow aliases to external files or directories.
+- Added regression coverage for symlinked input files, symlinked input
+  directories, symlink-inspection failures on both input types, and resolver
+  failures on real non-symlink input paths, and extended the rollout-gate
+  contract to pin the shared helper behavior.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_runner_preflight_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 218 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1341 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 Nexus lane commit serialization validation
+
+- Verified the Nexus lane lifecycle/autoscale commit boundary with the current
+  `State` lock order: block commit serialization covers transaction-height
+  validation, autoscale geometry reconciliation, and final publication, while
+  manual lifecycle and autoscale paths keep world-backed reset cleanup outside
+  the lifecycle storage and state writer locks.
+- `docs/source/nexus_lanes.md` documents the same lock order and commit-boundary
+  behavior so operators do not infer that autoscale geometry can publish before
+  commit validation succeeds.
+- Validation status:
+  - no Cargo, rustc, or Codex-owned processes were killed, signaled,
+    restarted, or interrupted; external Cargo work was allowed to finish before
+    the broad run.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib state_commit_lock_order_tests -- --nocapture`
+    passed: 3 tests completed with 0 failures in 2.58s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib apply_lane_lifecycle -- --nocapture`
+    passed: 51 tests completed with 0 failures in 41.98s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -j 1 -p iroha_core --lib autoscale -- --nocapture`
+    passed: 155 tests completed with 0 failures in 87.03s.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multilane cargo test -p iroha_core --lib`
+    passed: 5495 tests completed with 0 failures, 264 ignored, in 13634.18s.
+  - Full workspace, multi-peer localnet, and live Taira/Minamoto validation
+    were not run in this slice, so Nexus multilane production readiness remains
+    open beyond this focused evidence.
+
+## 2026-06-28 SoraFS evidence-directory symlink guard
+
+- Tightened shared SoraFS evidence discovery so `--evidence-dir` inputs must be
+  real inspectable non-symlink directories before any recursive JSON scan runs.
+  The same guard now protects reserved-output conflict preflight scans.
+- Added regression coverage for symlinked evidence directories, evidence
+  directory symlink-inspection failures, and reserved-output preflight scans
+  through symlinked evidence directories, and extended the shared rollout-gate
+  contract to pin the behavior.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 166 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1337 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reserved-output preflight evidence shape guard
+
+- Tightened the shared reserved-output conflict preflight so explicit evidence
+  inputs and directory-scanned `*.json` candidates go through the same regular
+  non-symlink file inspection as main evidence discovery before path identity
+  comparison.
+- Added regression coverage for explicit evidence directories, explicit
+  evidence symlinks, directory-scanned JSON directories, and directory-scanned
+  JSON symlinks in the reserved-output conflict scan, and extended the shared
+  rollout-gate contract to pin the preflight inspection call.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 163 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1334 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check` and `git diff --exit-code -- Cargo.lock` passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS evidence symlink rejection guard
+
+- Tightened shared SoraFS evidence discovery so explicit and
+  directory-discovered evidence files must not be symlinks before entering the
+  parse list. This keeps rollout evidence handoffs rooted in real reviewed
+  files instead of symlink aliases.
+- Added regression coverage for explicit evidence symlinks, directory-scanned
+  JSON symlinks, and symlink inspection failures, and extended the shared
+  rollout-gate contract to pin the symlink rejection checks.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 159 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1330 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS discovered evidence file inspection guard
+
+- Tightened shared SoraFS evidence discovery so directory-scanned `*.json`
+  candidates must also be inspectable regular files before they enter the parse
+  list. A directory named like a JSON artifact now records a stable evidence
+  file diagnostic while preserving distinct regular evidence files from the same
+  scan.
+- Added regression coverage for discovered `.json` directories and discovered
+  file inspection failures, and extended the shared rollout-gate contract to
+  pin these scan-time file checks.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 156 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1327 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS explicit evidence file inspection guard
+
+- Tightened shared SoraFS evidence discovery so explicit `--evidence` file
+  inputs must be inspectable regular files before they enter the parse list.
+  Missing paths and directories now fail with stable discovery diagnostics
+  instead of falling through to later JSON-load errors.
+- Added regression coverage for missing explicit evidence files, explicit
+  directories, noncanonical file labels, file inspection failures, and the SFM-3
+  reputation checker's missing-file summary behavior. The shared rollout
+  contract now pins the explicit-file inspection helper and tests.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py scripts/tests/check_sorafs_reputation_rollout_evidence_test.py::test_explicit_missing_file_reports_discovery_error scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 155 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1325 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reserved-output identity fail-closed discovery
+
+- Tightened shared SoraFS evidence path handling so duplicate or aliased
+  reserved-output identities are reported instead of being silently overwritten.
+  Evidence discovery now stops before scanning evidence paths when reserved
+  output reservations are malformed or ambiguous.
+- Added regression coverage for direct reserved-output identity mapping,
+  evidence discovery preflight, and reserved-output conflict scans so duplicate
+  `--summary-out` style reservations cannot be hidden by a later alias.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py -q`
+    passed: 37 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 111 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1319 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS evidence duplicate identity fail-closed discovery
+
+- Tightened shared SoraFS evidence discovery so duplicate or aliased evidence
+  file identities are removed from the returned parse list after the collision
+  is recorded. This prevents the first copy of ambiguous operator evidence from
+  still appearing as a parsed rollout artifact beside the load error.
+- Added regression coverage that duplicate explicit, explicit/directory, and
+  overlapping-directory evidence identities return no parsed file for the
+  ambiguous identity while preserving distinct evidence files in the same run.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/sorafs_evidence_paths_test.py -q`
+    passed: 34 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 111 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1316 tests completed with 0 failures.
+  - `git diff --name-only -- '*.py' | xargs python3 -m py_compile`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reputation explicit evidence path-kind guard
+
+- Tightened the SFM-3 reputation rollout evidence loader so the same resolved
+  explicit evidence file cannot be assigned conflicting evidence kinds through
+  repeated `--evidence kind=path` hints.
+- Added regression coverage for `transport=<path>` plus `metrics=<same path>`
+  to ensure ambiguous typed evidence mappings are reported in the gate summary
+  instead of relying only on duplicate-file discovery diagnostics.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py::test_explicit_same_path_conflicting_kinds_fail scripts/tests/check_sorafs_reputation_rollout_evidence_test.py::test_explicit_kind_must_match_recognized_schema scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    passed: 31 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checker_mains_return_argparse_error_codes scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_checkers_use_shared_evidence_file_discovery -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 111 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1315 tests completed with 0 failures.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reputation typed evidence schema-kind guard
+
+- Tightened the SFM-3 reputation rollout evidence loader so an explicit
+  `--evidence kind=path` hint fails closed when the payload carries a recognized
+  schema for a different evidence kind.
+- Added regression coverage for `metrics=<transport payload>` to ensure typed
+  evidence hints cannot override schema identity before validation.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_reputation_rollout_evidence_test.py::test_explicit_kind_must_match_recognized_schema scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    passed: 29 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_typed_evidence_specs_match_external_evidence_keys scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_evidence_contract_schemas_are_canonical -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 111 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1314 tests completed with 0 failures.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reputation evidence-contract schema guard
+
+- Added explicit SoraFS v1 schema identifiers for the SFM-3 reputation rollout
+  generated evidence kinds: publish summary, latest snapshot summary, provider
+  proof, event watch, and provider proof verification.
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and rejects non-string, non-SoraFS,
+  or non-v1 `evidence_contract` schema values. This prevents dry-run evidence
+  contracts from advertising `None` or otherwise untyped evidence classes.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_evidence_contract_schemas_are_canonical -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_reputation_rollout_evidence_test.py::test_dry_run_prints_complete_reputation_rollout_plan scripts/tests/check_sorafs_reputation_rollout_evidence_test.py -q`
+    passed: 28 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 111 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1313 tests completed with 0 failures.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run deployment-context guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan with a `deployment_context` section
+  and verifies it exactly matches the parsed deployment id, normalized
+  environment, and `deployment_context_reviewed: true` marker.
+- This keeps reviewed deployment identity in dry-run output aligned with the
+  context stamped onto generated evidence before verifier execution.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_deployment_context_matches_args -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 110 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1312 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run typed-evidence mapping guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies typed verifier
+  `--evidence kind=path` specs point at the same dry-run
+  `external_evidence[kind]` path and a matching `evidence_contract` key.
+- This keeps typed external evidence handoffs from drifting away from the
+  schema contract operators review before running a gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_typed_evidence_specs_match_external_evidence_keys -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 109 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1311 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run external-contract guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies every
+  `external_evidence` key has a matching `evidence_contract` entry.
+- This ensures every externally reviewed evidence path in the dry-run plan is
+  backed by an advertised schema and required payload-field contract.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_external_evidence_keys_have_contract_entries -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 108 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1310 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run top-level key guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and rejects unexpected top-level
+  fields outside the reviewed plan metadata, deployment context,
+  evidence-contract, evidence-input, threshold, and step keys.
+- This prevents future dry-run plan JSON from introducing unreviewed fields
+  that could hide payload material or drift away from the documented operator
+  review contract.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_plan_uses_reviewed_top_level_keys -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 107 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1309 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run external-output separation guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies `external_evidence`
+  entries are well-shaped, non-empty, unique paths that do not overlap with any
+  planned artifact output in the same plan.
+- This prevents operator-reviewed input evidence from being silently reused as
+  a collection output target during dry-run planning.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_external_evidence_is_distinct_from_outputs -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 106 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1308 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run threshold alignment guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan with a `thresholds` section and
+  verifies each exposed threshold maps to the verifier gate command option of
+  the same hyphenated name.
+- This keeps operator-reviewed freshness, latency, quorum, and count thresholds
+  aligned with the values the evidence checker will enforce.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_thresholds_match_gate_command -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 105 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1307 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run configured-verifier guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies the verifier gate command
+  starts with the current Python executable plus the parsed `--verifier` path,
+  with that checker path present exactly once.
+- This prevents future runners from reviewing one verifier path while the
+  dry-run command executes a different evidence checker.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_verifier_gate_uses_configured_checker -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 104 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1306 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run verifier-summary guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies the verifier gate
+  artifact is the only `--summary-out` target in the gate command.
+- This keeps the operator-reviewed promotion summary path unambiguous and
+  prevents future runners from emitting a verifier command whose summary output
+  diverges from the rendered gate artifact.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_verifier_summary_artifact_matches_gate_output -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 103 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1305 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run verifier-final guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies the single verifier
+  gate step is the final step operators review.
+- This prevents future runners from placing generated canaries or artifact
+  collection after the verifier has already evaluated the evidence bundle.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_verifier_gate_is_final_step -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 102 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1304 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run exact-step guard
+
+- Added a shared dynamic regression test that renders every checked-in SoraFS
+  rollout/release collection dry-run plan and verifies the JSON `steps` array
+  exactly matches the `CommandPlan` sequence built from the reviewed argfile:
+  label, artifact path, and command vector.
+- This prevents dry-run review output from omitting, reordering, or rewriting
+  the command plan that will execute canaries and evidence gates.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_steps_match_built_command_plan scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_plan_schema_matches_checker_summary scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_step_artifacts_match_command_outputs -q`
+    passed: 3 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 101 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1303 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run schema-summary guard
+
+- Added a shared dynamic regression test that renders every SoraFS rollout/
+  release collection runner's checked-in dry-run plan and verifies the plan
+  schema is a SoraFS rollout/release collection schema, the
+  `verifier_summary_schema` matches the checker `SUMMARY_SCHEMA`, and exactly
+  one verifier gate step is present.
+- This keeps operator review tied to the evidence gate schema that will parse
+  the generated summary, preventing stale dry-run metadata from drifting away
+  from the checker contract.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_plan_schema_matches_checker_summary scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_example_dry_run_contracts_match_checker_fields scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_step_artifacts_match_command_outputs -q`
+    passed: 3 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 100 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1302 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run artifact-output guard
+
+- Added a shared dynamic regression test that builds every SoraFS rollout/
+  release collection runner's checked-in dry-run plan and verifies each
+  rendered step artifact matches the command output argument that produces it
+  (`--out`, `--json-out`, `--summary-out`, or `--output`, including
+  `--option=value` forms).
+- This protects operator review from stale or misleading dry-run artifact paths
+  before generated canaries or verifier summaries are promoted as rollout
+  evidence.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_step_artifacts_match_command_outputs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_explicit_evidence_args_are_visible_in_dry_run_plan scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_generated_artifacts_are_under_verifier_evidence_dir -q`
+    passed: 3 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 99 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1301 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS explicit evidence dry-run visibility guard
+
+- Added a shared dynamic regression test that verifies every verifier
+  `--evidence` file argument in SoraFS rollout/release runner dry-run plans is
+  visible through the dry-run `external_evidence` map.
+- Updated the SFM-3 reputation collection runner so metrics, transport, and
+  consumption canary evidence paths are included in dry-run `external_evidence`
+  instead of only being embedded in the verifier command.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_explicit_evidence_args_are_visible_in_dry_run_plan -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_reputation_rollout_evidence_test.py -q`
+    passed: 7 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 98 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1300 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/run_sorafs_reputation_rollout_evidence.py scripts/tests/run_sorafs_reputation_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS generated-canary artifact corridor guard
+
+- Added a shared dynamic regression test for generated-canary SoraFS collection
+  runners. The test builds each checked-in dry-run plan, verifies the verifier
+  step consumes the reviewed `--out-dir` via `--evidence-dir`, and verifies
+  every generated canary artifact is planned directly under that output
+  directory before the evidence gate can read it.
+- This closes a production-review gap for runners such as AI pre-screening,
+  transparency, and reputation where evidence is generated locally during the
+  collection plan rather than supplied through flag-backed evidence paths.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_commands_match_rendered_evidence_inputs scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_generated_artifacts_are_under_verifier_evidence_dir -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 97 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1299 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run evidence-command alignment guard
+
+- Added a shared dynamic regression test that builds every flag-backed SoraFS
+  rollout/release runner's checked-in dry-run plan and verifies the rendered
+  `external_evidence` map, verifier `--evidence` arguments, and verifier
+  `--require-kind` arguments all match the parser-derived evidence paths and
+  selected required kinds. This keeps operator dry-run review output aligned
+  with the command that will actually invoke the evidence gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_example_dry_run_contracts_match_checker_fields scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_dry_run_commands_match_rendered_evidence_inputs -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 96 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1298 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS runner dry-run required-kind contract guard
+
+- Added a shared dynamic regression test that parses every checked-in SoraFS
+  rollout/release collection argfile, builds the runner dry-run command plan,
+  and verifies the emitted `evidence_contract` schemas and required payload
+  fields exactly match the checker constants for the selected required kinds.
+- Fixed collection runners that deferred `--require-kind` parsing until `main`
+  instead of returning a complete parser namespace. Appeal finance, Governance
+  DAG, hedging/billing, moderation panel, orderbook, PoP credentials, repair,
+  and reserve/rent now derive `required_kinds` in `parse_args`, before input
+  validation or dry-run plan construction.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runners_parse_required_kinds_before_validation scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_runner_example_dry_run_contracts_match_checker_fields -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py scripts/tests/run_sorafs_governance_dag_rollout_evidence_test.py scripts/tests/run_sorafs_hedging_rollout_evidence_test.py scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py scripts/tests/run_sorafs_orderbook_rollout_evidence_test.py scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py scripts/tests/run_sorafs_repair_rollout_evidence_test.py scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py -q`
+    passed: 60 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 95 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1297 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/run_sorafs_appeal_finance_rollout_evidence.py scripts/run_sorafs_governance_dag_rollout_evidence.py scripts/run_sorafs_hedging_rollout_evidence.py scripts/run_sorafs_moderation_panel_rollout_evidence.py scripts/run_sorafs_orderbook_rollout_evidence.py scripts/run_sorafs_pop_credentials_rollout_evidence.py scripts/run_sorafs_repair_rollout_evidence.py scripts/run_sorafs_reserve_rent_rollout_evidence.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reviewed deployment-contract guard
+
+- Tightened the shared dry-run evidence-contract regression coverage so every
+  SoraFS rollout/release checker must expose canonical, duplicate-free
+  `EVIDENCE_REQUIRED_FIELDS`, and every reviewed-context checker must expose
+  `deployment_id`, `environment`, and `deployment_context_reviewed` for every
+  default required evidence kind. This keeps dry-run `evidence_contract` output
+  honest about the reviewed deployment identity and environment data operators
+  must collect before promotion.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_evidence_gates_export_dry_run_field_contracts scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_evidence_contracts_disclose_reviewed_deployment_context -q`
+    passed: 2 tests completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 93 tests completed with 0 failures.
+  - `python3 -m pytest $(rg --files scripts/tests | rg 'sorafs.*_test\.py$') -q`
+    passed: 1295 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS localized plan source-hash guard
+
+- Added a shared static regression test that checks every top-level localized
+  `docs/source/sorafs*plan.*.md` file carries a `source_hash` matching the
+  current English source plan. This protects SoraFS rollout and production
+  planning docs from drifting after source-plan edits.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_top_level_sorafs_plan_localized_hashes_match_source -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 92 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS source-entry collection coverage guard
+
+- Generalized the rollout collection argfile source-entry guard so every
+  SoraFS source-entry runner must have its checked-in collection example cover
+  all required source kinds. This now covers both the SFM-4a AI pre-screening
+  transparency handoff entries and the SFM-4c transparency source-entry
+  collection runner, instead of only the transparency runner.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_source_entry_runner_examples_cover_required_source_entry_kinds -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 91 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS collection argfile evidence-flag coverage guard
+
+- Added a shared static regression test that imports every flag-backed SoraFS
+  rollout and release collection runner and verifies its checked-in collection
+  argfile contains the evidence flag for every default required evidence kind.
+  This prevents future required evidence kinds from being added to a runner
+  while the operator example still omits the artifact path operators must
+  review.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_flag_backed_rollout_collection_examples_cover_default_required_kinds -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 91 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS rollout evidence-contract regression guard
+
+- Added a shared static regression test that imports every SoraFS rollout and
+  release evidence checker, verifies each `EVIDENCE_REQUIRED_FIELDS` map covers
+  every default required kind with non-empty field tuples, rejects unknown field
+  contracts, and verifies every collection runner exposes dry-run
+  `evidence_contract` output sourced from those field maps.
+- This protects the production promotion workflow from adding future SoraFS
+  rollout or release gates whose dry-run plans hide the schema and required
+  payload fields operators must collect.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_rollout_evidence_gates_export_dry_run_field_contracts -q`
+    passed: 1 test completed with 0 failures.
+  - `python3 -m pytest scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 90 tests completed with 0 failures.
+  - `python3 -m py_compile scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, and
+    conflict-marker scan passed.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS reference SDK release evidence-contract dry-run export
+
+- Added `EVIDENCE_REQUIRED_FIELDS` to the SF-11 reference SDK release evidence
+  checker and exposed it through the collection runner's dry-run
+  `evidence_contract` map. Operators can now inspect the exact schema and
+  required payload fields for release archives, signed manifests, downstream
+  bindings, cookbook smoke, FFI/header contract, and governance approval before
+  collecting release evidence.
+- Updated the SF-11 reference SDK plan, roadmap, and localized source hashes to
+  document the dry-run contract surface while leaving signed per-target
+  archives, downstream package publication, and live operator smoke evidence as
+  the remaining production gates.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_reference_sdk_release_evidence.py scripts/run_sorafs_reference_sdk_release_evidence.py scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 116 tests completed with 0 failures.
+  - Direct reference SDK release runner `--dry-run` with repo-local placeholder
+    evidence passed and emitted 6 evidence inputs, 6 evidence contracts, and
+    the `signed_manifest` contract.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, conflict-marker
+    scan, dry-run temporary-directory cleanup check, and localized reference SDK
+    source-hash consistency check passed.
+  - localized `docs/source/sorafs_reference_sdk_plan.*.md` files were updated
+    to source hash
+    `ded823ae930ce511e40d74f4978ee6b5fc53748a6773a429463a17d2410e17f4`.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS gateway moderation-toggle evidence gate
+
+- Added `moderation_toggle` as a required SFM-4 gateway compliance rollout
+  evidence kind. The checker now fails closed unless a payload-free
+  moderation-toggle canary proves `iroha_config` binding, approved-toggle count
+  equality, operator-role enforcement, reviewed approval workflow, expiry,
+  cache invalidation, persisted operator audit trail, rollback verification,
+  bundle binding, and absence of raw toggle payloads and response bodies.
+- Bound moderation-toggle evidence to the same promoted `bundle_digest_hex` as
+  feed-promotion evidence, updated the collection runner with
+  `--moderation-toggle-evidence`, refreshed the gateway compliance collection
+  example, and documented that the promotion gate now proves the toggle
+  boundary while the production service deployment remains open work.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/check_sorafs_rollout_gate_contract_test.py -q`
+    passed: 119 tests completed with 0 failures.
+  - Direct gateway compliance runner `--dry-run` with repo-local placeholder
+    evidence passed and emitted 10 evidence inputs, 10 evidence contracts, and
+    the `moderation_toggle` contract.
+  - `git diff --check`, `git diff --exit-code -- Cargo.lock`, conflict-marker
+    scan, dry-run temporary-directory cleanup check, and localized gateway
+    source-hash consistency check passed.
+  - localized `docs/source/sorafs_gateway_compliance_plan.*.md` files were
+    updated to source hash
+    `c05a2f073d1b69b827d0784557c134ed7f2f02cb085f6a1220c3a315e267dadf`.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS gateway compliance controller-runtime gate
+
+- Added `controller_runtime` as a required SFM-4 gateway compliance rollout
+  evidence kind. The checker now fails closed unless a payload-free controller
+  report proves `iroha_config` binding, feed fetch/normalization/signature count
+  equality, deterministic normalization, bundle packing, update-history
+  persistence, gateway reload request, failure backoff, rollback planning, and
+  absence of raw feeds, feed payloads, and response bodies.
+- Bound controller runtime evidence to the same promoted
+  `bundle_digest_hex` as feed-promotion evidence, updated the collection
+  runner with `--controller-runtime-evidence`, refreshed the gateway compliance
+  collection example, and documented that an always-on controller daemon still
+  remains production work while promotion packets must now prove the controller
+  boundary.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py -q`
+    passed: 27 tests completed with 0 failures.
+  - localized `docs/source/sorafs_gateway_compliance_plan.*.md` files were
+    updated to source hash
+    `9ff72640c8f14d1a74e824c127f019d7444eb4e028549b47ae48d60310c45630`.
+  - Cargo validation was not started because external Cargo/Rust processes were
+    already running.
+
+## 2026-06-28 SoraFS AI, gateway, and moderation-panel evidence-contract dry-run export
+
+- Exposed the SFM-4a AI pre-screening, SFM-4 gateway compliance, and SFM-4b
+  moderation-panel rollout checkers' required payload-field contracts through
+  `EVIDENCE_REQUIRED_FIELDS` and each collection planner's dry-run
+  `evidence_contract` output. Operators can now inspect exact schemas and
+  required fields before collecting screening workflow, gateway compliance, or
+  moderation-panel staged evidence.
+- Added runner dry-run coverage for AI runner/workflow/governance fields,
+  gateway bundle/denial/metrics/governance fields, moderation case/viewer/
+  commit-reveal/metrics/governance fields, response-file handling, split
+  response-file handling, and selected-kind subset gates. Updated the SFM-4a
+  AI pre-screening, SFM-4 gateway compliance, and SFM-4b moderation-panel plans
+  plus the roadmap while leaving live deployed evidence collection as the
+  remaining production gate.
+- Validation status:
+  - no processes were killed, signaled, restarted, or interrupted.
+  - `python3 -m py_compile scripts/check_sorafs_ai_prescreen_rollout_evidence.py scripts/run_sorafs_ai_prescreen_rollout_evidence.py scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py scripts/check_sorafs_gateway_compliance_rollout_evidence.py scripts/run_sorafs_gateway_compliance_rollout_evidence.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/check_sorafs_moderation_panel_rollout_evidence.py scripts/run_sorafs_moderation_panel_rollout_evidence.py scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py`
+    passed.
+  - `python3 -m pytest scripts/tests/run_sorafs_ai_prescreen_rollout_evidence_test.py scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py -q`
+    passed: 22 tests completed with 0 failures.
+  - localized source hashes were refreshed:
+    `docs/source/sorafs_ai_prescreen_plan.*.md` ->
+    `5da57a041e75f21d25dded27190506f6a2c86eaf7ecd7b1bd79691b08da349de`;
+    `docs/source/sorafs_gateway_compliance_plan.*.md` ->
+    `faccdc6ff3485065e79d095ff0e682be138b70da568d0db578829c8437e759dd`;
+    `docs/source/sorafs_moderation_panel_plan.*.md` ->
+    `54625457389e1b7ba8e82e0fc7682f0de239461aa0bf39019d96f1defbf76c99`.
+  - Cargo validation was not started because an external
+    `cargo test -p iroha_core --lib` process was already running.
+
 ## 2026-06-28 SoraFS PDP and PoP evidence-contract dry-run export
 
 - Exposed the SF-13 PDP and SFM-4b1 PoP credential rollout checkers'

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -229,20 +230,51 @@ def test_generated_artifact_annotation_marks_reviewed_context(tmp_path: Path) ->
     assert payload["deployment_context_reviewed"] is True
 
 
+def test_deployment_context_write_uses_no_follow_descriptor_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    original_open = os.open
+    opened: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == artifact:
+            opened["flags"] = flags
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE.os, "open", open_path)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == []
+    assert opened["flags"] & os.O_WRONLY
+    assert opened["flags"] & os.O_TRUNC
+    assert not opened["flags"] & os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        assert opened["flags"] & os.O_NOFOLLOW
+    assert MODULE.deployment_context_write_open_flags() == opened["flags"]
+
+
 def test_deployment_context_write_error_is_sanitized(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     artifact = write_payload(tmp_path / "artifact.json")
-    original_write_text = Path.write_text
+    original_open = os.open
     bad_message = "write denied\nsecret"
 
-    def write_text_raises(path: Path, *args, **kwargs):
+    def open_raises(path: Path, flags: int, *args, **kwargs):
         if path == artifact:
             raise OSError(bad_message)
-        return original_write_text(path, *args, **kwargs)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", write_text_raises)
+    monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
+    monkeypatch.setattr(MODULE.os, "open", open_raises)
 
     errors = MODULE.annotate_evidence_artifact(
         artifact,
@@ -255,6 +287,83 @@ def test_deployment_context_write_error_is_sanitized(
         "<non-canonical-error>"
     ]
     assert bad_message not in "\n".join(errors)
+
+
+def test_deployment_context_write_rejects_symlink_swap_before_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    target = tmp_path / "target.json"
+    target.write_text("old", encoding="utf-8")
+    original_open = os.open
+    bad_message = "symlink write denied\nsecret"
+
+    def load_and_swap(path: Path, _max_bytes: int) -> dict:
+        path.unlink()
+        path.symlink_to(target)
+        return {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == artifact:
+            if hasattr(os, "O_NOFOLLOW"):
+                assert flags & os.O_NOFOLLOW
+            raise OSError(bad_message)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", load_and_swap)
+    monkeypatch.setattr(MODULE.os, "open", open_path)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == [
+        f"failed to write deployment context into `{artifact}`: "
+        "<non-canonical-error>"
+    ]
+    assert target.read_text(encoding="utf-8") == "old"
+    assert bad_message not in "\n".join(errors)
+
+
+def test_deployment_context_write_rejects_parent_symlink_swap_before_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    parent = tmp_path / "artifact-parent"
+    parent.mkdir()
+    artifact = write_payload(parent / "artifact.json")
+    old_parent = tmp_path / "old-parent"
+    target_parent = tmp_path / "target-parent"
+    target_parent.mkdir()
+    (target_parent / "artifact.json").write_text("{}", encoding="utf-8")
+    original_open = os.open
+
+    def load_and_swap(_path: Path, _max_bytes: int) -> dict:
+        parent.rename(old_parent)
+        parent.symlink_to(target_parent, target_is_directory=True)
+        return {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == artifact:
+            raise AssertionError("parent-symlinked artifact must not be opened")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", load_and_swap)
+    monkeypatch.setattr(MODULE.os, "open", open_path)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == [
+        f"deployment-context artifact parent `{parent}` must not be a symlink"
+    ]
+    assert (target_parent / "artifact.json").read_text(encoding="utf-8") == "{}"
 
 
 def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:

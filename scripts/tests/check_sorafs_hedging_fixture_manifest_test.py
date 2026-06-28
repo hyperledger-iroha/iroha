@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -260,14 +261,14 @@ def test_summary_out_symlink_fails_before_manifest_read(
     target.write_text("old", encoding="utf-8")
     summary = tmp_path / "summary.json"
     summary.symlink_to(target)
-    original_open = Path.open
+    original_open = os.open
 
-    def open_path(path: Path, *args, **kwargs):
+    def open_path(path: Path, flags: int, *args, **kwargs):
         if path == manifest:
             raise AssertionError("manifest should not be read after summary preflight fails")
-        return original_open(path, *args, **kwargs)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", open_path)
+    monkeypatch.setattr(os, "open", open_path)
 
     rc = MODULE.main(
         [
@@ -344,14 +345,14 @@ def test_manifest_read_error_writes_blocked_summary_without_traceback(
 ) -> None:
     manifest = write_manifest(tmp_path / "fixture_manifest.json", base_manifest())
     summary = tmp_path / "summary.json"
-    original_open = Path.open
+    original_open = os.open
 
-    def open_path(path: Path, *args, **kwargs):
+    def open_path(path: Path, flags: int, *args, **kwargs):
         if path == manifest:
             raise OSError("manifest read denied")
-        return original_open(path, *args, **kwargs)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", open_path)
+    monkeypatch.setattr(os, "open", open_path)
 
     rc = MODULE.main(
         [
@@ -441,15 +442,15 @@ def test_full_mode_rejects_unreadable_generated_fixture_without_traceback(
     validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
-    original_open = Path.open
+    original_open = os.open
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
 
-    def open_path(path: Path, *args, **kwargs):
+    def open_path(path: Path, flags: int, *args, **kwargs):
         if path == target:
             raise OSError("generated fixture read denied")
-        return original_open(path, *args, **kwargs)
+        return original_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", open_path)
+    monkeypatch.setattr(os, "open", open_path)
 
     rc = MODULE.main(
         [
@@ -931,6 +932,117 @@ def test_full_mode_rejects_fixture_inventory_scan_errors_without_traceback(
     assert any(
         "failed to scan generated fixture root" in error
         and "fixture inventory scan denied" in error
+        for error in result["errors"]
+    )
+
+
+def test_full_mode_rejects_symlinked_generated_fixture_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    target_repo = tmp_path / "target-repo"
+    write_generated_pairs(target_repo, payload)
+    fixture_root = repo_root / MODULE.HEDGING_FIXTURE_ROOT
+    fixture_root.parent.mkdir(parents=True, exist_ok=True)
+    fixture_root.symlink_to(
+        target_repo / MODULE.HEDGING_FIXTURE_ROOT,
+        target_is_directory=True,
+    )
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["status"] == "blocked"
+    assert any(
+        "generated fixture root" in error and "must not be a symlink" in error
+        for error in result["errors"]
+    )
+
+
+def test_full_mode_rejects_generated_fixture_root_parent_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    target_repo = tmp_path / "target-repo"
+    write_generated_pairs(target_repo, payload)
+    repo_root = tmp_path / "repo-link"
+    repo_root.symlink_to(target_repo, target_is_directory=True)
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["status"] == "blocked"
+    assert any(
+        "generated fixture root parent" in error and "must not be a symlink" in error
+        for error in result["errors"]
+    )
+
+
+def test_full_mode_rejects_symlinked_generated_fixture_inventory_entry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = base_manifest()
+    repo_root = tmp_path / "repo"
+    write_generated_pairs(repo_root, payload)
+    target = tmp_path / "external.to"
+    target.write_bytes(b"external")
+    symlink = repo_root / MODULE.HEDGING_FIXTURE_ROOT / "symlinked.to"
+    symlink.symlink_to(target)
+    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
+
+    rc = MODULE.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--validator-bin",
+            str(validator),
+            "--summary-out",
+            str(summary),
+        ]
+    )
+
+    assert rc == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["status"] == "blocked"
+    assert any(
+        "generated fixture candidate" in error
+        and "symlinked.to" in error
+        and "must not be a symlink" in error
         for error in result["errors"]
     )
 

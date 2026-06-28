@@ -31,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256,
     read_evidence_bytes,
 )
+from sorafs_evidence_paths import validate_evidence_parent_chain  # noqa: E402
 from sorafs_path_identity import (  # noqa: E402
     error_diagnostic_label,
     path_diagnostic_label,
@@ -300,6 +301,11 @@ def inspect_regular_file(
         return None
     path_label = _path_label(path)
     try:
+        if path.is_symlink():
+            errors.append(f"{label} `{path_label}` must not be a symlink")
+            return None
+        if not validate_evidence_parent_chain(path, errors, label=label):
+            return None
         return path.is_file()
     except (OSError, RuntimeError) as error:
         errors.append(
@@ -321,6 +327,11 @@ def inspect_directory(
         return None
     path_label = _path_label(path)
     try:
+        if path.is_symlink():
+            errors.append(f"{label} `{path_label}` must not be a symlink")
+            return None
+        if not validate_evidence_parent_chain(path, errors, label=label):
+            return None
         return path.is_dir()
     except (OSError, RuntimeError) as error:
         errors.append(
@@ -1186,25 +1197,33 @@ def validate_generated_inventory(
         if isinstance(fixture_path, Path)
     }
     actual_paths: set[str] = set()
+    for path in scan_generated_fixture_files(fixture_root, errors):
+        relative_path = path.relative_to(REPO_ROOT)
+        if relative_path == HEDGING_FIXTURE_MANIFEST_PATH:
+            continue
+        actual_paths.add(relative_path.as_posix())
+    extra_paths = sorted(actual_paths.difference(expected_paths))
+    if extra_paths:
+        errors.append(f"unmanifested generated hedging fixtures: {extra_paths}")
+
+
+def scan_generated_fixture_files(fixture_root: Path, errors: list[str]) -> list[Path]:
+    """Return generated fixture files, recording inventory scan failures."""
+
+    fixture_files: list[Path] = []
     try:
         for path in fixture_root.rglob("*"):
             is_file = inspect_regular_file(path, "generated fixture candidate", errors)
             if not is_file or path.suffix not in {".json", ".to"}:
                 continue
-            relative_path = path.relative_to(REPO_ROOT)
-            if relative_path == HEDGING_FIXTURE_MANIFEST_PATH:
-                continue
-            actual_paths.add(relative_path.as_posix())
+            fixture_files.append(path)
     except (OSError, RuntimeError) as error:
         fixture_root_label = _path_label(fixture_root)
         errors.append(
             f"failed to scan generated fixture root `{fixture_root_label}`: "
             f"{_error_label(error, path_label=fixture_root_label)}"
         )
-        return
-    extra_paths = sorted(actual_paths.difference(expected_paths))
-    if extra_paths:
-        errors.append(f"unmanifested generated hedging fixtures: {extra_paths}")
+    return fixture_files
 
 
 def validate_expected_status(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     resolve_runner_output_path,
     run_command_plan,
     runner_arg_label,
+    runner_path_size_open_flags,
     validate_command_plan_artifacts,
     validate_command_plan_step_shapes,
     validate_runner_output_dir,
@@ -353,6 +355,113 @@ def test_runner_path_inspectors_sanitize_noncanonical_failures(
         ]
 
 
+def test_runner_path_size_rejects_symlink_before_stat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "artifact.json"
+    target.write_text("{}", encoding="utf-8")
+    artifact = tmp_path / "artifact-link.json"
+    artifact.symlink_to(target)
+    original_stat = Path.stat
+
+    def stat(path: Path, *args, **kwargs):
+        if path == artifact:
+            raise AssertionError("symlink artifact must not be statted")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    errors: list[str] = []
+
+    assert (
+        inspect_runner_path_size(artifact, errors, label="gate expected artifact")
+        is None
+    )
+    assert errors == [
+        f"gate expected artifact `{artifact}` must not be a symlink"
+    ]
+
+
+def test_runner_path_size_rejects_parent_symlink_before_stat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target_parent = tmp_path / "actual-parent"
+    target_parent.mkdir()
+    parent = tmp_path / "artifact-parent"
+    parent.symlink_to(target_parent, target_is_directory=True)
+    artifact = parent / "artifact.json"
+    (target_parent / "artifact.json").write_text("{}", encoding="utf-8")
+    original_stat = Path.stat
+
+    def stat(path: Path, *args, **kwargs):
+        if path == artifact:
+            raise AssertionError("parent-symlinked artifact must not be statted")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    errors: list[str] = []
+
+    assert (
+        inspect_runner_path_size(artifact, errors, label="gate expected artifact")
+        is None
+    )
+    assert errors == [
+        f"gate expected artifact parent `{parent}` must not be a symlink"
+    ]
+
+
+def test_runner_path_size_uses_no_follow_descriptor_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("ready", encoding="utf-8")
+    original_open = os.open
+    opened: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, *args, **kwargs):
+        if path == artifact:
+            opened["flags"] = flags
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_path)
+    errors: list[str] = []
+
+    assert inspect_runner_path_size(artifact, errors, label="gate expected artifact") == 5
+    assert errors == []
+    assert opened["flags"] & os.O_RDONLY == os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        assert opened["flags"] & os.O_NOFOLLOW
+    assert opened["flags"] == runner_path_size_open_flags()
+
+
+def test_runner_path_size_open_failure_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = tmp_path / "bad\nartifact.json"
+    artifact.write_text("ready", encoding="utf-8")
+    original_open = os.open
+
+    def open_path(path: Path, _flags: int, *args, **kwargs):
+        if path == artifact:
+            raise OSError(f"size open denied for {path}")
+        return original_open(path, _flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_path)
+    errors: list[str] = []
+
+    assert (
+        inspect_runner_path_size(artifact, errors, label="gate expected artifact")
+        is None
+    )
+    assert errors == [
+        "gate expected artifact `<non-canonical-path>` cannot be inspected: "
+        "<non-canonical-error>"
+    ]
+
+
 def test_runner_path_inspectors_reject_malformed_error_container(
     tmp_path: Path,
 ) -> None:
@@ -531,6 +640,92 @@ def test_verifier_inspection_failure_fails_preflight(
     assert errors == [f"--verifier `{verifier}` cannot be inspected: verifier stat denied"]
 
 
+def test_verifier_symlink_fails_preflight(tmp_path: Path) -> None:
+    target = tmp_path / "target_verifier.py"
+    verifier = tmp_path / "verifier.py"
+    target.write_text("", encoding="utf-8")
+    verifier.symlink_to(target)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--verifier `{verifier}` must not be a symlink"]
+
+
+def test_verifier_parent_symlink_fails_preflight(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    parent = tmp_path / "reviewed"
+    target.mkdir()
+    (target / "verifier.py").write_text("", encoding="utf-8")
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=parent / "verifier.py",
+            out_dir=tmp_path / "evidence",
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--verifier parent `{parent}` must not be a symlink"]
+
+
+def test_verifier_parent_chain_symlink_fails_preflight(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    ancestor = tmp_path / "reviewed"
+    target.mkdir()
+    (target / "nested").mkdir()
+    (target / "nested" / "verifier.py").write_text("", encoding="utf-8")
+    ancestor.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=ancestor / "nested" / "verifier.py",
+            out_dir=tmp_path / "evidence",
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--verifier parent `{ancestor}` must not be a symlink"]
+
+
+def test_verifier_symlink_inspection_failure_fails_preflight(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+
+    def is_symlink(path: Path) -> bool:
+        if path == verifier:
+            raise RuntimeError("verifier symlink stat denied")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [
+        f"--verifier `{verifier}` cannot be inspected: verifier symlink stat denied"
+    ]
+
+
 def test_out_dir_inspection_failure_fails_preflight(
     tmp_path: Path,
     monkeypatch,
@@ -584,6 +779,29 @@ def test_out_dir_parent_chain_symlink_fails_preflight(tmp_path: Path) -> None:
     verifier.write_text("", encoding="utf-8")
     target = tmp_path / "target"
     target.mkdir()
+    ancestor = tmp_path / "redirect"
+    ancestor.symlink_to(target, target_is_directory=True)
+    out_dir = ancestor / "nested" / "evidence"
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=out_dir,
+            summary_out=tmp_path / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--out-dir parent `{ancestor}` must not be a symlink"]
+
+
+def test_existing_out_dir_parent_chain_symlink_fails_preflight(
+    tmp_path: Path,
+) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    (target / "nested" / "evidence").mkdir(parents=True)
     ancestor = tmp_path / "redirect"
     ancestor.symlink_to(target, target_is_directory=True)
     out_dir = ancestor / "nested" / "evidence"
@@ -708,6 +926,50 @@ def test_summary_out_parent_chain_symlink_fails_preflight(tmp_path: Path) -> Non
     assert errors == [f"--summary-out parent `{ancestor}` must not be a symlink"]
 
 
+def test_existing_summary_out_parent_symlink_fails_preflight(tmp_path: Path) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "summary.json").write_text("{}", encoding="utf-8")
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=parent / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+
+
+def test_existing_summary_out_parent_chain_symlink_fails_preflight(
+    tmp_path: Path,
+) -> None:
+    verifier = tmp_path / "verifier.py"
+    verifier.write_text("", encoding="utf-8")
+    target = tmp_path / "target"
+    (target / "nested").mkdir(parents=True)
+    (target / "nested" / "summary.json").write_text("{}", encoding="utf-8")
+    ancestor = tmp_path / "summary-root"
+    ancestor.symlink_to(target, target_is_directory=True)
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=ancestor / "nested" / "summary.json",
+        ),
+        summary_filename="rollout-summary.json",
+    )
+
+    assert errors == [f"--summary-out parent `{ancestor}` must not be a symlink"]
+
+
 def test_summary_out_parent_chain_file_fails_preflight(tmp_path: Path) -> None:
     verifier = tmp_path / "verifier.py"
     verifier.write_text("", encoding="utf-8")
@@ -764,6 +1026,45 @@ def test_missing_input_file_reports_only_file_requirement(tmp_path: Path) -> Non
     errors = require_existing_files([missing], "--evidence")
 
     assert errors == [f"--evidence `{missing}` must exist and be a file"]
+
+
+def test_input_file_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    symlink = tmp_path / "evidence.json"
+    target.write_text("{}", encoding="utf-8")
+    symlink.symlink_to(target)
+
+    errors = require_existing_files([symlink], "--evidence")
+
+    assert errors == [f"--evidence `{symlink}` must not be a symlink"]
+
+
+def test_input_file_parent_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    parent = tmp_path / "reviewed"
+    target.mkdir()
+    (target / "evidence.json").write_text("{}", encoding="utf-8")
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = require_existing_files([parent / "evidence.json"], "--evidence")
+
+    assert errors == [f"--evidence parent `{parent}` must not be a symlink"]
+
+
+def test_input_file_parent_chain_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    ancestor = tmp_path / "reviewed"
+    target.mkdir()
+    (target / "nested").mkdir()
+    (target / "nested" / "evidence.json").write_text("{}", encoding="utf-8")
+    ancestor.symlink_to(target, target_is_directory=True)
+
+    errors = require_existing_files(
+        [ancestor / "nested" / "evidence.json"],
+        "--evidence",
+    )
+
+    assert errors == [f"--evidence parent `{ancestor}` must not be a symlink"]
 
 
 def test_missing_input_file_sanitizes_noncanonical_path() -> None:
@@ -837,6 +1138,28 @@ def test_input_file_inspection_failure_is_reported(
     assert errors == [f"--evidence `{evidence}` cannot be inspected: input stat denied"]
 
 
+def test_input_file_symlink_inspection_failure_is_reported(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+    original_is_symlink = Path.is_symlink
+
+    def is_symlink(path: Path) -> bool:
+        if path == evidence:
+            raise RuntimeError("input symlink stat denied")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+    errors = require_existing_files([evidence], "--evidence")
+
+    assert errors == [
+        f"--evidence `{evidence}` cannot be inspected: input symlink stat denied"
+    ]
+
+
 def test_cross_label_duplicate_input_file_identity_fails(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence.json"
     evidence.write_text("{}", encoding="utf-8")
@@ -852,11 +1175,22 @@ def test_cross_label_duplicate_input_file_identity_fails(tmp_path: Path) -> None
     assert "--first-evidence" in errors[0]
 
 
-def test_input_file_resolver_failure_is_reported(tmp_path: Path) -> None:
-    loop = tmp_path / "loop.json"
-    loop.symlink_to(loop)
+def test_input_file_resolver_failure_is_reported(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text("{}", encoding="utf-8")
+    original_resolve = Path.resolve
 
-    errors = require_existing_files([loop], "--evidence")
+    def resolve(path: Path, *args, **kwargs):
+        if path == evidence:
+            raise OSError("input resolve denied")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+    errors = require_existing_files([evidence], "--evidence")
 
     assert any("cannot be resolved" in error for error in errors)
 
@@ -879,6 +1213,41 @@ def test_missing_input_directory_reports_only_directory_requirement(
     errors = require_existing_dirs([missing], "--bundle")
 
     assert errors == [f"--bundle `{missing}` must exist and be a directory"]
+
+
+def test_input_directory_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    symlink = tmp_path / "bundle"
+    target.mkdir()
+    symlink.symlink_to(target, target_is_directory=True)
+
+    errors = require_existing_dirs([symlink], "--bundle")
+
+    assert errors == [f"--bundle `{symlink}` must not be a symlink"]
+
+
+def test_input_directory_parent_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    parent = tmp_path / "reviewed"
+    target.mkdir()
+    (target / "bundle").mkdir()
+    parent.symlink_to(target, target_is_directory=True)
+
+    errors = require_existing_dirs([parent / "bundle"], "--bundle")
+
+    assert errors == [f"--bundle parent `{parent}` must not be a symlink"]
+
+
+def test_input_directory_parent_chain_symlink_fails(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    ancestor = tmp_path / "reviewed"
+    target.mkdir()
+    (target / "nested" / "bundle").mkdir(parents=True)
+    ancestor.symlink_to(target, target_is_directory=True)
+
+    errors = require_existing_dirs([ancestor / "nested" / "bundle"], "--bundle")
+
+    assert errors == [f"--bundle parent `{ancestor}` must not be a symlink"]
 
 
 def test_missing_input_directory_sanitizes_noncanonical_path() -> None:
@@ -955,11 +1324,44 @@ def test_input_directory_type_inspection_failure_is_reported(
     ]
 
 
-def test_input_directory_resolver_failure_is_reported(tmp_path: Path) -> None:
-    loop = tmp_path / "loop"
-    loop.symlink_to(loop)
+def test_input_directory_symlink_inspection_failure_is_reported(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    original_is_symlink = Path.is_symlink
 
-    errors = require_existing_dirs([loop], "--bundle")
+    def is_symlink(path: Path) -> bool:
+        if path == bundle:
+            raise OSError("directory symlink stat denied")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+    errors = require_existing_dirs([bundle], "--bundle")
+
+    assert errors == [
+        f"--bundle `{bundle}` cannot be inspected: directory symlink stat denied"
+    ]
+
+
+def test_input_directory_resolver_failure_is_reported(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    original_resolve = Path.resolve
+
+    def resolve(path: Path, *args, **kwargs):
+        if path == bundle:
+            raise RuntimeError("directory resolve denied")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+
+    errors = require_existing_dirs([bundle], "--bundle")
 
     assert any("cannot be resolved" in error for error in errors)
 
@@ -1108,6 +1510,66 @@ def test_validate_command_plan_artifacts_rejects_duplicate_reserved_outputs(
     ]
 
 
+def test_validate_command_plan_artifacts_rejects_reserved_output_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    reserved = tmp_path / "out"
+    reserved.symlink_to(target, target_is_directory=True)
+
+    errors = validate_command_plan_artifacts(
+        [Step("gate", tmp_path / "artifact.json", ["true"])],
+        reserved_output_paths=(reserved,),
+    )
+
+    assert errors == [f"reserved output path `{reserved}` must not be a symlink"]
+
+
+def test_validate_command_plan_artifacts_rejects_reserved_output_parent_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    parent = tmp_path / "reserved-root"
+    parent.symlink_to(target, target_is_directory=True)
+    reserved = parent / "out"
+
+    errors = validate_command_plan_artifacts(
+        [Step("gate", tmp_path / "artifact.json", ["true"])],
+        reserved_output_paths=(reserved,),
+    )
+
+    assert errors == [
+        f"reserved output path parent `{parent}` must not be a symlink"
+    ]
+
+
+def test_validate_command_plan_artifacts_reserved_output_symlink_inspection_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    reserved = tmp_path / "out"
+    original_is_symlink = Path.is_symlink
+
+    def is_symlink(path: Path) -> bool:
+        if path == reserved:
+            raise OSError("reserved output symlink stat denied")
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", is_symlink)
+
+    errors = validate_command_plan_artifacts(
+        [Step("gate", tmp_path / "artifact.json", ["true"])],
+        reserved_output_paths=(reserved,),
+    )
+
+    assert errors == [
+        f"reserved output path `{reserved}` cannot be inspected: "
+        "reserved output symlink stat denied"
+    ]
+
+
 def test_validate_command_plan_artifacts_stops_after_reserved_output_errors(
     tmp_path: Path,
 ) -> None:
@@ -1122,6 +1584,26 @@ def test_validate_command_plan_artifacts_stops_after_reserved_output_errors(
     )
 
     assert errors == ["reserved output path `summary.json` must be a path"]
+
+
+def test_validate_command_plan_artifacts_stops_after_reserved_output_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    reserved = tmp_path / "out"
+    reserved.symlink_to(target, target_is_directory=True)
+    artifact_target = tmp_path / "artifact-target.json"
+    artifact_target.write_text("{}", encoding="utf-8")
+    artifact = tmp_path / "artifact.json"
+    artifact.symlink_to(artifact_target)
+
+    errors = validate_command_plan_artifacts(
+        [Step("gate", artifact, ["true"])],
+        reserved_output_paths=(reserved,),
+    )
+
+    assert errors == [f"reserved output path `{reserved}` must not be a symlink"]
 
 
 def test_planned_artifact_symlink_fails(tmp_path: Path) -> None:
@@ -1588,6 +2070,59 @@ def test_run_command_plan_rejects_output_dir_symlink_before_launch(
     assert f"--out-dir `{out_dir}` must not be a symlink" in captured.err
 
 
+def test_run_command_plan_rejects_output_dir_symlink_written_by_command(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+    target = tmp_path / "target"
+    script = (
+        "from pathlib import Path; import sys; "
+        "out_dir = Path(sys.argv[1]); "
+        "target = Path(sys.argv[2]); "
+        "target.mkdir(); "
+        "out_dir.rmdir(); "
+        "out_dir.symlink_to(target, target_is_directory=True)"
+    )
+
+    exit_code = run_command_plan(
+        [
+            Step(
+                "gate",
+                None,
+                [sys.executable, "-c", script, str(out_dir), str(target)],
+            )
+        ],
+        out_dir,
+    )
+
+    assert exit_code == 1
+    assert out_dir.is_symlink()
+    captured = capsys.readouterr()
+    assert f"--out-dir `{out_dir}` must not be a symlink" in captured.err
+
+
+def test_run_command_plan_rejects_output_dir_removed_by_command(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+    script = (
+        "from pathlib import Path; import sys; "
+        "Path(sys.argv[1]).rmdir()"
+    )
+
+    exit_code = run_command_plan(
+        [Step("gate", None, [sys.executable, "-c", script, str(out_dir)])],
+        out_dir,
+    )
+
+    assert exit_code == 1
+    assert not out_dir.exists()
+    captured = capsys.readouterr()
+    assert f"--out-dir `{out_dir}` must exist and be a directory" in captured.err
+
+
 def test_run_command_plan_rejects_artifact_parent_symlink_before_create(
     tmp_path: Path,
     capsys,
@@ -1671,6 +2206,42 @@ def test_run_command_plan_rejects_artifact_symlink_written_by_command(
     captured = capsys.readouterr()
     assert (
         f"gate expected artifact `{artifact}` must not be a symlink"
+        in captured.err
+    )
+
+
+def test_run_command_plan_rejects_artifact_parent_symlink_written_by_command(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    parent = tmp_path / "artifact-parent"
+    target = tmp_path / "target"
+    artifact = parent / "artifact.json"
+    script = (
+        "from pathlib import Path; import sys; "
+        "parent = Path(sys.argv[1]); "
+        "target = Path(sys.argv[2]); "
+        "target.mkdir(); "
+        "parent.symlink_to(target, target_is_directory=True); "
+        "(target / 'artifact.json').write_text('{}', encoding='utf-8')"
+    )
+
+    exit_code = run_command_plan(
+        [
+            Step(
+                "gate",
+                artifact,
+                [sys.executable, "-c", script, str(parent), str(target)],
+            )
+        ],
+        tmp_path / "out",
+    )
+
+    assert exit_code == 1
+    assert (target / "artifact.json").exists()
+    captured = capsys.readouterr()
+    assert (
+        f"gate expected artifact parent `{parent}` must not be a symlink"
         in captured.err
     )
 
