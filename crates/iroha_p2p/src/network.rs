@@ -5878,8 +5878,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     async fn run(mut self, shutdown_signal: ShutdownSignal) {
         let mut update_topology_interval =
             tokio::time::interval(topology_tick_interval(self.topology_update_interval));
+        update_topology_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Process pending staggered connects frequently to honor small staggers
         let mut pending_connects_interval = tokio::time::interval(Duration::from_millis(50));
+        pending_connects_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut dns_refresh_interval =
             self.dns_refresh_interval
                 .map(tokio::time::interval)
@@ -5890,7 +5892,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 });
         // TTL check timer: coarse periodic check
         let mut dns_ttl_check = if self.dns_refresh_ttl.is_some() {
-            Some(tokio::time::interval(Duration::from_secs(60)))
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            Some(interval)
         } else {
             None
         };
@@ -6732,6 +6736,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             return DeferredFlushOutcome::Flushed;
         }
         while let Some(entry) = queued.pop_front() {
+            let retry_entry = entry.clone();
             let Some(ref_peer) = self.peers.get(peer_id) else {
                 queued.push_front(entry);
                 self.deferred_send_queue
@@ -6768,7 +6773,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                     DEFERRED_SEND_DROPPED.fetch_add(1, Ordering::Relaxed);
                 }
                 DeferredPostResult::Full => {
-                    DEFERRED_SEND_DROPPED.fetch_add(1, Ordering::Relaxed);
+                    queued.push_front(retry_entry);
                     self.deferred_send_queue
                         .restore_peer(peer_id.clone(), queued);
                     return DeferredFlushOutcome::Backpressured(conn_id);
@@ -9154,7 +9159,7 @@ mod tests {
             "successful flush should remove the peer queue"
         );
         let received = receivers
-            .try_recv_other()
+            .try_recv_high_control()
             .expect("generationless frame should be sent to the current peer session");
         assert_eq!(received.origin, network.self_id);
         match received.target {
@@ -9189,10 +9194,7 @@ mod tests {
             network.flush_deferred_frames_for_peer(&peer_id),
             DeferredFlushOutcome::Flushed
         ));
-        assert!(matches!(
-            receivers.try_recv_other(),
-            Err(TryRecvError::Empty)
-        ));
+        assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
         assert!(
             !network.deferred_send_queue.by_peer.contains_key(&peer_id),
             "stale entries should be dropped instead of restored"
@@ -9239,15 +9241,16 @@ mod tests {
             network.flush_deferred_frames_for_peer(&peer_id),
             DeferredFlushOutcome::Backpressured(9)
         ));
-        assert_eq!(
-            network
-                .deferred_send_queue
-                .by_peer
-                .get(&peer_id)
-                .map(VecDeque::len),
-            Some(1),
-            "backpressure should restore entries that were not attempted yet"
-        );
+        let entries = network
+            .deferred_send_queue
+            .by_peer
+            .get(&peer_id)
+            .expect("backpressure should keep deferred entries for retry");
+        let priorities: Vec<Priority> = entries.iter().map(|entry| entry.frame.priority).collect();
+        let generations: Vec<Option<ConnectionId>> =
+            entries.iter().map(|entry| entry.generation).collect();
+        assert_eq!(priorities, vec![Priority::High, Priority::High]);
+        assert_eq!(generations, vec![None, None]);
     }
 
     #[test]
@@ -9318,10 +9321,7 @@ mod tests {
             network.flush_deferred_frames_for_peer(&peer_id),
             DeferredFlushOutcome::Flushed
         ));
-        assert!(matches!(
-            receivers.try_recv_other(),
-            Err(TryRecvError::Empty)
-        ));
+        assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
         assert!(
             !network.deferred_send_queue.by_peer.contains_key(&peer_id),
             "expired deferred entries should be removed during flush"
@@ -9368,14 +9368,11 @@ mod tests {
             .try_recv_other()
             .expect("queued frame should be posted first");
         let second = receivers
-            .try_recv_other()
+            .try_recv_high_control()
             .expect("current frame should be posted after queued frame");
         assert!(matches!(first.priority, Priority::Low));
         assert!(matches!(second.priority, Priority::High));
-        assert!(matches!(
-            receivers.try_recv_other(),
-            Err(TryRecvError::Empty)
-        ));
+        assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
     }
 
     #[test]
@@ -9393,7 +9390,7 @@ mod tests {
             .post(dummy_relay_frame(
                 network.self_id.clone(),
                 &peer_id,
-                Priority::Low,
+                Priority::High,
             ))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr, 93, handle);
@@ -9740,10 +9737,7 @@ mod tests {
             !network.deferred_send_queue.by_peer.contains_key(&peer_id),
             "locally skipped trust-gossip frames should not be restored"
         );
-        assert!(matches!(
-            receivers.try_recv_other(),
-            Err(TryRecvError::Empty)
-        ));
+        assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
         assert!(
             trust_gossip_skipped_capability_off_count() >= skipped_before.saturating_add(1),
             "local capability skip metric should increment"
@@ -9781,10 +9775,7 @@ mod tests {
             !network.deferred_send_queue.by_peer.contains_key(&peer_id),
             "capability skip should not defer the live frame"
         );
-        assert!(matches!(
-            receivers.try_recv_other(),
-            Err(TryRecvError::Empty)
-        ));
+        assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
         assert!(
             network.peers.contains_key(&peer_id),
             "capability skip should keep the live peer"
@@ -9811,7 +9802,7 @@ mod tests {
             .post(dummy_relay_frame(
                 network.self_id.clone(),
                 &peer_id,
-                Priority::Low,
+                Priority::High,
             ))
             .expect("test peer queue prefill should succeed");
         insert_dummy_ref_peer(&mut network, peer_id.clone(), peer_addr.clone(), 97, handle);
@@ -9918,7 +9909,7 @@ mod tests {
         });
 
         let received = hub_receivers
-            .try_recv_other()
+            .try_recv_high_control()
             .expect("unconnected target should be routed through the hub");
         assert_eq!(received.origin, network.self_id);
         assert!(matches!(received.priority, Priority::High));
@@ -10022,10 +10013,10 @@ mod tests {
 
         for received in [
             receivers_one
-                .try_recv_other()
+                .try_recv_high_control()
                 .expect("first peer should receive broadcast"),
             receivers_two
-                .try_recv_other()
+                .try_recv_high_control()
                 .expect("second peer should receive broadcast"),
         ] {
             assert_eq!(received.origin, network.self_id);
@@ -10118,10 +10109,7 @@ mod tests {
             message::Topic::Other,
         );
 
-        assert!(matches!(
-            receivers.try_recv_other(),
-            Err(TryRecvError::Empty)
-        ));
+        assert!(matches!(receivers.try_recv_any(), Err(TryRecvError::Empty)));
     }
 
     #[test]
@@ -10244,7 +10232,7 @@ mod tests {
             .await;
 
         let forwarded = target_receivers
-            .try_recv_other()
+            .try_recv_high_control()
             .expect("hub should forward direct relay frame to target");
         assert_eq!(forwarded.origin, *incoming_peer.id());
         assert_eq!(forwarded.ttl, 2);

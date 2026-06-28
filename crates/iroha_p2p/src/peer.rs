@@ -1038,10 +1038,17 @@ mod handshake_config_tests {
             None,
         );
 
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keygen");
+        let expires_at = std::time::SystemTime::now()
+            .checked_add(Duration::from_secs(120))
+            .expect("ticket expiry should be representable")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("current time should be after unix epoch")
+            .as_secs();
         let ticket = PowTicket {
             version: 1,
             difficulty: 1,
-            expires_at: 1_000,
+            expires_at,
             client_nonce: [0u8; 32],
             solution: [0u8; 32],
         };
@@ -1049,18 +1056,17 @@ mod handshake_config_tests {
             ticket,
             relay_id: config.relay_id.as_slice().try_into().unwrap(),
             transcript_hash: None,
-            signature: vec![0u8; 48],
+            signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
         };
         let signed_bytes = signed.encode();
 
         let err = config
-            .verify_signed_ticket(&signed_bytes, b"invalid-public-key")
+            .verify_signed_ticket(&signed_bytes, keypair.public_key())
             .expect_err("invalid signature must fail");
         match err {
-            ChallengeVerifyError::Pow(pow_err) => assert!(matches!(
-                pow_err,
-                pow::Error::InvalidSignature | pow::Error::PostQuantum(_)
-            )),
+            ChallengeVerifyError::Pow(pow_err) => {
+                assert!(matches!(pow_err, pow::Error::InvalidSignature))
+            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -1718,24 +1724,57 @@ pub mod handles {
     /// Receiver set kept alive by network tests that need a synthetic peer handle.
     #[cfg(test)]
     pub(crate) struct TestPeerHandleReceivers<T: Pload> {
-        _hi_consensus: post_channel::Receiver<T>,
-        _hi_consensus_payload: post_channel::Receiver<T>,
-        _hi_consensus_chunk: post_channel::Receiver<T>,
-        _hi_control: post_channel::Receiver<T>,
-        _lo_block_sync: post_channel::Receiver<T>,
-        _lo_tx_gossip: post_channel::Receiver<T>,
-        _lo_peer_gossip: post_channel::Receiver<T>,
-        _lo_health: post_channel::Receiver<T>,
+        hi_consensus: post_channel::Receiver<T>,
+        hi_consensus_payload: post_channel::Receiver<T>,
+        hi_consensus_chunk: post_channel::Receiver<T>,
+        hi_control: post_channel::Receiver<T>,
+        lo_block_sync: post_channel::Receiver<T>,
+        lo_tx_gossip: post_channel::Receiver<T>,
+        lo_peer_gossip: post_channel::Receiver<T>,
+        lo_health: post_channel::Receiver<T>,
         lo_other: post_channel::Receiver<T>,
     }
 
     #[cfg(test)]
     impl<T: Pload> TestPeerHandleReceivers<T> {
+        /// Receive the next high-priority control-lane message, if any.
+        pub(crate) fn try_recv_high_control(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.hi_control.try_recv()
+        }
+
         /// Receive the next generic-lane message, if any.
         pub(crate) fn try_recv_other(
             &mut self,
         ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
             self.lo_other.try_recv()
+        }
+
+        /// Receive the next message from any synthetic lane, if any.
+        pub(crate) fn try_recv_any(&mut self) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            use tokio::sync::mpsc::error::TryRecvError;
+
+            macro_rules! try_lane {
+                ($lane:expr) => {
+                    match $lane.try_recv() {
+                        Ok(message) => return Ok(message),
+                        Err(TryRecvError::Empty) => {}
+                        Err(error) => return Err(error),
+                    }
+                };
+            }
+
+            try_lane!(self.hi_consensus);
+            try_lane!(self.hi_consensus_payload);
+            try_lane!(self.hi_consensus_chunk);
+            try_lane!(self.hi_control);
+            try_lane!(self.lo_block_sync);
+            try_lane!(self.lo_tx_gossip);
+            try_lane!(self.lo_peer_gossip);
+            try_lane!(self.lo_health);
+            try_lane!(self.lo_other);
+            Err(TryRecvError::Empty)
         }
     }
 
@@ -1769,14 +1808,14 @@ pub mod handles {
                 },
             },
             TestPeerHandleReceivers {
-                _hi_consensus: hi_consensus_rx,
-                _hi_consensus_payload: hi_consensus_payload_rx,
-                _hi_consensus_chunk: hi_consensus_chunk_rx,
-                _hi_control: hi_control_rx,
-                _lo_block_sync: lo_block_sync_rx,
-                _lo_tx_gossip: lo_tx_gossip_rx,
-                _lo_peer_gossip: lo_peer_gossip_rx,
-                _lo_health: lo_health_rx,
+                hi_consensus: hi_consensus_rx,
+                hi_consensus_payload: hi_consensus_payload_rx,
+                hi_consensus_chunk: hi_consensus_chunk_rx,
+                hi_control: hi_control_rx,
+                lo_block_sync: lo_block_sync_rx,
+                lo_tx_gossip: lo_tx_gossip_rx,
+                lo_peer_gossip: lo_peer_gossip_rx,
+                lo_health: lo_health_rx,
                 lo_other: lo_other_rx,
             },
         )
@@ -2583,6 +2622,32 @@ mod run {
         None
     }
 
+    fn high_outbound_pending<T>(
+        hi_control_rx: &post_channel::Receiver<T>,
+        hi_consensus_rx: &post_channel::Receiver<T>,
+        hi_consensus_payload_rx: &post_channel::Receiver<T>,
+        hi_consensus_chunk_rx: &post_channel::Receiver<T>,
+    ) -> bool {
+        !hi_control_rx.is_empty()
+            || !hi_consensus_rx.is_empty()
+            || !hi_consensus_payload_rx.is_empty()
+            || !hi_consensus_chunk_rx.is_empty()
+    }
+
+    fn low_outbound_pending<T>(
+        lo_block_sync_rx: &post_channel::Receiver<T>,
+        lo_tx_gossip_rx: &post_channel::Receiver<T>,
+        lo_peer_gossip_rx: &post_channel::Receiver<T>,
+        lo_health_rx: &post_channel::Receiver<T>,
+        lo_other_rx: &post_channel::Receiver<T>,
+    ) -> bool {
+        !lo_block_sync_rx.is_empty()
+            || !lo_tx_gossip_rx.is_empty()
+            || !lo_peer_gossip_rx.is_empty()
+            || !lo_health_rx.is_empty()
+            || !lo_other_rx.is_empty()
+    }
+
     fn maybe_take_low_after_hi<T>(
         hi_budget: &mut u8,
         low_rr: &mut u8,
@@ -2593,6 +2658,16 @@ mod run {
         lo_other_rx: &mut post_channel::Receiver<T>,
     ) -> Option<(LowTopic, T)> {
         if *hi_budget != 0 {
+            return None;
+        }
+        if !low_outbound_pending(
+            lo_block_sync_rx,
+            lo_tx_gossip_rx,
+            lo_peer_gossip_rx,
+            lo_health_rx,
+            lo_other_rx,
+        ) {
+            *hi_budget = HI_BUDGET_FALLBACK;
             return None;
         }
         if let Some(msg) = try_recv_low_rr(
@@ -2841,6 +2916,8 @@ mod run {
 
             let mut idle_interval = tokio::time::interval_at(Instant::now() + idle_timeout, idle_timeout);
             let mut ping_interval = tokio::time::interval_at(Instant::now() + idle_timeout / 2, idle_timeout / 2);
+            idle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
             // Fairness scheduler: opportunistically service one low-priority topic
             // after processing a burst of high-priority posts. This avoids starving
@@ -2855,7 +2932,14 @@ mod run {
             let mut malformed_payload_streak_low: u32 = 0;
 
             loop {
-                if let Some((topic, msg)) = maybe_take_low_after_hi(
+                let low_pending = low_outbound_pending(
+                    &lo_block_sync_rx,
+                    &lo_tx_gossip_rx,
+                    &lo_peer_gossip_rx,
+                    &lo_health_rx,
+                    &lo_other_rx,
+                );
+                if low_pending && let Some((topic, msg)) = maybe_take_low_after_hi(
                     &mut hi_budget,
                     &mut low_rr,
                     &mut lo_block_sync_rx,
@@ -2913,85 +2997,96 @@ mod run {
                 // `message_sender.send()` step. This reduces per-connection frame rate and tokio
                 // I/O driver churn under load.
                 let mut drained_hi = 0usize;
-                while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
-                    let Some((topic, msg)) = try_recv_high_fair(
-                        &mut hi_control_burst,
-                        &mut hi_consensus_burst,
-                        &mut hi_payload_burst,
-                        &mut hi_availability_burst,
-                        &mut hi_control_rx,
-                        &mut hi_consensus_rx,
-                        &mut hi_consensus_payload_rx,
-                        &mut hi_consensus_chunk_rx,
-                    ) else {
-                        break;
-                    };
-                    iroha_logger::trace!("Post message ({}/drain)", high_topic_label(topic));
-                    if let Err(error) =
-                        message_sender_hi.prepare_message(&Message::Data(msg), Priority::High)
-                    {
-                        iroha_logger::error!(%error, "Failed to encrypt message.");
-                        break;
+                if hi_budget > 0
+                    && high_outbound_pending(
+                        &hi_control_rx,
+                        &hi_consensus_rx,
+                        &hi_consensus_payload_rx,
+                        &hi_consensus_chunk_rx,
+                    )
+                {
+                    while drained_hi < OUTBOUND_DRAIN_HI_MAX {
+                        let Some((topic, msg)) = try_recv_high_fair(
+                            &mut hi_control_burst,
+                            &mut hi_consensus_burst,
+                            &mut hi_payload_burst,
+                            &mut hi_availability_burst,
+                            &mut hi_control_rx,
+                            &mut hi_consensus_rx,
+                            &mut hi_consensus_payload_rx,
+                            &mut hi_consensus_chunk_rx,
+                        ) else {
+                            break;
+                        };
+                        iroha_logger::trace!("Post message ({}/drain)", high_topic_label(topic));
+                        if let Err(error) =
+                            message_sender_hi.prepare_message(&Message::Data(msg), Priority::High)
+                        {
+                            iroha_logger::error!(%error, "Failed to encrypt message.");
+                            break;
+                        }
+                        hi_budget = hi_budget.saturating_sub(1);
+                        drained_hi = drained_hi.saturating_add(1);
                     }
-                    hi_budget = hi_budget.saturating_sub(1);
-                    drained_hi = drained_hi.saturating_add(1);
                 }
 
                 let mut drained_lo = 0usize;
-                while drained_lo < OUTBOUND_DRAIN_LO_MAX {
-                    let Some((topic, m)) = try_recv_low_rr(
-                        &mut low_rr,
-                        &mut lo_block_sync_rx,
-                        &mut lo_tx_gossip_rx,
-                        &mut lo_peer_gossip_rx,
-                        &mut lo_health_rx,
-                        &mut lo_other_rx,
-                    ) else {
-                        break;
-                    };
-                    iroha_logger::trace!("Post message ({}/drain)", low_topic_label(topic));
-                    #[cfg(feature = "quic")]
-                    let sent_datagram = {
-                        let net_topic = m.topic();
-                        if net_topic.is_best_effort() {
-                            if let Some(sender) = datagram_sender.as_mut() {
-                                match sender.try_send(&m) {
-                                    Ok(DatagramSend::Sent { .. }) => true,
-                                    Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
-                                        datagram_sender = None;
-                                        false
+                if low_pending {
+                    while drained_lo < OUTBOUND_DRAIN_LO_MAX {
+                        let Some((topic, m)) = try_recv_low_rr(
+                            &mut low_rr,
+                            &mut lo_block_sync_rx,
+                            &mut lo_tx_gossip_rx,
+                            &mut lo_peer_gossip_rx,
+                            &mut lo_health_rx,
+                            &mut lo_other_rx,
+                        ) else {
+                            break;
+                        };
+                        iroha_logger::trace!("Post message ({}/drain)", low_topic_label(topic));
+                        #[cfg(feature = "quic")]
+                        let sent_datagram = {
+                            let net_topic = m.topic();
+                            if net_topic.is_best_effort() {
+                                if let Some(sender) = datagram_sender.as_mut() {
+                                    match sender.try_send(&m) {
+                                        Ok(DatagramSend::Sent { .. }) => true,
+                                        Ok(DatagramSend::Unsupported | DatagramSend::Disabled) => {
+                                            datagram_sender = None;
+                                            false
+                                        }
+                                        Ok(DatagramSend::TooLarge) => false,
+                                        Err(error) => {
+                                            iroha_logger::error!(
+                                                %error,
+                                                "Failed to send peer datagram."
+                                            );
+                                            break;
+                                        }
                                     }
-                                    Ok(DatagramSend::TooLarge) => false,
-                                    Err(error) => {
-                                        iroha_logger::error!(
-                                            %error,
-                                            "Failed to send peer datagram."
-                                        );
-                                        break;
-                                    }
+                                } else {
+                                    false
                                 }
                             } else {
                                 false
                             }
-                        } else {
-                            false
-                        }
-                    };
-                    #[cfg(not(feature = "quic"))]
-                    let sent_datagram = false;
-                    if !sent_datagram {
-                        let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                            sender.prepare_message(&Message::Data(m), Priority::Low)
-                        } else {
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
                         };
-                        if let Err(error) = prepared {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
+                        #[cfg(not(feature = "quic"))]
+                        let sent_datagram = false;
+                        if !sent_datagram {
+                            let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                                sender.prepare_message(&Message::Data(m), Priority::Low)
+                            } else {
+                                message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                            };
+                            if let Err(error) = prepared {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
                         }
+                        hi_budget = HI_BUDGET_RESET;
+                        drained_lo = drained_lo.saturating_add(1);
                     }
-                    hi_budget = HI_BUDGET_RESET;
-                    drained_lo = drained_lo.saturating_add(1);
                 }
 
                 let consensus_direct_pending = !hi_consensus_rx.is_empty();
@@ -3464,7 +3559,7 @@ mod run {
                 }
 
                 // Opportunistically allow a low-priority message through after bursts of high-priority posts.
-                if hi_budget == 0 {
+                if hi_budget == 0 && low_pending {
                     if let Some((topic, m)) = try_recv_low_rr(
                         &mut low_rr,
                         &mut lo_block_sync_rx,
@@ -3517,7 +3612,9 @@ mod run {
                         iroha_logger::trace!("Post message ({})", low_topic_label(topic));
                     }
                 }
-                tokio::task::yield_now().await;
+                if drained_hi > 0 || drained_lo > 0 {
+                    tokio::task::yield_now().await;
+                }
             }
         }.await;
 
@@ -4133,6 +4230,15 @@ mod run {
             let chunk = &self.batch[self.batch_offset..];
             if !chunk.is_empty() {
                 let n = self.write.write(chunk).await?;
+                if n == 0 {
+                    return Err(Error::Io(
+                        std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "failed to write encrypted peer frame",
+                        )
+                        .into(),
+                    ));
+                }
                 self.batch_offset = self.batch_offset.saturating_add(n);
             }
             if self.batch_offset >= self.batch.len() {
@@ -4717,6 +4823,8 @@ mod run {
             buffer: Arc<Mutex<Vec<u8>>>,
         }
 
+        struct ZeroWrite;
+
         impl AsyncWrite for TrackingWrite {
             fn poll_write(
                 self: Pin<&mut Self>,
@@ -4754,6 +4862,30 @@ mod run {
                 let mut buffer = self.buffer.lock().expect("buffer lock");
                 buffer.extend_from_slice(buf);
                 Poll::Ready(Ok(buf.len()))
+            }
+
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for ZeroWrite {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Ready(Ok(0))
             }
 
             fn poll_flush(
@@ -4816,6 +4948,23 @@ mod run {
             let stats = stats.lock().expect("stats lock");
             assert!(stats.writes > 0, "expected at least one write");
             assert!(stats.flushes > 0, "expected at least one flush");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_rejects_zero_byte_write() {
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[31u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(Box::new(ZeroWrite), cryptographer, 1024);
+
+            sender
+                .prepare_message(&Message::Data(Dummy), Priority::High)
+                .expect("prepare message");
+            let error = sender.send().await.expect_err("zero-byte write must fail");
+            match error {
+                Error::Io(error) => assert_eq!(error.kind(), std::io::ErrorKind::WriteZero),
+                other => panic!("expected WriteZero I/O error, got {other:?}"),
+            }
         }
 
         #[test]
