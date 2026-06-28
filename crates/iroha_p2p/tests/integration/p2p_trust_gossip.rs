@@ -87,6 +87,8 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         ),
         deferred_send_max_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+        deferred_send_max_bytes_per_peer:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: TRUST_DECAY_HALF_LIFE,
@@ -122,6 +124,14 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         p2p_queue_cap_high: NonZeroUsize::new(4096).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(4096).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(1024).expect("non-zero"),
+        p2p_outbound_frame_queue_max_high_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+        p2p_outbound_frame_queue_max_low_bytes:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+        p2p_outbound_frame_queue_max_high_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+        p2p_outbound_frame_queue_max_low_frames:
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
         p2p_subscriber_queue_cap:
             iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
         consensus_ingress_rate_per_sec:

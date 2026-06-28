@@ -974,7 +974,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    da::proof_policy_bundle_hash,
     executor::{charge_fees_for_applied_overlay_with_encoded_len, configure_executor_fuel_budget},
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
@@ -3108,27 +3107,26 @@ mod new {
 
     impl From<NewBlock> for SignedBlock {
         fn from(block: NewBlock) -> Self {
-            let mut transactions = Vec::new();
             let mut external_entrypoints = Vec::with_capacity(block.transactions.len());
             for accepted in block.transactions {
-                external_entrypoints.push(accepted.entrypoint().clone());
-                if let Some(signed) = accepted.external().cloned() {
-                    transactions.push(signed);
-                }
+                external_entrypoints.push(accepted.into_entrypoint());
             }
-            let mut signed_block = SignedBlock::presigned_with_da(
+            SignedBlock::presigned_with_payload(
                 block.signature,
-                block.header,
-                transactions,
-                block.da_commitments,
-            );
-            signed_block.set_external_entrypoints(external_entrypoints);
-            signed_block.set_da_proof_policies(block.da_proof_policies);
-            signed_block.set_da_pin_intents(block.da_pin_intents);
-            signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
-            signed_block.set_npos_consensus_effects(block.npos_consensus_effects);
-            signed_block.set_execution_context(block.execution_context);
-            signed_block
+                BlockPayload {
+                    header: block.header,
+                    // `external_entrypoints` is the canonical V1 payload store; keeping the
+                    // skipped legacy cache here doubles pending block transaction memory.
+                    transactions: Vec::new(),
+                    external_entrypoints,
+                    execution_context: block.execution_context,
+                    da_commitments: block.da_commitments,
+                    da_proof_policies: block.da_proof_policies,
+                    da_pin_intents: block.da_pin_intents,
+                    previous_roster_evidence: block.previous_roster_evidence,
+                    npos_consensus_effects: block.npos_consensus_effects,
+                },
+            )
         }
     }
 
@@ -3145,7 +3143,7 @@ mod new {
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         #[test]
-        fn into_signed_block_preserves_transactions() {
+        fn into_signed_block_preserves_external_transactions_without_legacy_cache() {
             let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
 
@@ -3177,7 +3175,14 @@ mod new {
                 .unpack(|_| {});
 
             let signed_block: SignedBlock = new_block.into();
-            assert_eq!(signed_block.transactions_vec(), &expected);
+            assert!(
+                signed_block.transactions_vec().is_empty(),
+                "new blocks should not retain the skipped legacy transaction cache"
+            );
+            assert_eq!(
+                signed_block.external_transactions().collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>()
+            );
         }
 
         #[test]
@@ -3256,7 +3261,14 @@ mod new {
                 .unpack(|_| {});
 
             let signed_block: SignedBlock = new_block.into();
-            assert_eq!(signed_block.transactions_vec(), &expected);
+            assert!(
+                signed_block.transactions_vec().is_empty(),
+                "new blocks should not retain the skipped legacy transaction cache"
+            );
+            assert_eq!(
+                signed_block.external_transactions().collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>()
+            );
         }
     }
 }
@@ -5815,7 +5827,7 @@ pub(crate) mod valid {
             )?;
 
             let nexus = state.nexus();
-            let expected_policy_hash = proof_policy_bundle_hash(&nexus.lane_config);
+            let expected_policy_hash = crate::da::active_proof_policy_bundle_hash(nexus);
             if block.header().da_proof_policies_hash() != Some(expected_policy_hash) {
                 return Err(BlockValidationError::ProofPolicyHashMismatch {
                     expected: expected_policy_hash,
@@ -5952,9 +5964,11 @@ pub(crate) mod valid {
             };
 
             let world = state.world();
-            crate::da::validate_pin_intent_bundle(bundle, &state.nexus().lane_config, |account| {
-                world.accounts().get(account).is_some()
-            })?;
+            crate::da::validate_pin_intent_bundle_against_nexus(
+                bundle,
+                state.nexus(),
+                |account| world.accounts().get(account).is_some(),
+            )?;
             for intent in &bundle.intents {
                 if world
                     .da_pin_intents_by_lane_epoch()
@@ -14594,6 +14608,91 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_rejects_stale_geometry_da_proof_policy_hash() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let stale_lane = LaneId::new(1);
+            let stale_geometry_catalog = LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: stale_lane,
+                        alias: "stale-proof-policy".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("stale derived geometry catalog");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.lane_catalog = LaneCatalog::default();
+                nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
+                    &stale_geometry_catalog,
+                );
+            }
+
+            let stale_policies =
+                crate::da::proof_policy_bundle(&state.nexus_snapshot().lane_config);
+            let expected_policy_hash =
+                crate::da::active_proof_policy_bundle_hash(&state.nexus_snapshot());
+            let stale_policy_hash = Some(HashOf::new(&stale_policies));
+            assert_ne!(
+                stale_policy_hash,
+                Some(expected_policy_hash),
+                "stale derived geometry must produce a distinct DA proof-policy hash"
+            );
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_proof_policies(Some(stale_policies))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+
+            let view = state.query_view();
+            let err = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect_err("stale derived geometry must not satisfy DA proof-policy hash validation");
+
+            assert!(matches!(
+                err,
+                BlockValidationError::ProofPolicyHashMismatch { expected, actual }
+                    if expected == expected_policy_hash && actual == stale_policy_hash
+            ));
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -15051,6 +15150,185 @@ pub(crate) mod valid {
                 BlockValidationError::DaCommitmentBundle(DaCommitmentValidationError::ProofPolicy(
                     crate::da::DaProofPolicyError::UnknownLane { .. }
                 ))
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_stale_geometry_da_commitment_lane() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let stale_lane = LaneId::new(1);
+            let stale_geometry_catalog = LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: stale_lane,
+                        alias: "stale-da-commitment".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("stale derived geometry catalog");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.lane_catalog = LaneCatalog::default();
+                nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
+                    &stale_geometry_catalog,
+                );
+            }
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let record = DaCommitmentRecord::new(
+                stale_lane,
+                1,
+                1,
+                BlobDigest::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+                DaProofScheme::MerkleSha256,
+                Hash::prehashed([0xCC; 32]),
+                None,
+                None,
+                RetentionClass::default(),
+                StorageTicketId::new([0xEE; 32]),
+                Signature::from_bytes(&[0x11; 64]),
+            );
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_commitments(Some(DaCommitmentBundle::new(vec![record])))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected stale-geometry DA commitment rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaCommitmentBundle(DaCommitmentValidationError::ProofPolicy(
+                    crate::da::DaProofPolicyError::UnknownLane { lane }
+                )) if *lane == stale_lane
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_stale_geometry_da_pin_intent_lane() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let stale_lane = LaneId::new(1);
+            let stale_geometry_catalog = LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: stale_lane,
+                        alias: "stale-da-pin-intent".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("stale derived geometry catalog");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.lane_catalog = LaneCatalog::default();
+                nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
+                    &stale_geometry_catalog,
+                );
+            }
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let intent = DaPinIntent::new(
+                stale_lane,
+                1,
+                1,
+                StorageTicketId::new([0xAA; 32]),
+                ManifestDigest::new([0xBB; 32]),
+            );
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected stale-geometry DA pin-intent rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::UnknownLane {
+                    lane
+                }) if *lane == stale_lane
             ));
         }
 
@@ -20455,6 +20733,202 @@ mod tests {
                 .expect_err("bad signer bitmap must fail")
                 .contains("signer bitmap length mismatch")
         );
+    }
+
+    #[test]
+    fn native_amx_receipt_validation_rejects_participant_set_drift() {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let (tx, tx_hash) =
+            signed_domain_registration_tx(&[("merchant", "paynet"), ("treasury", "cbuae")]);
+        let dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+            vec![
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(1), paynet),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    crate::queue::RoutingDecision::new(LaneId::new(2), cbuae),
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let (world, keypairs) = native_amx_test_world_with_keys();
+        let world_view = world.view();
+        let entrypoint_hash = tx.hash_as_entrypoint();
+        let mut source_id = [0u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx_hash.as_ref());
+        let receipt =
+            signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
+        let validate = |receipt: &NativeAmxReceipt| {
+            validate_native_amx_receipt_against_plan(
+                receipt,
+                entrypoint_hash,
+                &routing_plan,
+                source_id,
+                42,
+                &dataspace_catalog,
+                &world_view,
+            )
+        };
+
+        let mut duplicate_participant = receipt.clone();
+        duplicate_participant.legs[1] = duplicate_participant.legs[0].clone();
+        assert!(
+            validate(&duplicate_participant)
+                .expect_err("duplicate participant leg must fail")
+                .contains("duplicates participant"),
+            "duplicate native AMX participant legs must fail before QC material can be reused"
+        );
+
+        let mut unexpected_participant = receipt;
+        unexpected_participant.legs[1].lane_id = LaneId::new(99);
+        unexpected_participant.legs[1].dataspace_id = DataSpaceId::new(99);
+        assert!(
+            validate(&unexpected_participant)
+                .expect_err("unexpected participant leg must fail")
+                .contains("unexpected participant lane 99 dataspace 99"),
+            "native AMX receipts must not add participant legs outside the canonical routing plan"
+        );
+    }
+
+    #[test]
+    fn native_amx_receipt_survives_into_lane_settlement_status() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus status test lock");
+        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let chain_id = ChainId::from("native-amx-settlement-status-test");
+        let (authority, signer) = gen_account_in("wonderland");
+        let authority_domain = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(authority_domain.clone()).build(&authority);
+        let (mut world, keypairs) = native_amx_test_world_with_keys();
+        world.domains.insert(authority_domain, domain);
+        world.accounts.insert(
+            authority.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = LaneCatalog::new(
+                nonzero!(4_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: LaneId::new(1),
+                        dataspace_id: paynet,
+                        alias: "paynet".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: LaneId::new(2),
+                        dataspace_id: cbuae,
+                        alias: "cbuae".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
+        }
+
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            authority.clone(),
+            &time_source,
+        )
+        .with_instructions([
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "paynet").expect("domain id"),
+            ))),
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("treasury", "cbuae").expect("domain id"),
+            ))),
+        ])
+        .sign(signer.private_key());
+        let accepted_for_plan = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+        let plan = {
+            let view = state.view();
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                &view.nexus,
+                &accepted_for_plan,
+                view.world(),
+                u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+            )
+            .expect("mixed dataspace write targets should build a native AMX plan")
+        };
+        assert!(matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)));
+        let block_height = 1;
+        let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
+        source_id.copy_from_slice(tx.hash().as_ref());
+        let receipt = signed_native_amx_receipt(
+            source_id,
+            tx.hash_as_entrypoint(),
+            &plan,
+            block_height,
+            &keypairs,
+        );
+        let context =
+            crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
+                .with_native_amx_receipt(receipt.clone());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        time_handle.advance(Duration::from_millis(1));
+
+        let block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
+            .chain(0, state.view().latest_block().as_deref())
+            .with_execution_context(Some(BlockExecutionContextBundle::new(vec![context])))
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {});
+        assert_eq!(block.header().height().get(), block_height);
+        let mut state_block = state.block(block.header());
+        let valid_block = block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        assert!(
+            valid_block
+                .as_ref()
+                .entrypoint_results()
+                .all(|(_, _, result)| result.0.is_ok()),
+            "native AMX transaction should execute successfully: {:?}",
+            valid_block
+                .as_ref()
+                .entrypoint_results()
+                .collect::<Vec<_>>()
+        );
+
+        let snapshot = crate::sumeragi::status::snapshot();
+        assert_eq!(snapshot.lane_settlement_commitments.len(), 1);
+        let commitment = &snapshot.lane_settlement_commitments[0];
+        assert_eq!(commitment.tx_count, 1);
+        assert_eq!(commitment.native_amx_receipts, vec![receipt]);
+        assert_eq!(
+            commitment.lane_id,
+            plan.coordinator_route().lane_id,
+            "settlement status must use the native AMX coordinator lane"
+        );
+        assert_eq!(
+            commitment.dataspace_id,
+            plan.coordinator_route().dataspace_id,
+            "settlement status must use the native AMX coordinator dataspace"
+        );
+
+        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
     }
 
     fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {

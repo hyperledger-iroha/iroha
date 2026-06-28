@@ -11,6 +11,7 @@ import io
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
@@ -1743,6 +1744,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             (android_raw_puller._command_disruption_errors, "raw pull command", "SERIAL-789"),
         )
         cases = (
+            ("mixed-case adb token", ("KiLl-SeRvEr",)),
+            ("mixed-case adb sequence", ("SHELL", "AM", "FORCE-STOP", "pkg")),
             ("pm enable", ("shell", "pm", "enable", "pkg")),
             ("pm suspend", ("shell", "pm", "suspend", "pkg")),
             ("pm unsuspend", ("shell", "pm", "unsuspend", "pkg")),
@@ -1764,6 +1767,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(len(errors), 1)
                     self.assertIn("must not manage other running jobs", rendered)
                     self.assertNotIn(serial, rendered)
+
+        for validator, label, _serial in helpers:
+            with self.subTest(label=label, case="mixed-case kill executable path"):
+                errors = validator(["/BIN/KiLl", "1234"], label)
+                rendered = "\n".join(errors)
+
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must not manage other running jobs", rendered)
 
         self.assertEqual(
             android_capture_helper._command_disruption_errors(
@@ -20549,6 +20560,275 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(blocker["section"], "abi6_reserved_lineage")
         self.assertIn("did not report blockers", blocker["message"])
 
+    def test_build_summary_blocks_ready_section_with_reported_blockers(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        inconsistent_section = {
+            "ok": True,
+            "blockers": [
+                readiness.blocker(
+                    "synthetic_section_blocker",
+                    "synthetic section blocker",
+                )
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=inconsistent_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        self.assertIn(
+            "synthetic_section_blocker",
+            {item["code"] for item in summary["blockers"]},
+        )
+        blocker = next(
+            item
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_inconsistent"
+        )
+        self.assertEqual(blocker["section"], "lineage_key_release_tooling")
+        self.assertIn("reported blockers while marked ready", blocker["message"])
+
+    def test_build_summary_blocks_non_object_section(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = ["not", "a", "section"]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        self.assertIsInstance(summary["compact_key_evidence"], dict)
+        self.assertFalse(summary["compact_key_evidence"]["ok"])
+        blocker = next(
+            item
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_shape"
+        )
+        self.assertEqual(blocker["section"], "compact_key_evidence")
+        self.assertIn("section must be a JSON object", blocker["message"])
+
+    def test_build_summary_blocks_mapping_subclass_section_without_access(
+        self,
+    ) -> None:
+        class HostileMapping(Mapping[object, object]):
+            def __getitem__(self, key: object) -> object:
+                raise AssertionError("hostile section mapping access must not run")
+
+            def __iter__(self):
+                raise AssertionError("hostile section mapping iteration must not run")
+
+            def __len__(self) -> int:
+                raise AssertionError("hostile section mapping length must not run")
+
+        ready_section = {"ok": True, "blockers": []}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=HostileMapping(),
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+
+        self.assertFalse(summary["ready"])
+        self.assertFalse(summary["lineage_proof_evidence"]["ok"])
+        blocker = next(
+            item
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_shape"
+        )
+        self.assertEqual(blocker["section"], "lineage_proof_evidence")
+        self.assertIn("section must be a JSON object", rendered)
+        self.assertNotIn("hostile section mapping", rendered)
+
+    def test_build_summary_blocks_non_boolean_section_ok(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {"ok": "true", "blockers": []}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        self.assertIsInstance(summary["localnet_lifecycle_evidence"], dict)
+        self.assertFalse(summary["localnet_lifecycle_evidence"]["ok"])
+        blocker = next(
+            item
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_ok_shape"
+        )
+        self.assertEqual(blocker["section"], "localnet_lifecycle_evidence")
+        self.assertIn("ok must be a JSON boolean", blocker["message"])
+
     def test_build_summary_blocks_malformed_section_blockers(self) -> None:
         ready_section = {"ok": True, "blockers": []}
         malformed_section = {"ok": False, "blockers": {"code": "hidden"}}
@@ -20608,6 +20888,1141 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertEqual(blocker["section"], "abi7_recursive_compact")
         self.assertIn("blockers must be a JSON array", blocker["message"])
+
+    def test_build_summary_blocks_list_subclass_section_blockers_without_access(
+        self,
+    ) -> None:
+        class HostileList(list[object]):
+            def __iter__(self):
+                raise AssertionError("hostile blockers list iteration must not run")
+
+            def __len__(self) -> int:
+                raise AssertionError("hostile blockers list length must not run")
+
+            def __bool__(self) -> bool:
+                raise AssertionError("hostile blockers list truthiness must not run")
+
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {"ok": False, "blockers": HostileList()}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+
+        self.assertFalse(summary["ready"])
+        blocker = next(
+            item
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blockers_shape"
+        )
+        self.assertEqual(blocker["section"], "compact_key_evidence")
+        self.assertIn("blockers must be a JSON array", rendered)
+        self.assertNotIn("hostile blockers list", rendered)
+
+    def test_build_summary_filters_malformed_section_blocker_entries(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                "raw blocker",
+                {"code": "", "message": "empty code"},
+                {"code": "empty_message", "message": ""},
+                {"code": "valid_section_blocker", "message": "valid blocker"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        for item in summary["blockers"]:
+            self.assertIsInstance(item, dict)
+            self.assertIsInstance(item["code"], str)
+            self.assertIsInstance(item["message"], str)
+        for item in summary["android_device_lab"]["blockers"]:
+            self.assertIsInstance(item, dict)
+            self.assertIsInstance(item["code"], str)
+            self.assertIsInstance(item["message"], str)
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_shape", codes)
+        rendered = json.dumps(summary["blockers"], sort_keys=True)
+        self.assertNotIn("raw blocker", rendered)
+        section_rendered = json.dumps(
+            summary["android_device_lab"]["blockers"],
+            sort_keys=True,
+        )
+        self.assertNotIn("raw blocker", section_rendered)
+        observed = {
+            (item["section"], item.get("index"), item.get("field"))
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blocker_shape"
+        }
+        self.assertEqual(
+            observed,
+            {
+                ("android_device_lab", 0, None),
+                ("android_device_lab", 1, "code"),
+                ("android_device_lab", 2, "message"),
+            },
+        )
+
+    def test_build_summary_blocks_mapping_subclass_blocker_without_access(
+        self,
+    ) -> None:
+        class HostileMapping(Mapping[object, object]):
+            def __getitem__(self, key: object) -> object:
+                raise AssertionError("hostile blocker mapping access must not run")
+
+            def __iter__(self):
+                raise AssertionError("hostile blocker mapping iteration must not run")
+
+            def __len__(self) -> int:
+                raise AssertionError("hostile blocker mapping length must not run")
+
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                HostileMapping(),
+                {"code": "valid_section_blocker", "message": "valid blocker"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_shape", codes)
+        observed = {
+            (item.get("section"), item.get("index"), item.get("field"))
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blocker_shape"
+        }
+        self.assertEqual(observed, {("android_device_lab", 0, None)})
+        self.assertIn("blocker 0 must be a JSON object", rendered)
+        self.assertNotIn("hostile blocker mapping", rendered)
+
+    def test_build_summary_normalizes_non_json_section_blocker_extras(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            malformed_section = {
+                "ok": False,
+                "blockers": [
+                    {
+                        "code": "valid_section_blocker",
+                        "message": "valid blocker with unsafe extras",
+                        "path": root / "hidden-release-path",
+                        "numbers": [1, float("nan")],
+                        "nested": {1: "non-string key", "safe": "value"},
+                        "token=supersecret": "blocker unsafe field value must not leak",
+                        "debug\x1b[31m": "blocker unsafe control value must not leak",
+                    },
+                ],
+            }
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        self.assertEqual(written["status"], "blocked")
+        self.assertIn("must be strict JSON", rendered)
+        self.assertIn(readiness.EVIDENCE_UNSUPPORTED_VALUE_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION, rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn(str(root), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("debug\x1b[31m", rendered)
+        self.assertNotIn("blocker unsafe field value must not leak", rendered)
+        self.assertNotIn("blocker unsafe control value must not leak", rendered)
+        self.assertNotIn("\\u001b", rendered)
+
+    def test_build_summary_blocks_colliding_sanitized_section_blocker_extra_fields(
+        self,
+    ) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {
+                    "code": "valid_section_blocker",
+                    "message": "valid blocker with colliding unsafe extras",
+                    "token=first-secret": "first blocker collision value must not leak",
+                    "secret=second-secret": (
+                        "second blocker collision value must not leak"
+                    ),
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        self.assertEqual(written["status"], "blocked")
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        valid_blocker = next(
+            item
+            for item in summary["android_device_lab"]["blockers"]
+            if item["code"] == "valid_section_blocker"
+        )
+        self.assertEqual(
+            valid_blocker[slot_helpers.device_lab.SECRET_PATH_REDACTION],
+            readiness.EVIDENCE_UNSUPPORTED_VALUE_REDACTION,
+        )
+        self.assertIn("blocker 0 must be strict JSON", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_UNSUPPORTED_VALUE_REDACTION, rendered)
+        self.assertNotIn("token=first-secret", rendered)
+        self.assertNotIn("secret=second-secret", rendered)
+        self.assertNotIn("first blocker collision value must not leak", rendered)
+        self.assertNotIn("second blocker collision value must not leak", rendered)
+
+    def test_build_summary_normalizes_recursive_section_json_values(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        blocker_cycle: list[object] = []
+        blocker_cycle.append(blocker_cycle)
+        section_cycle: dict[str, object] = {}
+        section_cycle["self"] = section_cycle
+        blocker_deep: object = "deep blocker value must not leak"
+        section_deep: object = "deep section value must not leak"
+        for _ in range(readiness.READINESS_JSON_MAX_DEPTH + 2):
+            blocker_deep = [blocker_deep]
+            section_deep = [section_deep]
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {
+                    "code": "valid_section_blocker",
+                    "message": "valid blocker",
+                    "cycle": blocker_cycle,
+                    "deep": blocker_deep,
+                },
+            ],
+            "cycle": section_cycle,
+            "deep": section_deep,
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        self.assertEqual(written["status"], "blocked")
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_json_shape", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        self.assertIn(readiness.EVIDENCE_UNSUPPORTED_VALUE_REDACTION, rendered)
+        self.assertNotIn("deep blocker value must not leak", rendered)
+        self.assertNotIn("deep section value must not leak", rendered)
+
+    def test_build_summary_rejects_tuple_section_json_values(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {
+                    "code": "valid_section_blocker",
+                    "message": "valid blocker",
+                    "tuple_value": ("tuple blocker value must not leak",),
+                },
+            ],
+            "tuple_value": ("tuple section value must not leak",),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        self.assertEqual(written["status"], "blocked")
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_json_shape", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        self.assertIn(readiness.EVIDENCE_UNSUPPORTED_VALUE_REDACTION, rendered)
+        self.assertNotIn("tuple blocker value must not leak", rendered)
+        self.assertNotIn("tuple section value must not leak", rendered)
+
+    def test_build_summary_drops_section_blockers_with_unsafe_identity(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {
+                    "code": "token=supersecret-code",
+                    "message": "unsafe code blocker identity must not leak",
+                },
+                {
+                    "code": "unsafe_message_blocker",
+                    "message": "token=supersecret-message",
+                },
+                {
+                    "code": "control_code\x1b[31m",
+                    "message": "unsafe control code identity must not leak",
+                },
+                {
+                    "code": "unsafe_control_message",
+                    "message": "control message \x1b[31m",
+                },
+                {
+                    "code": "valid_section_blocker",
+                    "message": "valid blocker",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        section_codes = {
+            item["code"] for item in summary["compact_key_evidence"]["blockers"]
+        }
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        self.assertNotIn("unsafe_message_blocker", codes)
+        self.assertNotIn("unsafe_control_message", codes)
+        self.assertNotIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, codes)
+        self.assertNotIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, codes)
+        self.assertEqual(section_codes, codes)
+        self.assertFalse(written["compact_key_evidence"]["ok"])
+        observed = {
+            (item.get("index"), item.get("field"))
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blocker_json_shape"
+        }
+        self.assertEqual(
+            observed,
+            {
+                (0, "code"),
+                (1, "message"),
+                (2, "code"),
+                (3, "message"),
+            },
+        )
+        self.assertIn("code must be strict JSON", rendered)
+        self.assertIn("message must be strict JSON", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("unsafe code blocker identity must not leak", rendered)
+        self.assertNotIn("unsafe control code identity must not leak", rendered)
+        self.assertNotIn("unsafe_message_blocker", rendered)
+        self.assertNotIn("unsafe_control_message", rendered)
+        self.assertNotIn("\\u001b", rendered)
+
+    def test_build_summary_rejects_blank_or_padded_section_blocker_identity(
+        self,
+    ) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {"code": "   ", "message": "blank code must not survive"},
+                {
+                    "code": " padded_code ",
+                    "message": "padded code must not survive",
+                },
+                {
+                    "code": "padded_message",
+                    "message": " padded message must not survive ",
+                },
+                {"code": "valid_section_blocker", "message": "valid blocker"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_shape", codes)
+        self.assertNotIn("padded_code", codes)
+        self.assertNotIn("padded_message", codes)
+        self.assertFalse(written["localnet_lifecycle_evidence"]["ok"])
+        observed = {
+            (item.get("index"), item.get("field"))
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blocker_shape"
+        }
+        self.assertEqual(
+            observed,
+            {
+                (0, "code"),
+                (1, "code"),
+                (2, "message"),
+            },
+        )
+        self.assertIn("code must be a non-empty trimmed string", rendered)
+        self.assertIn("message must be a non-empty trimmed string", rendered)
+        self.assertNotIn("blank code must not survive", rendered)
+        self.assertNotIn("padded code must not survive", rendered)
+        self.assertNotIn("padded message must not survive", rendered)
+
+    def test_build_summary_rejects_hostile_string_subclass_blocker_identity(
+        self,
+    ) -> None:
+        class HostileString(str):
+            def __eq__(self, other: object) -> bool:
+                raise AssertionError("hostile blocker string equality must not run")
+
+            def strip(self, chars: str | None = None) -> str:
+                raise AssertionError("hostile blocker string strip must not run")
+
+        ready_section = {"ok": True, "blockers": []}
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {
+                    "code": HostileString("hostile_code_subclass"),
+                    "message": "hostile code subclass must not leak",
+                },
+                {
+                    "code": "hostile_message_subclass",
+                    "message": HostileString("hostile message subclass must not leak"),
+                },
+                {"code": "valid_section_blocker", "message": "valid blocker"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_shape", codes)
+        self.assertNotIn("hostile_code_subclass", rendered)
+        self.assertNotIn("hostile code subclass must not leak", rendered)
+        self.assertNotIn("hostile_message_subclass", codes)
+        self.assertNotIn("hostile message subclass must not leak", rendered)
+        observed = {
+            (item.get("section"), item.get("index"), item.get("field"))
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blocker_shape"
+        }
+        self.assertEqual(
+            observed,
+            {
+                ("compact_key_evidence", 0, "code"),
+                ("compact_key_evidence", 1, "message"),
+            },
+        )
+
+    def test_build_summary_normalizes_non_json_section_extra_fields(self) -> None:
+        ready_section = {"ok": True, "blockers": []}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            malformed_section = {
+                "ok": False,
+                "blockers": [
+                    {
+                        "code": "valid_section_blocker",
+                        "message": "valid blocker",
+                    },
+                ],
+                "path": root / "hidden-release-path",
+                "numbers": [1, float("nan")],
+                "nested": {1: "non-string key", "safe": "value"},
+                "token=supersecret": "section unsafe field value must not leak",
+                "debug\x1b[31m": "section unsafe control value must not leak",
+                1: "non-string section key",
+            }
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=malformed_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=ready_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["status"], "blocked")
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_json_shape", codes)
+        self.assertFalse(written["lineage_proof_evidence"]["ok"])
+        self.assertIn("section field must be strict JSON", rendered)
+        self.assertIn("section field key must be a JSON string", rendered)
+        self.assertIn(readiness.EVIDENCE_UNSUPPORTED_VALUE_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_NONFINITE_NUMBER_REDACTION, rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertIn(readiness.EVIDENCE_CONTROL_STRING_REDACTION, rendered)
+        self.assertNotIn(str(root), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn("debug\x1b[31m", rendered)
+        self.assertNotIn("section unsafe field value must not leak", rendered)
+        self.assertNotIn("section unsafe control value must not leak", rendered)
+        self.assertNotIn("\\u001b", rendered)
+
+    def test_build_summary_rejects_hostile_non_string_section_key_without_equality(
+        self,
+    ) -> None:
+        class HostileKey:
+            def __hash__(self) -> int:
+                return id(self)
+
+            def __eq__(self, other: object) -> bool:
+                raise AssertionError("non-string section key equality must not run")
+
+        ready_section = {"ok": True, "blockers": []}
+        hostile_key = HostileKey()
+        malformed_section = {
+            "ok": False,
+            "blockers": [
+                {
+                    "code": "valid_section_blocker",
+                    "message": "valid blocker",
+                },
+            ],
+            hostile_key: "hostile section key value must not leak",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_json_shape", codes)
+        self.assertIn("section field key must be a JSON string", rendered)
+        self.assertNotIn("hostile section key value must not leak", rendered)
+
+    def test_build_summary_rejects_hostile_non_string_blocker_key_without_equality(
+        self,
+    ) -> None:
+        class HostileKey:
+            armed = False
+
+            def __hash__(self) -> int:
+                return hash("code")
+
+            def __eq__(self, other: object) -> bool:
+                if self.armed:
+                    raise AssertionError("non-string blocker key equality must not run")
+                return False
+
+        ready_section = {"ok": True, "blockers": []}
+        hostile_key = HostileKey()
+        malformed_blocker = {
+            hostile_key: "hostile blocker key value must not leak",
+            "code": "valid_section_blocker",
+            "message": "valid blocker",
+        }
+        hostile_key.armed = True
+        malformed_section = {"ok": False, "blockers": [malformed_blocker]}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                mock.patch.object(
+                    readiness,
+                    "check_abi6_reserved_lineage",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_abi7_fail_closed",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_key_release_tooling",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_lineage_proof_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_compact_key_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_localnet_lifecycle_evidence",
+                    return_value=ready_section,
+                ),
+                mock.patch.object(
+                    readiness,
+                    "check_android_device_lab",
+                    return_value=malformed_section,
+                ),
+            ):
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=root / "device-lab",
+                    lineage_proof_evidence_path=root
+                    / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME,
+                    trusted_signer_public_keys={},
+                )
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("valid_section_blocker", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        self.assertIn("blocker 0 must be strict JSON", rendered)
+        self.assertNotIn("hostile blocker key value must not leak", rendered)
 
     def test_android_rollup_missing_trusted_signer_blocks_before_slot_discovery(
         self,
@@ -29772,6 +31187,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             write_compact_key_execution_report(staged_artifact_dir)
             write_compact_key_staged_run_report(staged_artifact_dir)
             exit_file.write_text("0\n", encoding="utf-8")
+            temp_generator_log = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            temp_execution_report = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.EXECUTION_REPORT_FILENAME}.staged-runner.tmp"
+            )
+            temp_generator_log.write_text("stale compact temp log\n", encoding="utf-8")
+            temp_execution_report.write_text(
+                "stale compact execution temp\n",
+                encoding="utf-8",
+            )
             args = compact_key_staged_runner.parse_args(
                 [
                     "--staged-artifact-dir",
@@ -29789,9 +31217,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 args,
                 runner=forbidden_runner,
             )
+            temp_generator_log_exists = temp_generator_log.exists()
+            temp_execution_report_exists = temp_execution_report.exists()
 
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
+        self.assertFalse(temp_generator_log_exists)
+        self.assertFalse(temp_execution_report_exists)
 
     def test_compact_key_staged_runner_resume_reruns_on_noncanonical_exit_marker(
         self,
@@ -31067,6 +32499,100 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(temp_exists)
         self.assertEqual(final_log_text, "replacement compact log\n")
+
+    def test_compact_key_staged_runner_resume_removes_stale_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            temp_log = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            temp_log.write_text("stale interrupted compact keygen log\n", encoding="utf-8")
+            exit_file = root / "staged.exit"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+
+            def fake_runner(
+                _command: list[str],
+                cwd: Path,
+                log_path: Path,
+            ) -> int:
+                self.assertEqual(log_path, temp_log)
+                self.assertFalse(log_path.exists())
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            temp_exists = temp_log.exists()
+            final_log = staged_artifact_dir / compact_key_staged_runner.GENERATOR_LOG_FILENAME
+            final_log_is_file = final_log.is_file()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertFalse(temp_exists)
+        self.assertTrue(final_log_is_file)
+
+    def test_compact_key_staged_runner_resume_rejects_symlinked_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            temp_log = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            target = root / "temp-target.log"
+            target.write_text("do not remove\n", encoding="utf-8")
+            temp_log.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, temp_log, target)
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--resume-keygen",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after unsafe temp log")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            [
+                (
+                    "staged recursive compact key generator log temporary output "
+                    "must not be a symlink"
+                )
+            ],
+        )
+        self.assertEqual(target_text, "do not remove\n")
 
     def test_compact_key_staged_runner_rejects_symlinked_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -33928,6 +35454,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
             ).write_text("generated init lineage keys\n", encoding="utf-8")
             write_lineage_execution_report(staged_artifact_dir, "init")
+            init_temp_log = (
+                staged_artifact_dir
+                / (
+                    f".{lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES['init']}"
+                    ".staged-runner.tmp"
+                )
+            )
+            proof_temp_execution_report = (
+                staged_artifact_dir
+                / (
+                    f".{lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES['proof']}"
+                    ".staged-runner.tmp"
+                )
+            )
+            init_temp_log.write_text("stale init temp log\n", encoding="utf-8")
+            proof_temp_execution_report.write_text(
+                "stale proof execution temp\n",
+                encoding="utf-8",
+            )
             args = lineage_staged_runner.parse_args(
                 [
                     "--repo-root",
@@ -33974,6 +35519,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["init"]
                 ).read_text(encoding="utf-8")
             )
+            init_temp_log_exists = init_temp_log.exists()
+            proof_temp_execution_report_exists = proof_temp_execution_report.exists()
 
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
@@ -33989,6 +35536,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
         self.assertEqual(init_execution_report["exit_code"], 0)
+        self.assertFalse(init_temp_log_exists)
+        self.assertFalse(proof_temp_execution_report_exists)
 
     def test_lineage_proof_staged_runner_redacts_control_duplicate_execution_key(
         self,
@@ -35707,6 +37256,198 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(temp_exists)
         self.assertEqual(final_log_text, "replacement lineage log\n")
+
+    def test_lineage_proof_staged_runner_resume_removes_stale_keygen_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            log_name = lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            temp_log = staged_artifact_dir / f".{log_name}.staged-runner.tmp"
+            temp_log.write_text("stale interrupted lineage log\n", encoding="utf-8")
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(
+                command: list[str],
+                _cwd: Path,
+                log_path: Path,
+            ) -> int:
+                calls.append(command)
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                    ),
+                )
+                self.assertEqual(log_path, temp_log)
+                self.assertFalse(log_path.exists())
+                create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                log_path.write_text("resumed lineage log\n", encoding="utf-8")
+                return 17
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+            )
+            temp_exists = temp_log.exists()
+            final_log_text = (staged_artifact_dir / log_name).read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(status, 17)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                )
+            ],
+        )
+        self.assertFalse(temp_exists)
+        self.assertEqual(final_log_text, "resumed lineage log\n")
+
+    def test_lineage_proof_staged_runner_resume_rejects_symlinked_keygen_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            log_name = lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            target = root / "external-temp-log"
+            target.write_text("external temp log\n", encoding="utf-8")
+            temp_log = staged_artifact_dir / f".{log_name}.staged-runner.tmp"
+            try:
+                temp_log.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(
+                    f"symlinks are not available in this test environment: {exc}"
+                )
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                    "--resume-key-artifacts",
+                ]
+            )
+
+            def forbidden_runner(
+                _command: list[str],
+                _cwd: Path,
+                _log_path: Path,
+            ) -> int:
+                raise AssertionError("runner must not run with symlinked temp log")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged init lineage key artifact log temporary output must not be a symlink",
+            errors,
+        )
+
+    def test_lineage_proof_staged_runner_resume_removes_stale_proof_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            for profile in ("init", "append"):
+                create_lineage_artifact_files_for_profile(staged_artifact_dir, profile)
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES[profile]
+                ).write_text(
+                    f"generated {profile} lineage keys\n",
+                    encoding="utf-8",
+                )
+                write_lineage_execution_report(staged_artifact_dir, profile)
+            proof_log = (
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            temp_log = staged_artifact_dir / f".{proof_log.name}.staged-runner.tmp"
+            temp_log.write_text("stale proof temp log\n", encoding="utf-8")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(
+                command: list[str],
+                cwd: Path,
+                log_path: Path,
+            ) -> int:
+                calls.append(command)
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                    ),
+                )
+                self.assertEqual(cwd, REPO_ROOT)
+                self.assertEqual(log_path, temp_log)
+                self.assertFalse(log_path.exists())
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[5.0, 6.25]),
+            )
+            temp_exists = temp_log.exists()
+            proof_log_text = proof_log.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                )
+            ],
+        )
+        self.assertFalse(temp_exists)
+        self.assertIn("test result: ok.", proof_log_text)
 
     def test_lineage_proof_staged_runner_rejects_symlinked_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -44840,6 +46581,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
 
+    def test_write_summary_rejects_non_serializable_json_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            errors = readiness.write_summary(
+                summary_path,
+                {
+                    "schema": readiness.SUMMARY_SCHEMA,
+                    "ready": False,
+                    "unsafe": object(),
+                },
+            )
+            temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
+
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(temp_outputs, [])
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out summary is not strict JSON",
+                }
+            ],
+        )
+
     def test_write_summary_installs_private_file_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
@@ -45920,6 +47687,81 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     )
                     self.assertIn(expected_message, rendered)
                     self.assertNotIn(str(public_key_path), rendered)
+
+    def test_early_signer_loader_errors_are_normalized_without_leak(self) -> None:
+        unsafe_error = "token=supersecret signer loader error \x1b[31m"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_path = root / "summary.json"
+            safe_key_path = root / "trusted-public.pem"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                readiness.device_lab,
+                "load_trusted_signer_public_keys",
+                return_value=(
+                    {},
+                    ["trusted signer could not be parsed", unsafe_error],
+                ),
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = readiness.main(
+                        [
+                            "--repo-root",
+                            str(REPO_ROOT),
+                            "--trusted-signer-public-key",
+                            str(safe_key_path),
+                            "--summary-out",
+                            str(summary_path),
+                        ]
+                    )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            rendered = stdout.getvalue() + stderr.getvalue() + json.dumps(summary)
+
+        self.assertEqual(status, 1)
+        self.assertFalse(summary["ready"])
+        codes = {item["code"] for item in summary["blockers"]}
+        self.assertIn("android_trusted_signer_invalid", codes)
+        self.assertIn("kagemusha_readiness_section_blocker_json_shape", codes)
+        self.assertIn("trusted signer could not be parsed", rendered)
+        observed = {
+            (item.get("section"), item.get("index"), item.get("field"))
+            for item in summary["blockers"]
+            if item["code"] == "kagemusha_readiness_section_blocker_json_shape"
+        }
+        self.assertIn(("top_level", 1, "message"), observed)
+        self.assertIn("message must be strict JSON", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn(unsafe_error, rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("\\u001b", rendered)
+
+    def test_blocked_summary_blocks_top_level_blocker_iterable_without_access(
+        self,
+    ) -> None:
+        class HostileIterable:
+            def __iter__(self):
+                raise AssertionError("hostile top-level blocker iteration must not run")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary = readiness._blocked_summary(HostileIterable())
+            summary_path = root / "summary.json"
+            errors = readiness.write_summary(summary_path, summary)
+            rendered = json.dumps(summary, sort_keys=True, allow_nan=False)
+            written = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary["ready"])
+        self.assertEqual(written["status"], "blocked")
+        self.assertEqual(
+            [item["code"] for item in summary["blockers"]],
+            ["kagemusha_readiness_section_blockers_shape"],
+        )
+        self.assertEqual(summary["blockers"][0]["section"], "top_level")
+        self.assertIn("blockers must be a JSON array", rendered)
+        self.assertNotIn("hostile top-level blocker", rendered)
 
     def test_negative_lineage_proof_future_skew_blocks_before_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -2619,8 +2619,8 @@ mod tests {
             .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
         let bootstrap_authority = block
-            .transactions_vec()
-            .first()
+            .external_transactions()
+            .next()
             .expect("genesis transaction")
             .authority()
             .clone();

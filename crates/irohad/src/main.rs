@@ -3685,6 +3685,22 @@ fn snapshot_read_error_is_recoverable_for_bootstrap(
     }
 }
 
+fn refresh_block_count_after_snapshot_load(
+    block_count: &mut iroha_core::kura::BlockCount,
+    committed_height: usize,
+) {
+    if committed_height <= block_count.0 {
+        return;
+    }
+
+    iroha_logger::warn!(
+        committed_height,
+        previous_block_count = block_count.0,
+        "Loaded snapshot is ahead of the startup block count; refreshing block count"
+    );
+    block_count.0 = committed_height;
+}
+
 fn apply_state_config_before_kura_replay(
     state: &mut State,
     config: &Config,
@@ -3832,12 +3848,6 @@ mod snapshot_read_error_tests {
             &mismatched_height,
             true,
         ));
-        assert!(!snapshot_read_error_is_recoverable(
-            &TryReadSnapshotError::MismatchedHeight {
-                snapshot_height: 2,
-                kura_height: 1,
-            }
-        ));
 
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MissingBlock { height: 1 }
@@ -3862,6 +3872,24 @@ mod snapshot_read_error_tests {
                 kura_block_hash: dummy_block_hash(2),
             }
         ));
+    }
+
+    #[test]
+    fn refresh_block_count_after_snapshot_load_uses_snapshot_height_when_ahead() {
+        let mut block_count = iroha_core::kura::BlockCount(0);
+
+        refresh_block_count_after_snapshot_load(&mut block_count, 2);
+
+        assert_eq!(block_count.0, 2);
+    }
+
+    #[test]
+    fn refresh_block_count_after_snapshot_load_preserves_higher_kura_height() {
+        let mut block_count = iroha_core::kura::BlockCount(5);
+
+        refresh_block_count_after_snapshot_load(&mut block_count, 2);
+
+        assert_eq!(block_count.0, 5);
     }
 
     #[test]
@@ -4053,6 +4081,7 @@ impl Iroha {
                     "Successfully loaded the state from a snapshot"
                 );
                 loaded_state_from_snapshot = true;
+                refresh_block_count_after_snapshot_load(&mut block_count, state.committed_height());
                 state
             }
             Err(TryReadSnapshotError::NotFound) => {

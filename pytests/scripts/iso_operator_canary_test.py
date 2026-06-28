@@ -59,6 +59,303 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 detail = CANARY._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("canary-hidden", detail)
+        hidden = "token=canary-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = CANARY._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=canary-ancestor-secret"
+        path_type = type(CANARY.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._reject_symlinked_existing_ancestors(
+                            CANARY.Path("ancestor") / "leaf",
+                            display_label="summary_out",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=canary-reader-inspect-secret"
+        path_type = type(CANARY.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = CANARY.Path(raw_root) / "canary.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._read_regular_file(path, display_label="canary")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect canary", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_path_stat_failures_return_false(self):
+        hidden = "token=canary-alias-stat-secret"
+        path_type = type(CANARY.Path("."))
+        original_stat = path_type.stat
+        helper_cases = (
+            ("file", CANARY._same_existing_file),
+            ("path", CANARY._same_existing_path),
+        )
+        failure_cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for helper_name, helper in helper_cases:
+            for failure in failure_cases:
+                with self.subTest(helper=helper_name, error=type(failure).__name__):
+
+                    def failing_stat(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.stat = failing_stat
+                    try:
+                        self.assertFalse(
+                            helper(CANARY.Path("left"), CANARY.Path("right"))
+                        )
+                    finally:
+                        path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=canary-resolve-secret"
+        path_type = type(CANARY.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+        helper_cases = (
+            (
+                "duplicate",
+                CANARY.Path("receipt-dir"),
+                lambda target: CANARY._reject_duplicate_paths(
+                    [target], "verify.receipt_dirs"
+                ),
+                "cannot resolve verify.receipt_dirs[0]",
+            ),
+            (
+                "overlap",
+                CANARY.Path("receipt-dir"),
+                lambda target: CANARY._reject_overlapping_paths(
+                    target,
+                    "rail.receipt_dir",
+                    CANARY.Path("inbox"),
+                    "rail.inbox_dir",
+                ),
+                "cannot resolve rail.receipt_dir",
+            ),
+            (
+                "covered-dir",
+                CANARY.Path("receipt-dir"),
+                lambda target: CANARY._reject_receipts_covered_by_dirs(
+                    [CANARY.Path("receipt-dir") / "rail.receipt.json"],
+                    [target],
+                ),
+                "cannot resolve verify.receipt_dirs[0]",
+            ),
+            (
+                "stage-dir",
+                CANARY.Path("stage-receipts"),
+                lambda target: CANARY._reject_receipts_from_stage_dirs(
+                    [CANARY.Path("stage-receipts") / "rail.receipt.json"],
+                    [target],
+                ),
+                "cannot resolve stage.receipt_dir[0]",
+            ),
+            (
+                "config-relative-parent",
+                CANARY.Path("config") / "relative",
+                lambda target: CANARY._path_from_config(
+                    target.parent,
+                    "relative/file.json",
+                    "rail.inbox_dir",
+                ),
+                "cannot resolve rail.inbox_dir parent",
+            ),
+        )
+        for helper_name, target, action, expected in helper_cases:
+            for name, failure in failure_cases:
+                with self.subTest(helper=helper_name, failure=name):
+
+                    def failing_resolve(self, *args, error=failure, **kwargs):
+                        if self == target:
+                            raise error
+                        return original_resolve(self, *args, **kwargs)
+
+                    path_type.resolve = failing_resolve
+                    try:
+                        with self.assertRaises(CANARY.CanaryError) as caught:
+                            action(target)
+                    finally:
+                        path_type.resolve = original_resolve
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=canary-reader-open-secret"
+        cleanup_hidden = "token=canary-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "runbook.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = CANARY.os.fdopen
+            original_close = CANARY.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            CANARY.os.fdopen = failing_fdopen
+            CANARY.os.close = failing_close
+            try:
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="runbook",
+                    )
+            finally:
+                CANARY.os.fdopen = original_fdopen
+                CANARY.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open runbook for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=canary-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            CANARY.os.fdopen = failing_fdopen
+            CANARY.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="runbook",
+                    )
+            finally:
+                CANARY.os.fdopen = original_fdopen
+                CANARY.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open runbook for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=canary-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            CANARY.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="runbook",
+                    )
+            finally:
+                CANARY.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open runbook for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -97,6 +394,171 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertIn("must not be a symlink", message)
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
+
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=canary-output-inspect-secret"
+        path_type = type(CANARY.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden)),
+            ("exists_runtime", "exists", RuntimeError(hidden)),
+            ("lstat_os", "lstat", OSError(5, hidden)),
+            ("lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._ensure_text_output_target(
+                            CANARY.Path("summary.json"),
+                            display_label="summary_out",
+                            create_parent=False,
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_parent_creation_failures_do_not_echo_detail(self):
+        hidden = "token=canary-output-create-secret"
+        path_type = type(CANARY.Path("."))
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("mkdir_os", OSError(5, hidden)),
+            ("mkdir_runtime", RuntimeError(hidden)),
+            ("mkdir_type", TypeError(hidden)),
+            ("mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(CANARY.CanaryError) as caught:
+                            CANARY._ensure_text_output_target(
+                                CANARY.Path(raw_root) / "out" / "summary.json",
+                                display_label="summary_out",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=canary-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for summary_out"),
+            ("replace", None, "cannot replace summary_out"),
+            ("fsync_runtime", None, "cannot write temporary output for summary_out"),
+            ("replace_runtime", None, "cannot replace summary_out"),
+            ("fsync", "unlink", "cannot write temporary output for summary_out"),
+            ("fsync", "close", "cannot write temporary output for summary_out"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for summary_out"),
+            ("fsync", "close_runtime", "cannot write temporary output for summary_out"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "canary.summary.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = CANARY.os.fsync
+                original_replace = CANARY.os.replace
+                original_unlink = CANARY.os.unlink
+                original_close = CANARY.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                CANARY.os.fsync = failing_fsync
+                CANARY.os.replace = failing_replace
+                CANARY.os.unlink = failing_unlink
+                CANARY.os.close = failing_close
+                try:
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="summary_out",
+                        )
+                finally:
+                    CANARY.os.fsync = original_fsync
+                    CANARY.os.replace = original_replace
+                    CANARY.os.unlink = original_unlink
+                    CANARY.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
@@ -239,6 +701,49 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=canary-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--config"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--config",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            ("hostile-string", [HostileText("--config")], "--config requires a path value"),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("canary-argv-secret", stderr)
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = ("--unknown-canary\x1bflag", "--unknown-canary\u202eflag")
@@ -1024,6 +1529,155 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             )
             self.assertNotIn(overlong, stderr)
 
+    def test_runbook_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "canary-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        required = CANARY._required_string(
+            {"provider": HostileText("local-bank")},
+            "provider",
+            "runbook",
+        )
+        self.assertEqual(required, "local-bank")
+        self.assertIs(type(required), str)
+        optional = CANARY._optional_string(
+            {"message": HostileText("canary-run")},
+            "message",
+            "rail",
+        )
+        self.assertEqual(optional, "canary-run")
+        self.assertIs(type(optional), str)
+        string_list = CANARY._string_list(
+            {"endpoints": [HostileText("https://notary.local-bank.bank")]},
+            "endpoints",
+            "notary",
+        )
+        self.assertEqual(string_list, ["https://notary.local-bank.bank"])
+        self.assertIs(type(string_list[0]), str)
+        present = CANARY._reject_unknown_keys(
+            {HostileText("provider"): "local-bank"},
+            {"provider"},
+            "runbook",
+        )
+        self.assertEqual(present, {"provider"})
+        self.assertTrue(all(type(key) is str for key in present))
+
+        cases = (
+            (
+                "required",
+                lambda: CANARY._required_string(
+                    {"provider": HostileText("local\x1bbank")},
+                    "provider",
+                    "runbook",
+                ),
+            ),
+            (
+                "optional",
+                lambda: CANARY._optional_string(
+                    {"message": HostileText("canary\x1brun")},
+                    "message",
+                    "rail",
+                ),
+            ),
+            (
+                "list",
+                lambda: CANARY._string_list(
+                    {"endpoints": [HostileText("https://notary.local\x1bbank")]},
+                    "endpoints",
+                    "notary",
+                ),
+            ),
+            (
+                "require-object-dict-subclass",
+                lambda: CANARY._require_object(
+                    HostileDict({"provider": "local-bank"}),
+                    "runbook",
+                ),
+            ),
+            (
+                "string-list-subclass",
+                lambda: CANARY._string_list(
+                    {"endpoints": HostileList(["https://notary.local-bank.bank"])},
+                    "endpoints",
+                    "notary",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: CANARY._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: CANARY._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: CANARY._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "unknown-key",
+                lambda: CANARY._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"provider"},
+                    "runbook",
+                ),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: CANARY._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"provider"},
+                    "runbook",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: CANARY._reject_unknown_keys(
+                    HostileDict({"provider": "redacted"}),
+                    {"provider"},
+                    "runbook",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
     def test_config_string_lists_are_count_bounded_before_entry_parsing(self):
         items = [None] * (CANARY.MAX_JSON_LIST_ITEMS + 1)
         cases = (
@@ -1315,6 +1969,31 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_child_stage_runtime_startup_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-runtime-startup-secret"
+
+        def raising_popen(*_args, **_kwargs):
+            raise RuntimeError(hidden)
+
+        original_popen = CANARY.subprocess.Popen
+        CANARY.subprocess.Popen = raising_popen
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [str(Path(tempfile.gettempdir()) / hidden / "child")],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("child stage could not be started", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn(tempfile.gettempdir(), message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
     def test_child_stage_output_read_failure_is_controlled_without_echo(self):
         hidden = "token=canary-pipe-secret"
 
@@ -1339,6 +2018,210 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
         self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_child_stage_runtime_pipe_read_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-runtime-pipe-secret"
+
+        class FailingPipe:
+            def read(self, _size):
+                raise RuntimeError(hidden)
+
+            def close(self):
+                return None
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = FailingPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        original_popen = CANARY.subprocess.Popen
+        CANARY.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("child stage output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_child_stage_runtime_pipe_close_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-runtime-close-secret"
+
+        class ClosingPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                raise RuntimeError(hidden)
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = ClosingPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        original_popen = CANARY.subprocess.Popen
+        CANARY.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(CANARY.CanaryError) as caught:
+                CANARY._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    128,
+                    1.0,
+                )
+        finally:
+            CANARY.subprocess.Popen = original_popen
+
+        message = str(caught.exception)
+        self.assertIn("child stage output could not be read", message)
+        self.assertNotIn(hidden, message)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_child_stage_runtime_wait_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-runtime-wait-secret"
+        cleanup_hidden = "token=canary-runtime-kill-secret"
+        cases = (
+            ("wait failure", "wait"),
+            ("invalid returncode", "returncode"),
+        )
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        for name, mode in cases:
+            with self.subTest(name=name):
+
+                class FakeProcess:
+                    stdout = EmptyPipe()
+                    stderr = EmptyPipe()
+
+                    def wait(self, timeout=None):
+                        if mode == "wait":
+                            raise RuntimeError(hidden)
+                        return hidden
+
+                    def kill(self):
+                        raise RuntimeError(cleanup_hidden)
+
+                def fake_popen(*_args, **_kwargs):
+                    return FakeProcess()
+
+                original_popen = CANARY.subprocess.Popen
+                CANARY.subprocess.Popen = fake_popen
+                try:
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._run_command_bounded(
+                            [sys.executable, "-c", "print('ok')"],
+                            128,
+                            1.0,
+                        )
+                finally:
+                    CANARY.subprocess.Popen = original_popen
+
+                message = str(caught.exception)
+                self.assertIn("child stage did not finish cleanly", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_child_stage_runtime_thread_join_failure_is_controlled_without_echo(self):
+        hidden = "token=canary-runtime-thread-secret"
+        cases = ("join", "is_alive")
+
+        class EmptyPipe:
+            def read(self, _size):
+                return b""
+
+            def close(self):
+                return None
+
+        class FakeProcess:
+            stdout = EmptyPipe()
+            stderr = EmptyPipe()
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(*_args, **_kwargs):
+            return FakeProcess()
+
+        for mode in cases:
+            with self.subTest(mode=mode):
+
+                class FakeThread:
+                    def __init__(self, *, target, args, daemon):
+                        self._target = target
+                        self._args = args
+
+                    def start(self):
+                        self._target(*self._args)
+
+                    def join(self, timeout=None):
+                        if mode == "join":
+                            raise RuntimeError(hidden)
+
+                    def is_alive(self):
+                        if mode == "is_alive":
+                            raise RuntimeError(hidden)
+                        return False
+
+                original_popen = CANARY.subprocess.Popen
+                original_thread = CANARY.threading.Thread
+                CANARY.subprocess.Popen = fake_popen
+                CANARY.threading.Thread = FakeThread
+                try:
+                    with self.assertRaises(CANARY.CanaryError) as caught:
+                        CANARY._run_command_bounded(
+                            [sys.executable, "-c", "print('ok')"],
+                            128,
+                            1.0,
+                        )
+                finally:
+                    CANARY.subprocess.Popen = original_popen
+                    CANARY.threading.Thread = original_thread
+
+                message = str(caught.exception)
+                self.assertIn("child stage output could not be read", message)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+
     def test_child_stage_pipe_reader_clamps_bytes_like_chunks_by_byte_length(self):
         class FakePipe:
             def __init__(self, chunks):
@@ -1359,6 +2242,41 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 captured, truncated = CANARY._read_limited_pipe(FakePipe([chunk]), 6)
                 self.assertEqual(captured, expected)
                 self.assertTrue(truncated)
+
+    def test_child_stage_pipe_reader_rejects_hostile_bytes_subclasses(self):
+        hidden = "token=canary-hostile-pipe-secret"
+
+        class FakePipe:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+
+            def read(self, _size):
+                return self.chunks.pop(0) if self.chunks else b""
+
+        class HostileBytes(bytes):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytes_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytes_len={hidden}")
+
+        class HostileBytearray(bytearray):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytearray_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytearray_len={hidden}")
+
+        cases = (
+            ("bytes-subclass", HostileBytes(b"abcdefgh")),
+            ("bytearray-subclass", HostileBytearray(b"abcdefgh")),
+        )
+        for name, chunk in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(OSError) as caught:
+                    CANARY._read_limited_pipe(FakePipe([chunk]), 6)
+                self.assertIn("non-byte data", str(caught.exception))
+                self.assertNotIn(hidden, str(caught.exception))
 
     def test_child_stage_pipe_reader_rejects_non_byte_chunks_without_echo(self):
         hidden = "token=canary-pipe-secret"
@@ -1872,8 +2790,15 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 CANARY.run(args)
 
     def test_direct_run_scalar_paths_must_be_paths_before_config_loading(self):
+        hidden = "canary-hostile-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         cases = (
             ("config", "config", object(), "--config"),
+            ("config pathlike", "config", HostilePathLike(), "--config"),
             ("summary", "summary_out", object(), "summary_out"),
         )
         for name, field, value, label in cases:
@@ -1895,6 +2820,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
                     message = str(caught.exception)
                     self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn(hidden, message)
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 

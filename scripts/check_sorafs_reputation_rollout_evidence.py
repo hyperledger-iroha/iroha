@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_lines,
+    emit_checker_exception,
     render_and_write_checker_summary,
     validate_checker_preflight,
 )
@@ -67,6 +68,7 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_sensitivity import visit_sensitive_fields  # noqa: E402
 
 
@@ -101,6 +103,71 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS if kind.schema}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS if kind.required)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "publish": (
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "provider_count",
+        "generated_at_unix",
+    ),
+    "latest": (
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "provider_count",
+        "generated_at_unix",
+    ),
+    "provider": (
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "provider",
+        "proof",
+    ),
+    "events": (
+        "since",
+        "next_since",
+        "count",
+        "events",
+    ),
+    "verify": (
+        "valid",
+        "proof_verified",
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "provider_count",
+        "provider_id",
+        "provider_score_bps",
+    ),
+    "metrics": (
+        "schema",
+        "status",
+        "metrics_scrape_success",
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "provider_count",
+        "snapshot_age_seconds",
+        "ingest_lag_seconds",
+    ),
+    "transport": (
+        "schema",
+        "status",
+        "sse_connected",
+        "websocket_connected",
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "sse_event_count",
+        "websocket_event_count",
+    ),
+    "consumption": (
+        "schema",
+        "status",
+        "routing_score_consumed",
+        "routing_weight_changed",
+        "incentive_score_consumed",
+        "snapshot_id_hex",
+        "merkle_root_hex",
+        "provider_count",
+    ),
+}
 SNAPSHOT_ANCHOR_KINDS = ("publish", "latest")
 SNAPSHOT_BOUND_KINDS = (
     "provider",
@@ -200,7 +267,7 @@ def load_evidence(
         try:
             explicit_kind, path = parse_evidence_spec(spec)
         except ValueError as error:
-            errors.append(str(error))
+            errors.append(error_diagnostic_label(error))
             continue
         explicit_entries.append((explicit_kind, path))
 
@@ -681,7 +748,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded = expand_response_args(sys.argv[1:] if argv is None else argv, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded)
@@ -694,7 +761,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     preflight_errors = validate_checker_preflight(args)
     if preflight_errors:

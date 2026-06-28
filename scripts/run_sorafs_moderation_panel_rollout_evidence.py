@@ -36,6 +36,7 @@ from sorafs_response_args import (  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
+    emit_runner_exception,
     run_command_plan,
     require_existing_files,
     require_runner_non_negative_int,
@@ -271,7 +272,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         raise SystemExit(2) from error
     return parser.parse_args(expanded_args)
 
@@ -288,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         return 2
 
     errors = validate_inputs(args)

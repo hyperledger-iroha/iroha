@@ -34,6 +34,7 @@ def base(schema: str) -> dict:
         "generated_at_unix": GENERATED_AT,
         "deployment_id": "potr-staging-a",
         "environment": "staging",
+        "deployment_context_reviewed": True,
     }
 
 

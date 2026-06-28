@@ -182,10 +182,16 @@ class OfflineNoteV2Test {
             modelPayload = OfflineNoteV2.encodeRedeem(redeem),
             instruction = OfflineNoteV2.redeemInstruction(redeem),
         )
-        assertInstructionWrapper(
-            schema = OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            modelPayload = OfflineNoteV2.encodeDeviceAttestationRegistration(registration),
-            instruction = OfflineNoteV2.registerDeviceAttestationInstruction(registration),
+        val registerWirePayload = wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration))
+        assertEquals(
+            string(obj(obj(fixture, "chain_vectors"), "attestation_registration"), "instruction_norito_base64"),
+            base64(registerWirePayload),
+            "register device attestation instruction norito",
+        )
+        assertEquals(
+            base64(registration.noritoEncoded()),
+            base64(OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(registerWirePayload).noritoEncoded()),
+            "decoded register device attestation instruction",
         )
     }
 

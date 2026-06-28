@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-27
+Last updated: 2026-06-28
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -418,10 +418,12 @@ response-body digests, and bounded child-process output byte caps reject boolean
 aliases before verifier subprocesses run.
 Regular-file and rail payload byte caps now also reject boolean or non-integer
 aliases before filesystem metadata is inspected.
-Pending XSD source probes now reserve `reachable` for real 2xx/3xx responses
+Pending XSD source probes now reserve `reachable` for real 2xx responses
 with positive bounded samples that start with a namespace-bound XML Schema root
 opening tag, not just an XML declaration or embedded schema-looking text;
-non-XSD 1xx/2xx/3xx samples are recorded and replayed as
+redirect-class or other non-2xx XSD-looking samples fail closed as
+`NetworkError` evidence without retained sample bytes, while non-XSD
+1xx/2xx/3xx samples are recorded and replayed as
 `unexpected` evidence instead, and malformed
 status metadata, zero-byte success responses, malformed non-byte read output,
 or stream read failures become `NetworkError` evidence without retained sample
@@ -512,11 +514,17 @@ ISO URL metadata, freshness, counts, bounded sample digest shape,
 `downloaded_bytes <= max_bytes`, the helper's 65,536-byte maximum sample cap,
 the helper's 300-second maximum timeout cap, truncation consistency, and
 failed-probe zero-byte/non-XSD-looking status shape, timeout/network-error null
-`content_type` shape, HTTP-error 4xx/5xx status codes, failed-probe
+`content_type` shape, malformed response status accessor failures, opener or
+response context failures, HTTP-error 4xx/5xx status codes, failed-probe
 `error_kind` role shape including exact `NetworkError` for network failures,
 `unexpected` status shape as a real 1xx/2xx/3xx HTTP response with positive
-sampled bytes and `looks_like_xsd=false`, plus reachable XSD-looking probe status without
-importing the restricted schema bytes. Probe
+sampled bytes and `looks_like_xsd=false`, plus `reachable` status shape as a
+real 2xx HTTP response with XSD-looking probe status without importing the
+restricted schema bytes. Replay also rejects forged `content_type` values that
+the probe producer would have omitted, including whitespace-padded or
+secret-looking header material; failed response header access omits
+`content_type` without archiving accessor exception text, and runtime read
+failures normalize to `NetworkError` without retaining exception text. Probe
 summaries supplied without
 matching pending official source gaps are now blocked as unreferenced evidence,
 including extra probe rows when only a subset of official source gaps remains.
@@ -644,7 +652,8 @@ numeric spellings as options.
 Pending XSD source probe summaries also omit unsafe remote `Content-Type`
 metadata before evidence emission and only record real integer 100-599 HTTP
 status values, so hostile headers or Python boolean/int aliases cannot become
-digest-bound operator evidence.
+digest-bound operator evidence; final readiness replays the same omission
+policy before accepting archived probe rows.
 Network failures in those probe summaries now use a stable `NetworkError` role
 instead of raw Python exception class names.
 All ISO operator entry points now also reject secret-looking raw CLI tokens
@@ -739,10 +748,20 @@ format controls, and non-ASCII material before schema-validation errors are
 reported.
 Direct evidence receipt-verifier diagnostics now redact key/value and
 identifier-style secret-looking stderr plus unsafe control characters before
-reporting child verifier failures. ISO input readers and summary/receipt
-writers sanitize raw OS `strerror` text before diagnostics, preserving ordinary
-short ASCII errors while collapsing path-like, secret-looking, control-bearing,
-non-ASCII, or oversized error text to `I/O error`. Archived receipt
+reporting child verifier failures. ISO input readers, input-directory checks,
+ancestor inspection preflights, alias-comparison helpers, and summary/receipt
+writers sanitize raw OS `strerror` text and hostile `strerror` accessor
+failures, including reader, input-directory, receipt-directory, receipt
+source-file, ancestor, output parent/leaf, and alias
+`lstat()`/`stat()`/`exists()`/`is_symlink()` inspection failures, output parent
+creation failures, rail/notary receipt-directory inspection and creation
+failures, input runtime/type/value handle failures, descriptor-close cleanup
+runtime/type/value failures plus temporary write/fsync/replace runtime/type/value
+failures and cleanup unlink/close runtime/type/value failures, before
+diagnostics, preserving
+ordinary short ASCII errors while collapsing path-like, secret-looking,
+control-bearing, non-ASCII, oversized, or
+unreadable error text to `I/O error`. Archived receipt
 previews/errors now also reject non-ASCII text before replay. ISO JSON
 unknown-key scanners now also hide control-bearing key names, including names
 with Unicode format controls, across
@@ -791,9 +810,18 @@ submitted messages or published anchors/endpoints; rail stdout must report a
 single submitted message when the command used explicit `--message`, notary
 stdout `endpoint_count` must match the executed command's repeated `--endpoint`
 flags, and `published_anchors` must stay at one unless the command used
-`--all`, so printable logs, dry-run summaries, inflated endpoint counts, forged
-multi-message claims, or forged multi-anchor publication claims cannot stand in
-for production child-stage evidence.
+`--all`; notary receipt summaries must also use `latest.notary.json` without
+`--all` and digest-addressed `anchors/<index>.notary.json` with `--all`, so
+printable logs, dry-run summaries, inflated endpoint counts, forged
+multi-message claims, forged multi-anchor publication claims, or swapped
+latest/all-anchor modes cannot stand in for production child-stage evidence.
+The compact canary evidence now carries sanitized `stage_command_modes`
+(`rail_uses_message`, `rail_submitted_message_count`, `notary_uses_all`,
+`notary_endpoint_count`, and `notary_published_anchor_count`) so final
+production-readiness replay can reject forged compact summaries whose rail
+single-message, rail submitted-message-count, notary all-anchor, notary
+endpoint-count, or notary published-anchor-count proof no longer matches the
+compact receipts without persisting raw commands or endpoint URLs.
 Canary verify-stage receipt-verifier stdout must also keep receipt paths covered
 by the verify command's `--receipt-dir`/`--receipt` selectors, with explicit
 `--receipt` files present in the captured summary, before archive replay can use
@@ -837,6 +865,13 @@ no path-like slash smuggling.
 Pending-source message names are unique within each XSD summary and across
 cross-summary replay, so one official message name cannot be relabelled under a
 different pending message definition or download URL.
+The live pending-source probe also treats response cleanup as best-effort:
+non-callable context hooks normalize to `NetworkError`, while context-exit and
+close or close-accessor failures are ignored after bounded sample classification
+so cleanup-only failures cannot replace a valid reachability result or archive
+exception text. HTTP-error response objects are also closed best-effort before
+their bounded error row is archived. Opener/read runtime, type, or value
+failures likewise normalize to `NetworkError` without retaining exception text.
 XSD summary version 3 now also carries a recomputed
 `missing_profile_schema_message_ids` aggregate with unique missing message
 definitions, per-message profile-version counts, and reviewed-gap
@@ -857,9 +892,14 @@ instead of archived free-form gap reasons.
 The rail gateway adapter, receipt verifier, direct evidence verification, and
 final readiness also reject unsupported receipt-kind and rail-message-type
 values with label-only diagnostics, including stage receipt-kind mismatch
-blockers that no longer print the unexpected archived kind. Unsupported canary
-stage-name diagnostics are also label-only and no longer echo the unexpected
-stage label. Direct evidence replay and final readiness trust blockers now keep
+blockers that no longer print the unexpected archived kind. Final readiness
+normalized receipt output also scrubs unsupported or malformed rail
+`message_type`/`profile`/`rail_message_id`/`source_path` values and malformed
+or unsupported notary `anchor_sha256`/`index_sha256`/`anchor_path`/`store_dir`/
+`index_path`/`record_count` values to `"unsupported"` before public JSON is
+emitted. Unsupported canary stage-name diagnostics are also label-only and no
+longer echo the unexpected stage label. Direct evidence replay and final
+readiness trust blockers now keep
 non-production or unsupported embedded-signature policy values out of
 diagnostics as well, and final readiness normalized trust profile output scrubs
 non-production/unsupported policies plus placeholder trust-source
@@ -1169,9 +1209,110 @@ verification mirrors the unsafe-text policy when replaying source sidecar
 Duplicate record, list, digest, OID, archived receipt-reuse, and trust-material
 diagnostics now report field/index labels without echoing the rejected duplicate
 value.
+Operator evidence verification and final readiness also treat compact notary
+`anchor_path`, `anchor_sha256`, `index_path`, and `index_sha256` values as
+receipt source material within each canary or archive receipt summary, so
+relabelled duplicate notary anchors or indexes cannot satisfy readiness under
+fresh receipt paths/digests. Reusing the same notary `store_dir` within one
+summary remains allowed for legitimate multi-anchor publication.
 Rail-gateway and audit-notary bearer-token files now reject Unicode format
 controls in decoded token contents, and token-file failures report the credential
 input label instead of echoing runtime token file paths.
+Local ISO source and overlap corridor checks now also wrap `Path.resolve()`
+failures for XSD manifest roots and schema/fixture paths, trust/evidence/
+readiness summary inputs, canary output/artifact/config/verify receipt paths,
+rail sidecar peers, receipt duplicate detection, rail message/receipt-directory
+overlap, and notary anchor/source overlap with role-scoped `I/O error`
+diagnostics, so resolver exceptions cannot leak local operator paths before
+evidence or readiness replay.
+Pending official-XSD source probes now also omit hostile `Content-Type` string
+metadata when normalization helpers fail, keeping otherwise reachable probes
+reachable while avoiding archived header exception text.
+Final-readiness replay mirrors that no-echo posture for hostile archived
+pending-probe `content_type` and `error_kind` text normalization failures.
+Pending-probe CLI selectors, live rail/notary adapter inputs, receipt
+verification, canary, trust-bundle, XSD-fixture, operator-evidence, and
+final-readiness replay also coerce accepted archived/config text values and list
+entries to plain strings before later receipt-kind, stage-name, preview,
+context, digest/OID, sidecar, endpoint, and secret-scan checks. Recursive JSON
+object-key scans also reject non-string keys and normalize hostile `str`
+subclasses before secret/control-field checks, so hostile Python objects cannot
+inject exception text into diagnostics or remain in summary outputs. Unknown-key
+validators also reject non-plain dict subclasses, non-string keys, and hostile
+`str` subclass keys before field-set comparison; receipt and notary exact-key
+checks reuse those normalized key sets for missing-key checks. Forbidden
+receipt-metadata replay checks also iterate normalized receipt-entry keys
+instead of direct dict-set intersections before rail/notary compatibility
+diagnostics or blockers are emitted. Recursive surrogate and secret-material
+scanners now also reject
+non-plain JSON list/dict subclasses before calling container methods, while
+normalizing hostile `str` subclasses before surrogate scans. Shared
+object/array and list-valued field helpers now also require exact plain JSON
+containers before semantic validation. Rail sidecars plus notary/receipt
+persisted records, audit indexes, anchors, source sidecars, and top-level
+receipt JSON now also reject non-plain object subclasses at their loaded-object
+shape checks. Notary and receipt status-derivation helpers now also require
+exact plain `change_reason_codes` lists before treating a pending record as
+accepted-with-change, avoiding hostile list truthiness during replay.
+Trust-bundle public summaries, operator-evidence public canary summaries, and
+final-readiness public summary rendering now also copy only exact plain JSON
+containers before dropping private fields or scrubbing XSD strict flags,
+pending-probe response metadata, receipt summaries, receipt lists, and receipt
+entries; unsupported response, insecure-endpoint, legacy-message, or
+default-profile metadata is redacted only after those shape checks, so hostile
+subclasses cannot run `.get`, `.items`, iteration, membership, assignment, or
+deep-copy methods during output sanitization. The same public-summary copier
+now redacts non-finite numeric values before JSON rendering, so internal
+`NaN`/`Infinity` values cannot bypass `allow_nan=false` output guarantees.
+Rail-gateway and audit-notary HTTP status predicates now also reject Python
+boolean values directly, keeping direct helper calls aligned with the stricter
+response-status parsers before receipt metadata is digested.
+Rail/notary response-body bounding also accepts only exact built-in `bytes`,
+`bytearray`, or `memoryview` containers before slicing or length checks, so
+hostile subclasses cannot run during receipt digest materialization.
+Pending XSD source probes and bounded child-process pipe readers for canary,
+receipt-verifier, and xmllint output now apply the same exact bytes-like
+container rule before sample hashing or output retention.
+Repeatable direct selector inputs for pending message IDs, notary endpoints,
+trust bundles, receipt selectors, evidence summaries, and readiness summaries
+now require exact `list` or `tuple` containers before length checks or
+iteration.
+Compact evidence/readiness role collectors and XSD material-path collectors now
+require exact plain nested summary objects before `.get()` or indexing can run.
+Direct scalar and repeatable path arguments now accept only sanitized strings or
+exact concrete stdlib `pathlib` path instances before filesystem loading, so
+arbitrary path-like objects and path subclasses cannot run `__fspath__` or
+`__str__` during validation.
+The rail gateway direct `message` selector now follows the same rule and rejects
+hostile path-like objects plus list subclasses before inbox discovery.
+Operator-evidence canary command arrays now normalize child command entries to
+plain strings before flag, path, URL, and redaction scans, preventing hostile
+string subclasses from running during evidence validation.
+All ISO operator/probe/verifier direct `main(argv=...)` calls now require exact
+plain argument lists and copy hostile string subclasses to plain strings before
+raw CLI preflight or `argparse` inspection, so direct API callers cannot run
+overridden container or text methods at the CLI boundary. The `argv=None` path
+also rejects non-plain ambient `sys.argv` containers before slicing, and parser
+construction uses explicit program names instead of reading ambient
+`sys.argv[0]`. Direct `run(args)` calls also require exact
+`argparse.Namespace` values before any caller-provided object can service
+`getattr` or `setattr`.
+CLI-facing and JSON-summary numeric scalar helpers now also require exact
+built-in `int`/`float` values or sanitized numeric strings before conversion,
+comparison, freshness-budget, timeout, byte-limit, count, day, version, or
+status-code checks, so hostile numeric subclasses cannot run `__int__`,
+`__float__`, or comparison hooks during direct API or replay helper use. The
+remaining file-read limits, bounded child-command output limits, child
+return-code validators, verified-count summaries, freshness projections, and
+public response-metadata classifiers now use the same exact built-in integer
+boundary.
+Operator-evidence and production-readiness direct text validators now also copy
+hostile `str` subclasses to plain strings before rail-message-id, CLI context,
+artifact path, timestamp, XSD source/fixture path, reviewed-gap, pending-source
+URL, pending-probe text, and blocked-source restriction-marker checks.
+Trust-bundle source timestamp parsing now mirrors that boundary by rejecting
+non-string `source.retrieved_at` values and normalizing hostile `str`
+subclasses before canonical timestamp and freshness checks.
 Remaining production work still depends on operator-supplied live rail evidence,
 redistributable schemas, and official trust/revocation bundles.
 
@@ -5579,12 +5720,16 @@ redistributable schemas, and official trust/revocation bundles.
   non-ASCII, and local-path-shaped direct receipt-verifier stderr before
   reporting failed child verifier diagnostics,
   reports XSD `xmllint`, canary child-stage, and direct receipt-verifier startup
-  failures with stage labels instead of argv, local paths, or raw
-  process-launch exception text or chained traceback causes,
-  reports their stdout/stderr pipe read or close failures as label-only
+  failures, including runtime/type/value launcher failures, with stage labels
+  instead of argv, local paths, or raw process-launch exception text or chained
+  traceback causes,
+  reports their stdout/stderr runtime/type/value pipe read or close failures
+  plus post-wait thread `join()`/`is_alive()` bookkeeping failures as label-only
   stage-output read errors, and requires child-output pipe chunks to be
   byte-like values capped by byte length before preview decoding so
-  wide-format `memoryview` chunks cannot bypass output limits,
+  wide-format `memoryview` chunks cannot bypass output limits, and reports
+  runtime/type/value wait failures, cleanup kill failures, and malformed return
+  codes as label-only child-finish errors,
 		  rejects receipt,
 		  summary, and emitted profile-override output paths when they contain
 	  control characters, whitespace, leading-dash segments, backslashes,

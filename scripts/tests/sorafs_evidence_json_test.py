@@ -14,9 +14,11 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from sorafs_evidence_json import (  # noqa: E402
     decode_evidence_json,
+    EvidenceFileTooLargeError,
     load_evidence_json,
     load_evidence_json_with_sha256,
     load_evidence_json_with_sha256_or_record_error,
+    read_evidence_bytes,
 )
 
 
@@ -72,7 +74,7 @@ def test_load_evidence_json_rejects_non_path_without_traceback() -> None:
     try:
         load_evidence_json("evidence.json", 1024)
     except ValueError as error:
-        assert "evidence path `evidence.json` must be a path" in str(error)
+        assert "evidence path must be a path" in str(error)
     else:
         raise AssertionError("expected non-path evidence to fail")
 
@@ -89,7 +91,41 @@ def test_load_evidence_json_with_sha256_or_record_error_records_non_path() -> No
     assert loaded is None
     assert errors == [
         "evidence.json: failed to load evidence JSON: "
-        "evidence path `evidence.json` must be a path"
+        "evidence path must be a path"
+    ]
+
+
+def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_path_label() -> None:
+    for path in (" bad.json", "bad\npath.json", b"bad.json"):
+        errors: list[str] = []
+
+        loaded = load_evidence_json_with_sha256_or_record_error(
+            path,
+            1024,
+            errors,
+        )
+
+        assert loaded is None
+        assert errors == [
+            "<non-path>: failed to load evidence JSON: evidence path must be a path"
+            if isinstance(path, bytes)
+            else "<non-canonical-path>: failed to load evidence JSON: "
+            "evidence path must be a path"
+        ]
+        assert "\n" not in errors[0]
+
+
+def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_os_error(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "bad\npath.json"
+    errors: list[str] = []
+
+    loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
+
+    assert loaded is None
+    assert errors == [
+        "<non-canonical-path>: failed to load evidence JSON: <non-canonical-error>"
     ]
 
 
@@ -110,6 +146,28 @@ def test_load_evidence_json_with_sha256_or_record_error_rejects_malformed_errors
             assert "evidence JSON errors must be a list of strings" in str(error)
         else:
             raise AssertionError(f"accepted malformed errors {errors!r}")
+
+
+def test_load_evidence_json_with_sha256_or_record_error_rejects_malformed_existing_error_text(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"schema":"test"}', encoding="utf-8")
+
+    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+        try:
+            load_evidence_json_with_sha256_or_record_error(
+                evidence,
+                1024,
+                errors,
+            )
+        except ValueError as error:
+            assert (
+                "evidence JSON errors must contain non-empty canonical strings"
+                in str(error)
+            )
+        else:
+            raise AssertionError(f"accepted malformed error text {errors!r}")
 
 
 def test_load_evidence_json_rejects_invalid_byte_limit_without_traceback(
@@ -161,6 +219,20 @@ def test_load_evidence_json_rejects_oversized_file(tmp_path: Path) -> None:
         assert "evidence file exceeds 1 bytes" in str(error)
     else:
         raise AssertionError("expected oversized evidence to fail")
+
+
+def test_read_evidence_bytes_raises_typed_oversize_error(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"schema":"test"}', encoding="utf-8")
+
+    try:
+        read_evidence_bytes(evidence, 1)
+    except EvidenceFileTooLargeError as error:
+        assert error.max_bytes == 1
+        assert str(error) == "evidence file exceeds 1 bytes"
+        assert isinstance(error, ValueError)
+    else:
+        raise AssertionError("expected typed oversized evidence failure")
 
 
 def test_load_evidence_json_with_sha256_rejects_oversized_file(tmp_path: Path) -> None:
@@ -235,6 +307,23 @@ def test_load_evidence_json_rejects_duplicate_nested_keys(tmp_path: Path) -> Non
         raise AssertionError("expected duplicate nested key to fail")
 
 
+def test_decode_evidence_json_sanitizes_malformed_duplicate_key_label() -> None:
+    for raw in (
+        b'{"bad\\nkey":1,"bad\\nkey":2}',
+        b'{" padded":1," padded":2}',
+    ):
+        try:
+            decode_evidence_json(raw)
+        except ValueError as error:
+            message = str(error)
+            assert "evidence JSON object contains duplicate key `<non-canonical>`" in (
+                message
+            )
+            assert "\n" not in message
+        else:
+            raise AssertionError("expected malformed duplicate key to fail")
+
+
 def test_load_evidence_json_with_sha256_or_record_error_records_duplicate_key(
     tmp_path: Path,
 ) -> None:
@@ -248,6 +337,22 @@ def test_load_evidence_json_with_sha256_or_record_error_records_duplicate_key(
     assert errors == [
         f"{evidence}: failed to load evidence JSON: "
         "evidence JSON object contains duplicate key `schema`"
+    ]
+
+
+def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_duplicate_key(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "duplicate.json"
+    evidence.write_text('{"bad\\nkey":1,"bad\\nkey":2}', encoding="utf-8")
+    errors: list[str] = []
+
+    loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
+
+    assert loaded is None
+    assert errors == [
+        f"{evidence}: failed to load evidence JSON: "
+        "evidence JSON object contains duplicate key `<non-canonical>`"
     ]
 
 

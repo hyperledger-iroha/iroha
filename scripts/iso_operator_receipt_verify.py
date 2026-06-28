@@ -453,6 +453,37 @@ class ReceiptError(RuntimeError):
     """Raised when an operator receipt is invalid."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise ReceiptError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise ReceiptError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise ReceiptError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise ReceiptError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise ReceiptError("args must be an argparse.Namespace")
+    return args
+
+
 def sha256_hex(data: bytes) -> str:
     """Return a lowercase SHA-256 hex digest."""
 
@@ -469,7 +500,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -495,6 +529,36 @@ def _safe_os_error_detail(error: OSError) -> str:
     if any(marker in lowered for marker in secret_markers):
         return "I/O error"
     return detail
+
+
+def _path_exists(path: Path, label: str) -> bool:
+    try:
+        return path.exists()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot inspect {label}: I/O error") from None
+
+
+def _path_is_symlink(path: Path, label: str) -> bool:
+    try:
+        return path.is_symlink()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot inspect {label}: I/O error") from None
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot resolve {label}: I/O error") from None
 
 
 def _canonical_summary_json_bytes(value: Any) -> bytes:
@@ -537,6 +601,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label if display_label is not None else str(current)
+            raise ReceiptError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label if display_label is not None else str(current)
+            raise ReceiptError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -606,7 +683,7 @@ def _reject_raw_cli_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -628,7 +705,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -647,7 +724,7 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 
 
 def _preflight_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -689,7 +766,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label if display_label is not None else str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise ReceiptError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -697,6 +774,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise ReceiptError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot inspect {label}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise ReceiptError(f"{label} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
@@ -726,9 +808,14 @@ def _read_regular_file(
             raise ReceiptError(f"{label} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise ReceiptError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot open {label} for reading: I/O error") from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _load_json(
@@ -764,20 +851,28 @@ def _load_json(
     return value
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise ReceiptError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise ReceiptError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise ReceiptError(f"{label} contains unknown keys")
+    return present
 
 
 def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -> None:
-    _reject_unknown_keys(value, required, label)
-    missing = sorted(required - set(value))
+    present = _reject_unknown_keys(value, required, label)
+    missing = sorted(required - present)
     if missing:
         raise ReceiptError(f"{label} is missing required keys: {', '.join(missing)}")
 
 
 def _require_json_array(value: Any, label: str) -> list[Any]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise ReceiptError(f"{label} must be an array")
     if len(value) > MAX_JSON_LIST_ITEMS:
         raise ReceiptError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
@@ -906,9 +1001,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise ReceiptError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise ReceiptError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise ReceiptError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -916,6 +1014,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise ReceiptError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise ReceiptError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -960,27 +1060,35 @@ def _check_no_secret_material(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, dict):
+        if type(value) is not dict:
+            raise ReceiptError(f"{path} contains non-plain JSON object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise ReceiptError(
                 f"{path} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
             )
         for key, child in value.items():
-            if _is_secret_looking_key(key):
+            if not isinstance(key, str):
+                raise ReceiptError(f"{path} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{path} field")
+            if _is_secret_looking_key(key_text):
                 raise ReceiptError(f"{path} contains forbidden secret-looking field")
-            if _is_control_bearing_key(key):
+            if _is_control_bearing_key(key_text):
                 raise ReceiptError(f"{path} contains forbidden control-bearing field")
             _check_no_secret_material(
                 child,
                 path,
-                field_name=str(key),
+                field_name=key_text,
                 _depth=_depth + 1,
             )
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise ReceiptError(f"{path} contains non-plain JSON array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise ReceiptError(f"{path} must contain at most {MAX_JSON_LIST_ITEMS} items")
         for child in value:
             _check_no_secret_material(child, path, _depth=_depth + 1)
     elif isinstance(value, str):
+        value = _plain_text(value, str(path))
         if _contains_unsafe_json_control(value):
             raise ReceiptError(f"{path} contains unsafe control characters")
         if field_name not in SECRET_VALUE_SCAN_EXEMPT_FIELDS and _contains_secret_material(value):
@@ -1207,7 +1315,10 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
 
 
 def _require_clean_string(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
+        raise ReceiptError(f"{label} must be a non-empty string")
+    value = _plain_text(value, label)
+    if not value.strip():
         raise ReceiptError(f"{label} must be a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
@@ -1289,7 +1400,7 @@ def _reject_repository_iso_fixture_path(raw: str | Path, label: str) -> None:
 
 
 def _require_nonnegative_int(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if type(value) is not int or value < 0:
         raise ReceiptError(f"{label} must be a non-negative integer")
     return value
 
@@ -1357,7 +1468,7 @@ def _derived_pacs002_code(record: dict[str, Any], label: str) -> str:
     if record.get("hold_reason_code") is not None:
         return "PDNG"
     change_reason_codes = record.get("change_reason_codes")
-    if isinstance(change_reason_codes, list) and change_reason_codes:
+    if type(change_reason_codes) is list and len(change_reason_codes) > 0:
         return "ACWC"
     if record.get("ledger_tx_queued"):
         return "ACSP"
@@ -1372,7 +1483,7 @@ def _verify_optional_clean_string_fields(
 
 
 def _verify_persisted_context(value: Any, label: str) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise ReceiptError(f"{label} must be an object")
     _require_exact_keys(value, PERSISTED_CONTEXT_KEYS, label)
     _verify_optional_clean_string_fields(value, PERSISTED_CONTEXT_KEYS, label)
@@ -1381,7 +1492,7 @@ def _verify_persisted_context(value: Any, label: str) -> None:
 def _verify_persisted_metadata(
     value: Any, label: str, index_record: dict[str, Any]
 ) -> None:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise ReceiptError(f"{label} must be an object")
     _require_exact_keys(value, PERSISTED_METADATA_KEYS, label)
     _verify_optional_clean_string_fields(
@@ -1411,7 +1522,7 @@ def _verify_persisted_metadata(
 
 
 def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise ReceiptError(f"{label} must be an object")
     _require_exact_keys(value, PERSISTED_HISTORY_KEYS, label)
     status = _require_record_state(value.get("status"), f"{label}.status")
@@ -1436,15 +1547,11 @@ def _verify_persisted_record_source(
         max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES,
         display_label=label,
     )
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise ReceiptError(f"{label} must contain a JSON object")
     _require_exact_keys(value, PERSISTED_RECORD_KEYS, label)
     version = value.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != PERSISTED_RECORD_VERSION
-    ):
+    if type(version) is not int or version != PERSISTED_RECORD_VERSION:
         raise ReceiptError(f"{label} has unsupported persisted record version")
     source_digest = require_digest_matches(value, PERSISTED_RECORD_DIGEST_FIELD, label)
     if source_digest != index_record.get(PERSISTED_RECORD_DIGEST_FIELD):
@@ -1573,13 +1680,12 @@ def _check_status(receipt: dict[str, Any], label: str, *, allow_failed: bool) ->
     if not isinstance(ok, bool):
         raise ReceiptError(f"{label} ok must be boolean")
     if status_code is not None and (
-        isinstance(status_code, bool)
-        or not isinstance(status_code, int)
+        type(status_code) is not int
         or status_code < 100
         or status_code > 599
     ):
         raise ReceiptError(f"{label} status_code must be null or an HTTP status integer")
-    success = isinstance(status_code, int) and 200 <= status_code <= 299
+    success = type(status_code) is int and 200 <= status_code <= 299
     if ok != success:
         raise ReceiptError(f"{label} ok does not match status_code success state")
     if not allow_failed and not success:
@@ -1616,7 +1722,7 @@ def _check_failed_receipt_error(
     error: str,
 ) -> None:
     status_code = receipt.get("status_code")
-    if isinstance(status_code, int) and not isinstance(status_code, bool):
+    if type(status_code) is int:
         match = HTTP_RECEIPT_ERROR_RE.fullmatch(error)
         if match is None or int(match.group(1)) != status_code:
             raise ReceiptError(f"{label} failed receipt error must match status_code")
@@ -1627,7 +1733,7 @@ def _check_failed_receipt_error(
 
 def _check_response_metadata(receipt: dict[str, Any], label: str, *, kind: str) -> None:
     status_code = receipt.get("status_code")
-    has_http_response = isinstance(status_code, int) and not isinstance(status_code, bool)
+    has_http_response = type(status_code) is int
     response_body_sha256 = receipt.get("response_body_sha256")
     response_body_preview = receipt.get("response_body_preview")
     if response_body_sha256 is None:
@@ -1695,7 +1801,7 @@ def _response_preview_looks_secret(preview: str) -> bool:
 
 
 def _verify_audit_index_record_source(record: Any, label: str) -> None:
-    if not isinstance(record, dict):
+    if type(record) is not dict:
         raise ReceiptError(f"{label} must be an object")
     _require_exact_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
     message_id = _require_nonsecret_clean_string(
@@ -1760,16 +1866,16 @@ def _reject_duplicate_audit_index_records(records: list[Any], label: str) -> Non
 
 
 def _verify_audit_index_source(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise ReceiptError(f"{label} must contain a JSON object")
     _reject_unknown_keys(value, AUDIT_INDEX_KEYS, label)
     version = value.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version != INDEX_VERSION:
+    if type(version) is not int or version != INDEX_VERSION:
         raise ReceiptError(f"{label} version must be {INDEX_VERSION}")
     require_digest_matches(value, INDEX_DIGEST_FIELD, label)
     record_count = value.get("record_count")
     records = value.get("records")
-    if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
+    if type(record_count) is not int or record_count < 0:
         raise ReceiptError(f"{label} record_count must be a non-negative integer")
     records = _require_json_array(records, f"{label} records")
     if len(records) != record_count:
@@ -1792,6 +1898,11 @@ def _ensure_input_directory(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise ReceiptError(f"{display} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot inspect {display}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot inspect {display}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise ReceiptError(f"{display} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
@@ -1817,13 +1928,13 @@ def _verify_persisted_record_sources(
         if require_source_files and records:
             raise ReceiptError(f"{label}.store_dir is required to verify audit records")
         return
-    if not store_dir.exists():
+    if not _path_exists(store_dir, f"{label}.store_dir"):
         if require_source_files:
             raise ReceiptError(f"{label}.store_dir does not exist")
         return
     _ensure_input_directory(store_dir, f"{label}.store_dir", display_path=False)
     messages_dir = store_dir / RECORDS_DIR
-    if not messages_dir.exists():
+    if not _path_exists(messages_dir, f"{label}.store_dir/{RECORDS_DIR}"):
         if require_source_files:
             raise ReceiptError(f"{label}.store_dir/{RECORDS_DIR} does not exist")
         return
@@ -1833,10 +1944,10 @@ def _verify_persisted_record_sources(
         display_path=False,
     )
     for offset, record in enumerate(records):
-        if not isinstance(record, dict):
+        if type(record) is not dict:
             raise ReceiptError(f"{label}.records[{offset}] must be an object")
         record_path = messages_dir / record["filename"]
-        if not record_path.exists():
+        if not _path_exists(record_path, f"{label}.records[{offset}].source"):
             if require_source_files:
                 raise ReceiptError(f"{label} references missing audit record")
             continue
@@ -1878,16 +1989,17 @@ def _verify_anchor_path_peers(
     if anchor_path.name != LATEST_ANCHOR_FILE:
         return
     digest_anchor = export_dir / ANCHOR_DIR / f"{index_sha256}.notary.json"
-    if digest_anchor.exists():
-        if digest_anchor.is_symlink():
-            raise ReceiptError(
-                f"{receipt_label} digest-addressed anchor peer must not be a symlink"
-            )
+    digest_anchor_label = f"{receipt_label} digest-addressed anchor peer"
+    if _path_is_symlink(digest_anchor, digest_anchor_label):
+        raise ReceiptError(
+            f"{receipt_label} digest-addressed anchor peer must not be a symlink"
+        )
+    if _path_exists(digest_anchor, digest_anchor_label):
         if _read_regular_file(
             digest_anchor,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
             limit_label="JSON",
-            display_label=f"{receipt_label} digest-addressed anchor peer",
+            display_label=digest_anchor_label,
         ) != _read_regular_file(
             anchor_path,
             max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
@@ -1920,7 +2032,7 @@ def _verify_anchor_source(
     _reject_all_zero_sha256(anchor_sha256, f"{label} anchor_sha256")
     _reject_all_zero_sha256(index_sha256, f"{label} index_sha256")
     record_count = receipt.get("record_count")
-    if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
+    if type(record_count) is not int or record_count < 0:
         raise ReceiptError(f"{label} record_count must be a non-negative integer")
     if require_source_files and record_count == 0:
         raise ReceiptError(
@@ -1941,9 +2053,9 @@ def _verify_anchor_source(
         index_sha256=index_sha256,
         receipt_label=label,
     )
-    if anchor_path.is_symlink():
+    if _path_is_symlink(anchor_path, f"{label} anchor_path"):
         raise ReceiptError(f"{label} anchor_path must not be a symlink")
-    if not anchor_path.exists():
+    if not _path_exists(anchor_path, f"{label} anchor_path"):
         if require_source_files:
             raise ReceiptError(f"{label} references missing anchor_path")
         return (None, None)
@@ -1953,11 +2065,11 @@ def _verify_anchor_source(
         max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
         display_label=anchor_label,
     )
-    if not isinstance(anchor, dict):
+    if type(anchor) is not dict:
         raise ReceiptError(f"{anchor_label} must contain a JSON object")
     _reject_unknown_keys(anchor, ANCHOR_KEYS, anchor_label)
     version = anchor.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version != ANCHOR_VERSION:
+    if type(version) is not int or version != ANCHOR_VERSION:
         raise ReceiptError(f"{anchor_label} has unsupported anchor version")
     if (
         require_digest_matches(anchor, ANCHOR_DIGEST_FIELD, anchor_label)
@@ -1967,11 +2079,7 @@ def _verify_anchor_source(
     if anchor.get(INDEX_DIGEST_FIELD) != index_sha256:
         raise ReceiptError(f"{label} index_sha256 does not match source anchor")
     anchor_record_count = anchor.get("record_count")
-    if (
-        isinstance(anchor_record_count, bool)
-        or not isinstance(anchor_record_count, int)
-        or anchor_record_count < 0
-    ):
+    if type(anchor_record_count) is not int or anchor_record_count < 0:
         raise ReceiptError(f"{anchor_label} record_count must be a non-negative integer")
     if anchor_record_count != record_count:
         raise ReceiptError(f"{label} record_count does not match source anchor")
@@ -2002,8 +2110,9 @@ def _verify_anchor_source(
         require_source_files=require_source_files,
     )
     index_file = export_dir / INDEX_FILE
-    index_path = str(index_file) if index_file.exists() else None
-    if index_file.exists():
+    index_exists = _path_exists(index_file, exported_index_label)
+    index_path = str(index_file) if index_exists else None
+    if index_exists:
         exported_index = _verify_audit_index_source(
             _load_json(
                 index_file,
@@ -2027,7 +2136,10 @@ def _normalize_optional_string(
 ) -> str | None:
     if value is None:
         return None
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
+        raise ReceiptError(f"{label} must be null or a non-empty string")
+    value = _plain_text(value, label)
+    if not value.strip():
         raise ReceiptError(f"{label} must be null or a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
@@ -2079,7 +2191,10 @@ def _normalize_sidecar_optional_string(
     if key not in sidecar:
         return None
     value = sidecar[key]
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str):
+        raise ReceiptError(f"{label} must be a non-empty string")
+    value = _plain_text(value, label)
+    if not value.strip():
         raise ReceiptError(f"{label} must be a non-empty string")
     if len(value) > MAX_CLEAN_STRING_CHARS:
         raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
@@ -2138,7 +2253,7 @@ def _verify_rail_sidecar(
         max_bytes=MAX_RAIL_SIDECAR_JSON_BYTES,
         display_label=sidecar_label,
     )
-    if not isinstance(sidecar, dict):
+    if type(sidecar) is not dict:
         raise ReceiptError(f"{sidecar_label} must contain a JSON object")
     _reject_unknown_keys(sidecar, RAIL_SIDECAR_KEYS, sidecar_label)
     if sidecar.get("payload_sha256") != payload_sha256:
@@ -2218,9 +2333,12 @@ def _verify_rail_source(
             f"{label} xml_path must not point to checked-in ISO XML fixtures"
         )
     expected_sidecar = xml_path.with_suffix(xml_path.suffix + ".json")
-    if sidecar_path.resolve() != expected_sidecar.resolve():
+    if _path_resolve(sidecar_path, f"{label} sidecar_path") != _path_resolve(
+        expected_sidecar,
+        f"{label} expected sidecar_path",
+    ):
         raise ReceiptError(f"{label} sidecar_path must match xml_path sidecar")
-    if sidecar_path.exists():
+    if _path_exists(sidecar_path, f"{label} sidecar_path"):
         _verify_rail_sidecar(
             label,
             sidecar_path,
@@ -2231,7 +2349,7 @@ def _verify_rail_source(
         )
     elif require_source_files:
         raise ReceiptError(f"{label} references missing sidecar_path")
-    if not xml_path.exists():
+    if not _path_exists(xml_path, f"{label} xml_path"):
         if require_source_files:
             raise ReceiptError(f"{label} references missing xml_path")
         return
@@ -2266,15 +2384,11 @@ def verify_receipt_file(
         max_bytes=MAX_RECEIPT_JSON_BYTES,
         display_label=label,
     )
-    if not isinstance(receipt, dict):
+    if type(receipt) is not dict:
         raise ReceiptError(f"{label} must contain a JSON object")
     _check_no_secret_material(receipt, label)
     version = receipt.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != RECEIPT_VERSION
-    ):
+    if type(version) is not int or version != RECEIPT_VERSION:
         raise ReceiptError(f"{label} has unsupported receipt version")
     kind = receipt.get("receipt_kind")
     if isinstance(kind, str):
@@ -2332,6 +2446,11 @@ def discover_receipts(receipt_dir: Path, *, display_label: str | None = None) ->
         metadata = receipt_dir.lstat()
     except FileNotFoundError as error:
         raise ReceiptError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReceiptError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReceiptError(f"cannot inspect {label}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise ReceiptError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
@@ -2345,7 +2464,7 @@ def discover_receipts(receipt_dir: Path, *, display_label: str | None = None) ->
 def _reject_duplicate_paths(paths: list[Path]) -> None:
     seen: dict[str, int] = {}
     for offset, path in enumerate(paths):
-        key = str(path.resolve())
+        key = str(_path_resolve(path, f"receipt[{offset}]"))
         if key in seen:
             raise ReceiptError(f"receipt[{offset}] duplicates receipt[{seen[key]}]")
         seen[key] = offset
@@ -2444,7 +2563,7 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
 def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+    if isinstance(value, (str, bytes)) or type(value) not in (list, tuple):
         raise ReceiptError(f"{label} must be a repeatable path list")
     if len(value) > MAX_RECEIPT_INPUT_PATHS:
         raise ReceiptError(f"{label} accepts at most {MAX_RECEIPT_INPUT_PATHS} paths")
@@ -2452,14 +2571,18 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):
             raise ReceiptError(f"{label}[{offset}] must be a path")
-        try:
+        if isinstance(entry, str):
+            entry = _plain_text(entry, f"{label}[{offset}]")
             paths.append(Path(entry))
-        except TypeError as error:
-            raise ReceiptError(f"{label}[{offset}] must be a path") from error
+        elif type(entry) is type(Path()):
+            paths.append(Path(entry))
+        else:
+            raise ReceiptError(f"{label}[{offset}] must be a path")
     return paths
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     _require_policy_booleans(args)
     receipt_paths = _required_cli_path_sequence(getattr(args, "receipt", None), "--receipt")
     receipt_dir_paths = _required_cli_path_sequence(
@@ -2523,6 +2646,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Verify ISO 20022 operator rail/notary adapter receipts.",
         allow_abbrev=False,
     )
@@ -2569,11 +2693,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
-        _preflight_raw_cli_secrets(argv, {"--receipt", "--receipt-dir"})
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
+        _preflight_raw_cli_secrets(normalised_argv, {"--receipt", "--receipt-dir"})
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--allow-default-profile",
                 "--allow-failed",
@@ -2582,8 +2707,8 @@ def main(argv: list[str] | None = None) -> int:
                 "--require-source-files",
             },
         )
-        _preflight_cli_paths(argv, {"--receipt", "--receipt-dir"})
-        args = parser.parse_args(argv)
+        _preflight_cli_paths(normalised_argv, {"--receipt", "--receipt-dir"})
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except ReceiptError as error:
         print(f"error: {error}", file=sys.stderr)

@@ -5869,6 +5869,59 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/accounts/{account_id}/history": {
+      "get": {
+        "description": "List indexed account activity history.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List account activity history.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/accounts/{uaid}/portfolio": {
       "get": {
         "description": "Fetch the asset portfolio for an account identifier (supports optional `asset_id` filtering).",
@@ -5907,6 +5960,38 @@
         "summary": "Fetch account portfolio.",
         "tags": [
           "Accounts"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/retail/recipients/lookup": {
+      "post": {
+        "description": "Lookup a retail recipient by canonical account and alias identifiers.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Lookup retail recipient.",
+        "tags": [
+          "Aliases"
         ],
         "x-iroha-tool-effect": "read"
       }

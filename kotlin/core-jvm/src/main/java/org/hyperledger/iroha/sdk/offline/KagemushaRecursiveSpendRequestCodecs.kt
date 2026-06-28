@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Collections
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
@@ -421,7 +422,8 @@ class RedeemSpendRequest @JvmOverloads constructor(
         }
     }
     private val canonicalPublicAmount = canonicalU128Decimal(publicAmount, "publicAmount")
-    val lineageVerifierRecords: List<VerifierRecordRef> = lineageVerifierRecords.toList()
+    val lineageVerifierRecords: List<VerifierRecordRef> =
+        Collections.unmodifiableList(lineageVerifierRecords.toList())
 
     init {
         requireNonNegativeHeight(blockHeight)
@@ -512,7 +514,16 @@ class SpendBundleSummary(
     }
 
     init {
+        require(hopCount in 1..KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1) {
+            "bundle.accumulator.hop_count"
+        }
+        require(KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)) {
+            "bundle.proof_circuit_id unsupported recursive proof circuit id"
+        }
+        requireAccumulatorAsset(asset)
         requirePortableId(chainId, "chainId")
+        requireAccumulatorRoots(initialRootBytes, finalRootBytes)
+        requireTopupAnchorNullifiers(topupAnchorNullifierBytes, currentNote)
     }
 
     val initialRoot: ByteArray get() = initialRootBytes.copyOf()
@@ -2323,6 +2334,19 @@ private fun requireAccumulatorRoots(initialRoot: ByteArray, finalRoot: ByteArray
     require(!isZero32(initialRoot)) { "bundle.accumulator.initial_root" }
     require(!isZero32(finalRoot) && !finalRoot.contentEquals(initialRoot)) {
         "bundle.accumulator.final_root"
+    }
+}
+
+private fun requireAccumulatorAsset(asset: String) {
+    require(
+        AssetDefinitionIdEncoder.isCanonicalAddress(asset) ||
+            (
+                asset.length == 36 &&
+                    asset.startsWith("hex:") &&
+                    asset.drop(4).all { it in '0'..'9' || it in 'a'..'f' }
+                ),
+    ) {
+        "bundle.accumulator.asset"
     }
 }
 

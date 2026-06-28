@@ -1053,6 +1053,29 @@ function recursiveSpendBundleWithTrailingCurrentNoteField() {
   );
 }
 
+function recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(fieldIndex, replacement) {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
+  const currentNoteFields = kagemushaReadAllFields(accumulatorFields[22]);
+  currentNoteFields[fieldIndex] = Buffer.from(replacement);
+  currentNoteFields.push(kagemushaNoritoString("ignored-extra-current-note-field"));
+  accumulatorFields[22] = Buffer.concat(
+    currentNoteFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
 function recursiveSpendBundleWithEqualCurrentNoteNullifier() {
   const payload = assertKagemushaArchiveSchema(
     sharedRecursiveSpendArchive("init_bundle"),
@@ -1062,6 +1085,29 @@ function recursiveSpendBundleWithEqualCurrentNoteNullifier() {
   const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
   const currentNoteFields = kagemushaReadAllFields(accumulatorFields[22]);
   currentNoteFields[1] = Buffer.from(currentNoteFields[0]);
+  accumulatorFields[22] = Buffer.concat(
+    currentNoteFields.map((field) => kagemushaNoritoField(field)),
+  );
+  bundleFields[0] = Buffer.concat(
+    accumulatorFields.map((field) => kagemushaNoritoField(field)),
+  );
+  return kagemushaNoritoFrameFromSchemaHash(
+    kagemushaSchemaHashForTypeName(KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME),
+    Buffer.concat(bundleFields.map((field) => kagemushaNoritoField(field))),
+    TEST_NORITO_COMPACT_LEN_FLAG,
+  );
+}
+
+function recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField() {
+  const payload = assertKagemushaArchiveSchema(
+    sharedRecursiveSpendArchive("init_bundle"),
+    KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+  );
+  const bundleFields = kagemushaReadAllFields(payload);
+  const accumulatorFields = kagemushaReadAllFields(bundleFields[0]);
+  const currentNoteFields = kagemushaReadAllFields(accumulatorFields[22]);
+  currentNoteFields[1] = Buffer.from(currentNoteFields[0]);
+  currentNoteFields.push(kagemushaNoritoString("ignored-extra-current-note-field"));
   accumulatorFields[22] = Buffer.concat(
     currentNoteFields.map((field) => kagemushaNoritoField(field)),
   );
@@ -2324,6 +2370,51 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
   assert.equal(initBundle.finalRoot.length, 32);
   assert.equal(initBundle.currentNote.amount, "7");
   assert.ok(initBundle.topupAnchorNullifiers.length >= 2);
+  const originalInitialRoot = Buffer.from(initBundle.initialRoot);
+  const mutatedInitialRoot = initBundle.initialRoot;
+  mutatedInitialRoot[0] ^= 0xff;
+  assert.deepEqual(initBundle.initialRoot, originalInitialRoot);
+  assert.deepEqual(initBundle.initial_root, originalInitialRoot);
+  const originalFinalRoot = Buffer.from(initBundle.finalRoot);
+  const mutatedFinalRoot = initBundle.final_root;
+  mutatedFinalRoot[0] ^= 0xff;
+  assert.deepEqual(initBundle.finalRoot, originalFinalRoot);
+  assert.deepEqual(initBundle.final_root, originalFinalRoot);
+  const originalTopupAnchorNullifiers = initBundle.topupAnchorNullifiers.map((value) =>
+    Buffer.from(value),
+  );
+  const mutatedTopupAnchors = initBundle.topupAnchorNullifiers;
+  mutatedTopupAnchors[0][0] ^= 0xff;
+  mutatedTopupAnchors.length = 0;
+  assert.deepEqual(initBundle.topupAnchorNullifiers, originalTopupAnchorNullifiers);
+  assert.deepEqual(initBundle.topup_anchor_nullifiers, originalTopupAnchorNullifiers);
+  const originalNoteCommitment = Buffer.from(initBundle.currentNote.noteCommitment);
+  const mutatedNoteCommitment = initBundle.currentNote.note_commitment;
+  mutatedNoteCommitment[0] ^= 0xff;
+  assert.deepEqual(initBundle.currentNote.noteCommitment, originalNoteCommitment);
+  assert.deepEqual(initBundle.current_note.note_commitment, originalNoteCommitment);
+  const originalSpendNullifier = Buffer.from(initBundle.currentNote.spendNullifier);
+  const mutatedSpendNullifier = initBundle.current_note.spend_nullifier;
+  mutatedSpendNullifier[0] ^= 0xff;
+  assert.deepEqual(initBundle.currentNote.spendNullifier, originalSpendNullifier);
+  assert.deepEqual(initBundle.current_note.spend_nullifier, originalSpendNullifier);
+  const mutableVerifierRecordBytes = syntheticKagemushaArchive(
+    KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
+    0x68,
+  );
+  const copiedVerifierRecordBytes = Buffer.from(mutableVerifierRecordBytes);
+  const copiedVerifierRecord = buildKagemushaRecursiveSpendVerifierRecordRef({
+    verifierKeyId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    recordBytes: mutableVerifierRecordBytes,
+  });
+  assert.equal(Object.isFrozen(copiedVerifierRecord), true);
+  mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0xff;
+  assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);
+  assert.deepEqual(copiedVerifierRecord.record_bytes, copiedVerifierRecordBytes);
+  const returnedVerifierRecordBytes = copiedVerifierRecord.record_bytes;
+  returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0xff;
+  assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);
+  assert.deepEqual(copiedVerifierRecord.record_bytes, copiedVerifierRecordBytes);
   const malformedTopupAnchorCases = [
     ["topup anchor empty list", [], "bundle.accumulator.topup_anchor_nullifiers count is out of range"],
     [
@@ -2397,6 +2488,49 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
     ),
     "trailing accumulator cannot mask invalid top-up anchor nullifiers",
   );
+  const maskedTopupAnchorPrecedenceCases = [
+    [
+      "malformed proof cannot mask current-note top-up anchor reuse",
+      recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes([
+        initBundle.currentNote.noteCommitment,
+      ]),
+      "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    ],
+    [
+      "trailing accumulator cannot mask current-note top-up anchor reuse",
+      recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField([
+        initBundle.currentNote.spendNullifier,
+      ]),
+      "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+    ],
+    [
+      "malformed proof cannot mask duplicate top-up anchors",
+      recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes([
+        initBundle.topupAnchorNullifiers[0],
+        initBundle.topupAnchorNullifiers[0],
+      ]),
+      "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+    ],
+    [
+      "trailing accumulator cannot mask descending top-up anchors",
+      recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField([
+        initBundle.topupAnchorNullifiers[1],
+        initBundle.topupAnchorNullifiers[0],
+      ]),
+      "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+    ],
+  ];
+  for (const [label, archive, expectedMessage] of maskedTopupAnchorPrecedenceCases) {
+    assert.throws(
+      () => decodeKagemushaRecursiveSpendBundle(archive),
+      kagemushaRequestCodecError(
+        "archive",
+        "bundle.accumulator.topup_anchor_nullifiers",
+        expectedMessage,
+      ),
+      label,
+    );
+  }
 
   const appendBundle = decodeKagemushaRecursiveSpendBundle(
     sharedRecursiveSpendAbi7Archive("append_bundle"),
@@ -2604,6 +2738,42 @@ test("Kagemusha recursive spend typed codecs decode ABI-6 and ABI-7 fixtures", (
         decodeKagemushaRecursiveSpendBundle(
           recursiveSpendBundleWithCurrentNoteField(fieldIndex, replacement),
         ),
+      kagemushaRequestCodecError(expectedKind, expectedField, expectedMessage),
+    );
+  }
+  const currentNoteValidationPrecedenceCases = [
+    [
+      recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(0, Buffer.alloc(32)),
+      "field",
+      "noteCommitment",
+      null,
+    ],
+    [
+      recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(1, Buffer.alloc(32)),
+      "field",
+      "spendNullifier",
+      null,
+    ],
+    [
+      recursiveSpendBundleWithEqualCurrentNoteNullifierAndTrailingField(),
+      "field",
+      "spendNullifier",
+      null,
+    ],
+    [
+      recursiveSpendBundleWithCurrentNoteFieldAndTrailingField(
+        2,
+        kagemushaZeroNumericPayload(),
+      ),
+      "field",
+      "bundle.accumulator.current_note.amount",
+      /numeric amount must be greater than zero/,
+    ],
+  ];
+  for (const [archive, expectedKind, expectedField, expectedMessage]
+    of currentNoteValidationPrecedenceCases) {
+    assert.throws(
+      () => decodeKagemushaRecursiveSpendBundle(archive),
       kagemushaRequestCodecError(expectedKind, expectedField, expectedMessage),
     );
   }
@@ -3391,6 +3561,26 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           verifierKeyId: "danglingRedeemLineageRecord",
           recordBytes: Buffer.from([0]),
         },
+      }),
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles or lineage witnesses/,
+    ),
+  );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: recursiveSpendRecipient(),
+        publicAmount: "7",
+        redeemProof,
+        lineageVerifierRecords: [
+          {
+            verifierKeyId: "danglingRedeemLineageRecords",
+            recordBytes: Buffer.from([0]),
+          },
+        ],
       }),
     kagemushaRequestCodecError(
       "field",

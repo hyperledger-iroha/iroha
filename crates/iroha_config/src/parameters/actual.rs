@@ -1713,6 +1713,8 @@ pub struct Network {
     pub deferred_send_ttl: Duration,
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub deferred_send_max_per_peer: usize,
+    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    pub deferred_send_max_bytes_per_peer: usize,
     /// Interval between peer gossip batches.
     pub peer_gossip_period: Duration,
     /// Maximum interval between peer gossip batches (idle backoff ceiling).
@@ -1804,6 +1806,14 @@ pub struct Network {
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,
+    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    pub p2p_outbound_frame_queue_max_high_bytes: NonZeroUsize,
+    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    pub p2p_outbound_frame_queue_max_low_bytes: NonZeroUsize,
+    /// Maximum encrypted high-priority outbound frames retained per peer.
+    pub p2p_outbound_frame_queue_max_high_frames: NonZeroUsize,
+    /// Maximum encrypted low-priority outbound frames retained per peer.
+    pub p2p_outbound_frame_queue_max_low_frames: NonZeroUsize,
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     pub p2p_subscriber_queue_cap: NonZeroUsize,
     /// Optional per-peer consensus ingress rate (msgs/sec). When None, ingress limiting is disabled.
@@ -2478,6 +2488,8 @@ pub struct Queue {
     pub capacity: NonZeroUsize,
     /// Per-user transaction limit in the queue.
     pub capacity_per_user: NonZeroUsize,
+    /// Estimated maximum retained queue memory budget in bytes.
+    pub max_retained_bytes: NonZeroU64,
     /// Transaction time-to-live.
     pub transaction_time_to_live: Duration,
     /// Minimum interval between expired-transaction sweeps.
@@ -4468,6 +4480,7 @@ impl Default for Queue {
             transaction_time_to_live: defaults::queue::TRANSACTION_TIME_TO_LIVE,
             capacity: defaults::queue::CAPACITY,
             capacity_per_user: defaults::queue::CAPACITY_PER_USER,
+            max_retained_bytes: defaults::queue::MAX_RETAINED_BYTES,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
             expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
             plan_journal_enabled: defaults::queue::PLAN_JOURNAL_ENABLED,
@@ -4851,6 +4864,8 @@ pub struct SumeragiRecovery {
     pub range_pull_escalation_after_hash_misses: u32,
     /// Height margin used to prune stale missing-block requests once head advances.
     pub missing_request_stale_height_margin: u64,
+    /// Maximum full pending block bodies retained in memory.
+    pub pending_block_cap: usize,
     /// Maximum deferred block-sync updates retained in memory.
     pub pending_block_sync_cap: usize,
     /// Maximum cached proposal entries retained in memory.
@@ -4920,6 +4935,10 @@ pub struct SumeragiRbc {
     pub rebroadcast_sessions_per_tick: usize,
     /// Maximum RBC payload chunks broadcast per tick.
     pub payload_chunks_per_tick: usize,
+    /// Maximum RBC outbound rebroadcast sessions retained in memory.
+    pub outbound_queue_max_sessions: usize,
+    /// Maximum RBC outbound rebroadcast bytes retained in memory.
+    pub outbound_queue_max_bytes: usize,
     /// Whether inline frontier BlockCreated payloads also seed Proposal + RBC backup transport.
     pub inline_block_created_backup: bool,
     /// Maximum number of persisted RBC session summaries retained on disk.
@@ -6911,6 +6930,8 @@ pub struct SorafsStorage {
     pub orderbook: SorafsOrderbook,
     /// Local SFM-4c privacy aggregate publication scheduler.
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
+    /// Local SFM-6 reserve lifecycle advancement scheduler.
+    pub reserve_lifecycle: SorafsReserveLifecycleSchedule,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
@@ -6939,6 +6960,17 @@ pub struct SorafsPrivacyAggregateSchedule {
     pub cycle_seconds: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
+}
+
+/// Local SFM-6 reserve lifecycle advancement scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsReserveLifecycleSchedule {
+    /// Whether config-backed lifecycle advancement is enabled.
+    pub enabled: bool,
+    /// Interval between lifecycle advancement ticks, in seconds.
+    pub interval_seconds: u64,
+    /// Delay before the first lifecycle advancement tick, in seconds.
+    pub initial_delay_seconds: u64,
 }
 
 /// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
@@ -6971,6 +7003,7 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsTokenConfig::default(),
             orderbook: SorafsOrderbook::default(),
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
+            reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
@@ -6996,6 +7029,17 @@ impl Default for SorafsPrivacyAggregateSchedule {
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl Default for SorafsReserveLifecycleSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::reserve_lifecycle::ENABLED,
+            interval_seconds: defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS,
+            initial_delay_seconds:
+                defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS,
         }
     }
 }
@@ -9853,7 +9897,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offline_defaults_keep_kagemusha_enabled_without_legacy_fallback() {
+    fn offline_defaults_keep_kagemusha_enabled() {
         let offline = Offline::default();
         assert!(
             offline.kagemusha_enabled,

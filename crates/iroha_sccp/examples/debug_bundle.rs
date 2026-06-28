@@ -3,9 +3,11 @@
 use std::io::{self, Read};
 
 use iroha_sccp::{
-    decode_nexus_bridge_finality_proof, sccp_message_source_domain, sccp_message_target_domain,
-    sccp_message_transparent_public_inputs, verify_nexus_bridge_finality_proof_structure,
-    verify_sccp_payload_structure, NexusSccpMessageProofV1,
+    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, decode_nexus_bridge_finality_proof,
+    decode_sccp_source_chain_proof_envelope, sccp_message_source_domain,
+    sccp_message_target_domain, sccp_message_transparent_public_inputs,
+    verify_nexus_bridge_finality_proof_structure, verify_sccp_payload_structure,
+    verify_sccp_source_chain_proof_envelope_structure,
 };
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -27,8 +29,14 @@ fn main() {
         norito::json::from_str(&input).expect("decode bundle json");
     println!("bundle.version={}", bundle.version);
     println!("commitment.version={}", bundle.commitment.version);
-    println!("source_domain={}", sccp_message_source_domain(&bundle.payload));
-    println!("target_domain={}", sccp_message_target_domain(&bundle.payload));
+    println!(
+        "source_domain={}",
+        sccp_message_source_domain(&bundle.payload)
+    );
+    println!(
+        "target_domain={}",
+        sccp_message_target_domain(&bundle.payload)
+    );
     println!(
         "payload_structure={}",
         verify_sccp_payload_structure(&bundle.payload)
@@ -39,6 +47,72 @@ fn main() {
         "public_inputs_some={}",
         sccp_message_transparent_public_inputs(&bundle).is_some()
     );
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_SORA {
+        let Some(source_proof) = decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
+        else {
+            println!("source_proof_decode=false");
+            return;
+        };
+        println!("source_proof_decode=true");
+        println!("source_proof.version={}", source_proof.version);
+        println!("source_proof.source_domain={}", source_proof.source_domain);
+        println!("source_proof.target_domain={}", source_proof.target_domain);
+        println!("source_proof.chain={}", source_proof.source_chain);
+        println!(
+            "source_proof.source_proof_plan={:?}",
+            source_proof.source_proof_plan
+        );
+        println!(
+            "source_proof.finality_model={:?}",
+            source_proof.finality_model
+        );
+        println!(
+            "source_proof.message_id={}",
+            hex_encode(&source_proof.message_id)
+        );
+        println!(
+            "source_proof.payload_hash={}",
+            hex_encode(&source_proof.payload_hash)
+        );
+        println!(
+            "source_proof.source_event_digest={}",
+            hex_encode(&source_proof.source_event_digest)
+        );
+        println!(
+            "source_proof.commitment_root={}",
+            hex_encode(&source_proof.commitment_root)
+        );
+        println!("source_proof.height={}", source_proof.finality_height);
+        println!(
+            "source_proof.block_hash={}",
+            hex_encode(&source_proof.finality_block_hash)
+        );
+        println!(
+            "source_proof.finalized_header_hash={}",
+            hex_encode(&source_proof.finalized_header_hash)
+        );
+        println!(
+            "source_proof.receipt_or_message_root={}",
+            hex_encode(&source_proof.receipt_or_message_root)
+        );
+        println!(
+            "source_proof.consensus_proof_len={}",
+            source_proof.consensus_proof.len()
+        );
+        println!(
+            "source_proof.message_inclusion_proof_len={}",
+            source_proof.message_inclusion_proof.len()
+        );
+        println!(
+            "source_proof.inclusion_branch_len={}",
+            source_proof.inclusion_branch.len()
+        );
+        println!(
+            "source_proof.structure={}",
+            verify_sccp_source_chain_proof_envelope_structure(&source_proof)
+        );
+        return;
+    }
     let Some(finality) = decode_nexus_bridge_finality_proof(&bundle.finality_proof) else {
         println!("finality_decode=false");
         return;
@@ -52,10 +126,7 @@ fn main() {
         "finality.commitment_root={}",
         hex_encode(&finality.commitment_root)
     );
-    println!(
-        "finality.header_len={}",
-        finality.block_header_bytes.len()
-    );
+    println!("finality.header_len={}", finality.block_header_bytes.len());
     println!(
         "finality.structure={}",
         verify_nexus_bridge_finality_proof_structure(&finality)

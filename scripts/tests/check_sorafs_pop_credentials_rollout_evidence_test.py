@@ -181,6 +181,7 @@ def complete_payloads() -> dict[str, dict[str, object]]:
     for payload in payloads.values():
         payload["deployment_id"] = DEPLOYMENT_ID
         payload["environment"] = ENVIRONMENT
+        payload["deployment_context_reviewed"] = True
     return payloads
 
 

@@ -37,6 +37,7 @@ def base(schema: str) -> dict:
         "generated_at_unix": GENERATED_AT,
         "deployment_id": "gateway-compliance-staging-a",
         "environment": "staging",
+        "deployment_context_reviewed": True,
     }
 
 

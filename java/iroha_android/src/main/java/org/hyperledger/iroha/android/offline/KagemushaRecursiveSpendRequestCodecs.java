@@ -1229,17 +1229,28 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final SpendableNoteDescriptor currentNote) {
       this.hopCount = hopCount;
       this.proofCircuitId = Objects.requireNonNull(proofCircuitId, "proofCircuitId");
+      require(
+          hopCount >= 1
+              && hopCount
+                  <= KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+          "bundle.accumulator.hop_count");
+      require(
+          KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(this.proofCircuitId),
+          "bundle.proof_circuit_id unsupported recursive proof circuit id");
       this.asset = Objects.requireNonNull(asset, "asset");
+      requireAccumulatorAsset(this.asset);
       this.chainId = Objects.requireNonNull(chainId, "chainId");
       requirePortableId(this.chainId, "chainId");
       this.initialRoot = fixedBytes(initialRoot, 32, "initialRoot");
       this.finalRoot = fixedBytes(finalRoot, 32, "finalRoot");
+      requireAccumulatorRoots(this.initialRoot, this.finalRoot);
       final ArrayList<byte[]> copiedTopupAnchorNullifiers = new ArrayList<>();
       for (final byte[] value : Objects.requireNonNull(topupAnchorNullifiers, "topupAnchorNullifiers")) {
         copiedTopupAnchorNullifiers.add(fixedBytes(value, 32, "topupAnchorNullifier"));
       }
       this.topupAnchorNullifiers = Collections.unmodifiableList(copiedTopupAnchorNullifiers);
       this.currentNote = Objects.requireNonNull(currentNote, "currentNote");
+      requireTopupAnchorNullifiers(this.topupAnchorNullifiers, this.currentNote);
     }
 
     public byte[] initialRoot() {
@@ -2332,6 +2343,25 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     require(
         !isZero(finalRoot) && !Arrays.equals(finalRoot, initialRoot),
         "bundle.accumulator.final_root");
+  }
+
+  private static void requireAccumulatorAsset(final String asset) {
+    require(
+        AssetDefinitionIdEncoder.isCanonicalAddress(asset) || isHexAssetDefinitionFallback(asset),
+        "bundle.accumulator.asset");
+  }
+
+  private static boolean isHexAssetDefinitionFallback(final String asset) {
+    if (asset.length() != 36 || !asset.startsWith("hex:")) {
+      return false;
+    }
+    for (int index = 4; index < asset.length(); index++) {
+      final char value = asset.charAt(index);
+      if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static void requireAccumulatorCorridor(final NoritoDecoder decoder, final int hopCount) {

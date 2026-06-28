@@ -203,14 +203,20 @@ CREATE TABLE reputation_snapshots (
   summary matches the fail-closed rollout decision. It rejects raw snapshot/proof
   bytes, raw provider records, request or
   response bodies, bearer tokens, signed transactions, private keys, and other
-  payload-bearing fields. The checker supports shell-style `@ARGFILE` inputs
-  for direct replay of reviewed evidence directories and explicit artifacts.
+  payload-bearing fields. The checker exports its required top-level payload
+  fields as `EVIDENCE_REQUIRED_FIELDS`, allowing dry-run collection plans and
+  downstream automation to inspect the exact SFM-3 evidence contract before
+  live collection. It supports shell-style `@ARGFILE` inputs for direct replay
+  of reviewed evidence directories and explicit artifacts.
 - `scripts/run_sorafs_reputation_rollout_evidence.py` collects the deployed
   rollout bundle with bounded `sorafs_cli reputation publish|snapshot|fetch|watch|verify`
   commands, supports shell-style `@ARGFILE` response files, checks provider
   proof coverage before touching a live Torii endpoint, and then runs the
-  evidence gate. `scripts/examples/sorafs_reputation_rollout_evidence.args.example`
-  provides a payload-free operator template.
+  evidence gate. Its `--dry-run` output includes the checker-backed
+  `evidence_contract` map for publish/latest, provider, events, verify,
+  metrics, transport, and consumption artifacts.
+  `scripts/examples/sorafs_reputation_rollout_evidence.args.example` provides
+  a payload-free operator template.
 - Operator workflow notes live in
   `docs/source/sorafs/reputation_operator.md`.
 

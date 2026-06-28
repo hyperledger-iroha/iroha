@@ -179,6 +179,21 @@ def test_missing_transparency_source_kind_fails_before_plan(tmp_path: Path, caps
     assert captured.out == ""
 
 
+def test_malformed_source_entry_sanitizes_exception_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bad_message = "transparency\nsource"
+
+    def raise_malformed_source_entry(_spec: str):
+        raise ValueError(bad_message)
+
+    monkeypatch.setattr(MODULE, "split_source_entry_spec", raise_malformed_source_entry)
+    errors = MODULE.validate_inputs(MODULE.parse_args(complete_args(tmp_path)))
+
+    assert "<non-canonical-error>" in errors
+    assert bad_message not in "\n".join(errors)
+
+
 def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     missing = tmp_path / "missing-execution-summary.json"

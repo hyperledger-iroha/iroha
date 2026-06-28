@@ -122,6 +122,43 @@ pub fn encode_halo2_ipa_proving_key_archive(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+/// Write Halo2 IPA proving-key bytes with circuit-family and verifier-key binding.
+///
+/// This produces the same Norito archive as
+/// [`encode_halo2_ipa_proving_key_archive`] while streaming the framed archive
+/// to a seekable writer.
+///
+/// # Errors
+///
+/// Returns an error when the circuit family or proving-key payload is empty, or
+/// when Norito encoding fails.
+pub fn write_halo2_ipa_proving_key_archive<W>(
+    writer: &mut W,
+    circuit_family: &str,
+    vk_commitment: [u8; 32],
+    proving_key: Vec<u8>,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+{
+    if circuit_family.is_empty() {
+        return Err("proving key archive circuit family must be non-empty".to_owned());
+    }
+    if proving_key.is_empty() {
+        return Err("proving key archive payload must be non-empty".to_owned());
+    }
+    let archive = norito::to_bytes(&Halo2IpaProvingKeyArchive {
+        version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
+        circuit_family: circuit_family.to_owned(),
+        vk_commitment,
+        proving_key,
+    })
+    .map_err(|err| format!("failed to encode proving key archive: {err}"))?;
+    std::io::Write::write_all(writer, &archive)
+        .map_err(|err| format!("failed to write proving key archive: {err}"))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 fn decode_halo2_ipa_proving_key_archive(
     bytes: &[u8],
     expected_circuit_family: &str,
@@ -324,8 +361,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MAX_K: u32 = 24;
 /// Minimum Halo2 IPA parameter degree expected for reserved recursive spend lineage keys.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K: u32 = 8;
 /// Canonical Halo2 IPA parameter degree for one-hop recursive spend lineage proofs.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 =
-    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K;
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
 #[cfg(feature = "zk-halo2-ipa")]
 const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
@@ -376,10 +412,10 @@ pub const KAGEMUSHA_HOP_MAX_PROOF_BYTES: u32 = confidential_v2::CONFIDENTIAL_V2_
 pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: usize = 128;
 /// Number of fixed windows used by the production recursive Vesta IPA verifier witness profile.
 #[cfg(feature = "zk-halo2-ipa")]
-pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;
 /// Bits per fixed window used by the production recursive Vesta IPA verifier witness profile.
 #[cfg(feature = "zk-halo2-ipa")]
-pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;
+pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;
 /// Canonical verifier-witness profile name bound into reserved Kagemusha recursive evidence.
 #[cfg(feature = "zk-halo2-ipa")]
 pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
@@ -2340,13 +2376,13 @@ fn derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_bytes_for_len<
+fn derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_raw_for_len<
     const LEN: usize,
 >(
     vk_box: &VerifyingKeyBox,
     circuit_id: &str,
     context: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<([u8; 32], Vec<u8>), String> {
     ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
         vk_box,
         u32::try_from(LEN).expect("opening length fits u32"),
@@ -2360,31 +2396,56 @@ fn derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_bytes
             params.k()
         ));
     }
-    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
-        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
-            LEN,
-            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
-            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
-        >,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| {
-        format!("missing/invalid H2VK payload for {circuit_id} verifier key opening length {LEN}")
-    })?;
-    let pk = halo2_backend::keygen_pk(
+    let pk = halo2_backend::keygen_pk2(
         &params,
-        parsed_vk,
         &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSliceKeygenShape::<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
         >::default(),
+        false,
     )
     .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
-    encode_halo2_ipa_proving_key_archive(
-        circuit_id,
+    ensure_generated_proving_key_vk_matches_box(&pk, vk_box, circuit_id, context)?;
+    Ok((
         hash_vk(vk_box),
-        halo2_backend::proving_key_to_processed_bytes(&pk),
-    )
+        halo2_backend::proving_key_into_processed_bytes(pk),
+    ))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_bytes_for_len<
+    const LEN: usize,
+>(
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    context: &str,
+) -> Result<Vec<u8>, String> {
+    let (vk_commitment, proving_key) =
+        derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_raw_for_len::<LEN>(
+            vk_box, circuit_id, context,
+        )?;
+    encode_halo2_ipa_proving_key_archive(circuit_id, vk_commitment, proving_key)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn write_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_archive_for_len<
+    W,
+    const LEN: usize,
+>(
+    writer: &mut W,
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    context: &str,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+{
+    let (vk_commitment, proving_key) =
+        derive_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_raw_for_len::<LEN>(
+            vk_box, circuit_id, context,
+        )?;
+    write_halo2_ipa_proving_key_archive(writer, circuit_id, vk_commitment, proving_key)
 }
 
 /// Derive packaged Halo2 IPA proving-key bytes for the one-hop Reserved-lineage circuit.
@@ -2492,13 +2553,13 @@ fn derive_halo2_ipa_kagemusha_recursive_compact_append_proving_key_bytes_for_len
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_bytes_for_len<
+fn derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_raw_for_len<
     const LEN: usize,
 >(
     vk_box: &VerifyingKeyBox,
     circuit_id: &str,
     context: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<([u8; 32], Vec<u8>), String> {
     ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
         vk_box,
         u32::try_from(LEN).expect("opening length fits u32"),
@@ -2512,33 +2573,56 @@ fn derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_bytes_
             params.k()
         ));
     }
-    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
-        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
-            LEN,
-            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
-            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
-        >,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| {
-        format!(
-            "missing/invalid H2VK payload for kagemusha-recursive-spend-lineage-append-v1 verifier key opening length {LEN}"
-        )
-    })?;
-    let pk = halo2_backend::keygen_pk(
+    let pk = halo2_backend::keygen_pk2(
         &params,
-        parsed_vk,
         &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSliceKeygenShape::<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
         >::default(),
+        false,
     )
     .map_err(|err| format!("failed to derive {context} proving key: {err}"))?;
-    encode_halo2_ipa_proving_key_archive(
-        circuit_id,
+    ensure_generated_proving_key_vk_matches_box(&pk, vk_box, circuit_id, context)?;
+    Ok((
         hash_vk(vk_box),
-        halo2_backend::proving_key_to_processed_bytes(&pk),
-    )
+        halo2_backend::proving_key_into_processed_bytes(pk),
+    ))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_bytes_for_len<
+    const LEN: usize,
+>(
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    context: &str,
+) -> Result<Vec<u8>, String> {
+    let (vk_commitment, proving_key) =
+        derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_raw_for_len::<LEN>(
+            vk_box, circuit_id, context,
+        )?;
+    encode_halo2_ipa_proving_key_archive(circuit_id, vk_commitment, proving_key)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn write_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_archive_for_len<
+    W,
+    const LEN: usize,
+>(
+    writer: &mut W,
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    context: &str,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+{
+    let (vk_commitment, proving_key) =
+        derive_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_raw_for_len::<LEN>(
+            vk_box, circuit_id, context,
+        )?;
+    write_halo2_ipa_proving_key_archive(writer, circuit_id, vk_commitment, proving_key)
 }
 
 /// Derive packaged Halo2 IPA proving-key bytes for the Reserved-lineage append circuit.
@@ -2770,6 +2854,39 @@ fn build_kagemusha_recursive_append_verifier_slice_vk_box<const LEN: usize>(
     zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn generated_proving_key_vk_box_bytes(pk: &halo2_backend::ProvingKey, circuit_id: &str) -> Vec<u8> {
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, circuit_id);
+    zk1::wrap_append_vk_pasta(&mut bytes, pk.get_vk());
+    bytes
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_generated_proving_key_vk_matches_box(
+    pk: &halo2_backend::ProvingKey,
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    context: &str,
+) -> Result<(), String> {
+    let generated_vk_bytes = generated_proving_key_vk_box_bytes(pk, circuit_id);
+    if generated_vk_bytes == vk_box.bytes {
+        return Ok(());
+    }
+
+    let expected = hash_vk(vk_box);
+    let generated = hash_vk(&VerifyingKeyBox::new(
+        ZK_BACKEND_HALO2_IPA.to_owned(),
+        generated_vk_bytes,
+    ));
+    Err(format!(
+        "{context} generated verifier key does not match supplied verifier key: expected {}, generated {}",
+        hex::encode(expected),
+        hex::encode(generated)
+    ))
 }
 
 /// Build a governance/WSV verifier-key record for Kagemusha folded proofs.
@@ -7166,6 +7283,31 @@ pub fn derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_by
     )
 }
 
+/// Write Halo2 IPA proving-key bytes for the ABI-7 recursive compact Kagemusha circuit.
+///
+/// The output archive is equivalent to
+/// [`derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes`]
+/// but is streamed to `writer`.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key or opening length is unsupported, key
+/// derivation fails, or archive encoding fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive<W>(
+    writer: &mut W,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+{
+    write_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_proving_key_archive(
+        writer,
+        vk_box,
+        KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN,
+    )
+}
+
 /// Derive Halo2 IPA proving-key bytes for a one-hop ABI-7 recursive compact key.
 ///
 /// # Errors
@@ -7195,6 +7337,48 @@ pub fn derive_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_provin
         32 => derive_len!(32),
         64 => derive_len!(64),
         128 => derive_len!(128),
+        other => Err(format!(
+            "Kagemusha recursive compact one-hop proving key opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+/// Write Halo2 IPA proving-key bytes for a one-hop ABI-7 recursive compact key.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key or opening length is unsupported, key
+/// derivation fails, or archive encoding fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn write_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_proving_key_archive<W>(
+    writer: &mut W,
+    vk_box: &VerifyingKeyBox,
+    verifier_opening_len: u32,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+{
+    macro_rules! write_len {
+        ($len:literal) => {
+            write_halo2_ipa_kagemusha_recursive_one_hop_verifier_slice_proving_key_archive_for_len::<
+                W,
+                $len,
+            >(
+                writer,
+                vk_box,
+                KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+                "Kagemusha recursive compact payment token",
+            )
+        };
+    }
+    match verifier_opening_len {
+        2 => write_len!(2),
+        4 => write_len!(4),
+        8 => write_len!(8),
+        16 => write_len!(16),
+        32 => write_len!(32),
+        64 => write_len!(64),
+        128 => write_len!(128),
         other => Err(format!(
             "Kagemusha recursive compact one-hop proving key opening length `{other}` is unsupported"
         )),
@@ -7235,6 +7419,48 @@ pub fn derive_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving
                 vk_box,
             )
         }
+        other => Err(format!(
+            "Kagemusha recursive compact append proving key opening length `{other}` is unsupported"
+        )),
+    }
+}
+
+/// Write Halo2 IPA proving-key bytes for an append ABI-7 recursive compact key.
+///
+/// # Errors
+///
+/// Returns an error when the verifier key or opening length is unsupported, key
+/// derivation fails, or archive encoding fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn write_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_archive<W>(
+    writer: &mut W,
+    vk_box: &VerifyingKeyBox,
+    verifier_opening_len: u32,
+) -> Result<(), String>
+where
+    W: std::io::Write + std::io::Seek,
+{
+    macro_rules! write_len {
+        ($len:literal) => {
+            write_halo2_ipa_kagemusha_recursive_append_verifier_slice_proving_key_archive_for_len::<
+                W,
+                $len,
+            >(
+                writer,
+                vk_box,
+                KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+                "Kagemusha recursive compact append",
+            )
+        };
+    }
+    match verifier_opening_len {
+        2 => write_len!(2),
+        4 => write_len!(4),
+        8 => write_len!(8),
+        16 => write_len!(16),
+        32 => write_len!(32),
+        64 => write_len!(64),
+        128 => write_len!(128),
         other => Err(format!(
             "Kagemusha recursive compact append proving key opening length `{other}` is unsupported"
         )),

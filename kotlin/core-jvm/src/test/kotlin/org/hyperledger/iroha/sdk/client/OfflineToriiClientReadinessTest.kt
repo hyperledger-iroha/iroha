@@ -23,7 +23,7 @@ class OfflineToriiClientReadinessTest {
               "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
               "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
               "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-              "offline_kagemusha_recursive_compact_artifacts_available": true
+              "offline_kagemusha_recursive_compact_artifacts_available": false
             }
             """.trimIndent(),
         )
@@ -48,7 +48,7 @@ class OfflineToriiClientReadinessTest {
         assertEquals("recursive_compact_v1", readiness.offlineKagemushaRecursiveCompactMode)
         assertEquals(7, readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion)
         assertEquals("kagemusha-recursive-compact-v1", readiness.offlineKagemushaRecursiveCompactCircuitId)
-        assertEquals(true, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
+        assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
     }
 
     @Test

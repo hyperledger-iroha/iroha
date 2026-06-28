@@ -22,6 +22,7 @@ from check_sorafs_por_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_CHALLENGES,
     DEFAULT_MIN_PROVIDERS,
     DEFAULT_REQUIRED_KINDS,
+    EVIDENCE_REQUIRED_FIELDS,
     KIND_BY_NAME,
     SUMMARY_SCHEMA,
 )
@@ -37,6 +38,7 @@ from sorafs_response_args import (  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
+    emit_runner_exception,
     run_command_plan,
     require_existing_files,
     require_runner_non_negative_int,
@@ -166,6 +168,13 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for kind, paths in evidence_paths_by_kind(args).items()
             if paths
         },
+        "evidence_contract": {
+            kind: {
+                "schema": KIND_BY_NAME[kind].schema,
+                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+            }
+            for kind in args.required_kinds
+        },
         "steps": [
             {
                 "label": step.label,
@@ -252,7 +261,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         raise SystemExit(2) from error
     args = parser.parse_args(expanded_args)
     try:
@@ -262,7 +271,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_runner_error_lines((str(error),))
+        emit_runner_exception(error)
         raise SystemExit(2) from error
     return args
 

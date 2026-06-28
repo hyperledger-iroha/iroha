@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
+    emit_checker_exception,
     emit_checker_notice,
     render_and_write_checker_summary,
     validate_checker_preflight,
@@ -204,6 +205,184 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_CANARY_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+    "config_digest_hex",
+)
+COMMON_GOVERNANCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "pricing_config": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "config_version",
+        "config_source",
+        "class_count",
+        "pricing_config_present",
+        "settlement_config_present",
+        "quote_ttl_present",
+        "default_panel_size_present",
+        "config_route_2xx",
+        "status_route_2xx",
+        "config_payload_included",
+        "response_bodies_included",
+    ),
+    "quote_api": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "quote_count",
+        "passed_quote_count",
+        "classes",
+        "urgencies",
+        "deterministic_replay_passed",
+        "deposit_bounds_enforced",
+        "max_route_latency_ms",
+        "payloads_included",
+        "response_bodies_included",
+    ),
+    "deposit_lifecycle": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "deposit_probe_count",
+        "confirmed_deposit_count",
+        "payer_auth_enforced",
+        "participant_status_gate_enforced",
+        "mismatched_escrow_rejected",
+        "unconfirmed_ballot_rejected",
+        "ledger_lock_confirmed",
+        "idempotency_key_bound",
+        "evidence_hashes_bound",
+        "max_route_latency_ms",
+        "raw_instruction_included",
+        "deposit_payloads_included",
+        "response_bodies_included",
+    ),
+    "settlement_execution": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "route_count",
+        "passed_route_count",
+        "routes",
+        "settlement_probe_count",
+        "instruction_step_count",
+        "outcomes",
+        "reconciliation_statuses",
+        "drawdown_instruction_present",
+        "cancel_instruction_present",
+        "required_signer_bound",
+        "deterministic_reconciliation_digest",
+        "treasury_reconciliation_passed",
+        "mismatched_ledger_rejected",
+        "raw_instruction_included",
+        "signed_transaction_included",
+        "response_bodies_included",
+    ),
+    "settlement_submitter": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "configured_signer_count",
+        "queued_step_count",
+        "submitted_step_count",
+        "receipt_published",
+        "required_authority_matched",
+        "missing_signer_rejected",
+        "wrong_authority_rejected",
+        "rejected_or_expired_retry_verified",
+        "max_settlement_lag_seconds",
+        "raw_receipt_included",
+        "signed_transaction_included",
+    ),
+    "moderation_worker": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "worker_enabled",
+        "storage_configured",
+        "submitter_keys_configured",
+        "ballot_replay_count",
+        "live_event_subscription_verified",
+        "deposit_fingerprint_reconstructed",
+        "evidence_hashes_verified",
+        "runtime_ledger_validated",
+        "pending_step_queued",
+        "idempotent_rescan_verified",
+        "retry_cap_enforced",
+        "max_settlement_lag_seconds",
+        "raw_ballot_included",
+        "deposit_confirmation_payload_included",
+    ),
+    "governance_dag_publication": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "report_count",
+        "weekly_rollup_count",
+        "settlement_receipt_count",
+        "payload_kinds",
+        "publish_index_verified",
+        "canonical_to_payloads_verified",
+        "json_sidecars_verified",
+        "blake3_sidecars_verified",
+        "car_queue_verified",
+        "runtime_signed_dag_verified",
+        "report_publish_auth_enforced",
+        "rollup_publish_auth_enforced",
+        "raw_report_included",
+        "raw_rollup_included",
+        "raw_receipt_included",
+    ),
+    "dashboard_metrics": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "hosted_public_dashboard_verified",
+        "critical_alerts_firing",
+        "metrics",
+        "payload_kinds",
+        "response_bodies_included",
+    ),
+    "multi_peer_reconciliation": COMMON_CANARY_REQUIRED_FIELDS
+    + (
+        "peer_count",
+        "validator_count",
+        "case_count",
+        "deposit_posted",
+        "decision_ingested",
+        "settlement_submitted",
+        "disbursement_verified",
+        "treasury_reconciliation_passed",
+        "governance_dag_receipt_verified",
+        "all_peers_reconciled",
+        "qc_quorum_satisfied",
+        "mismatch_count",
+        "unexpected_failure_count",
+        "raw_ledger_included",
+    ),
+    "governance_approval": COMMON_GOVERNANCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "pricing_policy_present",
+        "config_digest_hex",
+        "settlement_policy_present",
+        "deposit_custody_policy_present",
+        "settlement_submitter_policy_present",
+        "worker_retry_policy_present",
+        "public_dashboard_rollout_accepted",
+        "multi_peer_reconciliation_accepted",
+        "config_source",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -793,7 +972,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         expanded_args = expand_response_args(raw_args, parser)
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
     try:
         args = parser.parse_args(expanded_args)
@@ -807,7 +986,7 @@ def main(argv: list[str] | None = None) -> int:
             default_required=DEFAULT_REQUIRED_KINDS,
         )
     except ValueError as error:
-        emit_checker_error_lines((str(error),))
+        emit_checker_exception(error)
         return 2
 
     options = ValidationOptions(

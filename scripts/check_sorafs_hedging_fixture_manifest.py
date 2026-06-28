@@ -20,12 +20,21 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_lines,
+    emit_checker_exception,
     render_checker_summary,
     resolve_checker_preflight_path,
     validate_checker_summary_output,
     write_checker_summary,
 )
-from sorafs_evidence_json import load_evidence_json_with_sha256  # noqa: E402
+from sorafs_evidence_json import (  # noqa: E402
+    EvidenceFileTooLargeError,
+    load_evidence_json_with_sha256,
+    read_evidence_bytes,
+)
+from sorafs_path_identity import (  # noqa: E402
+    error_diagnostic_label,
+    path_diagnostic_label,
+)
 
 
 REPO_ROOT = SCRIPT_DIR.parent
@@ -130,6 +139,18 @@ EXPECTED_NEGATIVE_CASES = {
 }
 
 
+def _path_label(path: Any) -> str:
+    """Return a canonical operator diagnostic label for a path-like value."""
+
+    return path_diagnostic_label(path)
+
+
+def _error_label(error: BaseException, *, path_label: str | None = None) -> str:
+    """Return a canonical operator diagnostic label for an exception."""
+
+    return error_diagnostic_label(error, path_label=path_label)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the fixture manifest checker."""
 
@@ -225,7 +246,7 @@ def validate_fixture_manifest_preflight(args: argparse.Namespace) -> list[str]:
     if summary_out is None:
         return errors
     if not isinstance(summary_out, Path):
-        return [f"--summary-out `{summary_out}` must be a path"]
+        return [f"--summary-out `{_path_label(summary_out)}` must be a path"]
     if not validate_checker_summary_output(summary_out, errors):
         return errors
     manifest_identity = None
@@ -247,7 +268,7 @@ def validate_fixture_manifest_preflight(args: argparse.Namespace) -> list[str]:
     ):
         errors.append(
             "--summary-out `{}` must not be the same path as --manifest `{}`".format(
-                summary_out, manifest
+                _path_label(summary_out), _path_label(manifest)
             )
         )
     return errors
@@ -274,10 +295,17 @@ def inspect_regular_file(
 ) -> bool | None:
     """Return whether `path` is a regular file, recording inspection failures."""
 
+    if not isinstance(path, Path):
+        errors.append(f"{label} `{_path_label(path)}` must be a path")
+        return None
+    path_label = _path_label(path)
     try:
         return path.is_file()
     except (OSError, RuntimeError) as error:
-        errors.append(f"failed to inspect {label} `{path}`: {error}")
+        errors.append(
+            f"failed to inspect {label} `{path_label}`: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
         return None
 
 
@@ -288,10 +316,17 @@ def inspect_directory(
 ) -> bool | None:
     """Return whether `path` is a directory, recording inspection failures."""
 
+    if not isinstance(path, Path):
+        errors.append(f"{label} `{_path_label(path)}` must be a path")
+        return None
+    path_label = _path_label(path)
     try:
         return path.is_dir()
     except (OSError, RuntimeError) as error:
-        errors.append(f"failed to inspect {label} `{path}`: {error}")
+        errors.append(
+            f"failed to inspect {label} `{path_label}`: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
         return None
 
 
@@ -299,14 +334,27 @@ def read_file_bytes(
     path: Path,
     label: str,
     errors: list[str],
+    *,
+    max_bytes: int,
 ) -> bytes | None:
     """Read file bytes, recording filesystem failures as checker errors."""
 
+    path_label = _path_label(path)
     try:
-        return path.read_bytes()
+        return read_evidence_bytes(path, max_bytes)
     except (OSError, RuntimeError) as error:
-        errors.append(f"failed to read {label} `{path}`: {error}")
-        return None
+        errors.append(
+            f"failed to read {label} `{path_label}`: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
+    except EvidenceFileTooLargeError as error:
+        errors.append(f"{label} exceeds {error.max_bytes} bytes: {path_label}")
+    except ValueError as error:
+        errors.append(
+            f"failed to read {label} `{path_label}`: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
+    return None
 
 
 def load_manifest(path: Path, errors: list[str]) -> tuple[dict[str, Any], str | None]:
@@ -316,14 +364,22 @@ def load_manifest(path: Path, errors: list[str]) -> tuple[dict[str, Any], str | 
     if is_file is None:
         return {}, None
     if not is_file:
-        errors.append(f"manifest does not exist: {path}")
+        errors.append(f"manifest does not exist: {_path_label(path)}")
         return {}, None
     try:
         return load_evidence_json_with_sha256(path, MAX_JSON_BYTES)
     except (OSError, RuntimeError) as error:
-        errors.append(f"failed to read manifest `{path}`: {error}")
+        path_label = _path_label(path)
+        errors.append(
+            f"failed to read manifest `{path_label}`: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
     except (UnicodeDecodeError, ValueError) as error:
-        errors.append(f"manifest is not valid bounded JSON object: {error}")
+        path_label = _path_label(path)
+        errors.append(
+            "manifest is not valid bounded JSON object: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
     return {}, None
 
 
@@ -544,16 +600,22 @@ def validate_generated_entry(
         or not HEX_RE.fullmatch(norito_hex)
     ):
         errors.append(
-            f"{json_path} must contain lowercase even-length hex norito_bytes_hex"
+            f"{_path_label(json_path)} must contain lowercase even-length hex norito_bytes_hex"
         )
         return result
     try:
         sidecar_norito_bytes = bytes.fromhex(norito_hex)
     except ValueError as error:
-        errors.append(f"{json_path} norito_bytes_hex is not valid hex: {error}")
+        errors.append(
+            f"{_path_label(json_path)} norito_bytes_hex is not valid hex: "
+            f"{_error_label(error)}"
+        )
         return result
     if sidecar_norito_bytes != norito_bytes:
-        errors.append(f"{json_path} norito_bytes_hex does not match {norito_path}")
+        errors.append(
+            f"{_path_label(json_path)} norito_bytes_hex does not match "
+            f"{_path_label(norito_path)}"
+        )
         return result
     if not validate_json_sidecar(entry, json_value, json_path, errors):
         return result
@@ -579,14 +641,22 @@ def load_generated_json_sidecar(
     if is_file is None:
         return None
     if not is_file:
-        errors.append(f"missing {file_label}: {path}")
+        errors.append(f"missing {file_label}: {_path_label(path)}")
         return None
     try:
         return load_evidence_json_with_sha256(path, MAX_JSON_BYTES)
     except (OSError, RuntimeError) as error:
-        errors.append(f"failed to read {file_label} `{path}`: {error}")
+        path_label = _path_label(path)
+        errors.append(
+            f"failed to read {file_label} `{path_label}`: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
     except (UnicodeDecodeError, ValueError) as error:
-        errors.append(f"{path} is not a valid bounded JSON object: {error}")
+        path_label = _path_label(path)
+        errors.append(
+            f"{path_label} is not a valid bounded JSON object: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
     return None
 
 
@@ -1126,7 +1196,11 @@ def validate_generated_inventory(
                 continue
             actual_paths.add(relative_path.as_posix())
     except (OSError, RuntimeError) as error:
-        errors.append(f"failed to scan generated fixture root `{fixture_root}`: {error}")
+        fixture_root_label = _path_label(fixture_root)
+        errors.append(
+            f"failed to scan generated fixture root `{fixture_root_label}`: "
+            f"{_error_label(error, path_label=fixture_root_label)}"
+        )
         return
     extra_paths = sorted(actual_paths.difference(expected_paths))
     if extra_paths:
@@ -1159,7 +1233,10 @@ def validate_expected_status(
     try:
         command_tokens = shlex.split(command)
     except ValueError as error:
-        errors.append(f"{name} validation_command is not shell-tokenizable: {error}")
+        errors.append(
+            f"{name} validation_command is not shell-tokenizable: "
+            f"{_error_label(error)}"
+        )
         return
     if command_tokens != expected_tokens:
         errors.append(
@@ -1186,7 +1263,7 @@ def validate_expected_status(
             timeout=validator_timeout_seconds,
         )
     except OSError as error:
-        errors.append(f"{name} validator execution failed: {error}")
+        errors.append(f"{name} validator execution failed: {_error_label(error)}")
         return
     except subprocess.TimeoutExpired:
         errors.append(
@@ -1233,16 +1310,13 @@ def read_generated_bytes(
     if is_file is None:
         return None
     if not is_file:
-        errors.append(f"missing generated {label} fixture: {path}")
+        errors.append(f"missing generated {label} fixture: {_path_label(path)}")
         return None
-    raw = read_file_bytes(path, file_label, errors)
+    raw = read_file_bytes(path, file_label, errors, max_bytes=max_bytes)
     if raw is None:
         return None
     if not raw:
-        errors.append(f"generated {label} fixture is empty: {path}")
-        return None
-    if len(raw) > max_bytes:
-        errors.append(f"generated {label} fixture exceeds {max_bytes} bytes: {path}")
+        errors.append(f"generated {label} fixture is empty: {_path_label(path)}")
         return None
     return raw
 

@@ -400,6 +400,7 @@ fn minimal_config_snapshot() {
                 dial_timeout: 5s,
                 deferred_send_ttl: 1.5s,
                 deferred_send_max_per_peer: 256,
+                deferred_send_max_bytes_per_peer: 33554432,
                 peer_gossip_period: 1s,
                 peer_gossip_max_period: 30s,
                 trust_gossip: true,
@@ -894,6 +895,11 @@ fn minimal_config_snapshot() {
                         cycle_seconds: 604800,
                         publish_delay_seconds: 3600,
                     },
+                    reserve_lifecycle: SorafsReserveLifecycleSchedule {
+                        enabled: false,
+                        interval_seconds: 3600,
+                        initial_delay_seconds: 0,
+                    },
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signing_key_path: None,
@@ -1366,6 +1372,7 @@ fn minimal_config_snapshot() {
                     sidecar_mismatch_ttl: 2s,
                     range_pull_escalation_after_hash_misses: 3,
                     missing_request_stale_height_margin: 16,
+                    pending_block_cap: 512,
                     pending_block_sync_cap: 256,
                     pending_proposal_cap: 128,
                     missing_fetch_aggressive_after_attempts: 2,
@@ -1399,6 +1406,8 @@ fn minimal_config_snapshot() {
                     session_ttl: 120s,
                     rebroadcast_sessions_per_tick: 8,
                     payload_chunks_per_tick: 64,
+                    outbound_queue_max_sessions: 16,
+                    outbound_queue_max_bytes: 134217728,
                     inline_block_created_backup: true,
                     store_max_sessions: 4096,
                     store_soft_sessions: 3072,
@@ -1526,6 +1535,7 @@ fn minimal_config_snapshot() {
             queue: Queue {
                 capacity: 262144,
                 capacity_per_user: 262144,
+                max_retained_bytes: 134217728,
                 transaction_time_to_live: 86400s,
                 expired_cull_interval: 1s,
                 expired_cull_batch: 256,
@@ -2575,6 +2585,7 @@ fn minimal_config_snapshot() {
                     escrow_required: false,
                     escrow_accounts: {},
                     kagemusha_enabled: true,
+                    kagemusha_force_legacy: false,
                 },
                 router: Router {
                     twap_window: 60s,
@@ -4399,6 +4410,75 @@ fn collectors_k_validation_propagates() {
         .expect_err("parse should fail for invalid collectors_k");
     let message = format!("{report:?}");
     assert_contains!(message, "sumeragi.collectors.k must be greater than zero");
+}
+
+#[test]
+fn sumeragi_pending_block_cap_env_overrides_parse() {
+    let cfg = ConfigReader::new()
+        .with_env(MockEnv::new().set("SUMERAGI_RECOVERY_PENDING_BLOCK_CAP", "7"))
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("read user config")
+        .parse()
+        .expect("parse actual config");
+
+    assert_eq!(cfg.sumeragi.recovery.pending_block_cap, 7);
+}
+
+#[test]
+fn sumeragi_pending_block_cap_validation_propagates() {
+    let env = MockEnv::new().set("SUMERAGI_RECOVERY_PENDING_BLOCK_CAP", "0");
+    let report = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("user config should load")
+        .read_and_complete::<UserConfig>()
+        .expect("user config view")
+        .parse()
+        .expect_err("parse should fail for invalid pending_block_cap");
+    let message = format!("{report:?}");
+    assert_contains!(
+        message,
+        "sumeragi.recovery.pending_block_cap must be greater than zero"
+    );
+}
+
+#[test]
+fn sumeragi_rbc_outbound_queue_caps_env_overrides_parse() {
+    let cfg = ConfigReader::new()
+        .with_env(
+            MockEnv::new()
+                .set("SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_SESSIONS", "3")
+                .set("SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_BYTES", "4096"),
+        )
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<UserConfig>()
+        .expect("read user config")
+        .parse()
+        .expect("parse actual config");
+
+    assert_eq!(cfg.sumeragi.rbc.outbound_queue_max_sessions, 3);
+    assert_eq!(cfg.sumeragi.rbc.outbound_queue_max_bytes, 4096);
+}
+
+#[test]
+fn sumeragi_rbc_outbound_queue_caps_validation_propagates() {
+    let env = MockEnv::new().set("SUMERAGI_RBC_OUTBOUND_QUEUE_MAX_BYTES", "0");
+    let report = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("minimal_with_trusted_peers.toml"))
+        .expect("user config should load")
+        .read_and_complete::<UserConfig>()
+        .expect("user config view")
+        .parse()
+        .expect_err("parse should fail for invalid outbound RBC queue cap");
+    let message = format!("{report:?}");
+    assert_contains!(
+        message,
+        "sumeragi.advanced.rbc.outbound_queue_max_sessions and outbound_queue_max_bytes must be greater than zero"
+    );
 }
 
 #[test]

@@ -55,9 +55,17 @@ class NativeOfflineNoteProver private constructor() {
                 probeSymbol = { nativeProveNoteRedeemWithVk(ByteArray(0), ByteArray(0)) },
             )
 
-        internal fun detectNativeAvailability(loadLibrary: () -> Unit, probeSymbol: () -> Unit): Boolean =
+        internal fun detectNativeAvailability(loadLibrary: () -> Unit, probeSymbol: () -> Unit): Boolean {
             try {
                 loadLibrary()
+            } catch (_: UnsatisfiedLinkError) {
+                return false
+            } catch (_: SecurityException) {
+                return false
+            } catch (_: RuntimeException) {
+                return false
+            }
+            return try {
                 probeSymbol()
                 true
             } catch (_: IllegalArgumentException) {
@@ -66,7 +74,10 @@ class NativeOfflineNoteProver private constructor() {
                 false
             } catch (_: SecurityException) {
                 false
+            } catch (_: RuntimeException) {
+                false
             }
+        }
 
         @JvmStatic
         private external fun nativeProveNoteRedeemWithVk(

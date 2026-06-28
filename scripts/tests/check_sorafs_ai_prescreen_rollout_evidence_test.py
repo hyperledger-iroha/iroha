@@ -35,6 +35,7 @@ def write_json(path: Path, payload: dict) -> Path:
 def with_context(payload: dict) -> dict:
     payload["deployment_id"] = DEPLOYMENT_ID
     payload["environment"] = ENVIRONMENT
+    payload["deployment_context_reviewed"] = True
     return payload
 
 

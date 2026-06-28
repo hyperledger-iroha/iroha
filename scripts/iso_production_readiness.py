@@ -22,12 +22,12 @@ Safety:
 from __future__ import annotations
 
 import argparse
-import copy
 import datetime as dt
 import errno
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -273,11 +273,20 @@ COMPACT_CANARY_KEYS = {
     "require_explicit_policy",
     "stage_names",
     "stage_dry_run",
+    "stage_command_modes",
     "stage_windows",
     "receipt_summary",
     SUMMARY_DIGEST_FIELD,
 }
 COMPACT_STAGE_WINDOW_KEYS = {"name", "started_at", "finished_at"}
+COMPACT_STAGE_COMMAND_MODE_KEYS = {
+    "name",
+    "rail_uses_message",
+    "rail_submitted_message_count",
+    "notary_uses_all",
+    "notary_endpoint_count",
+    "notary_published_anchor_count",
+}
 RECEIPT_SUMMARY_KEYS = {
     "version",
     "verified_receipts",
@@ -332,6 +341,12 @@ RECEIPT_MATERIAL_DIGEST_FIELDS = (
     "index_sha256",
 )
 RECEIPT_SOURCE_MATERIAL_FIELDS_BY_KIND = {
+    "iso-audit-notary": (
+        "anchor_path",
+        "anchor_sha256",
+        "index_path",
+        "index_sha256",
+    ),
     "iso-rail-gateway": ("source_path", "payload_sha256", "rail_message_id"),
 }
 CANARY_RECEIPT_SOURCE_MATERIAL_REUSE_CODES = (
@@ -893,7 +908,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -942,23 +960,61 @@ def _contains_control_character(value: str) -> bool:
     )
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise ReadinessError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise ReadinessError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise ReadinessError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise ReadinessError("args must be an argparse.Namespace")
+    return args
+
+
 def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) -> None:
     if _depth > MAX_JSON_NESTING_DEPTH:
         raise ReadinessError(
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, dict):
+        if type(value) is not dict:
+            raise ReadinessError(f"{label} contains non-plain JSON object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise ReadinessError(
                 f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
             )
         for key, child in value.items():
-            if _is_secret_looking_key(key):
+            if not isinstance(key, str):
+                raise ReadinessError(f"{label} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{label} field")
+            if _is_secret_looking_key(key_text):
                 raise ReadinessError(f"{label} contains forbidden secret-looking field")
-            if _is_control_bearing_key(key):
+            if _is_control_bearing_key(key_text):
                 raise ReadinessError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
+            _check_no_secret_material(child, f"{label}.{key_text}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise ReadinessError(f"{label} contains non-plain JSON array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise ReadinessError(
                 f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -966,6 +1022,7 @@ def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) 
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
+        value = _plain_text(value, label)
         if _contains_unsafe_json_control(value):
             raise ReadinessError(f"{label} contains unsafe control characters")
         _reject_secret_string(value, label)
@@ -979,7 +1036,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label or str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise ReadinessError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -987,6 +1044,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise ReadinessError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReadinessError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReadinessError(f"cannot inspect {label}: I/O error") from None
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise ReadinessError(f"{label} must not be a symlink")
@@ -1017,9 +1079,14 @@ def _read_regular_file(
             raise ReadinessError(f"{label} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise ReadinessError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReadinessError(f"cannot open {label} for reading: I/O error") from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
@@ -1112,7 +1179,7 @@ def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -1133,7 +1200,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -1168,7 +1235,7 @@ def _preflight_required_cli_values(
     flags: set[str],
     value_name: str,
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -1202,7 +1269,7 @@ def _preflight_required_cli_values(
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -1265,7 +1332,7 @@ def _preflight_numeric_cli_values(
     integer_flags: set[str],
     number_flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     flags = integer_flags | number_flags
     index = 0
     while index < len(raw_args):
@@ -1310,9 +1377,19 @@ def _same_existing_file(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise ReadinessError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise ReadinessError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_summary_output_input_alias(
@@ -1344,14 +1421,45 @@ def _ensure_text_output_target(
             path.parent.mkdir(parents=True, exist_ok=True)
         except FileExistsError as error:
             raise ReadinessError(f"{label} must be a directory") from error
-    if path.parent.exists() or path.parent.is_symlink():
-        parent_mode = path.parent.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(f"cannot create {label} parent: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(f"cannot create {label} parent: I/O error") from None
+    def inspected_exists(target: Path, role: str) -> bool:
+        try:
+            return target.exists() or target.is_symlink()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    def inspected_lstat(target: Path, role: str) -> os.stat_result:
+        try:
+            return target.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    if inspected_exists(path.parent, "parent"):
+        parent_mode = inspected_lstat(path.parent, "parent").st_mode
         if stat.S_ISLNK(parent_mode):
             raise ReadinessError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(parent_mode):
             raise ReadinessError(f"{label} must be a directory")
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    if inspected_exists(path, "leaf"):
+        metadata = inspected_lstat(path, "leaf")
         if stat.S_ISLNK(metadata.st_mode):
             raise ReadinessError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -1393,26 +1501,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise ReadinessError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise ReadinessError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise ReadinessError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise ReadinessError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _reject_symlinked_existing_ancestors(
@@ -1428,6 +1558,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label or str(current)
+            raise ReadinessError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label or str(current)
+            raise ReadinessError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -1504,9 +1647,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise ReadinessError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise ReadinessError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise ReadinessError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -1514,6 +1660,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise ReadinessError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise ReadinessError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -1524,14 +1672,22 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise ReadinessError(f"{label} must be a JSON object")
     return value
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise ReadinessError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise ReadinessError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise ReadinessError(f"{label} contains unknown keys")
+    return present
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -1599,7 +1755,7 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
 
 
 def _require_list(value: Any, label: str) -> list[Any]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise ReadinessError(f"{label} must be a JSON array")
     if len(value) > MAX_JSON_LIST_ITEMS:
         raise ReadinessError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
@@ -1608,14 +1764,18 @@ def _require_list(value: Any, label: str) -> list[Any]:
 
 def _require_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise ReadinessError(f"{label}.{key} must be a non-empty string")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{field_label} must be a non-empty string")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise ReadinessError(f"{field_label} must be a non-empty string")
     if len(raw) > MAX_CLEAN_STRING_CHARS:
-        raise ReadinessError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
+        raise ReadinessError(f"{field_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if _contains_control_character(raw):
-        raise ReadinessError(f"{label}.{key} must not contain control characters")
+        raise ReadinessError(f"{field_label} must not contain control characters")
     if raw != raw.strip():
-        raise ReadinessError(f"{label}.{key} must not have surrounding whitespace")
+        raise ReadinessError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -1631,6 +1791,7 @@ def _require_cli_string(value: str | None, label: str) -> str:
         raise ReadinessError(f"provide {label}")
     if not isinstance(value, str):
         raise ReadinessError(f"{label} must be a string")
+    value = _plain_text(value, label)
     if not value.strip():
         raise ReadinessError(f"provide {label}")
     if len(value) > MAX_CLEAN_STRING_CHARS:
@@ -1647,7 +1808,7 @@ def _require_cli_string(value: str | None, label: str) -> str:
 def _require_positive_cli_int(value: int | None, label: str) -> int:
     if value is None:
         raise ReadinessError(f"provide {label}")
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if type(value) is not int or value <= 0:
         raise ReadinessError(f"{label} must be a positive integer")
     if value > MAX_FRESHNESS_BUDGET_DAYS:
         raise ReadinessError(
@@ -1659,7 +1820,7 @@ def _require_positive_cli_int(value: int | None, label: str) -> int:
 def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     seen: dict[str, int] = {}
     for offset, path in enumerate(paths):
-        key = str(path)
+        key = str(_path_resolve(path, f"{label}[{offset}]"))
         if key in seen:
             raise ReadinessError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
@@ -1705,15 +1866,16 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise ReadinessError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if type(value) is type(Path()):
         return Path(value)
-    except TypeError as error:
-        raise ReadinessError(f"{label} must be a path") from error
+    raise ReadinessError(f"{label} must be a path")
 
 
 def _require_positive_int(value: dict[str, Any], key: str, label: str) -> int:
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+    if type(raw) is not int or raw <= 0:
         raise ReadinessError(f"{label}.{key} must be a positive integer")
     return raw
 
@@ -1729,14 +1891,14 @@ def _require_positive_days(value: dict[str, Any], key: str, label: str) -> int:
 
 def _require_nonnegative_int(value: dict[str, Any], key: str, label: str) -> int:
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+    if type(raw) is not int or raw < 0:
         raise ReadinessError(f"{label}.{key} must be a non-negative integer")
     return raw
 
 
 def _require_positive_number(value: dict[str, Any], key: str, label: str) -> float:
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+    if type(raw) not in (int, float):
         raise ReadinessError(f"{label}.{key} must be a positive finite number")
     parsed = float(raw)
     if not (parsed > 0.0 and parsed < float("inf")):
@@ -1897,6 +2059,7 @@ def _block_trust_digest_role_confusion(
 
 
 def _validate_receipt_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if _receipt_path_is_repository_fixture(raw):
         raise ReadinessError(
@@ -1908,6 +2071,7 @@ def _validate_receipt_path(raw: str, label: str) -> str:
 
 
 def _validate_xml_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".xml"):
         raise ReadinessError(f"{label} must point to an .xml file")
@@ -1915,6 +2079,7 @@ def _validate_xml_path(raw: str, label: str) -> str:
 
 
 def _validate_notary_anchor_path(raw: str, label: str, index_sha256: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     parts = raw.split("/")
     leaf = parts[-1] if parts else ""
@@ -1939,7 +2104,10 @@ def _validate_notary_store_dir(
             raise ReadinessError(f"{entry_label}.store_dir must be recorded")
         return None
     raw = receipt["store_dir"]
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{entry_label}.store_dir must be a non-empty path")
+    raw = _plain_text(raw, f"{entry_label}.store_dir")
+    if not raw.strip():
         raise ReadinessError(f"{entry_label}.store_dir must be a non-empty path")
     _reject_path_smuggling(raw, f"{entry_label}.store_dir")
     return raw
@@ -1966,7 +2134,10 @@ def _validate_notary_index_path(
             raise ReadinessError(f"{entry_label}.index_path must be recorded")
         return None
     raw = receipt["index_path"]
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{entry_label}.index_path must be a non-empty path")
+    raw = _plain_text(raw, f"{entry_label}.index_path")
+    if not raw.strip():
         raise ReadinessError(f"{entry_label}.index_path must be a non-empty path")
     _reject_path_smuggling(raw, f"{entry_label}.index_path")
     if _receipt_path_is_repository_fixture(raw):
@@ -1981,6 +2152,7 @@ def _validate_notary_index_path(
 
 
 def _validate_compact_summary_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise ReadinessError(f"{label} must point to a .json file")
@@ -1988,6 +2160,7 @@ def _validate_compact_summary_path(raw: str, label: str) -> str:
 
 
 def _validate_config_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise ReadinessError(f"{label} must point to a .json file")
@@ -1995,6 +2168,7 @@ def _validate_config_path(raw: str, label: str) -> str:
 
 
 def _validate_trust_bundle_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     _reject_path_smuggling(raw, label)
     if not raw.endswith(".json"):
         raise ReadinessError(f"{label} must point to a .json file")
@@ -2002,6 +2176,7 @@ def _validate_trust_bundle_path(raw: str, label: str) -> str:
 
 
 def _reject_path_smuggling(raw: str, label: str) -> None:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_SOURCE_PATH_CHARS:
         raise ReadinessError(
             f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
@@ -2122,7 +2297,10 @@ def _require_nullable_rail_message_id(
     raw = value[key]
     if raw is None:
         return None
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label}.{key} must be null or a non-empty string")
+    raw = _plain_text(raw, f"{label}.{key}")
+    if not raw.strip():
         raise ReadinessError(f"{label}.{key} must be null or a non-empty string")
     if _contains_control_character(raw):
         raise ReadinessError(f"{label}.{key} must not contain control characters")
@@ -2152,6 +2330,248 @@ def _require_stage_name(value: dict[str, Any], key: str, label: str) -> str:
     _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
+
+
+def _verify_stage_command_modes(
+    canary: dict[str, Any],
+    label: str,
+    stage_names: list[str],
+    dry_run_by_stage: dict[str, bool],
+    plan_only: bool,
+) -> list[dict[str, Any]]:
+    raw_modes = _require_list(
+        canary.get("stage_command_modes"),
+        f"{label}.stage_command_modes",
+    )
+    if len(raw_modes) != len(stage_names):
+        raise ReadinessError(
+            f"{label}.stage_command_modes must match stage_names length"
+        )
+    modes: list[dict[str, Any]] = []
+    for offset, raw_mode in enumerate(raw_modes):
+        mode_label = f"{label}.stage_command_modes[{offset}]"
+        mode = _require_object(raw_mode, mode_label)
+        _reject_unknown_keys(mode, COMPACT_STAGE_COMMAND_MODE_KEYS, mode_label)
+        name = _require_stage_name(mode, "name", mode_label)
+        if name != stage_names[offset]:
+            raise ReadinessError(
+                f"{mode_label}.name must match stage_names[{offset}]"
+            )
+        rail_uses_message = _require_bool(mode, "rail_uses_message", mode_label)
+        rail_submitted_message_count = _require_nonnegative_int(
+            mode,
+            "rail_submitted_message_count",
+            mode_label,
+        )
+        notary_uses_all = _require_bool(mode, "notary_uses_all", mode_label)
+        notary_endpoint_count = _require_nonnegative_int(
+            mode,
+            "notary_endpoint_count",
+            mode_label,
+        )
+        notary_published_anchor_count = _require_nonnegative_int(
+            mode,
+            "notary_published_anchor_count",
+            mode_label,
+        )
+        if name != "rail":
+            if rail_uses_message:
+                raise ReadinessError(
+                    f"{mode_label}.rail_uses_message must be false for non-rail stages"
+                )
+            if rail_submitted_message_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.rail_submitted_message_count must be zero for non-rail stages"
+                )
+        else:
+            rail_is_observed = not plan_only and not dry_run_by_stage.get(name, False)
+            if rail_is_observed:
+                if rail_submitted_message_count <= 0:
+                    raise ReadinessError(
+                        f"{mode_label}.rail_submitted_message_count must be positive for executed rail stage"
+                    )
+                if rail_uses_message and rail_submitted_message_count != 1:
+                    raise ReadinessError(
+                        f"{mode_label}.rail_submitted_message_count must be one when rail_uses_message=true"
+                    )
+            elif rail_submitted_message_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.rail_submitted_message_count must be zero for dry-run or plan-only rail stage"
+                )
+        if name != "notary":
+            if notary_uses_all:
+                raise ReadinessError(
+                    f"{mode_label}.notary_uses_all must be false for non-notary stages"
+                )
+            if notary_endpoint_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.notary_endpoint_count must be zero for non-notary stages"
+                )
+            if notary_published_anchor_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.notary_published_anchor_count must be zero for non-notary stages"
+                )
+        elif notary_endpoint_count <= 0:
+            raise ReadinessError(
+                f"{mode_label}.notary_endpoint_count must be positive for notary stage"
+            )
+        else:
+            notary_is_observed = not plan_only and not dry_run_by_stage.get(name, False)
+            if notary_is_observed:
+                if notary_published_anchor_count <= 0:
+                    raise ReadinessError(
+                        f"{mode_label}.notary_published_anchor_count must be positive for executed notary stage"
+                    )
+                if not notary_uses_all and notary_published_anchor_count != 1:
+                    raise ReadinessError(
+                        f"{mode_label}.notary_published_anchor_count must be one unless notary_uses_all=true"
+                    )
+            elif notary_published_anchor_count != 0:
+                raise ReadinessError(
+                    f"{mode_label}.notary_published_anchor_count must be zero for dry-run or plan-only notary stage"
+                )
+        modes.append(
+            {
+                "name": name,
+                "rail_uses_message": rail_uses_message,
+                "rail_submitted_message_count": rail_submitted_message_count,
+                "notary_uses_all": notary_uses_all,
+                "notary_endpoint_count": notary_endpoint_count,
+                "notary_published_anchor_count": notary_published_anchor_count,
+            }
+        )
+    return modes
+
+
+def _canary_receipts_by_kind(
+    receipt_summary: dict[str, Any],
+    receipt_kind: str,
+) -> list[dict[str, Any]]:
+    return [
+        receipt
+        for receipt in receipt_summary["receipts"]
+        if receipt["receipt_kind"] == receipt_kind
+    ]
+
+
+def _check_canary_command_mode_receipt_binding(
+    label: str,
+    path: Path,
+    blockers: list[dict[str, Any]],
+    stage_command_modes: list[dict[str, Any]],
+    dry_run_by_stage: dict[str, bool],
+    receipt_summary: dict[str, Any] | None,
+) -> None:
+    if receipt_summary is None:
+        return
+    modes_by_stage = {mode["name"]: mode for mode in stage_command_modes}
+    rail_mode = modes_by_stage.get("rail")
+    if (
+        rail_mode is not None
+        and not dry_run_by_stage.get("rail", False)
+    ):
+        rail_receipts = _canary_receipts_by_kind(
+            receipt_summary,
+            "iso-rail-gateway",
+        )
+        if len(rail_receipts) != rail_mode["rail_submitted_message_count"]:
+            if rail_mode["rail_uses_message"]:
+                message = (
+                    f"{label}.receipt_summary rail receipt count must be one when "
+                    "stage_command_modes rail_uses_message=true"
+                )
+            else:
+                message = (
+                    f"{label}.receipt_summary rail receipt count must match "
+                    "stage_command_modes rail_submitted_message_count"
+                )
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_rail_message_receipt_count",
+                message,
+                path,
+            )
+
+    notary_mode = modes_by_stage.get("notary")
+    if notary_mode is None or dry_run_by_stage.get("notary", False):
+        return
+    notary_receipts = _canary_receipts_by_kind(
+        receipt_summary,
+        "iso-audit-notary",
+    )
+    if not notary_receipts:
+        return
+    endpoint_count = notary_mode["notary_endpoint_count"]
+    notary_uses_all = notary_mode["notary_uses_all"]
+    published_anchor_count = notary_mode["notary_published_anchor_count"]
+    notary_anchor_paths = [
+        receipt.get("anchor_path") for receipt in notary_receipts
+    ]
+    if not all(isinstance(anchor_path, str) for anchor_path in notary_anchor_paths):
+        return
+    has_latest_anchor = any(
+        anchor_path.split("/")[-1] == LATEST_ANCHOR_FILE
+        for anchor_path in notary_anchor_paths
+    )
+    has_digest_addressed_anchor = any(
+        anchor_path.split("/")[-1] != LATEST_ANCHOR_FILE
+        for anchor_path in notary_anchor_paths
+    )
+    if notary_uses_all:
+        if has_latest_anchor:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_anchor_mismatch",
+                (
+                    f"{label}.receipt_summary records latest notary anchor but "
+                    "stage_command_modes notary_uses_all=true"
+                ),
+                path,
+            )
+        if len(notary_receipts) % endpoint_count != 0:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_endpoint_count_mismatch",
+                (
+                    f"{label}.receipt_summary notary receipt count must be a "
+                    "multiple of stage_command_modes notary_endpoint_count when "
+                    "notary_uses_all=true"
+                ),
+                path,
+            )
+        if len(notary_receipts) != endpoint_count * published_anchor_count:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_anchor_count_mismatch",
+                (
+                    f"{label}.receipt_summary notary receipt count must match "
+                    "stage_command_modes notary_published_anchor_count and "
+                    "notary_endpoint_count when notary_uses_all=true"
+                ),
+                path,
+            )
+    else:
+        if has_digest_addressed_anchor:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_anchor_mismatch",
+                (
+                    f"{label}.receipt_summary records digest-addressed notary anchor "
+                    "but stage_command_modes notary_uses_all=false"
+                ),
+                path,
+            )
+        if len(notary_receipts) != endpoint_count:
+            _blocker(
+                blockers,
+                "evidence.canary_stage_command_mode_notary_endpoint_count_mismatch",
+                (
+                    f"{label}.receipt_summary notary receipt count must match "
+                    "stage_command_modes notary_endpoint_count unless "
+                    "notary_uses_all=true"
+                ),
+                path,
+            )
 
 
 def _block_receipt_metadata_error(
@@ -2206,7 +2626,20 @@ def _block_forbidden_receipt_metadata(
     path: Path,
     blockers: list[dict[str, Any]],
 ) -> None:
-    for key in sorted(forbidden_keys & set(receipt)):
+    present_forbidden: list[str] = []
+    for raw_key in receipt:
+        if not isinstance(raw_key, str):
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                f"{entry_label} contains forbidden metadata",
+                path,
+            )
+            return
+        key = _plain_text(raw_key, f"{entry_label} field")
+        if key in forbidden_keys:
+            present_forbidden.append(key)
+    for key in sorted(present_forbidden):
         _block_receipt_metadata_error(
             blockers,
             metadata_code,
@@ -2369,11 +2802,7 @@ def _block_receipt_entry_metadata_errors(
                         path,
                     )
         record_count = receipt.get("record_count")
-        if (
-            isinstance(record_count, bool)
-            or not isinstance(record_count, int)
-            or record_count <= 0
-        ):
+        if type(record_count) is not int or record_count <= 0:
             _block_receipt_metadata_error(
                 blockers,
                 metadata_code,
@@ -2531,11 +2960,74 @@ def _receipt_entry_for_readiness_output(
             else:
                 if _receipt_path_is_repository_fixture(source_path):
                     output["source_path"] = "unsupported"
+    elif receipt_kind == "iso-audit-notary":
+        if "anchor_sha256" in output and not _valid_nonzero_sha256(
+            output["anchor_sha256"]
+        ):
+            output["anchor_sha256"] = "unsupported"
+        index_sha256 = output.get("index_sha256")
+        index_sha256_valid = _valid_nonzero_sha256(index_sha256)
+        if "index_sha256" in output and not index_sha256_valid:
+            output["index_sha256"] = "unsupported"
+        anchor_path: str | None = None
+        if "anchor_path" in output:
+            if index_sha256_valid:
+                try:
+                    anchor_path = _validate_notary_anchor_path(
+                        _require_string(output, "anchor_path", "receipt"),
+                        "receipt.anchor_path",
+                        index_sha256,
+                    )
+                except ReadinessError:
+                    output["anchor_path"] = "unsupported"
+                    anchor_path = None
+                else:
+                    if _receipt_path_is_repository_fixture(anchor_path):
+                        output["anchor_path"] = "unsupported"
+                        anchor_path = None
+            else:
+                output["anchor_path"] = "unsupported"
+        if "store_dir" in output:
+            try:
+                store_dir = _validate_notary_store_dir(
+                    output,
+                    "receipt",
+                    require_source_files=False,
+                )
+            except ReadinessError:
+                output["store_dir"] = "unsupported"
+            else:
+                if store_dir is not None and _receipt_path_is_repository_fixture(
+                    store_dir
+                ):
+                    output["store_dir"] = "unsupported"
+        if "index_path" in output:
+            if anchor_path is None:
+                output["index_path"] = "unsupported"
+            else:
+                try:
+                    index_path = _validate_notary_index_path(
+                        output,
+                        "receipt",
+                        anchor_path,
+                        require_source_files=False,
+                    )
+                except ReadinessError:
+                    output["index_path"] = "unsupported"
+                else:
+                    if index_path is not None and _receipt_path_is_repository_fixture(
+                        index_path
+                    ):
+                        output["index_path"] = "unsupported"
+        if "record_count" in output and (
+            type(output["record_count"]) is not int or output["record_count"] <= 0
+        ):
+            output["record_count"] = "unsupported"
     return output
 
 
 def _version_for_readiness_output(value: Any, expected: int) -> int | str:
-    if not isinstance(value, bool) and isinstance(value, int) and value == expected:
+    if type(value) is int and value == expected:
         return value
     return "unsupported"
 
@@ -2558,6 +3050,39 @@ def _required_flag_for_readiness_output(value: bool) -> bool | str:
     return value
 
 
+def _plain_public_json_value(value: Any) -> Any:
+    if type(value) is dict:
+        output: dict[str, Any] = {}
+        for key, child in value.items():
+            if type(key) is not str:
+                return "unsupported"
+            output[key] = _plain_public_json_value(child)
+        return output
+    if type(value) is list:
+        return [_plain_public_json_value(item) for item in value]
+    if (
+        value is None
+        or type(value) is str
+        or type(value) is bool
+        or type(value) is int
+    ):
+        return value
+    if type(value) is float:
+        return value if math.isfinite(value) else "unsupported"
+    return "unsupported"
+
+
+def _public_json_object_without_private_fields(summary: Any) -> dict[str, Any]:
+    if type(summary) is not dict:
+        return {}
+    output: dict[str, Any] = {}
+    for key, value in summary.items():
+        if type(key) is not str or key.startswith("_"):
+            continue
+        output[key] = _plain_public_json_value(value)
+    return output
+
+
 def _evidence_policy_for_readiness_output(
     policy: dict[str, Any],
     args: argparse.Namespace,
@@ -2577,8 +3102,7 @@ def _evidence_policy_for_readiness_output(
     for field in sorted(EVIDENCE_FRESHNESS_POLICY_FIELDS):
         value = output.get(field)
         if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
+            type(value) is not int
             or value > getattr(args, field)
         ):
             output[field] = "unsupported"
@@ -2617,7 +3141,7 @@ def _freshness_budget_for_readiness_output(
 ) -> int | str | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value > release_budget:
+    if type(value) is not int or value > release_budget:
         return "unsupported"
     return value
 
@@ -2636,6 +3160,7 @@ def _require_profile_direction(value: dict[str, Any], key: str, label: str) -> s
 
 
 def _validate_schema_source_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_SOURCE_PATH_CHARS:
         raise ReadinessError(
             f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
@@ -2669,6 +3194,7 @@ def _validate_schema_source_path(raw: str, label: str) -> str:
 
 
 def _validate_fixture_summary_path(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_SOURCE_PATH_CHARS:
         raise ReadinessError(
             f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
@@ -2710,7 +3236,10 @@ def _validate_fixture_summary_path(raw: str, label: str) -> str:
 def _validate_reviewed_gap_reason(raw: Any, label: str) -> str | None:
     if raw is None:
         return None
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string when provided")
+    raw = _plain_text(raw, label)
+    if not raw.strip():
         raise ReadinessError(f"{label} must be a non-empty string when provided")
     if _contains_control_character(raw):
         raise ReadinessError(f"{label} must not contain control characters")
@@ -2930,7 +3459,10 @@ def _verify_blocked_schema_source_summary(
     seen_markers: dict[str, int] = {}
     for offset, marker_raw in enumerate(raw_markers):
         marker_label = f"{label}.restriction_markers[{offset}]"
-        if not isinstance(marker_raw, str) or not marker_raw.strip():
+        if not isinstance(marker_raw, str):
+            raise ReadinessError(f"{marker_label} must be a non-empty string")
+        marker_raw = _plain_text(marker_raw, marker_label)
+        if not marker_raw.strip():
             raise ReadinessError(f"{marker_label} must be a non-empty string")
         if marker_raw != marker_raw.strip():
             raise ReadinessError(f"{marker_label} must not have surrounding whitespace")
@@ -2965,6 +3497,7 @@ def _verify_blocked_schema_source_summary(
 
 
 def _validate_iso_catalogue_url(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_SOURCE_URL_CHARS:
         raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
     if _contains_control_character(raw):
@@ -3005,6 +3538,7 @@ def _validate_iso_catalogue_url(raw: str, label: str) -> str:
 
 
 def _validate_iso_download_url(raw: str, label: str) -> str:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_SOURCE_URL_CHARS:
         raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
     if _contains_control_character(raw):
@@ -3193,16 +3727,50 @@ def _verify_pending_schema_source_summary(
 def _validate_optional_probe_text(raw: Any, label: str) -> str | None:
     if raw is None:
         return None
-    if not isinstance(raw, str) or not raw:
+    if not isinstance(raw, str):
         raise ReadinessError(f"{label} must be a non-empty string or null")
-    if len(raw) > MAX_TRUST_SOURCE_TEXT_CHARS:
-        raise ReadinessError(
-            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
-        )
-    if _contains_control_character(raw):
-        raise ReadinessError(f"{label} must not contain control characters")
-    _reject_non_ascii_context(raw, label)
-    _reject_secret_string(raw, label)
+    raw = _plain_text(raw, label)
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    try:
+        if len(raw) > MAX_TRUST_SOURCE_TEXT_CHARS:
+            raise ReadinessError(
+                f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+            )
+        if _contains_control_character(raw):
+            raise ReadinessError(f"{label} must not contain control characters")
+        _reject_non_ascii_context(raw, label)
+        _reject_secret_string(raw, label)
+    except ReadinessError:
+        raise
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+    return raw
+
+
+def _validate_probe_content_type(raw: Any, label: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    raw = _plain_text(raw, label)
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    try:
+        if len(raw) > MAX_TRUST_SOURCE_TEXT_CHARS:
+            raise ReadinessError(
+                f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+            )
+        if raw != raw.strip():
+            raise ReadinessError(f"{label} must not have surrounding whitespace")
+        if _contains_control_character(raw):
+            raise ReadinessError(f"{label} must not contain control characters")
+        _reject_non_ascii_context(raw, label)
+        _reject_secret_string(raw, label)
+    except ReadinessError:
+        raise
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
     return raw
 
 
@@ -3218,7 +3786,7 @@ def _validate_probe_error_kind(raw: Any, label: str) -> str | None:
 def _validate_probe_http_status(raw: Any, label: str) -> int | None:
     if raw is None:
         return None
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 100 or raw > 599:
+    if type(raw) is not int or raw < 100 or raw > 599:
         raise ReadinessError(f"{label} must be an HTTP status code or null")
     return raw
 
@@ -3275,7 +3843,7 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
         probe.get("http_status"),
         f"{label}.http_status",
     )
-    content_type = _validate_optional_probe_text(
+    content_type = _validate_probe_content_type(
         probe.get("content_type"),
         f"{label}.content_type",
     )
@@ -3293,8 +3861,8 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
         f"{label}.error_kind",
     )
     if status == "reachable":
-        if http_status is None or not (200 <= http_status <= 399):
-            raise ReadinessError(f"{label}.http_status must record a 2xx or 3xx status")
+        if http_status is None or not (200 <= http_status <= 299):
+            raise ReadinessError(f"{label}.http_status must record a 2xx status")
         if downloaded_bytes <= 0:
             raise ReadinessError(
                 f"{label}.downloaded_bytes must be positive when reachable"
@@ -3407,6 +3975,7 @@ def _validate_https_source_url(
     *,
     allow_insecure_source_url: bool = False,
 ) -> str:
+    raw = _plain_text(raw, label)
     if len(raw) > MAX_SOURCE_URL_CHARS:
         raise ReadinessError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
     if _contains_control_character(raw):
@@ -4189,7 +4758,7 @@ def _verify_xsd_summary_entries(
                     f"{label} is schema-backed but still records a missing-schema reason",
                     path,
                 )
-            if not isinstance(schema_rel, str) or not schema_rel.strip():
+            if not isinstance(schema_rel, str):
                 _blocker(
                     blockers,
                     "xsd.fixture_schema_reference_missing",
@@ -4197,32 +4766,41 @@ def _verify_xsd_summary_entries(
                     path,
                 )
             else:
-                schema_rel = _validate_schema_source_path(schema_rel, f"{label}.schema")
-                if schema_rel not in schema_path_set:
+                schema_rel = _plain_text(schema_rel, f"{label}.schema")
+                if not schema_rel.strip():
                     _blocker(
                         blockers,
-                        "xsd.fixture_schema_reference_mismatch",
-                        f"{label}.schema references an unknown schema path",
+                        "xsd.fixture_schema_reference_missing",
+                        f"{label} is schema-backed but has no schema reference",
                         path,
                     )
                 else:
-                    schema_message_def_id = schema_ids_by_path[schema_rel]
-                    if schema_message_def_id != fixture_message_def_id:
+                    schema_rel = _validate_schema_source_path(schema_rel, f"{label}.schema")
+                    if schema_rel not in schema_path_set:
                         _blocker(
                             blockers,
-                            "xsd.fixture_schema_message_mismatch",
-                            f"{label}.schema message_def_id does not match fixture",
+                            "xsd.fixture_schema_reference_mismatch",
+                            f"{label}.schema references an unknown schema path",
                             path,
                         )
-                    schema_payload_root = schema_payload_roots_by_path[schema_rel]
-                    if schema_payload_root != fixture_payload_root:
-                        _blocker(
-                            blockers,
-                            "xsd.fixture_payload_root_mismatch",
-                            f"{label}.schema payload_root does not match fixture",
-                            path,
-                        )
-                    backed_schema_paths.add(schema_rel)
+                    else:
+                        schema_message_def_id = schema_ids_by_path[schema_rel]
+                        if schema_message_def_id != fixture_message_def_id:
+                            _blocker(
+                                blockers,
+                                "xsd.fixture_schema_message_mismatch",
+                                f"{label}.schema message_def_id does not match fixture",
+                                path,
+                            )
+                        schema_payload_root = schema_payload_roots_by_path[schema_rel]
+                        if schema_payload_root != fixture_payload_root:
+                            _blocker(
+                                blockers,
+                                "xsd.fixture_payload_root_mismatch",
+                                f"{label}.schema payload_root does not match fixture",
+                                path,
+                            )
+                        backed_schema_paths.add(schema_rel)
         else:
             computed_missing_schema += 1
             if schema_validated:
@@ -4452,7 +5030,7 @@ def _xsd_gap_diagnostic_entries(entries: list[Any]) -> list[dict[str, str]]:
             "message_def_id": entry["message_def_id"],
         }
         for entry in entries
-        if isinstance(entry, dict)
+        if type(entry) is dict
     ]
 
 
@@ -5057,11 +5635,7 @@ def _verify_receipt_summary(
     digest = _require_summary_digest(receipt_obj, label)
     _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
     version = receipt_obj.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != RECEIPT_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != RECEIPT_SUMMARY_VERSION:
         _blocker(
             blockers,
             version_code,
@@ -5080,37 +5654,43 @@ def _verify_receipt_summary(
         receipt_obj.get("receipt_kind"),
         f"{label}.receipt_kind",
     )
+    receipt_kind_clean: list[str] = []
     seen_receipt_kinds: dict[str, int] = {}
     for offset, item in enumerate(receipt_kind_raw):
-        if not isinstance(item, str) or not item.strip():
+        item_label = f"{label}.receipt_kind[{offset}]"
+        if not isinstance(item, str):
+            raise ReadinessError(f"{label}.receipt_kind must contain strings")
+        item = _plain_text(item, item_label)
+        if not item.strip():
             raise ReadinessError(f"{label}.receipt_kind must contain strings")
         if len(item) > MAX_CLEAN_STRING_CHARS:
             raise ReadinessError(
-                f"{label}.receipt_kind[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+                f"{item_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
             )
         if _contains_control_character(item):
             raise ReadinessError(
-                f"{label}.receipt_kind[{offset}] must not contain control characters"
+                f"{item_label} must not contain control characters"
             )
         if item != item.strip():
             raise ReadinessError(
-                f"{label}.receipt_kind[{offset}] must not have surrounding whitespace"
+                f"{item_label} must not have surrounding whitespace"
             )
-        _reject_non_ascii_context(item, f"{label}.receipt_kind[{offset}]")
-        _reject_secret_looking_identifier(item, f"{label}.receipt_kind[{offset}]")
+        _reject_non_ascii_context(item, item_label)
+        _reject_secret_looking_identifier(item, item_label)
         if item in seen_receipt_kinds:
             _blocker(
                 blockers,
                 kind_entry_mismatch_code,
                 (
-                    f"{label}.receipt_kind[{offset}] duplicates "
+                    f"{item_label} duplicates "
                     f"{label}.receipt_kind[{seen_receipt_kinds[item]}]"
                 ),
                 path,
             )
         else:
             seen_receipt_kinds[item] = offset
-    receipt_kind_set = set(receipt_kind_raw)
+        receipt_kind_clean.append(item)
+    receipt_kind_set = set(receipt_kind_clean)
     missing = sorted(REQUIRED_RECEIPT_KINDS - receipt_kind_set)
     if missing:
         _blocker(
@@ -5127,7 +5707,7 @@ def _verify_receipt_summary(
             "receipt verification contains unsupported receipt kinds",
             path,
         )
-    if receipt_kind_raw != sorted(receipt_kind_set):
+    if receipt_kind_clean != sorted(receipt_kind_set):
         _blocker(
             blockers,
             kind_entry_mismatch_code,
@@ -5246,8 +5826,7 @@ def _verify_receipt_summary(
         if "status_code" not in receipt or (
             status_code is not None
             and (
-                isinstance(status_code, bool)
-                or not isinstance(status_code, int)
+                type(status_code) is not int
                 or status_code < 100
                 or status_code > 599
             )
@@ -5260,7 +5839,7 @@ def _verify_receipt_summary(
                 path,
             )
         if status_code_valid and isinstance(ok, bool):
-            status_success = isinstance(status_code, int) and 200 <= status_code <= 299
+            status_success = type(status_code) is int and 200 <= status_code <= 299
             if ok != status_success:
                 _blocker(
                     blockers,
@@ -5483,11 +6062,7 @@ def verify_xsd_summary(
     _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, label)
     _check_no_secret_material(summary, label)
     version = summary.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != XSD_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != XSD_SUMMARY_VERSION:
         _blocker(
             blockers,
             "xsd.summary_version_unsupported",
@@ -5517,18 +6092,10 @@ def verify_xsd_summary(
     verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
     verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
     schema_backed_fixtures = summary.get("schema_backed_fixtures")
-    if (
-        isinstance(schema_backed_fixtures, bool)
-        or not isinstance(schema_backed_fixtures, int)
-        or schema_backed_fixtures < 0
-    ):
+    if type(schema_backed_fixtures) is not int or schema_backed_fixtures < 0:
         raise ReadinessError(f"{path}.schema_backed_fixtures must be a non-negative integer")
     schema_validated_fixtures = summary.get("schema_validated_fixtures")
-    if (
-        isinstance(schema_validated_fixtures, bool)
-        or not isinstance(schema_validated_fixtures, int)
-        or schema_validated_fixtures < 0
-    ):
+    if type(schema_validated_fixtures) is not int or schema_validated_fixtures < 0:
         raise ReadinessError(
             f"{path}.schema_validated_fixtures must be a non-negative integer"
         )
@@ -5645,12 +6212,12 @@ def verify_xsd_summary(
     missing_schema_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.missing_schema_fixtures")
         for entry in missing_schema_fixtures
-        if isinstance(entry, dict)
+        if type(entry) is dict
     }
     schema_only_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.schema_only_entries")
         for entry in schema_only_entries
-        if isinstance(entry, dict)
+        if type(entry) is dict
     }
     current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
     blocked_schema_message_ids = {
@@ -5696,7 +6263,7 @@ def verify_xsd_summary(
             f"{path}.missing_profile_schema_versions",
         )
         for entry in missing_profile_schema_versions
-        if isinstance(entry, dict)
+        if type(entry) is dict
     }
     for blocked in summary["_validated_blocked_schema_sources"]:
         message_def_id = blocked["message_def_id"]
@@ -5817,7 +6384,7 @@ def verify_xsd_summary(
         reviewed_profile_versions: list[Any] = []
         unreviewed_profile_versions: list[Any] = []
         for raw_missing in missing_profile_schema_versions:
-            if isinstance(raw_missing, dict) and raw_missing.get(
+            if type(raw_missing) is dict and raw_missing.get(
                 "message_def_id"
             ) in reviewed_xsd_gap_message_ids:
                 reviewed_profile_versions.append(raw_missing)
@@ -5920,11 +6487,7 @@ def verify_pending_xsd_probe_summary(
     _reject_unknown_keys(summary, PENDING_XSD_PROBE_SUMMARY_KEYS, label)
     _check_no_secret_material(summary, label)
     version = summary.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != PENDING_XSD_PROBE_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != PENDING_XSD_PROBE_SUMMARY_VERSION:
         _blocker(
             blockers,
             "xsd.pending_probe_summary_version_unsupported",
@@ -6096,17 +6659,17 @@ def _pending_xsd_probe_for_readiness_output(probe: dict[str, Any]) -> dict[str, 
 def _pending_xsd_probe_response_metadata_is_publicly_supported(
     probe: dict[str, Any],
 ) -> bool:
+    if type(probe) is not dict:
+        return False
     http_status = probe.get("http_status")
     downloaded_bytes = probe.get("downloaded_bytes")
     sample_sha256 = probe.get("sample_sha256")
     return (
         probe.get("status") == "reachable"
         and probe.get("looks_like_xsd") is True
-        and not isinstance(http_status, bool)
-        and isinstance(http_status, int)
-        and 200 <= http_status <= 399
-        and not isinstance(downloaded_bytes, bool)
-        and isinstance(downloaded_bytes, int)
+        and type(http_status) is int
+        and 200 <= http_status <= 299
+        and type(downloaded_bytes) is int
         and downloaded_bytes > 0
         and _is_lower_sha256(sample_sha256)
         and any(ch != "0" for ch in sample_sha256)
@@ -6114,12 +6677,18 @@ def _pending_xsd_probe_response_metadata_is_publicly_supported(
 
 
 def _public_pending_xsd_probe_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    output = {key: value for key, value in summary.items() if not key.startswith("_")}
-    output["ok"] = _required_flag_for_readiness_output(summary["ok"])
-    output["probes"] = [
-        _pending_xsd_probe_for_readiness_output(probe)
-        for probe in summary["probes"]
-    ]
+    output = _public_json_object_without_private_fields(summary)
+    output["ok"] = _required_flag_for_readiness_output(output.get("ok"))
+    probes = output.get("probes")
+    if type(probes) is list:
+        output["probes"] = [
+            _pending_xsd_probe_for_readiness_output(probe)
+            if type(probe) is dict
+            else "unsupported"
+            for probe in probes
+        ]
+    elif probes is not None:
+        output["probes"] = "unsupported"
     return output
 
 
@@ -6358,11 +6927,7 @@ def _verify_canary(
         )
     summary_sha256 = _require_sha256(canary, SUMMARY_DIGEST_FIELD, label)
     version = canary.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != CANARY_SUMMARY_VERSION
-    ):
+    if type(version) is not int or version != CANARY_SUMMARY_VERSION:
         _blocker(
             blockers,
             "evidence.canary_summary_version_unsupported",
@@ -6411,22 +6976,26 @@ def _verify_canary(
     stage_names_raw = _require_list(canary.get("stage_names"), f"{label}.stage_names")
     stage_names_clean: list[str] = []
     for offset, item in enumerate(stage_names_raw):
-        if not isinstance(item, str) or not item.strip():
+        item_label = f"{label}.stage_names[{offset}]"
+        if not isinstance(item, str):
+            raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
+        item = _plain_text(item, item_label)
+        if not item.strip():
             raise ReadinessError(f"{label}.stage_names must contain non-empty strings")
         if len(item) > MAX_CLEAN_STRING_CHARS:
             raise ReadinessError(
-                f"{label}.stage_names[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+                f"{item_label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
             )
         if _contains_control_character(item):
             raise ReadinessError(
-                f"{label}.stage_names[{offset}] must not contain control characters"
+                f"{item_label} must not contain control characters"
             )
         if item != item.strip():
             raise ReadinessError(
-                f"{label}.stage_names[{offset}] must not have surrounding whitespace"
+                f"{item_label} must not have surrounding whitespace"
             )
-        _reject_non_ascii_context(item, f"{label}.stage_names[{offset}]")
-        _reject_secret_looking_identifier(item, f"{label}.stage_names[{offset}]")
+        _reject_non_ascii_context(item, item_label)
+        _reject_secret_looking_identifier(item, item_label)
         stage_names_clean.append(item)
     stage_names_raw = stage_names_clean
     stage_names = set(stage_names_raw)
@@ -6457,6 +7026,13 @@ def _verify_canary(
             raise ReadinessError(f"{label}.stage_dry_run[{offset}] must be a boolean")
         stage_dry_run.append(item)
     dry_run_by_stage = dict(zip(stage_names_raw, stage_dry_run, strict=True))
+    stage_command_modes = _verify_stage_command_modes(
+        canary,
+        label,
+        stage_names_raw,
+        dry_run_by_stage,
+        plan_only,
+    )
     stage_windows_raw = _require_list(canary.get("stage_windows"), f"{label}.stage_windows")
     stage_windows: list[dict[str, str]] = []
     if plan_only:
@@ -6565,6 +7141,14 @@ def _verify_canary(
                 "canary receipt summary contains receipt kinds for stages not executed",
                 path,
             )
+        _check_canary_command_mode_receipt_binding(
+            label,
+            path,
+            blockers,
+            stage_command_modes,
+            dry_run_by_stage,
+            receipt_summary,
+        )
     return {
         "version": _version_for_readiness_output(version, CANARY_SUMMARY_VERSION),
         "path": canary_path,
@@ -6577,6 +7161,7 @@ def _verify_canary(
         "require_explicit_policy": require_explicit_policy,
         "stage_names": list(stage_names_raw),
         "stage_dry_run": stage_dry_run,
+        "stage_command_modes": stage_command_modes,
         "stage_windows": stage_windows,
         "verified_receipts": receipt_summary["verified_receipts"] if receipt_summary else 0,
         "receipt_kind": receipt_summary["receipt_kind"] if receipt_summary else [],
@@ -6858,7 +7443,7 @@ def _trust_profile_for_readiness_output(
     if output.get("embedded_signature_policy") != REQUIRE_VERIFIED:
         output["embedded_signature_policy"] = "unsupported"
     source = output.get("source")
-    if isinstance(source, dict):
+    if type(source) is dict:
         source_output = dict(source)
         for key in ("authority", "version"):
             value = source_output.get(key)
@@ -7093,7 +7678,7 @@ def _block_cross_canary_receipt_reuse(
             continue
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_path = receipt.get("path")
-            if isinstance(receipt_path, str):
+            if type(receipt_path) is str:
                 if receipt_path in seen_paths:
                     first_canary, first_receipt = seen_paths[receipt_path]
                     _blocker(
@@ -7128,7 +7713,7 @@ def _block_cross_canary_receipt_reuse(
                     seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
             for field, code in source_material_checks:
                 value = receipt.get(field)
-                if not isinstance(value, str):
+                if type(value) is not str:
                     continue
                 seen_for_field = seen_source_material[field]
                 previous = seen_for_field.get(value)
@@ -7164,7 +7749,7 @@ def _block_cross_trust_profile_reuse(
     seen_bundle_digests: dict[str, tuple[int, int]] = {}
     for trust_offset, trust in enumerate(trusts):
         profile_json_sha256 = trust.get("profile_json_sha256")
-        if isinstance(profile_json_sha256, str):
+        if type(profile_json_sha256) is str:
             if profile_json_sha256 in seen_profile_json_digests:
                 first_trust = seen_profile_json_digests[profile_json_sha256]
                 _blocker(
@@ -7243,10 +7828,10 @@ def _block_compact_json_artifact_path_role_reuse(
             f"canary_summaries[{canary_offset}].config_path",
         )
         receipt_summary = canary.get("receipt_summary")
-        if isinstance(receipt_summary, dict):
+        if type(receipt_summary) is dict:
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 receipt_path = receipt.get("path")
-                if isinstance(receipt_path, str):
+                if type(receipt_path) is str:
                     material_paths.setdefault(
                         receipt_path,
                         (
@@ -7260,10 +7845,10 @@ def _block_compact_json_artifact_path_role_reuse(
                 profile["path"],
                 f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path",
             )
-    if isinstance(archive_receipts, dict):
+    if type(archive_receipts) is dict:
         for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
             receipt_path = receipt.get("path")
-            if isinstance(receipt_path, str):
+            if type(receipt_path) is str:
                 material_paths.setdefault(
                     receipt_path,
                     f"receipt_verification.receipts[{receipt_offset}].path",
@@ -7348,7 +7933,7 @@ def _block_compact_summary_digest_role_confusion(
     receipt_digest_roles: list[tuple[str, str, str]] = []
     for canary_offset, canary in enumerate(canaries):
         receipt_summary = canary.get("receipt_summary")
-        if not isinstance(receipt_summary, dict):
+        if type(receipt_summary) is not dict:
             continue
         receipt_digest_roles.append(
             (
@@ -7359,7 +7944,7 @@ def _block_compact_summary_digest_role_confusion(
         )
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_digest = receipt.get("receipt_sha256")
-            if isinstance(receipt_digest, str):
+            if type(receipt_digest) is str:
                 receipt_digest_roles.append(
                     (
                         receipt_digest,
@@ -7370,7 +7955,7 @@ def _block_compact_summary_digest_role_confusion(
                 )
             for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                 material_digest = receipt.get(field)
-                if isinstance(material_digest, str):
+                if type(material_digest) is str:
                     receipt_digest_roles.append(
                         (
                             material_digest,
@@ -7399,7 +7984,7 @@ def _block_compact_summary_digest_role_confusion(
     trust_material_roles: list[tuple[str, str, str]] = []
     for trust_offset, trust in enumerate(trusts):
         profile_json_sha256 = trust.get("profile_json_sha256")
-        if isinstance(profile_json_sha256, str):
+        if type(profile_json_sha256) is str:
             trust_material_roles.append(
                 (
                     profile_json_sha256,
@@ -7581,7 +8166,7 @@ def _block_cross_xsd_summary_reuse(
         seen: dict[str, int] = {}
         for summary_offset, summary in enumerate(xsd_summaries):
             profile_catalog = summary.get("profile_catalog")
-            if not isinstance(profile_catalog, dict):
+            if type(profile_catalog) is not dict:
                 continue
             value = profile_catalog.get(field)
             if value is None:
@@ -7721,7 +8306,7 @@ def _xsd_material_path_roles(
                 )
             )
         profile_catalog = summary.get("profile_catalog")
-        if isinstance(profile_catalog, dict):
+        if type(profile_catalog) is dict:
             path_roles.append(
                 (
                     profile_catalog["path"],
@@ -7765,14 +8350,14 @@ def _evidence_receipt_entries(
     if source == "canary":
         for canary_offset, canary in enumerate(summary["canary_summaries"]):
             receipt_summary = canary.get("receipt_summary")
-            if receipt_summary is None:
+            if type(receipt_summary) is not dict:
                 continue
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 entries.append((receipt_offset, canary_offset, receipt))
         return entries
     if source == "archive":
         archive_summary = summary["receipt_verification"]
-        if isinstance(archive_summary, dict):
+        if type(archive_summary) is dict:
             for receipt_offset, receipt in enumerate(archive_summary["receipts"]):
                 entries.append((receipt_offset, None, receipt))
         return entries
@@ -7823,7 +8408,7 @@ def _block_cross_compact_summary_digest_role_confusion(
                 )
             )
             receipt_summary = canary.get("receipt_summary")
-            if not isinstance(receipt_summary, dict):
+            if type(receipt_summary) is not dict:
                 continue
             canary_material_digests.append(
                 (
@@ -7836,7 +8421,7 @@ def _block_cross_compact_summary_digest_role_confusion(
             )
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 receipt_digest = receipt.get("receipt_sha256")
-                if isinstance(receipt_digest, str):
+                if type(receipt_digest) is str:
                     canary_material_digests.append(
                         (
                             receipt_digest,
@@ -7849,7 +8434,7 @@ def _block_cross_compact_summary_digest_role_confusion(
                     )
                 for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                     material_digest = receipt.get(field)
-                    if isinstance(material_digest, str):
+                    if type(material_digest) is str:
                         canary_material_digests.append(
                             (
                                 material_digest,
@@ -7871,7 +8456,7 @@ def _block_cross_compact_summary_digest_role_confusion(
                 )
             )
             profile_json_sha256 = trust.get("profile_json_sha256")
-            if isinstance(profile_json_sha256, str):
+            if type(profile_json_sha256) is str:
                 trust_material_digests.append(
                     (
                         profile_json_sha256,
@@ -8009,10 +8594,10 @@ def _block_cross_evidence_summary_reuse(
                 )
             )
             receipt_summary = canary.get("receipt_summary")
-            if isinstance(receipt_summary, dict):
+            if type(receipt_summary) is dict:
                 for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                     receipt_path = receipt.get("path")
-                    if isinstance(receipt_path, str):
+                    if type(receipt_path) is str:
                         json_material_paths.append(
                             (
                                 receipt_path,
@@ -8045,12 +8630,12 @@ def _block_cross_evidence_summary_reuse(
                             f"[{trust_offset}].profiles[{profile_offset}].path"
                         ),
                     )
-                )
+            )
         archive_receipts = summary.get("receipt_verification")
-        if isinstance(archive_receipts, dict):
+        if type(archive_receipts) is dict:
             for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
                 receipt_path = receipt.get("path")
-                if isinstance(receipt_path, str):
+                if type(receipt_path) is str:
                     json_material_paths.append(
                         (
                             receipt_path,
@@ -8474,7 +9059,7 @@ def _xsd_material_digest_roles(
                 )
             )
         profile_catalog = summary.get("profile_catalog")
-        if isinstance(profile_catalog, dict):
+        if type(profile_catalog) is dict:
             roles.append(
                 (
                     profile_catalog["sha256"],
@@ -8509,7 +9094,7 @@ def _evidence_material_digest_roles(
             )
         )
         archive = summary["receipt_verification"]
-        if isinstance(archive, dict):
+        if type(archive) is dict:
             roles.append(
                 (
                     archive["summary_sha256"],
@@ -8518,7 +9103,7 @@ def _evidence_material_digest_roles(
             )
             for receipt_offset, receipt in enumerate(archive["receipts"]):
                 receipt_digest = receipt.get("receipt_sha256")
-                if isinstance(receipt_digest, str):
+                if type(receipt_digest) is str:
                     roles.append(
                         (
                             receipt_digest,
@@ -8531,7 +9116,7 @@ def _evidence_material_digest_roles(
                     )
                 for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                     digest = receipt.get(field)
-                    if isinstance(digest, str):
+                    if type(digest) is str:
                         roles.append(
                             (
                                 digest,
@@ -8553,7 +9138,7 @@ def _evidence_material_digest_roles(
                 )
             )
             receipt_summary = canary.get("receipt_summary")
-            if not isinstance(receipt_summary, dict):
+            if type(receipt_summary) is not dict:
                 continue
             roles.append(
                 (
@@ -8566,7 +9151,7 @@ def _evidence_material_digest_roles(
             )
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 receipt_digest = receipt.get("receipt_sha256")
-                if isinstance(receipt_digest, str):
+                if type(receipt_digest) is str:
                     roles.append(
                         (
                             receipt_digest,
@@ -8580,7 +9165,7 @@ def _evidence_material_digest_roles(
                     )
                 for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                     digest = receipt.get(field)
-                    if isinstance(digest, str):
+                    if type(digest) is str:
                         roles.append(
                             (
                                 digest,
@@ -8603,7 +9188,7 @@ def _evidence_material_digest_roles(
                 )
             )
             profile_json_sha256 = trust.get("profile_json_sha256")
-            if isinstance(profile_json_sha256, str):
+            if type(profile_json_sha256) is str:
                 roles.append(
                     (
                         profile_json_sha256,
@@ -8649,7 +9234,7 @@ def _receipt_path_material_roles(
     for receipt_offset, receipt in enumerate(receipts):
         for field in path_fields:
             value = receipt.get(field)
-            if isinstance(value, str):
+            if type(value) is str:
                 roles.append(
                     (
                         value,
@@ -8668,7 +9253,7 @@ def _evidence_material_path_roles(
     for summary_offset, summary in enumerate(evidence_summaries):
         roles.append((summary["path"], f"evidence_summaries[{summary_offset}].path"))
         archive = summary["receipt_verification"]
-        if isinstance(archive, dict):
+        if type(archive) is dict:
             roles.extend(
                 _receipt_path_material_roles(
                     archive["receipts"],
@@ -8683,7 +9268,7 @@ def _evidence_material_path_roles(
             roles.append((canary["path"], f"{canary_label}.path"))
             roles.append((canary["config_path"], f"{canary_label}.config_path"))
             receipt_summary = canary.get("receipt_summary")
-            if isinstance(receipt_summary, dict):
+            if type(receipt_summary) is dict:
                 roles.extend(
                     _receipt_path_material_roles(
                         receipt_summary["receipts"],
@@ -8869,27 +9454,26 @@ def _block_cross_evidence_pending_probe_path_role_confusion(
 
 
 def _public_xsd_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    output = {
-        key: value
-        for key, value in summary.items()
-        if not key.startswith("_")
-    }
+    output = _public_json_object_without_private_fields(summary)
     strict = output.get("strict")
-    if isinstance(strict, dict):
+    if type(strict) is dict:
         output["strict"] = {
             key: _required_flag_for_readiness_output(value)
             for key, value in strict.items()
         }
+    elif strict is not None:
+        output["strict"] = "unsupported"
     return output
 
 
 def _receipt_response_metadata_is_publicly_supported(receipt: dict[str, Any]) -> bool:
+    if type(receipt) is not dict:
+        return False
     status_code = receipt.get("status_code")
     response_body_sha256 = receipt.get("response_body_sha256")
     return (
         receipt.get("ok") is True
-        and not isinstance(status_code, bool)
-        and isinstance(status_code, int)
+        and type(status_code) is int
         and 200 <= status_code <= 299
         and _is_lower_sha256(response_body_sha256)
         and any(ch != "0" for ch in response_body_sha256)
@@ -8897,13 +9481,13 @@ def _receipt_response_metadata_is_publicly_supported(receipt: dict[str, Any]) ->
 
 
 def _redact_public_receipt_entries(receipt_summary: dict[str, Any] | None) -> None:
-    if not isinstance(receipt_summary, dict):
+    if type(receipt_summary) is not dict:
         return
     receipts = receipt_summary.get("receipts")
-    if not isinstance(receipts, list):
+    if type(receipts) is not list:
         return
     for receipt in receipts:
-        if not isinstance(receipt, dict):
+        if type(receipt) is not dict:
             continue
         if not _receipt_response_metadata_is_publicly_supported(receipt):
             for key in ("ok", "status_code", "response_body_sha256"):
@@ -8943,11 +9527,7 @@ def verify_evidence_summary(
         blockers=blockers,
     )
     version = summary.get("version")
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != EVIDENCE_VERSION
-    ):
+    if type(version) is not int or version != EVIDENCE_VERSION:
         raise ReadinessError(f"{path}.version must be {EVIDENCE_VERSION}")
     if not _require_bool(summary, "ok", str(path)):
         _blocker(blockers, "evidence.summary_not_ok", "evidence summary is not ok", path)
@@ -9043,11 +9623,7 @@ def verify_evidence_summary(
         )
         summary_sha256 = _require_sha256(trust_obj, SUMMARY_DIGEST_FIELD, label)
         version = trust_obj.get("version")
-        if (
-            isinstance(version, bool)
-            or not isinstance(version, int)
-            or version != TRUST_SUMMARY_VERSION
-        ):
+        if type(version) is not int or version != TRUST_SUMMARY_VERSION:
             _blocker(
                 blockers,
                 "trust.summary_version_unsupported",
@@ -9328,13 +9904,25 @@ def verify_evidence_summary(
 
 
 def _public_evidence_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    output = copy.deepcopy(
-        {key: value for key, value in summary.items() if not key.startswith("_")}
-    )
-    for canary in output.get("canary_summaries", []):
-        if isinstance(canary, dict):
-            _redact_public_receipt_entries(canary.get("receipt_summary"))
-    _redact_public_receipt_entries(output.get("receipt_verification"))
+    output = _public_json_object_without_private_fields(summary)
+    canary_summaries = output.get("canary_summaries")
+    if type(canary_summaries) is list:
+        for offset, canary in enumerate(canary_summaries):
+            if type(canary) is not dict:
+                canary_summaries[offset] = "unsupported"
+                continue
+            receipt_summary = canary.get("receipt_summary")
+            if receipt_summary is not None and type(receipt_summary) is not dict:
+                canary["receipt_summary"] = "unsupported"
+                continue
+            _redact_public_receipt_entries(receipt_summary)
+    elif canary_summaries is not None:
+        output["canary_summaries"] = "unsupported"
+    archive_receipts = output.get("receipt_verification")
+    if archive_receipts is not None and type(archive_receipts) is not dict:
+        output["receipt_verification"] = "unsupported"
+    else:
+        _redact_public_receipt_entries(archive_receipts)
     return output
 
 
@@ -9354,7 +9942,7 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
 def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     if value is None:
         return []
-    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+    if isinstance(value, (str, bytes)) or type(value) not in (list, tuple):
         raise ReadinessError(f"{label} must be a repeatable path list")
     if len(value) > MAX_SUMMARY_INPUT_PATHS:
         raise ReadinessError(f"{label} accepts at most {MAX_SUMMARY_INPUT_PATHS} paths")
@@ -9362,14 +9950,17 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
     for offset, entry in enumerate(value):
         if isinstance(entry, bytes):
             raise ReadinessError(f"{label}[{offset}] must be a path")
-        try:
+        if isinstance(entry, str):
+            paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
+        elif type(entry) is type(Path()):
             paths.append(Path(entry))
-        except TypeError as error:
-            raise ReadinessError(f"{label}[{offset}] must be a path") from error
+        else:
+            raise ReadinessError(f"{label}[{offset}] must be a path")
     return paths
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
     xsd_summary_paths = _required_cli_path_sequence(
         getattr(args, "xsd_summary", None),
@@ -9449,12 +10040,9 @@ def run(args: argparse.Namespace) -> int:
     xsd_paths = xsd_summary_paths
     evidence_paths = evidence_summary_paths
     pending_xsd_probe_paths = pending_xsd_probe_summary_paths
-    _reject_duplicate_paths([path.resolve() for path in xsd_paths], "--xsd-summary")
-    _reject_duplicate_paths([path.resolve() for path in evidence_paths], "--evidence-summary")
-    _reject_duplicate_paths(
-        [path.resolve() for path in pending_xsd_probe_paths],
-        "--pending-xsd-probe-summary",
-    )
+    _reject_duplicate_paths(xsd_paths, "--xsd-summary")
+    _reject_duplicate_paths(evidence_paths, "--evidence-summary")
+    _reject_duplicate_paths(pending_xsd_probe_paths, "--pending-xsd-probe-summary")
     xsd_summaries = [
         verify_xsd_summary(
             path,
@@ -9599,6 +10187,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Aggregate ISO 20022 production-readiness evidence summaries.",
         allow_abbrev=False,
     )
@@ -9675,10 +10264,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--evidence-summary",
                 "--environment",
@@ -9694,19 +10284,19 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--allow-canary-stage-receipts-only",
                 "--allow-reviewed-xsd-gaps",
             },
         )
         _preflight_required_cli_values(
-            argv,
+            normalised_argv,
             {"--environment", "--provider"},
             "context",
         )
         _preflight_numeric_cli_values(
-            argv,
+            normalised_argv,
             integer_flags={
                 "--max-canary-age-days",
                 "--max-evidence-age-days",
@@ -9717,7 +10307,7 @@ def main(argv: list[str] | None = None) -> int:
             number_flags=set(),
         )
         _preflight_output_cli_paths(
-            argv,
+            normalised_argv,
             {
                 "--evidence-summary",
                 "--pending-xsd-probe-summary",
@@ -9725,7 +10315,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--xsd-summary",
             },
         )
-        args = parser.parse_args(argv)
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except ReadinessError as error:
         print(f"error: {error}", file=sys.stderr)

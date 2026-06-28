@@ -20,7 +20,7 @@ pub mod shard_cursor;
 use std::collections::BTreeSet;
 
 pub use confidential::{ConfidentialComputeError, validate_confidential_compute_record};
-use iroha_config::parameters::actual::LaneConfig;
+use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry, Nexus};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::AccountId,
@@ -365,6 +365,84 @@ pub fn enforce_lane_proof_policy(
     Ok(())
 }
 
+fn active_lane_config_entry<'a>(
+    nexus: &'a Nexus,
+    lane_id: LaneId,
+) -> Result<&'a LaneConfigEntry, DaProofPolicyError> {
+    let Some(current) = nexus.lane_config.entry(lane_id) else {
+        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
+    };
+    let expected_config = LaneConfig::from_catalog(&nexus.lane_catalog);
+    let Some(expected) = expected_config.entry(lane_id) else {
+        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
+    };
+    if nexus
+        .dataspace_catalog
+        .by_id(expected.dataspace_id)
+        .is_none()
+    {
+        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
+    }
+    if !lane_config_entries_match_for_da(current, expected) {
+        return Err(DaProofPolicyError::UnknownLane { lane: lane_id });
+    }
+    Ok(current)
+}
+
+fn lane_config_entries_match_for_da(lhs: &LaneConfigEntry, rhs: &LaneConfigEntry) -> bool {
+    lhs.lane_id == rhs.lane_id
+        && lhs.shard_id == rhs.shard_id
+        && lhs.dataspace_id == rhs.dataspace_id
+        && lhs.visibility == rhs.visibility
+        && lhs.storage_profile == rhs.storage_profile
+        && lhs.proof_scheme == rhs.proof_scheme
+        && lhs.alias == rhs.alias
+        && lhs.slug == rhs.slug
+        && lhs.kura_segment == rhs.kura_segment
+        && lhs.merge_segment == rhs.merge_segment
+        && lhs.key_prefix == rhs.key_prefix
+        && lhs.manifest_policy == rhs.manifest_policy
+        && lhs.confidential_compute == rhs.confidential_compute
+        && lhs.confidential_policy == rhs.confidential_policy
+        && lhs.confidential_access == rhs.confidential_access
+}
+
+/// Return the active DA proof policy for a catalog-backed lane.
+///
+/// # Errors
+///
+/// Returns [`DaProofPolicyError::UnknownLane`] when the lane is absent from the
+/// authoritative catalog, when derived runtime geometry is missing or drifted
+/// from the catalog, or when the lane dataspace is absent from the active
+/// dataspace catalog.
+pub fn active_lane_proof_policy(
+    nexus: &Nexus,
+    lane_id: LaneId,
+) -> Result<DaProofPolicy, DaProofPolicyError> {
+    let entry = active_lane_config_entry(nexus, lane_id)?;
+    Ok(DaProofPolicy {
+        lane_id: entry.lane_id,
+        dataspace_id: entry.dataspace_id,
+        alias: entry.alias.clone(),
+        proof_scheme: entry.proof_scheme,
+    })
+}
+
+/// Enforce that a commitment's proof policy matches an active catalog-backed lane.
+///
+/// # Errors
+///
+/// Returns [`DaProofPolicyError`] when the lane is inactive, the derived runtime
+/// geometry drifted from the authoritative catalog, or the commitment violates
+/// the active lane proof scheme.
+pub fn enforce_active_lane_proof_policy(
+    record: &DaCommitmentRecord,
+    nexus: &Nexus,
+) -> Result<(), DaProofPolicyError> {
+    active_lane_config_entry(nexus, record.lane_id)?;
+    enforce_lane_proof_policy(record, &nexus.lane_config)
+}
+
 /// Filter DA pin intents using the configured lane catalog.
 ///
 /// Returns `(kept, rejected)` where `kept` contains intents that passed validation
@@ -373,6 +451,40 @@ pub fn enforce_lane_proof_policy(
 pub fn sanitize_pin_intents(
     intents: impl IntoIterator<Item = iroha_data_model::da::pin_intent::DaPinIntent>,
     lane_config: &LaneConfig,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> (
+    Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
+    Vec<DaPinIntentValidationError>,
+) {
+    sanitize_pin_intents_with_lane_check(
+        intents,
+        |lane_id| lane_config.entry(lane_id).is_some(),
+        account_exists,
+    )
+}
+
+/// Filter DA pin intents using the active Nexus lane catalog.
+///
+/// Returns `(kept, rejected)` where `kept` contains intents that passed
+/// validation and `rejected` lists every validation failure.
+pub fn sanitize_pin_intents_against_nexus(
+    intents: impl IntoIterator<Item = iroha_data_model::da::pin_intent::DaPinIntent>,
+    nexus: &Nexus,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> (
+    Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
+    Vec<DaPinIntentValidationError>,
+) {
+    sanitize_pin_intents_with_lane_check(
+        intents,
+        |lane_id| active_lane_config_entry(nexus, lane_id).is_ok(),
+        account_exists,
+    )
+}
+
+fn sanitize_pin_intents_with_lane_check(
+    intents: impl IntoIterator<Item = iroha_data_model::da::pin_intent::DaPinIntent>,
+    mut lane_is_active: impl FnMut(LaneId) -> bool,
     account_exists: impl Fn(&AccountId) -> bool,
 ) -> (
     Vec<iroha_data_model::da::pin_intent::DaPinIntent>,
@@ -423,7 +535,7 @@ pub fn sanitize_pin_intents(
     for intent in canonical.intents {
         let key = (intent.lane_id, intent.epoch, intent.sequence);
 
-        if lane_config.entry(intent.lane_id).is_none() {
+        if !lane_is_active(intent.lane_id) {
             rejected.push(DaPinIntentValidationError::UnknownLane {
                 lane: intent.lane_id,
             });
@@ -531,6 +643,36 @@ pub fn validate_pin_intent_bundle(
     Ok(())
 }
 
+/// Validate a DA pin-intent bundle against active Nexus lane catalogs.
+///
+/// # Errors
+///
+/// Returns the first [`DaPinIntentValidationError`] observed in the bundle.
+pub fn validate_pin_intent_bundle_against_nexus(
+    bundle: &iroha_data_model::da::pin_intent::DaPinIntentBundle,
+    nexus: &Nexus,
+    account_exists: impl Fn(&AccountId) -> bool,
+) -> Result<(), DaPinIntentValidationError> {
+    if bundle.version != iroha_data_model::da::pin_intent::DaPinIntentBundle::VERSION_V1 {
+        return Err(DaPinIntentValidationError::UnsupportedVersion {
+            version: bundle.version,
+        });
+    }
+
+    let (_kept, rejected) =
+        sanitize_pin_intents_against_nexus(bundle.intents.clone(), nexus, account_exists);
+    if let Some(error) = rejected.into_iter().next() {
+        return Err(error);
+    }
+    let canonical =
+        iroha_data_model::da::pin_intent::DaPinIntentBundle::new(bundle.intents.clone());
+    if let Some(index) = first_pin_intent_order_mismatch(&bundle.intents, &canonical.intents) {
+        return Err(DaPinIntentValidationError::NonCanonicalOrder { index });
+    }
+
+    Ok(())
+}
+
 fn first_pin_intent_order_mismatch(
     actual: &[iroha_data_model::da::pin_intent::DaPinIntent],
     canonical: &[iroha_data_model::da::pin_intent::DaPinIntent],
@@ -555,6 +697,35 @@ fn first_pin_intent_order_mismatch(
 pub fn validate_commitment_bundle(
     bundle: &DaCommitmentBundle,
     lane_config: &LaneConfig,
+) -> Result<(), DaCommitmentValidationError> {
+    validate_commitment_bundle_with_policy(bundle, |record| {
+        enforce_lane_proof_policy(record, lane_config)?;
+        validate_confidential_compute_record(lane_config, record)?;
+        Ok(())
+    })
+}
+
+/// Validate commitment bundle invariants against active Nexus lane catalogs.
+///
+/// # Errors
+///
+/// Returns a [`DaCommitmentValidationError`] when invariants are violated.
+pub fn validate_commitment_bundle_against_nexus(
+    bundle: &DaCommitmentBundle,
+    nexus: &Nexus,
+) -> Result<(), DaCommitmentValidationError> {
+    validate_commitment_bundle_with_policy(bundle, |record| {
+        enforce_active_lane_proof_policy(record, nexus)?;
+        validate_confidential_compute_record(&nexus.lane_config, record)?;
+        Ok(())
+    })
+}
+
+fn validate_commitment_bundle_with_policy(
+    bundle: &DaCommitmentBundle,
+    mut validate_record_policy: impl FnMut(
+        &DaCommitmentRecord,
+    ) -> Result<(), DaCommitmentValidationError>,
 ) -> Result<(), DaCommitmentValidationError> {
     validate_commitment_bundle_len(bundle.commitments.len())?;
 
@@ -607,8 +778,7 @@ pub fn validate_commitment_bundle(
             });
         }
 
-        enforce_lane_proof_policy(record, lane_config)?;
-        validate_confidential_compute_record(lane_config, record)?;
+        validate_record_policy(record)?;
     }
     let mut canonical = bundle.commitments.clone();
     canonical.sort();
@@ -927,16 +1097,40 @@ pub fn proof_policies(lane_config: &LaneConfig) -> Vec<DaProofPolicy> {
         .collect()
 }
 
+/// Snapshot active proof policies for catalog-backed Nexus lanes.
+#[must_use]
+pub fn active_proof_policies(nexus: &Nexus) -> Vec<DaProofPolicy> {
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter_map(|lane| active_lane_proof_policy(nexus, lane.id).ok())
+        .collect()
+}
+
 /// Snapshot the configured proof policies as a versioned bundle.
 #[must_use]
 pub fn proof_policy_bundle(lane_config: &LaneConfig) -> DaProofPolicyBundle {
     DaProofPolicyBundle::new(proof_policies(lane_config))
 }
 
+/// Snapshot active proof policies as a versioned bundle.
+#[must_use]
+pub fn active_proof_policy_bundle(nexus: &Nexus) -> DaProofPolicyBundle {
+    DaProofPolicyBundle::new(active_proof_policies(nexus))
+}
+
 /// Compute the hash for the current proof policy bundle.
 #[must_use]
 pub fn proof_policy_bundle_hash(lane_config: &LaneConfig) -> HashOf<DaProofPolicyBundle> {
     let bundle = proof_policy_bundle(lane_config);
+    HashOf::new(&bundle)
+}
+
+/// Compute the hash for the active proof policy bundle.
+#[must_use]
+pub fn active_proof_policy_bundle_hash(nexus: &Nexus) -> HashOf<DaProofPolicyBundle> {
+    let bundle = active_proof_policy_bundle(nexus);
     HashOf::new(&bundle)
 }
 
@@ -950,15 +1144,16 @@ mod tests {
             commitment::RetentionClass,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile},
+        nexus::{
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
+            LaneConfig as ModelLaneConfig, LaneStorageProfile,
+        },
     };
     use norito::to_bytes;
 
     use super::*;
 
-    fn lane_config_with(
-        lanes: Vec<ModelLaneConfig>,
-    ) -> iroha_config::parameters::actual::LaneConfig {
+    fn lane_catalog_with(lanes: Vec<ModelLaneConfig>) -> LaneCatalog {
         let max_lane = lanes
             .iter()
             .map(|lane| lane.id.as_u32())
@@ -966,8 +1161,40 @@ mod tests {
             .unwrap_or_default();
         let lane_count =
             NonZeroU32::new(max_lane.saturating_add(1)).expect("lane count is non-zero");
-        let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
+        LaneCatalog::new(lane_count, lanes).expect("lane catalog")
+    }
+
+    fn lane_config_with(
+        lanes: Vec<ModelLaneConfig>,
+    ) -> iroha_config::parameters::actual::LaneConfig {
+        let catalog = lane_catalog_with(lanes);
         iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog)
+    }
+
+    fn nexus_with_catalog(lane_catalog: LaneCatalog) -> Nexus {
+        let dataspace_catalog = DataSpaceCatalog::new(
+            lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.dataspace_id)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|id| DataSpaceMetadata {
+                    id,
+                    alias: format!("ds-{}", id.as_u64()),
+                    description: None,
+                    fault_tolerance: 1,
+                })
+                .collect(),
+        )
+        .expect("dataspace catalog");
+        Nexus {
+            enabled: true,
+            lane_config: LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            dataspace_catalog,
+            ..Default::default()
+        }
     }
 
     fn merkle_record(lane: u32) -> DaCommitmentRecord {
@@ -1035,6 +1262,225 @@ mod tests {
         assert_eq!(policies[1].dataspace_id, lane_b.dataspace_id);
         assert_eq!(policies[1].alias, lane_b.alias);
         assert_eq!(policies[1].proof_scheme, lane_b.proof_scheme);
+    }
+
+    #[test]
+    fn active_proof_policy_bundle_ignores_stale_geometry_for_removed_catalog_lane() {
+        let stale_lane = LaneId::new(1);
+        let authoritative_catalog = lane_catalog_with(vec![ModelLaneConfig::default()]);
+        let stale_geometry_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: stale_lane,
+                alias: "stale-da".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let mut nexus = nexus_with_catalog(authoritative_catalog);
+        nexus.lane_config = LaneConfig::from_catalog(&stale_geometry_catalog);
+        assert!(
+            nexus.lane_config.entry(stale_lane).is_some(),
+            "test must seed derived geometry for the removed lane"
+        );
+
+        let bundle = active_proof_policy_bundle(&nexus);
+
+        assert_eq!(bundle.policies.len(), 1);
+        assert_eq!(bundle.policies[0].lane_id, LaneId::SINGLE);
+        assert!(
+            bundle
+                .policies
+                .iter()
+                .all(|policy| policy.lane_id != stale_lane),
+            "stale geometry-only lane must not appear in active DA policy bundle"
+        );
+        assert!(matches!(
+            active_lane_proof_policy(&nexus, stale_lane),
+            Err(DaProofPolicyError::UnknownLane { lane }) if lane == stale_lane
+        ));
+    }
+
+    #[test]
+    fn validate_commitment_bundle_against_nexus_rejects_stale_geometry_lane() {
+        let stale_lane = LaneId::new(1);
+        let authoritative_catalog = lane_catalog_with(vec![ModelLaneConfig::default()]);
+        let stale_geometry_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: stale_lane,
+                alias: "stale-da-commitment".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let mut nexus = nexus_with_catalog(authoritative_catalog);
+        nexus.lane_config = LaneConfig::from_catalog(&stale_geometry_catalog);
+        let bundle = DaCommitmentBundle::new(vec![merkle_record(stale_lane.as_u32())]);
+
+        let err = validate_commitment_bundle_against_nexus(&bundle, &nexus)
+            .expect_err("stale geometry-only lane must not validate commitments");
+
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane { lane })
+                if lane == stale_lane
+        ));
+    }
+
+    #[test]
+    fn validate_pin_intent_bundle_against_nexus_rejects_stale_geometry_lane() {
+        let stale_lane = LaneId::new(1);
+        let authoritative_catalog = lane_catalog_with(vec![ModelLaneConfig::default()]);
+        let stale_geometry_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: stale_lane,
+                alias: "stale-da-intent".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let mut nexus = nexus_with_catalog(authoritative_catalog);
+        nexus.lane_config = LaneConfig::from_catalog(&stale_geometry_catalog);
+        let bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
+            iroha_data_model::da::pin_intent::DaPinIntent::new(
+                stale_lane,
+                1,
+                1,
+                StorageTicketId::new([0xCD; 32]),
+                iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAB; 32]),
+            ),
+        ]);
+
+        let err = validate_pin_intent_bundle_against_nexus(&bundle, &nexus, |_| true)
+            .expect_err("stale geometry-only lane must not validate pin intents");
+
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::UnknownLane { lane } if lane == stale_lane
+        ));
+    }
+
+    #[test]
+    fn active_proof_policy_rejects_catalog_lane_with_missing_dataspace() {
+        let inactive_lane = LaneId::new(1);
+        let lane_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: inactive_lane,
+                dataspace_id: DataSpaceId::new(7),
+                alias: "missing-dataspace-da".to_owned(),
+                proof_scheme: DaProofScheme::KzgBls12_381,
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let mut nexus = nexus_with_catalog(lane_catalog);
+        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata::default()])
+            .expect("dataspace catalog without lane dataspace");
+
+        let bundle = active_proof_policy_bundle(&nexus);
+
+        assert!(
+            bundle
+                .policies
+                .iter()
+                .all(|policy| policy.lane_id != inactive_lane),
+            "lanes whose dataspace is absent from the active catalog must not advertise DA policy"
+        );
+        assert!(matches!(
+            active_lane_proof_policy(&nexus, inactive_lane),
+            Err(DaProofPolicyError::UnknownLane { lane }) if lane == inactive_lane
+        ));
+        let commitment_bundle = DaCommitmentBundle::new(vec![kzg_record(
+            inactive_lane.as_u32(),
+            Some(KzgCommitment::new([0x42; 48])),
+        )]);
+        let err = validate_commitment_bundle_against_nexus(&commitment_bundle, &nexus)
+            .expect_err("missing dataspace must not validate DA commitments");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane { lane })
+                if lane == inactive_lane
+        ));
+
+        let pin_bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
+            iroha_data_model::da::pin_intent::DaPinIntent::new(
+                inactive_lane,
+                1,
+                1,
+                StorageTicketId::new([0x41; 32]),
+                iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x43; 32]),
+            ),
+        ]);
+        let err = validate_pin_intent_bundle_against_nexus(&pin_bundle, &nexus, |_| true)
+            .expect_err("missing dataspace must not validate DA pin intents");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::UnknownLane { lane } if lane == inactive_lane
+        ));
+    }
+
+    #[test]
+    fn active_proof_policy_rejects_catalog_geometry_drift() {
+        let drifted_lane = LaneId::new(1);
+        let authoritative_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: drifted_lane,
+                alias: "catalog-da".to_owned(),
+                dataspace_id: DataSpaceId::new(7),
+                proof_scheme: DaProofScheme::MerkleSha256,
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let drifted_geometry_catalog = lane_catalog_with(vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: drifted_lane,
+                alias: "drifted-da".to_owned(),
+                dataspace_id: DataSpaceId::new(9),
+                proof_scheme: DaProofScheme::KzgBls12_381,
+                ..ModelLaneConfig::default()
+            },
+        ]);
+        let mut nexus = nexus_with_catalog(authoritative_catalog);
+        nexus.lane_config = LaneConfig::from_catalog(&drifted_geometry_catalog);
+
+        let bundle = active_proof_policy_bundle(&nexus);
+
+        assert!(
+            bundle
+                .policies
+                .iter()
+                .all(|policy| policy.lane_id != drifted_lane),
+            "catalog/geometry drift must fail closed instead of advertising stale DA policy"
+        );
+        assert!(matches!(
+            active_lane_proof_policy(&nexus, drifted_lane),
+            Err(DaProofPolicyError::UnknownLane { lane }) if lane == drifted_lane
+        ));
+        let commitment_bundle = DaCommitmentBundle::new(vec![merkle_record(drifted_lane.as_u32())]);
+        let err = validate_commitment_bundle_against_nexus(&commitment_bundle, &nexus)
+            .expect_err("catalog/geometry drift must not validate DA commitments");
+        assert!(matches!(
+            err,
+            DaCommitmentValidationError::ProofPolicy(DaProofPolicyError::UnknownLane { lane })
+                if lane == drifted_lane
+        ));
+
+        let pin_bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
+            iroha_data_model::da::pin_intent::DaPinIntent::new(
+                drifted_lane,
+                1,
+                1,
+                StorageTicketId::new([0x51; 32]),
+                iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x53; 32]),
+            ),
+        ]);
+        let err = validate_pin_intent_bundle_against_nexus(&pin_bundle, &nexus, |_| true)
+            .expect_err("catalog/geometry drift must not validate DA pin intents");
+        assert!(matches!(
+            err,
+            DaPinIntentValidationError::UnknownLane { lane } if lane == drifted_lane
+        ));
     }
 
     #[test]

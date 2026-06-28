@@ -14,7 +14,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     ops::Deref,
     path::Path,
     str::FromStr,
@@ -29,6 +29,8 @@ use crossbeam_queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use eyre::Result;
 use indexmap::IndexSet;
+#[cfg(test)]
+use iroha_config::parameters::actual::LaneConfig as LaneGeometry;
 use iroha_config::parameters::actual::{
     GovernanceCatalog, LaneRegistry, LaneRoutingPolicy, Nexus, Queue as Config,
 };
@@ -52,7 +54,7 @@ use iroha_data_model::{
     name::Name,
     transaction::{Executable, TransactionEntrypoint, error::TransactionRejectionReason},
 };
-use iroha_logger::{trace, warn};
+use iroha_logger::{debug, trace, warn};
 use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
@@ -315,8 +317,6 @@ pub struct Queue {
     queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
     /// Cached count of hashes still waiting in `tx_hashes`.
     queued_count: AtomicUsize,
-    /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
-    tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Optional local journal for replaying pending transactions with full routing plans.
     plan_journal: parking_lot::Mutex<Option<QueuePlanJournal>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -333,6 +333,10 @@ pub struct Queue {
     capacity: NonZeroUsize,
     /// The maximum number of transactions in the queue per user. Used to apply throttling
     capacity_per_user: NonZeroUsize,
+    /// Estimated maximum retained queue memory budget in bytes.
+    max_retained_bytes: NonZeroU64,
+    /// Estimated retained memory for transactions currently tracked by the queue.
+    retained_bytes: AtomicU64,
     /// The time source used to check transaction against
     ///
     /// A mock time source is used in tests for determinism
@@ -381,6 +385,7 @@ impl fmt::Debug for Queue {
         f.debug_struct("Queue")
             .field("capacity", &self.capacity)
             .field("capacity_per_user", &self.capacity_per_user)
+            .field("max_retained_bytes", &self.max_retained_bytes)
             .field("tx_time_to_live", &self.tx_time_to_live)
             .field("expired_cull_interval", &self.expired_cull_interval)
             .field("expired_cull_batch", &self.expired_cull_batch)
@@ -394,6 +399,8 @@ impl fmt::Debug for Queue {
 
 const QUEUE_PRESSURE_MIN_AGE_BUDGET_MS: u64 = 2_000;
 const QUEUE_PRESSURE_MAX_AGE_BUDGET_MS: u64 = 5_000;
+/// Queue-side retained heap estimate charged to each transaction in addition to its canonical bytes.
+const TX_RETAINED_OVERHEAD_BYTES: u64 = 128 * 1024;
 
 /// Snapshot of queue pressure used by Torii admission and status reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -404,10 +411,16 @@ pub struct QueuePressureSnapshot {
     pub queued_tx_count: usize,
     /// Maximum queue capacity configured for the peer.
     pub capacity: NonZeroUsize,
+    /// Estimated retained bytes for all transactions tracked by the queue.
+    pub retained_bytes: u64,
+    /// Configured maximum estimated retained bytes for the queue.
+    pub max_retained_bytes: NonZeroU64,
     /// Age in milliseconds of the oldest queue-resident transaction's local queue residence.
     pub oldest_queued_tx_age_ms: u64,
     /// Whether the queue saturated because the tracked count hit capacity.
     pub saturated_by_count: bool,
+    /// Whether the queue saturated because the retained-byte budget is exhausted.
+    pub saturated_by_bytes: bool,
     /// Whether the queue saturated because the oldest queued age exceeded the budget.
     pub saturated_by_age: bool,
 }
@@ -416,17 +429,17 @@ impl QueuePressureSnapshot {
     /// Whether either saturation signal is active.
     #[must_use]
     pub const fn is_saturated(self) -> bool {
-        self.saturated_by_count || self.saturated_by_age
+        self.saturated_by_count || self.saturated_by_bytes || self.saturated_by_age
     }
 
     /// Convert the richer pressure snapshot into the coarse backpressure state.
     ///
     /// Coarse backpressure gates admission and consensus pacing. Keep it tied to
-    /// capacity saturation; age pressure stays available through the richer
-    /// snapshot for status reporting and diagnostics.
+    /// count/byte capacity saturation; age pressure stays available through the
+    /// richer snapshot for status reporting and diagnostics.
     #[must_use]
     pub const fn into_backpressure(self) -> BackpressureState {
-        if self.saturated_by_count {
+        if self.saturated_by_count || self.saturated_by_bytes {
             BackpressureState::Saturated {
                 queued: self.queued_tx_count,
                 capacity: self.capacity,
@@ -544,7 +557,6 @@ struct PreparedQueueAdmission {
     routing_decision: RoutingDecision,
     routing_plan: RoutingPlan,
     encoded_len: usize,
-    gossip_payload: Option<Arc<Vec<u8>>>,
     proposal_gas_cost: u64,
     enqueued_at_ms: u64,
     #[cfg(feature = "telemetry")]
@@ -1012,6 +1024,57 @@ impl Queue {
         tx.entrypoint_bytes().len()
     }
 
+    fn retained_byte_cost(encoded_len: usize) -> u64 {
+        u64::try_from(encoded_len)
+            .unwrap_or(u64::MAX)
+            .saturating_add(TX_RETAINED_OVERHEAD_BYTES)
+    }
+
+    /// Return the minimum retained-byte estimate charged for `count` incoming transactions.
+    ///
+    /// This excludes canonical transaction bytes because Torii may not have decoded the
+    /// payloads yet; it is intended for early admission shedding before expensive work.
+    pub fn retained_byte_cost_floor_for_transactions(count: usize) -> u64 {
+        u64::try_from(count)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(TX_RETAINED_OVERHEAD_BYTES)
+    }
+
+    fn track_retained_bytes(&self, encoded_len: usize) {
+        self.retained_bytes
+            .fetch_add(Self::retained_byte_cost(encoded_len), Ordering::Relaxed);
+    }
+
+    fn untrack_retained_bytes(&self, encoded_len: usize) {
+        let cost = Self::retained_byte_cost(encoded_len);
+        let mut current = self.retained_bytes.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_sub(cost);
+            match self.retained_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn insert_tx_encoded_len(&self, hash: SignedTxHash, encoded_len: usize) {
+        if let Some(old_len) = self.tx_encoded_len.insert(hash, encoded_len) {
+            self.untrack_retained_bytes(old_len);
+        }
+        self.track_retained_bytes(encoded_len);
+    }
+
+    fn remove_tx_encoded_len(&self, hash: &SignedTxHash) {
+        if let Some((_, encoded_len)) = self.tx_encoded_len.remove(hash) {
+            self.untrack_retained_bytes(encoded_len);
+        }
+    }
+
     fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
         tx.entrypoint_bytes()
     }
@@ -1022,7 +1085,7 @@ impl Queue {
     /// state snapshot and discard stale records deterministically.
     ///
     /// # Errors
-    /// Returns journal open or replay I/O errors.
+    /// Returns journal open or frame decode I/O errors.
     pub fn install_plan_journal(
         &self,
         path: impl AsRef<Path>,
@@ -1030,7 +1093,7 @@ impl Queue {
         durable_writes: bool,
     ) -> std::io::Result<usize> {
         let journal = QueuePlanJournal::open(path, max_bytes_before_compact, durable_writes)?;
-        let replayable = journal.replay()?.len();
+        let replayable = journal.live_record_count()?;
         *self.plan_journal.lock() = Some(journal);
         Ok(replayable)
     }
@@ -1047,16 +1110,16 @@ impl Queue {
         &self,
         state: &State,
     ) -> std::io::Result<QueuePlanJournalReplaySummary> {
-        let records = {
+        let replay = {
             let guard = self.plan_journal.lock();
             let Some(journal) = guard.as_ref() else {
                 return Ok(QueuePlanJournalReplaySummary::default());
             };
-            journal.replay()?
+            journal.prepare_replay()?
         };
 
         let mut summary = QueuePlanJournalReplaySummary {
-            records: records.len(),
+            records: replay.len(),
             ..QueuePlanJournalReplaySummary::default()
         };
         let mut journal_removals = Vec::new();
@@ -1067,7 +1130,7 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 
-        for record in records {
+        replay.for_each_record(|record| {
             let hash = record.signed_transaction_hash;
             let routing_plan = record.routing_plan.clone();
             let accepted =
@@ -1076,17 +1139,17 @@ impl Queue {
             if accepted.hash() != hash {
                 summary.tombstoned_malformed = summary.tombstoned_malformed.saturating_add(1);
                 journal_removals.push((hash, routing_plan.digest()));
-                continue;
+                return Ok(());
             }
             if state.has_committed_transaction(hash) {
                 summary.tombstoned_committed = summary.tombstoned_committed.saturating_add(1);
                 journal_removals.push((hash, routing_plan.digest()));
-                continue;
+                return Ok(());
             }
             if self.is_expired(&accepted) {
                 summary.tombstoned_expired = summary.tombstoned_expired.saturating_add(1);
                 journal_removals.push((hash, routing_plan.digest()));
-                continue;
+                return Ok(());
             }
             match self.route_plan_with_state(&accepted, state) {
                 Ok(current_plan) if current_plan == routing_plan => {}
@@ -1099,7 +1162,7 @@ impl Queue {
                     );
                     summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
                     journal_removals.push((hash, routing_plan.digest()));
-                    continue;
+                    return Ok(());
                 }
                 Err(error) => {
                     warn!(
@@ -1110,19 +1173,17 @@ impl Queue {
                     );
                     summary.tombstoned_stale = summary.tombstoned_stale.saturating_add(1);
                     journal_removals.push((hash, routing_plan.digest()));
-                    continue;
+                    return Ok(());
                 }
             }
 
             let checked = CheckedTransaction::new_unchecked(accepted);
-            let gossip_payload = (!record.gossip_payload.is_empty())
-                .then(|| Arc::new(record.gossip_payload.clone()));
             let mut state_access = LazyAdmissionStateAccess::new(state);
             let mut prepared = match self.prepare_checked_for_enqueue(
                 checked,
                 routing_plan.clone(),
                 &mut state_access,
-                gossip_payload,
+                None,
                 #[cfg(feature = "telemetry")]
                 telemetry_handle,
             ) {
@@ -1135,7 +1196,7 @@ impl Queue {
                     );
                     summary.rejected = summary.rejected.saturating_add(1);
                     journal_removals.push((hash, routing_plan.digest()));
-                    continue;
+                    return Ok(());
                 }
             };
             prepared.enqueued_at_ms = record.enqueue_timestamp_ms;
@@ -1157,7 +1218,8 @@ impl Queue {
                     journal_removals.push((hash, routing_plan.digest()));
                 }
             }
-        }
+            Ok(())
+        })?;
 
         self.record_plan_journal_removes(journal_removals);
 
@@ -1169,7 +1231,6 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         hash: SignedTxHash,
         routing_plan: &RoutingPlan,
-        gossip_payload: Arc<Vec<u8>>,
         enqueue_timestamp_ms: u64,
     ) -> DeferredQueuePlanJournalFlush {
         let mut guard = self.plan_journal.lock();
@@ -1180,7 +1241,6 @@ impl Queue {
             tx.entrypoint().clone(),
             hash,
             routing_plan.clone(),
-            gossip_payload,
             enqueue_timestamp_ms,
         );
         match journal.put_deferred_flush(record) {
@@ -1890,6 +1950,7 @@ impl Queue {
         Config {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
@@ -1905,6 +1966,7 @@ impl Queue {
             Config {
                 capacity,
                 capacity_per_user,
+                max_retained_bytes,
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
@@ -1925,6 +1987,7 @@ impl Queue {
         Config {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
@@ -1942,6 +2005,7 @@ impl Queue {
             Config {
                 capacity,
                 capacity_per_user,
+                max_retained_bytes,
                 transaction_time_to_live,
                 expired_cull_interval,
                 expired_cull_batch,
@@ -1962,6 +2026,7 @@ impl Queue {
         Config {
             capacity,
             capacity_per_user,
+            max_retained_bytes,
             transaction_time_to_live,
             expired_cull_interval,
             expired_cull_batch,
@@ -2001,13 +2066,14 @@ impl Queue {
                 queued_tx_enqueued_at_ms: DashMap::new(),
                 queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
                 queued_count: AtomicUsize::new(0),
-                tx_gossip_payloads: DashMap::new(),
                 plan_journal: parking_lot::Mutex::new(None),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
                 capacity,
                 capacity_per_user,
+                max_retained_bytes,
+                retained_bytes: AtomicU64::new(0),
                 time_source: TimeSource::new_system(),
                 tx_time_to_live: transaction_time_to_live,
                 expired_cull_interval,
@@ -2267,13 +2333,7 @@ impl Queue {
                         }
                     };
                     let routing = routing_plan.coordinator_route();
-                    let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
-                        Arc::clone(entry.value())
-                    } else {
-                        let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
-                        self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
-                        payload
-                    };
+                    let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
                     // Deep clone to produce an owned AcceptedTransaction for gossip
                     batch.push(GossipBatchEntry {
                         tx: tx_ref.as_accepted().clone(),
@@ -2384,7 +2444,11 @@ impl Queue {
         let routing = plan.coordinator_route();
         self.routing_decisions.insert(hash, routing);
         self.routing_plans.insert(hash, plan.clone());
-        routing_ledger::record_plan(hash, plan);
+        self.record_routing_plan_in_ledger(hash, plan);
+    }
+
+    fn record_routing_plan_in_ledger(&self, hash: SignedTxHash, plan: RoutingPlan) {
+        routing_ledger::record_plan_bounded(hash, plan, self.capacity.get());
     }
 
     fn refresh_routing_plan_with_view(
@@ -2460,11 +2524,10 @@ impl Queue {
             self.record_teu_dequeue(&hash, telemetry);
         }
 
-        self.tx_encoded_len.remove(&hash);
+        self.remove_tx_encoded_len(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
         self.remove_queued_age(&hash);
-        self.tx_gossip_payloads.remove(&hash);
 
         let err = Error::UnresolvedRoute { reason };
         if let Some(reason) = Self::queue_rejection_reason(&err) {
@@ -2759,7 +2822,7 @@ impl Queue {
         checked: CheckedTransaction<'static>,
         routing_plan: RoutingPlan,
         state_access: &mut C,
-        gossip_payload: Option<Arc<Vec<u8>>>,
+        _gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
         let routing_decision = routing_plan.coordinator_route();
@@ -3049,20 +3112,7 @@ impl Queue {
             telemetry_handle.record_manifest_admission("allowed");
         }
 
-        let provided_gossip_payload = gossip_payload.filter(|payload| !payload.is_empty());
-        let canonical_gossip_payload = Some(checked.as_accepted().entrypoint_bytes());
-        let gossip_payload = match (provided_gossip_payload, canonical_gossip_payload) {
-            (Some(provided), Some(canonical)) if provided.as_slice() == canonical.as_slice() => {
-                Some(provided)
-            }
-            (_, Some(canonical)) => Some(canonical),
-            (Some(provided), None) => Some(provided),
-            (None, None) => None,
-        };
-        let encoded_len = gossip_payload
-            .as_ref()
-            .map(|payload| payload.len())
-            .unwrap_or_else(|| Self::compute_tx_encoded_len(checked.as_accepted()));
+        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let hash = checked.as_ref().hash();
         let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
@@ -3075,7 +3125,6 @@ impl Queue {
             routing_decision,
             routing_plan,
             encoded_len,
-            gossip_payload,
             proposal_gas_cost,
             enqueued_at_ms,
             #[cfg(feature = "telemetry")]
@@ -3102,7 +3151,10 @@ impl Queue {
             let _guard = self.push_remove_lock.lock();
             let base_len = self.active_len();
             let capacity = self.capacity.get();
+            let base_retained_bytes = self.retained_bytes();
+            let max_retained_bytes = self.max_retained_bytes.get();
             let mut accepted_count = 0usize;
+            let mut accepted_retained_bytes = 0u64;
             let mut checked_user_increments = HashMap::<&AccountId, usize>::new();
 
             for (idx, admission) in prepared.iter().enumerate() {
@@ -3120,7 +3172,7 @@ impl Queue {
                 }
 
                 if base_len.saturating_add(accepted_count) >= capacity {
-                    warn!(
+                    debug!(
                         lane_id = %lane_id,
                         dataspace_id = %dataspace_id,
                         max = self.capacity,
@@ -3133,11 +3185,32 @@ impl Queue {
                     break;
                 }
 
+                let retained_cost = Self::retained_byte_cost(admission.encoded_len);
+                if base_retained_bytes
+                    .saturating_add(accepted_retained_bytes)
+                    .saturating_add(retained_cost)
+                    > max_retained_bytes
+                {
+                    debug!(
+                        lane_id = %lane_id,
+                        dataspace_id = %dataspace_id,
+                        retained_bytes = base_retained_bytes.saturating_add(accepted_retained_bytes),
+                        tx_retained_bytes = retained_cost,
+                        max_retained_bytes,
+                        "Achieved maximum retained transaction queue bytes"
+                    );
+                    failure = Some(Failure {
+                        tx: checked.as_accepted().clone().into(),
+                        err: Error::Full,
+                    });
+                    break;
+                }
+
                 if let Some(authority) = checked.as_ref().authority_opt() {
                     let queued = self.queued_tx_count_for_user(authority);
                     let pending = checked_user_increments.get(authority).copied().unwrap_or(0);
                     if queued.saturating_add(pending) >= self.capacity_per_user.get() {
-                        warn!(
+                        debug!(
                             max_txs_per_user = self.capacity_per_user,
                             %authority,
                             "Account reached maximum allowed number of transactions in the queue per user"
@@ -3155,6 +3228,7 @@ impl Queue {
                 }
 
                 accepted_count = accepted_count.saturating_add(1);
+                accepted_retained_bytes = accepted_retained_bytes.saturating_add(retained_cost);
             }
             drop(checked_user_increments);
 
@@ -3166,7 +3240,6 @@ impl Queue {
                     routing_decision,
                     routing_plan,
                     encoded_len,
-                    gossip_payload,
                     proposal_gas_cost,
                     enqueued_at_ms,
                     #[cfg(feature = "telemetry")]
@@ -3191,15 +3264,8 @@ impl Queue {
                 self.track_active_transaction();
                 self.routing_decisions.insert(hash, routing_decision);
                 self.routing_plans.insert(hash, routing_plan.clone());
-                routing_ledger::record_plan(hash, routing_plan.clone());
+                self.record_routing_plan_in_ledger(hash, routing_plan.clone());
                 self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
-                let journal_payload = record_plan_journal.then(|| {
-                    gossip_payload
-                        .as_ref()
-                        .map(Arc::clone)
-                        .unwrap_or_else(|| Self::encode_gossip_payload(tx_arc.as_accepted()))
-                });
-
                 let mut pushed = self.push_queued_hash(hash, enqueued_at_ms);
                 if !pushed {
                     let compacted = self.compact_hash_queue_locked();
@@ -3208,7 +3274,7 @@ impl Queue {
                     }
                 }
                 if !pushed {
-                    warn!("Queue is full");
+                    debug!("Queue is full");
                     let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
                     drop(tx_arc);
                     self.untrack_active_transaction();
@@ -3232,17 +3298,13 @@ impl Queue {
                     });
                     break;
                 }
-                self.tx_encoded_len.insert(hash, encoded_len);
-                if let Some(payload) = gossip_payload {
-                    self.tx_gossip_payloads.insert(hash, payload);
-                }
+                self.insert_tx_encoded_len(hash, encoded_len);
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
-                if let Some(journal_payload) = journal_payload {
+                if record_plan_journal {
                     let flush = self.record_plan_journal_put_deferred(
                         tx_arc.as_accepted(),
                         hash,
                         &routing_plan,
-                        journal_payload,
                         enqueued_at_ms,
                     );
                     journal_flush.combine(flush.0);
@@ -3647,11 +3709,30 @@ impl Queue {
             };
 
             if txs_len >= self.capacity.get() {
-                warn!(
+                debug!(
                     lane_id = %lane_id,
                     dataspace_id = %dataspace_id,
                     max = self.capacity,
                     "Achieved maximum amount of transactions"
+                );
+                self.publish_backpressure_state(txs_len, backpressure_telemetry);
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err: Error::Full,
+                });
+            }
+
+            let retained_cost = Self::retained_byte_cost(encoded_len);
+            let retained_bytes = self.retained_bytes();
+            let max_retained_bytes = self.max_retained_bytes.get();
+            if retained_bytes.saturating_add(retained_cost) > max_retained_bytes {
+                debug!(
+                    lane_id = %lane_id,
+                    dataspace_id = %dataspace_id,
+                    retained_bytes,
+                    tx_retained_bytes = retained_cost,
+                    max_retained_bytes,
+                    "Achieved maximum retained transaction queue bytes"
                 );
                 self.publish_backpressure_state(txs_len, backpressure_telemetry);
                 return Err(Failure {
@@ -3676,9 +3757,8 @@ impl Queue {
             self.track_active_transaction();
             self.routing_decisions.insert(hash, routing_decision);
             self.routing_plans.insert(hash, routing_plan.clone());
-            routing_ledger::record_plan(hash, routing_plan.clone());
+            self.record_routing_plan_in_ledger(hash, routing_plan.clone());
             self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
-            let journal_payload = Self::encode_gossip_payload(tx_arc.as_accepted());
             let mut pushed = self.push_queued_hash(hash, enqueue_at_ms);
             if !pushed {
                 let compacted = self.compact_hash_queue_locked();
@@ -3687,7 +3767,7 @@ impl Queue {
                 }
             }
             if !pushed {
-                warn!("Queue is full");
+                debug!("Queue is full");
                 let (_, err_tx) = self.txs.remove(&hash).expect("Inserted just before match");
                 drop(tx_arc);
                 self.untrack_active_transaction();
@@ -3712,13 +3792,12 @@ impl Queue {
                     err: Error::Full,
                 });
             }
-            self.tx_encoded_len.insert(hash, encoded_len);
+            self.insert_tx_encoded_len(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
             let flush = self.record_plan_journal_put_deferred(
                 tx_arc.as_accepted(),
                 hash,
                 &routing_plan,
-                journal_payload,
                 enqueue_at_ms,
             );
             journal_flush.combine(flush.0);
@@ -3835,11 +3914,11 @@ impl Queue {
             self.expiry_ring_members.clear();
             self.expiry_ring.lock().clear();
             self.tx_encoded_len.clear();
+            self.retained_bytes.store(0, Ordering::Relaxed);
             self.tx_gas_cost.clear();
             self.tx_enqueued_at_ms.clear();
             self.routing_decisions.clear();
             self.routing_plans.clear();
-            self.tx_gossip_payloads.clear();
             #[cfg(feature = "telemetry")]
             {
                 self.tx_teu.clear();
@@ -3935,11 +4014,10 @@ impl Queue {
                         expired_transactions.push(tx.into_accepted());
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4014,11 +4092,10 @@ impl Queue {
                         );
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4129,11 +4206,10 @@ impl Queue {
                         expired_transactions.push(tx.into_accepted());
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4206,11 +4282,10 @@ impl Queue {
                         );
                     }
                 }
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
 
@@ -4327,6 +4402,16 @@ impl Queue {
             return 0;
         }
         self.queued_count.load(Ordering::Relaxed)
+    }
+
+    /// Return the queue's estimated retained transaction bytes.
+    pub fn retained_bytes(&self) -> u64 {
+        self.retained_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Return the configured retained-byte budget for the queue.
+    pub fn max_retained_bytes(&self) -> NonZeroU64 {
+        self.max_retained_bytes
     }
 
     fn track_active_transaction(&self) {
@@ -4745,8 +4830,12 @@ impl Queue {
         tracked_tx_count: usize,
     ) -> QueuePressureSnapshot {
         let queued_tx_count = self.queued_len();
+        let retained_bytes = self.retained_bytes();
+        let max_retained_bytes = self.max_retained_bytes;
         let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
         let saturated_by_count = tracked_tx_count >= self.capacity.get();
+        let saturated_by_bytes =
+            retained_bytes.saturating_add(TX_RETAINED_OVERHEAD_BYTES) > max_retained_bytes.get();
         let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
         let saturated_by_age =
             queued_tx_count > 0 && oldest_queued_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
@@ -4755,8 +4844,11 @@ impl Queue {
             tracked_tx_count,
             queued_tx_count,
             capacity: self.capacity,
+            retained_bytes,
+            max_retained_bytes,
             oldest_queued_tx_age_ms,
             saturated_by_count,
+            saturated_by_bytes,
             saturated_by_age,
         }
     }
@@ -4784,7 +4876,10 @@ impl Queue {
                 tel,
                 snapshot.queued_tx_count as u64,
                 self.capacity.get() as u64,
+                snapshot.retained_bytes,
+                snapshot.max_retained_bytes.get(),
                 snapshot.saturated_by_count,
+                snapshot.saturated_by_bytes,
             );
         }
         #[cfg(not(feature = "telemetry"))]
@@ -4880,9 +4975,8 @@ impl Queue {
                 }
                 removed = removed.saturating_add(1);
             }
-            self.tx_encoded_len.remove(&hash);
+            self.remove_tx_encoded_len(&hash);
             self.tx_gas_cost.remove(&hash);
-            self.tx_gossip_payloads.remove(&hash);
         }
         let remove_ms = Self::duration_to_millis(remove_start.elapsed());
         if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
@@ -4973,14 +5067,13 @@ impl Queue {
                 self.decrease_per_user_tx_count(authority);
             }
             if decision.is_some() {
-                routing_ledger::record_plan(hash, plan);
+                self.record_routing_plan_in_ledger(hash, plan);
             }
         }
-        self.tx_encoded_len.remove(&hash);
+        self.remove_tx_encoded_len(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
         self.remove_queued_age(&hash);
-        self.tx_gossip_payloads.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
         self.removed_hashes.remove(&hash);
@@ -5043,11 +5136,10 @@ impl Queue {
                 }
                 let _ = routing_ledger::take(&hash);
                 let _ = routing_ledger::take_plan(&hash);
-                self.tx_encoded_len.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
                 self.remove_queued_age(&hash);
-                self.tx_gossip_payloads.remove(&hash);
                 if let Some(tx_arc) = tx_arc {
                     self.untrack_active_transaction();
                     self.removed_hashes.insert(hash, ());
@@ -5436,7 +5528,7 @@ impl Queue {
             self.routing_decisions.insert(*entry.key(), routing);
             self.routing_plans
                 .insert(*entry.key(), routing_plan.clone());
-            routing_ledger::record_plan(*entry.key(), routing_plan);
+            self.record_routing_plan_in_ledger(*entry.key(), routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -5576,7 +5668,7 @@ impl Queue {
             self.routing_decisions.insert(*entry.key(), routing);
             self.routing_plans
                 .insert(*entry.key(), routing_plan.clone());
-            routing_ledger::record_plan(*entry.key(), routing_plan);
+            self.record_routing_plan_in_ledger(*entry.key(), routing_plan);
             #[cfg(feature = "telemetry")]
             {
                 let teu = Self::compute_teu_weight(tx.as_accepted());
@@ -6327,7 +6419,6 @@ pub mod tests {
         nexus.routing_policy.default_lane = lane_id;
         nexus.routing_policy.default_dataspace = dataspace_id;
         nexus.fees.base_fee = Numeric::zero();
-        state.set_nexus(nexus.clone()).expect("set Nexus config");
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
@@ -6360,6 +6451,7 @@ pub mod tests {
             RoutingDecision::default()
         );
 
+        state.set_nexus(nexus.clone()).expect("set Nexus config");
         assert!(queue.reconfigure_nexus_with_state_if_needed(&nexus, &state, None));
         assert_eq!(
             *queue
@@ -7962,6 +8054,56 @@ pub mod tests {
     }
 
     #[test]
+    fn retained_byte_cost_floor_scales_with_incoming_count() {
+        let one = Queue::retained_byte_cost_floor_for_transactions(1);
+        assert!(one > 0, "each incoming tx must carry a non-zero floor");
+        assert_eq!(Queue::retained_byte_cost_floor_for_transactions(0), 0);
+        assert_eq!(Queue::retained_byte_cost_floor_for_transactions(3), one * 3);
+    }
+
+    #[test]
+    fn retained_byte_budget_rejects_before_count_capacity_and_releases_on_remove() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let first = accepted_tx_by_someone(&time_source);
+        let first_hash = first.as_ref().hash();
+        let first_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&first));
+        let mut cfg = config_factory();
+        cfg.capacity = nonzero!(16_usize);
+        cfg.capacity_per_user = nonzero!(16_usize);
+        cfg.max_retained_bytes = NonZeroU64::new(first_cost).expect("non-zero retained cost");
+
+        let queue = Queue::test(cfg, &time_source);
+        queue
+            .push(first, state.view())
+            .expect("first tx fits budget");
+        assert_eq!(queue.retained_bytes(), first_cost);
+
+        let pressure = queue.pressure_snapshot();
+        assert!(pressure.saturated_by_bytes);
+        assert!(!pressure.saturated_by_count);
+        assert!(queue.current_backpressure().is_saturated());
+
+        let second = accepted_tx_by_someone(&time_source);
+        let err = queue
+            .push(second, state.view())
+            .expect_err("byte budget should reject second tx before count capacity");
+        assert!(matches!(err.err, Error::Full));
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(queue.retained_bytes(), first_cost);
+
+        assert_eq!(
+            queue.remove_committed_hashes(std::iter::once(first_hash), None),
+            1
+        );
+        assert_eq!(queue.retained_bytes(), 0);
+        assert!(!queue.pressure_snapshot().saturated_by_bytes);
+    }
+
+    #[test]
     fn queue_plan_journal_replays_matching_plan_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
@@ -8031,11 +8173,12 @@ pub mod tests {
                 .expect("replayed plan"),
             plan
         );
+        let replayed_tx = replay_queue.txs.get(&hash).expect("replayed transaction");
         assert_eq!(
-            replay_queue
-                .tx_gossip_payloads
-                .get(&hash)
-                .expect("replayed payload")
+            replayed_tx
+                .value()
+                .as_accepted()
+                .entrypoint_bytes()
                 .as_slice(),
             payload.as_slice()
         );
@@ -8071,7 +8214,6 @@ pub mod tests {
             &tx,
             hash,
             &plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8186,7 +8328,6 @@ pub mod tests {
             &tx,
             hash,
             &stale_plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8298,7 +8439,6 @@ pub mod tests {
             &tx,
             hash,
             &stale_plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8480,7 +8620,6 @@ pub mod tests {
             &tx,
             hash,
             &stale_plan,
-            tx.entrypoint_bytes(),
             Queue::duration_to_millis(time_source.get_unix_time()),
         );
         queue.flush_plan_journal_deferred(flush);
@@ -8627,7 +8766,7 @@ pub mod tests {
     fn push_wakes_sumeragi_when_configured() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test(config_factory(), &time_source);
@@ -8737,27 +8876,23 @@ pub mod tests {
         let hash = tx.as_ref().hash();
         queue.push(tx, state.view()).expect("push tx");
         let _ = queue.gossip_batch(1, &state.view());
-        assert!(!queue.tx_gossip_payloads.is_empty());
 
         let removed = queue.remove_committed_hashes(std::iter::once(hash), None);
         assert_eq!(removed, 1);
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
-        assert!(queue.tx_gossip_payloads.is_empty());
 
         let tx = accepted_tx_by_someone(&time_source);
         queue.push(tx, state.view()).expect("push tx");
         assert!(!queue.tx_encoded_len.is_empty());
         let _ = queue.gossip_batch(1, &state.view());
-        assert!(!queue.tx_gossip_payloads.is_empty());
         queue.clear_all();
         assert!(queue.tx_encoded_len.is_empty());
         assert!(queue.tx_gas_cost.is_empty());
-        assert!(queue.tx_gossip_payloads.is_empty());
     }
 
     #[test]
-    fn queue_accepts_gossip_payload_cache() {
+    fn queue_reuses_gossip_payload_without_side_cache() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -8798,9 +8933,6 @@ pub mod tests {
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
             .expect("push tx with payload");
 
-        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
-
         let encoded_len = queue
             .tx_encoded_len
             .get(&hash)
@@ -8811,10 +8943,14 @@ pub mod tests {
         let batch = queue.gossip_batch_with_state(1, &state);
         assert_eq!(batch.len(), 1);
         assert_eq!(batch[0].payload.as_slice(), payload.as_slice());
+        assert!(
+            Arc::ptr_eq(&batch[0].payload, &payload),
+            "gossip should reuse inbound entrypoint bytes"
+        );
     }
 
     #[test]
-    fn queue_accepts_gossip_payload_cache_in_shared_view() {
+    fn queue_reuses_gossip_payload_without_side_cache_in_shared_view() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -8822,7 +8958,6 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let hash = tx.as_ref().hash();
         let payload = tx.entrypoint_bytes();
         let state_view = state.view();
 
@@ -8830,12 +8965,13 @@ pub mod tests {
             .push_with_gossip_payload_in_view(tx, &state_view, Some(Arc::clone(&payload)))
             .expect("push tx with payload through shared view");
 
-        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+        let batch = queue.gossip_batch(1, &state_view);
+        assert_eq!(batch.len(), 1);
+        assert!(Arc::ptr_eq(&batch[0].payload, &payload));
     }
 
     #[test]
-    fn queue_accepts_gossip_payload_cache_with_state() {
+    fn queue_reuses_gossip_payload_without_side_cache_with_state() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -8843,15 +8979,15 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let hash = tx.as_ref().hash();
         let payload = tx.entrypoint_bytes();
 
         queue
             .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
             .expect("push tx with payload through state");
 
-        let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
+        let batch = queue.gossip_batch_with_state(1, &state);
+        assert_eq!(batch.len(), 1);
+        assert!(Arc::ptr_eq(&batch[0].payload, &payload));
     }
 
     #[test]
@@ -9570,7 +9706,7 @@ pub mod tests {
             StateTelemetry::new(metrics.clone(), true),
         ));
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -9620,14 +9756,22 @@ pub mod tests {
         #[cfg(feature = "telemetry")]
         let metrics = Arc::new(Metrics::default());
         #[cfg(feature = "telemetry")]
-        let state = Arc::new(State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        ));
+        let state = {
+            let mut state = State::with_telemetry(
+                world,
+                kura.clone(),
+                query_handle.clone(),
+                StateTelemetry::new(metrics.clone(), true),
+            );
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let state = {
+            let mut state = State::new(world, kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -9729,14 +9873,22 @@ pub mod tests {
         #[cfg(feature = "telemetry")]
         let metrics = Arc::new(Metrics::default());
         #[cfg(feature = "telemetry")]
-        let state = Arc::new(State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        ));
+        let state = {
+            let mut state = State::with_telemetry(
+                world,
+                kura.clone(),
+                query_handle.clone(),
+                StateTelemetry::new(metrics.clone(), true),
+            );
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         #[cfg(not(feature = "telemetry"))]
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let state = {
+            let mut state = State::new(world, kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+            Arc::new(state)
+        };
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -9819,7 +9971,9 @@ pub mod tests {
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test_with_router_for_routes(
@@ -9862,7 +10016,9 @@ pub mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Queue::test_with_router_for_routes(
@@ -10393,7 +10549,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let batch = queue.gossip_batch_with_state(1, &fixture.state);
 
@@ -10992,11 +11152,6 @@ pub mod tests {
             .expect("routing decision should exist");
         assert_eq!(routing.lane_id, LaneId::SINGLE);
         assert_eq!(routing.dataspace_id, DataSpaceId::UNIVERSAL);
-        let stored_payload = queue
-            .tx_gossip_payloads
-            .get(&hash)
-            .expect("cached gossip payload should exist");
-        assert_eq!(stored_payload.as_slice(), payload.as_slice());
         assert_eq!(
             queue.tx_gossip.pop(),
             Some(hash),
@@ -11160,7 +11315,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let nexus = fixture.state.nexus_snapshot();
         queue.reconfigure_nexus_with_state(&nexus, &fixture.state, None);
@@ -11220,7 +11379,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let nexus = fixture.state.nexus_snapshot();
         let state_view = fixture.state.view();
@@ -11282,7 +11445,11 @@ pub mod tests {
         queue
             .routing_decisions
             .insert(hash, fixture.stale_plan.coordinator_route());
-        crate::queue::routing_ledger::record_plan(hash, fixture.stale_plan.clone());
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            fixture.stale_plan.clone(),
+            queue.capacity.get(),
+        );
 
         let state_view = fixture.state.view();
         let mut expired = Vec::new();
@@ -11358,7 +11525,6 @@ pub mod tests {
         assert!(!queue.txs.contains_key(&hash));
         assert!(queue.routing_decisions.get(&hash).is_none());
         assert!(queue.routing_plans.get(&hash).is_none());
-        assert!(queue.tx_gossip_payloads.get(&hash).is_none());
         assert_eq!(queue.active_len(), 0);
         assert_eq!(queue.queued_len(), 0);
         assert!(
@@ -11418,7 +11584,7 @@ pub mod tests {
     }
 
     #[test]
-    fn batch_push_with_precomputed_routing_enqueues_in_order_and_caches_payloads() {
+    fn batch_push_with_precomputed_routing_enqueues_in_order_without_side_payload_cache() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -11453,9 +11619,11 @@ pub mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].tx.as_ref().hash(), first_hash);
         assert_eq!(batch[0].payload.as_slice(), first_payload.as_slice());
+        assert!(Arc::ptr_eq(&batch[0].payload, &first_payload));
         assert_eq!(batch[0].routing, routing);
         assert_eq!(batch[1].tx.as_ref().hash(), second_hash);
         assert_eq!(batch[1].payload.as_slice(), second_payload.as_slice());
+        assert!(Arc::ptr_eq(&batch[1].payload, &second_payload));
         assert_eq!(batch[1].routing, routing);
     }
 
@@ -11598,6 +11766,23 @@ pub mod tests {
         }
     }
 
+    fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {
+        let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        nexus.lane_catalog = (*lane_catalog).clone();
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = (*dataspace_catalog).clone();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        // These queue unit tests use synthetic routers/catalogs that are not valid
+        // runtime Nexus configurations. Keep the state snapshot aligned with the
+        // queue so sync checks do not replace the explicit test router.
+        *state.nexus.write() = nexus;
+    }
+
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -11653,7 +11838,7 @@ pub mod tests {
     fn enforce_lane_teu_limits_defers_when_capacity_exceeded() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         // Prepare a representative transaction so we can size the lane capacity to its TEU weight.
@@ -11666,6 +11851,8 @@ pub mod tests {
 
         let test_lane = LaneId::new(7);
         let test_dataspace = DataSpaceId::new(1);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let state = Arc::new(state);
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -11677,10 +11864,6 @@ pub mod tests {
             router,
             &[(test_lane, test_dataspace)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
         let queue = Arc::new(queue_inner);
 
         let first_hash = first_tx.as_ref().hash();
@@ -11700,6 +11883,10 @@ pub mod tests {
             2,
             "expected both transactions before TEU gating"
         );
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let deferred = queue.enforce_lane_teu_limits(&mut guards);
         assert_eq!(
@@ -11721,6 +11908,7 @@ pub mod tests {
         assert_eq!(guards[0].routing().lane_id, test_lane);
 
         drop(guards);
+        *queue.nexus_limits.write() = QueueLimits::from_nexus(&state.nexus_snapshot());
         let deferred_tx = deferred.into_iter().next().expect("deferred tx present");
         queue
             .push(deferred_tx, state.view())
@@ -11950,15 +12138,17 @@ pub mod tests {
             }
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let lane_a = LaneId::new(1);
         let lane_b = LaneId::new(2);
         let dataspace_a = DataSpaceId::new(11);
         let dataspace_b = DataSpaceId::new(12);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(lane_a, dataspace_a), (lane_b, dataspace_b)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let first_tx = accepted_tx_by_someone(&time_source);
         let second_tx = accepted_tx_by_someone(&time_source);
@@ -11983,10 +12173,6 @@ pub mod tests {
             router,
             &[(lane_a, dataspace_a), (lane_b, dataspace_b)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: lane_b_bounds,
-            per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
-        };
         let queue = Arc::new(queue_inner);
 
         queue
@@ -11998,6 +12184,10 @@ pub mod tests {
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: lane_b_bounds,
+            per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
+        };
 
         let mut consumed = BTreeMap::new();
         let deferred = queue.enforce_lane_teu_limits_with_consumption(&mut guards, &mut consumed);
@@ -12014,17 +12204,19 @@ pub mod tests {
 
     #[test]
     fn enforce_lane_teu_limits_with_consumption_respects_existing_usage() {
+        let test_lane = LaneId::new(11);
+        let test_dataspace = DataSpaceId::new(5);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let first_tx = accepted_tx_by_someone(&time_source);
         let lane_capacity = Queue::compute_teu_weight(&first_tx);
         assert!(lane_capacity > 0, "expected positive TEU weight");
 
-        let test_lane = LaneId::new(11);
-        let test_dataspace = DataSpaceId::new(5);
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -12036,10 +12228,6 @@ pub mod tests {
             router,
             &[(test_lane, test_dataspace)],
         );
-        *queue_inner.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
         let queue = Arc::new(queue_inner);
 
         queue
@@ -12053,6 +12241,10 @@ pub mod tests {
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(guards.len(), 2, "expected both transactions before gating");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let mut consumed = BTreeMap::new();
         consumed.insert(test_lane, lane_capacity);
@@ -12077,16 +12269,18 @@ pub mod tests {
         where
             F: FnMut(&mut Vec<TransactionGuard>),
         {
+            let test_lane = LaneId::new(17);
+            let test_dataspace = DataSpaceId::new(4);
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+            let mut state = State::new(world_with_test_domains(), kura, query_handle);
+            install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+            let state = Arc::new(state);
             let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
             let lane_capacity = Queue::compute_teu_weight(first_tx);
             assert!(lane_capacity > 0, "expected positive TEU weight");
 
-            let test_lane = LaneId::new(17);
-            let test_dataspace = DataSpaceId::new(4);
             let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
                 lane: test_lane,
                 dataspace: test_dataspace,
@@ -12098,10 +12292,6 @@ pub mod tests {
                 router,
                 &[(test_lane, test_dataspace)],
             );
-            *queue_inner.nexus_limits.write() = QueueLimits {
-                fallback: scheduling,
-                per_lane: BTreeMap::from([(test_lane, scheduling)]),
-            };
             let queue = Arc::new(queue_inner);
 
             queue
@@ -12114,6 +12304,10 @@ pub mod tests {
             let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
             assert_eq!(guards.len(), 2, "expected both transactions before gating");
             reorder(&mut guards);
+            *queue.nexus_limits.write() = QueueLimits {
+                fallback: scheduling,
+                per_lane: BTreeMap::from([(test_lane, scheduling)]),
+            };
 
             let mut consumed = BTreeMap::new();
             let deferred =
@@ -12477,13 +12671,15 @@ pub mod tests {
             }
         }
 
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
         let expected_lane = LaneId::new(5);
         let expected_dataspace = DataSpaceId::new(13);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected_lane, expected_dataspace)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
@@ -12561,11 +12757,19 @@ pub mod tests {
 
     #[test]
     fn proposal_pop_refreshes_stale_routing_metadata() {
+        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(
+            &mut state,
+            &[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (refreshed.lane_id, refreshed.dataspace_id),
+            ],
+        );
+        let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let refreshed = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(10));
         let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),

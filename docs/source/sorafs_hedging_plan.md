@@ -207,7 +207,10 @@ Required before rollout:
   @scripts/examples/sorafs_hedging_rollout_evidence.args.example`. Production
   promotion remains blocked unless the summary status is `ready`, including at
   least two distinct staged billing cycles whose reference-decision ids match a
-  valid reference-price artifact in the same evidence bundle.
+  valid reference-price artifact in the same evidence bundle. The collection
+  planner's dry-run JSON includes an `evidence_contract` map so operators can
+  inspect the exact required fields for each requested evidence kind before
+  collecting or submitting live billing artifacts.
 
 ## Rollout Status
 - Done: target requirements are documented; adjacent reserve, DA rent telemetry,
@@ -216,7 +219,8 @@ Required before rollout:
   plus deterministic math/tests and reference-validator/CLI coverage are
   shipped; source-level Rust C FFI, Connect C/JNI, Kotlin/JVM, Java Android,
   and Swift bridge wrappers are shipped; the SFM-5 rollout evidence gate and
-  collection planner plus operator argument-file examples are shipped; the
+  collection planner with dry-run evidence-contract export plus operator
+  argument-file examples are shipped; the
   deterministic hedging/billing fixture generator, fixture manifest, and
   fixture README are shipped; the fixture manifest checker and focused tests are
   shipped, including accepted/rejected validator outcome enforcement for full

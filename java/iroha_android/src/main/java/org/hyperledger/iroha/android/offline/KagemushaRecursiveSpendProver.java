@@ -886,6 +886,9 @@ public final class KagemushaRecursiveSpendProver {
       final NativeAbiVersionProbe nativeBridgeAbiVersionProbe,
       final NativeSymbolProbe probeSymbol,
       final int requiredNativeBridgeAbiVersion) {
+    if (requiredNativeBridgeAbiVersion <= 0) {
+      return false;
+    }
     try {
       loadLibrary.run();
     } catch (final UnsatisfiedLinkError | SecurityException error) {

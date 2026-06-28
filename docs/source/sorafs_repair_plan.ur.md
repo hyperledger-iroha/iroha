@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 45105ac0d2a49627c893f7a3f29379c12fc6672e1a71cba67b6047942da8d2c4
+source_hash: dc4d510176f12b96075467cdef53e54e186c67affa3128eee429f4eef5200196
 source_last_modified: "2026-06-25T17:31:52+00:00"
 translation_last_reviewed: 2026-06-25
 ---

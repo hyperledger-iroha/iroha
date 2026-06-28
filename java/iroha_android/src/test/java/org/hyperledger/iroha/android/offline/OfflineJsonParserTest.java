@@ -30,7 +30,7 @@ public final class OfflineJsonParserTest {
           "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
           "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
           "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_recursive_compact_artifacts_available": true
+          "offline_kagemusha_recursive_compact_artifacts_available": false
         }
         """;
     final OfflineReadiness readiness =
@@ -45,7 +45,7 @@ public final class OfflineJsonParserTest {
     assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
     assert Integer.valueOf(7).equals(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
     assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId());
-    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+    assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
   }
 
   private static void parsesOfflineReadinessShortAbi7Aliases() {

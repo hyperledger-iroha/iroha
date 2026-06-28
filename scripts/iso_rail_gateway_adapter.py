@@ -312,22 +312,30 @@ def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) 
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, dict):
+        if type(value) is not dict:
+            raise AdapterError(f"{label} contains non-plain JSON object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise AdapterError(
                 f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
             )
         for key, child in value.items():
-            if _is_secret_looking_key(str(key)):
+            if not isinstance(key, str):
+                raise AdapterError(f"{label} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{label} field")
+            if _is_secret_looking_key(key_text):
                 raise AdapterError(f"{label} contains forbidden secret-looking field")
-            if _is_control_bearing_key(key):
+            if _is_control_bearing_key(key_text):
                 raise AdapterError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
+            _check_no_secret_material(child, f"{label}.{key_text}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise AdapterError(f"{label} contains non-plain JSON array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise AdapterError(f"{label} must contain at most {MAX_JSON_LIST_ITEMS} items")
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
+        value = _plain_text(value, label)
         if _contains_unsafe_json_control(value):
             raise AdapterError(f"{label} contains unsafe control characters")
         if _contains_secret_material(value):
@@ -339,6 +347,37 @@ NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 class AdapterError(RuntimeError):
     """Raised when an inbound rail file cannot be safely submitted."""
+
+
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise AdapterError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise AdapterError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise AdapterError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise AdapterError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise AdapterError("args must be an argparse.Namespace")
+    return args
 
 
 @dataclass(frozen=True)
@@ -381,7 +420,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -422,7 +464,7 @@ def _is_all_zero_sha256(value: str) -> bool:
 
 
 def _require_positive_cli_int(value: int, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if type(value) is not int or value <= 0:
         raise AdapterError(f"{label} must be a positive integer")
     return value
 
@@ -438,7 +480,7 @@ def _require_response_limit_bytes(value: int) -> int:
 
 
 def _require_positive_finite_cli_number(value: float, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise AdapterError(f"{label} must be a positive finite number")
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -457,14 +499,18 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise AdapterError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if type(value) is type(Path()):
         return Path(value)
-    except TypeError as error:
-        raise AdapterError(f"{label} must be a path") from error
+    raise AdapterError(f"{label} must be a path")
 
 
 def _required_cli_string(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
+        raise AdapterError(f"{label} must be a string")
+    value = _plain_text(value, label)
+    if not value:
         raise AdapterError(f"{label} must be a string")
     return value
 
@@ -566,9 +612,17 @@ def _reject_non_ascii_identifier(value: str, label: str) -> None:
         raise AdapterError(f"{label} must use printable ASCII")
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise AdapterError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise AdapterError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise AdapterError(f"{label} contains unknown keys")
+    return present
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -594,7 +648,7 @@ def _read_regular_file(
     path_label: str | None = None,
 ) -> bytes:
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise AdapterError("max file bytes must be a positive integer")
     display_path = path_label if path_label is not None else str(path)
@@ -608,6 +662,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{display_path} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {display_path}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {display_path}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise AdapterError(f"{display_path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
@@ -637,9 +696,16 @@ def _read_regular_file(
             raise AdapterError(f"{display_path} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise AdapterError(f"cannot open {display_path} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(
+            f"cannot open {display_path} for reading: I/O error"
+        ) from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _ensure_input_directory(path: Path, label: str) -> None:
@@ -648,6 +714,11 @@ def _ensure_input_directory(path: Path, label: str) -> None:
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(metadata.st_mode):
@@ -665,6 +736,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label if display_label is not None else str(current)
+            raise AdapterError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -764,7 +848,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -786,7 +870,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -805,7 +889,7 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -841,7 +925,7 @@ def _preflight_required_cli_values(
     flags: set[str],
     value_name: str,
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -919,7 +1003,7 @@ def _preflight_numeric_cli_values(
     integer_flags: set[str],
     number_flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     flags = integer_flags | number_flags
     index = 0
     while index < len(raw_args):
@@ -967,8 +1051,21 @@ def _ensure_output_directory(
         _reject_symlinked_existing_ancestors(path, display_label=label)
     except NotADirectoryError as error:
         raise AdapterError(f"{label} must be a directory") from error
-    if path.exists() or path.is_symlink():
-        mode = path.lstat().st_mode
+    try:
+        directory_exists = path.exists() or path.is_symlink()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
+    if directory_exists:
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(f"cannot inspect {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(f"cannot inspect {label}: I/O error") from None
         if stat.S_ISLNK(mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(mode):
@@ -978,8 +1075,22 @@ def _ensure_output_directory(
         return
     if not create:
         return
-    path.mkdir(parents=True, exist_ok=True)
-    mode = path.lstat().st_mode
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except FileExistsError as error:
+        raise AdapterError(f"{label} must be a directory") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot create {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot create {label}: I/O error") from None
+    try:
+        mode = path.lstat().st_mode
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label}: I/O error") from None
     if stat.S_ISLNK(mode):
         raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(mode):
@@ -988,8 +1099,21 @@ def _ensure_output_directory(
 
 def _ensure_output_file_target(path: Path, *, display_label: str | None = None) -> None:
     label = display_label if display_label is not None else str(path)
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    try:
+        target_exists = path.exists() or path.is_symlink()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label} leaf: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label} leaf: I/O error") from None
+    if target_exists:
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(f"cannot inspect {label} leaf: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(f"cannot inspect {label} leaf: I/O error") from None
         if stat.S_ISLNK(metadata.st_mode):
             raise AdapterError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -1010,7 +1134,18 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
         raise AdapterError(f"{label} must be a directory") from error
-    parent_mode = path.parent.lstat().st_mode
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot create {label} parent: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot create {label} parent: I/O error") from None
+    try:
+        parent_mode = path.parent.lstat().st_mode
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {label} parent: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {label} parent: I/O error") from None
     if stat.S_ISLNK(parent_mode):
         raise AdapterError(f"{label} must not be a symlink")
     if not stat.S_ISDIR(parent_mode):
@@ -1046,26 +1181,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise AdapterError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise AdapterError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise AdapterError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise AdapterError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _absolute_path_without_resolving_leaf(path: Path) -> Path:
@@ -1078,9 +1235,19 @@ def _same_existing_path(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_receipt_dir_input_alias(
@@ -1097,8 +1264,8 @@ def _reject_receipt_dir_input_path_overlap(
     input_path: Path,
     input_label: str,
 ) -> None:
-    receipt_root = receipt_dir.resolve()
-    input_root = input_path.resolve()
+    receipt_root = _path_resolve(receipt_dir, "receipt_dir")
+    input_root = _path_resolve(input_path, input_label)
     if (
         receipt_root == input_root
         or input_root in receipt_root.parents
@@ -1113,8 +1280,8 @@ def _reject_path_overlap(
     right: Path,
     right_label: str,
 ) -> None:
-    left_root = left.resolve()
-    right_root = right.resolve()
+    left_root = _path_resolve(left, left_label)
+    right_root = _path_resolve(right, right_label)
     if (
         left_root == right_root
         or right_root in left_root.parents
@@ -1184,9 +1351,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise AdapterError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise AdapterError("JSON array must be a plain array")
         if len(value) > MAX_JSON_LIST_ITEMS:
             raise AdapterError(
                 f"JSON array must contain at most {MAX_JSON_LIST_ITEMS} items"
@@ -1194,6 +1364,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise AdapterError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise AdapterError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -1209,13 +1381,18 @@ def _bounded_read(
     *,
     path_label: str | None = None,
 ) -> bytes:
-    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+    if type(max_bytes) is not int or max_bytes <= 0:
         raise AdapterError("max payload bytes must be a positive integer")
     display_path = path_label if path_label is not None else str(path)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise AdapterError(f"{display_path} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise AdapterError(f"cannot inspect {display_path}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(f"cannot inspect {display_path}: I/O error") from None
     if stat.S_ISLNK(metadata.st_mode):
         raise AdapterError(f"{display_path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
@@ -1250,9 +1427,16 @@ def _bounded_read(
             raise AdapterError(f"{display_path} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise AdapterError(f"cannot open {display_path} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise AdapterError(
+            f"cannot open {display_path} for reading: I/O error"
+        ) from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def verify_message_file(
@@ -1281,7 +1465,7 @@ def verify_message_file(
         max_bytes=MAX_SIDECAR_JSON_BYTES,
         display_label=sidecar_label,
     )
-    if not isinstance(sidecar, dict):
+    if type(sidecar) is not dict:
         raise AdapterError(f"{sidecar_label} must contain a JSON object")
     _reject_unknown_keys(sidecar, SIDECAR_KEYS, sidecar_label)
     _check_no_secret_material(sidecar, sidecar_label)
@@ -1303,6 +1487,7 @@ def verify_message_file(
 
     message_type = sidecar.get("message_type")
     if isinstance(message_type, str):
+        message_type = _plain_text(message_type, f"{sidecar_label} message_type")
         _reject_non_ascii_identifier(
             message_type,
             f"{sidecar_label} message_type",
@@ -1328,7 +1513,11 @@ def verify_message_file(
         profile = None
     else:
         profile = sidecar.get("profile")
-    if profile_present and (not isinstance(profile, str) or not profile.strip()):
+    if profile_present:
+        if not isinstance(profile, str):
+            raise AdapterError(f"{sidecar_label} profile must be a non-empty string")
+        profile = _plain_text(profile, f"{sidecar_label} profile")
+    if profile_present and not profile.strip():
         raise AdapterError(f"{sidecar_label} profile must be a non-empty string")
     if isinstance(profile, str):
         if _contains_control_character(profile):
@@ -1349,9 +1538,14 @@ def verify_message_file(
     rail_message_id = None
     if rail_message_id_present:
         rail_message_id = sidecar.get("rail_message_id")
-    if rail_message_id_present and (
-        not isinstance(rail_message_id, str) or not rail_message_id.strip()
-    ):
+    if rail_message_id_present:
+        if not isinstance(rail_message_id, str):
+            raise AdapterError(f"{sidecar_label} rail_message_id must be a non-empty string")
+        rail_message_id = _plain_text(
+            rail_message_id,
+            f"{sidecar_label} rail_message_id",
+        )
+    if rail_message_id_present and not rail_message_id.strip():
         raise AdapterError(f"{sidecar_label} rail_message_id must be a non-empty string")
     if isinstance(rail_message_id, str):
         if _contains_control_character(rail_message_id):
@@ -1443,26 +1637,26 @@ def resolve_message_paths(inbox_dir: Path, message: str | None) -> list[Path]:
     """Resolve one explicit message or discover all messages under the inbox."""
 
     _ensure_input_directory(inbox_dir, "inbox_dir")
-    inbox_root = inbox_dir.resolve()
+    inbox_root = _path_resolve(inbox_dir, "inbox_dir")
     if message is None:
         return discover_messages(inbox_dir, display_label="inbox_dir")
     _validate_path_argument(message, "--message path")
     raw_message = Path(message).expanduser()
     message_path = raw_message if raw_message.is_absolute() else inbox_dir / raw_message
-    resolved_parent = message_path.parent.resolve()
+    resolved_parent = _path_resolve(message_path.parent, "--message parent")
     if not resolved_parent.is_relative_to(inbox_root):
         raise AdapterError("--message path must stay under --inbox-dir")
     return [resolved_parent / message_path.name]
 
 
 def _reject_message_receipt_dir_overlap(paths: list[Path], receipt_dir: Path) -> None:
-    receipt_root = receipt_dir.resolve()
+    receipt_root = _path_resolve(receipt_dir, "receipt_dir")
     for offset, path in enumerate(paths):
         for label, source_path in (
             (f"message[{offset}]", path),
             (f"message[{offset}].sidecar", path.with_suffix(path.suffix + ".json")),
         ):
-            resolved = source_path.resolve()
+            resolved = _path_resolve(source_path, label)
             if resolved == receipt_root or receipt_root in resolved.parents:
                 raise AdapterError(f"{label} must not be read from receipt_dir")
 
@@ -1470,13 +1664,20 @@ def _reject_message_receipt_dir_overlap(paths: list[Path], receipt_dir: Path) ->
 def _normalise_message_argument(value: Any) -> str | None:
     if value is None:
         return None
-    if isinstance(value, (str, os.PathLike)):
-        raw = os.fspath(value)
+    if isinstance(value, bytes):
+        raise AdapterError("message must be a path")
+    if isinstance(value, str):
+        raw = _plain_text(value, "message")
         if raw == "":
             raise AdapterError("message must be a non-empty path")
         return raw
-    if isinstance(value, (list, tuple)):
-        if not value:
+    if type(value) is type(Path()):
+        raw = str(Path(value))
+        if raw == "":
+            raise AdapterError("message must be a non-empty path")
+        return raw
+    if type(value) in (list, tuple):
+        if len(value) == 0:
             return None
         if len(value) != 1:
             raise AdapterError("provide at most one --message")
@@ -1911,7 +2112,7 @@ def submit_message(
 
 
 def _is_http_status_code(status_code: int) -> bool:
-    return 100 <= status_code <= 599
+    return not isinstance(status_code, bool) and 100 <= status_code <= 599
 
 
 def _response_status_code(response: Any) -> int | None:
@@ -1929,7 +2130,7 @@ def _error_status_code(error: urllib.error.HTTPError) -> int | None:
 
 
 def _parse_http_status_code(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         return None
     if 0 <= value <= 999:
         return value
@@ -1971,11 +2172,11 @@ def _bounded_response_body(
     response_limit_bytes: int,
 ) -> tuple[bytes, bool] | None:
     capture_limit = response_limit_bytes + 1
-    if isinstance(body, bytes):
+    if type(body) is bytes:
         return body[:capture_limit], len(body) > response_limit_bytes
-    if isinstance(body, bytearray):
+    if type(body) is bytearray:
         return bytes(body[:capture_limit]), len(body) > response_limit_bytes
-    if isinstance(body, memoryview):
+    if type(body) is memoryview:
         try:
             byte_body = body.cast("B")
         except (TypeError, ValueError):
@@ -2147,6 +2348,7 @@ def _reject_unused_local_overrides(
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     if getattr(args, "inbox_dir", None) is None:
         raise AdapterError("provide --inbox-dir")
     args.inbox_dir = _optional_cli_path(args.inbox_dir, "inbox_dir")
@@ -2265,6 +2467,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Verify ISO 20022 rail-gateway file drops and submit them to Torii.",
         allow_abbrev=False,
     )
@@ -2338,10 +2541,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--bearer-token-file",
                 "--inbox-dir",
@@ -2354,7 +2558,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--allow-default-profile",
                 "--allow-insecure-http",
@@ -2362,17 +2566,17 @@ def main(argv: list[str] | None = None) -> int:
                 "--dry-run",
             },
         )
-        _preflight_required_cli_values(argv, {"--torii-base-url"}, "URL")
+        _preflight_required_cli_values(normalised_argv, {"--torii-base-url"}, "URL")
         _preflight_numeric_cli_values(
-            argv,
+            normalised_argv,
             integer_flags={"--max-payload-bytes", "--response-limit-bytes"},
             number_flags={"--timeout-secs"},
         )
         _preflight_output_cli_paths(
-            argv,
+            normalised_argv,
             {"--bearer-token-file", "--inbox-dir", "--message", "--receipt-dir"},
         )
-        args = parser.parse_args(argv)
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except AdapterError as error:
         print(f"error: {error}", file=sys.stderr)

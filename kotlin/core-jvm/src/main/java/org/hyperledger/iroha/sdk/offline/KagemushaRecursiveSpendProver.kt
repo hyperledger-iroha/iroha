@@ -911,6 +911,9 @@ class KagemushaRecursiveSpendProver private constructor() {
             probeSymbol: () -> Boolean,
             requiredNativeBridgeAbiVersion: Int = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
         ): Boolean {
+            if (requiredNativeBridgeAbiVersion <= 0) {
+                return false
+            }
             try {
                 loadLibrary()
             } catch (_: UnsatisfiedLinkError) {

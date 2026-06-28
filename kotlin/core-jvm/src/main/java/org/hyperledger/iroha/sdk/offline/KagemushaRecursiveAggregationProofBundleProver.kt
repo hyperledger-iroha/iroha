@@ -64,6 +64,8 @@ class KagemushaRecursiveAggregationProofBundleProver private constructor() {
                 return false
             } catch (_: SecurityException) {
                 return false
+            } catch (_: RuntimeException) {
+                return false
             }
             return try {
                 probeSymbol()
@@ -72,6 +74,8 @@ class KagemushaRecursiveAggregationProofBundleProver private constructor() {
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
+                false
+            } catch (_: RuntimeException) {
                 false
             }
         }

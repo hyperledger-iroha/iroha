@@ -3573,14 +3573,14 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let lane_id = LaneId::new(159);
+        let lane_id = LaneId::new(59);
         let (_sink, validator, reward_asset, _) = configure_reward_fixture(&mut stx, lane_id, 500);
         let record = stx
             .world
             .public_lane_validators
             .get_mut(&(lane_id, validator.clone()))
             .expect("validator record");
-        record.lane_id = LaneId::new(160);
+        record.lane_id = LaneId::new(60);
         record.status = PublicLaneValidatorStatus::Active;
 
         let err = RecordPublicLaneRewards {

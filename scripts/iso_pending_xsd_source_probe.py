@@ -58,6 +58,37 @@ class ProbeError(RuntimeError):
     """Raised when probe inputs are invalid."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise ProbeError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise ProbeError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise ProbeError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise ProbeError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise ProbeError("args must be an argparse.Namespace")
+    return args
+
+
 UrlOpen = Callable[..., Any]
 
 
@@ -82,6 +113,7 @@ def sha256_hex(data: bytes) -> str:
 def _ascii_cli_number_text(value: Any, label: str) -> Any:
     if not isinstance(value, str):
         return value
+    value = _plain_text(value, label)
     if not value:
         raise ProbeError(f"{label} must not be empty")
     if value != value.strip():
@@ -97,12 +129,14 @@ def _positive_float(value: Any, label: str) -> float:
     if isinstance(value, bool):
         raise ProbeError(f"{label} must be a positive finite number")
     value = _ascii_cli_number_text(value, label)
-    if isinstance(value, str) and ASCII_FLOAT_RE.fullmatch(value) is None:
-        raise ProbeError(f"{label} must be a positive finite number")
-    try:
+    if isinstance(value, str):
+        if ASCII_FLOAT_RE.fullmatch(value) is None:
+            raise ProbeError(f"{label} must be a positive finite number")
         parsed = float(value)
-    except (TypeError, ValueError) as error:
-        raise ProbeError(f"{label} must be a positive finite number") from error
+    elif type(value) in (int, float):
+        parsed = float(value)
+    else:
+        raise ProbeError(f"{label} must be a positive finite number")
     if not (parsed > 0.0 and parsed < float("inf")):
         raise ProbeError(f"{label} must be a positive finite number")
     if parsed > MAX_TIMEOUT_SECS:
@@ -114,12 +148,14 @@ def _positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool):
         raise ProbeError(f"{label} must be a positive integer")
     value = _ascii_cli_number_text(value, label)
-    if isinstance(value, str) and ASCII_INT_RE.fullmatch(value) is None:
-        raise ProbeError(f"{label} must be a positive integer")
-    try:
+    if isinstance(value, str):
+        if ASCII_INT_RE.fullmatch(value) is None:
+            raise ProbeError(f"{label} must be a positive integer")
         parsed = int(value)
-    except (TypeError, ValueError) as error:
-        raise ProbeError(f"{label} must be a positive integer") from error
+    elif type(value) is int:
+        parsed = value
+    else:
+        raise ProbeError(f"{label} must be a positive integer")
     if parsed <= 0:
         raise ProbeError(f"{label} must be a positive integer")
     if parsed > MAX_PROBE_BYTES:
@@ -128,7 +164,7 @@ def _positive_int(value: Any, label: str) -> int:
 
 
 def _preflight_probe_limit_cli_values(argv: list[str] | None) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     validators = {
         "--max-bytes": _positive_int,
         "--timeout-secs": _positive_float,
@@ -165,19 +201,19 @@ def _preflight_probe_limit_cli_values(argv: list[str] | None) -> None:
 
 def _selected_message_ids(values: Any) -> list[str]:
     known = xsd.KNOWN_PENDING_SCHEMA_SOURCE_METADATA
-    if not values:
+    if values is None:
         return sorted(known)
-    if isinstance(values, (str, bytes)):
+    if isinstance(values, (str, bytes)) or type(values) not in (list, tuple):
         raise ProbeError("--message-def-id must be a repeatable string list")
-    try:
-        selected = list(values)
-    except TypeError as error:
-        raise ProbeError("--message-def-id must be a repeatable string list") from error
+    if len(values) == 0:
+        return sorted(known)
+    selected = list(values)
     result: list[str] = []
     seen: dict[str, int] = {}
     for offset, value in enumerate(selected):
         if not isinstance(value, str):
             raise ProbeError(f"--message-def-id[{offset}] must be a string")
+        value = _plain_text(value, f"--message-def-id[{offset}]")
         if value not in known:
             raise ProbeError(f"--message-def-id[{offset}] is not a known pending schema")
         if value in seen:
@@ -198,30 +234,52 @@ def _content_type(headers: Any) -> str | None:
     if headers is None:
         return None
     value = None
-    get_content_type = getattr(headers, "get_content_type", None)
+    try:
+        get_content_type = getattr(headers, "get_content_type", None)
+    except Exception:
+        get_content_type = None
     if callable(get_content_type):
-        value = get_content_type()
+        try:
+            value = get_content_type()
+        except Exception:
+            value = None
     if value is None:
-        get = getattr(headers, "get", None)
+        try:
+            get = getattr(headers, "get", None)
+        except Exception:
+            get = None
         if callable(get):
-            value = get("content-type") or get("Content-Type")
+            try:
+                value = get("content-type") or get("Content-Type")
+            except Exception:
+                value = None
     if not isinstance(value, str) or not value:
         return None
-    if len(value) > MAX_CONTENT_TYPE_CHARS:
-        return None
-    if value != value.strip():
-        return None
-    if xsd._contains_control_character(value):
-        return None
-    if any(ord(ch) > 0x7E for ch in value):
-        return None
-    if xsd._contains_secret_material(value) or xsd._contains_secret_identifier_material(value):
+    try:
+        if len(value) > MAX_CONTENT_TYPE_CHARS:
+            return None
+        if value != value.strip():
+            return None
+        if xsd._contains_control_character(value):
+            return None
+        if any(ord(ch) > 0x7E for ch in value):
+            return None
+        if xsd._contains_secret_material(value) or xsd._contains_secret_identifier_material(value):
+            return None
+    except Exception:
         return None
     return value
 
 
+def _response_headers(response: Any) -> Any:
+    try:
+        return getattr(response, "headers", None)
+    except Exception:
+        return None
+
+
 def _http_status_code(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         return None
     if 100 <= value <= 599:
         return value
@@ -229,13 +287,70 @@ def _http_status_code(value: Any) -> int | None:
 
 
 def _response_status(response: Any) -> int | None:
-    status = _http_status_code(getattr(response, "status", None))
+    try:
+        raw_status = getattr(response, "status", None)
+    except Exception:
+        raw_status = None
+    status = _http_status_code(raw_status)
     if status is not None:
         return status
-    getcode = getattr(response, "getcode", None)
+    try:
+        getcode = getattr(response, "getcode", None)
+    except Exception:
+        getcode = None
     if callable(getcode):
-        return _http_status_code(getcode())
+        try:
+            return _http_status_code(getcode())
+        except Exception:
+            return None
     return None
+
+
+def _http_error_status(error: Any) -> int | None:
+    try:
+        code = getattr(error, "code", None)
+    except Exception:
+        code = None
+    return _http_status_code(code)
+
+
+def _enter_probe_response(response_context: Any) -> tuple[Any, Any | None] | None:
+    try:
+        enter = getattr(response_context, "__enter__", None)
+    except Exception:
+        return None
+    if enter is None:
+        return response_context, None
+    if not callable(enter):
+        return None
+    try:
+        exit_func = getattr(response_context, "__exit__", None)
+    except Exception:
+        exit_func = None
+    try:
+        response = enter()
+    except Exception:
+        return None
+    return response, exit_func
+
+
+def _close_probe_response(response_context: Any, exit_func: Any | None) -> None:
+    if callable(exit_func):
+        try:
+            exit_func(None, None, None)
+        except Exception:
+            return
+        return
+    try:
+        close = getattr(response_context, "close", None)
+    except Exception:
+        return
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        return
 
 
 def _probe_download(
@@ -264,7 +379,22 @@ def _probe_download(
         "download_url": metadata["download_url"],
     }
     try:
-        with opener(request, timeout=timeout_secs) as response:
+        response_context = opener(request, timeout=timeout_secs)
+        entered = _enter_probe_response(response_context)
+        if entered is None:
+            return {
+                **base,
+                "status": "network_error",
+                "http_status": None,
+                "content_type": None,
+                "downloaded_bytes": 0,
+                "sample_sha256": None,
+                "truncated": False,
+                "looks_like_xsd": False,
+                "error_kind": "NetworkError",
+            }
+        response, exit_func = entered
+        try:
             status = _response_status(response)
             if status is None:
                 return {
@@ -283,7 +413,7 @@ def _probe_download(
                     **base,
                     "status": "http_error",
                     "http_status": status,
-                    "content_type": _content_type(getattr(response, "headers", None)),
+                    "content_type": _content_type(_response_headers(response)),
                     "downloaded_bytes": 0,
                     "sample_sha256": None,
                     "truncated": False,
@@ -292,7 +422,7 @@ def _probe_download(
                 }
             try:
                 data = response.read(max_bytes + 1)
-            except http.client.HTTPException:
+            except (http.client.HTTPException, OSError, RuntimeError, TypeError, ValueError):
                 return {
                     **base,
                     "status": "network_error",
@@ -304,7 +434,7 @@ def _probe_download(
                     "looks_like_xsd": False,
                     "error_kind": "NetworkError",
                 }
-            if not isinstance(data, (bytes, bytearray, memoryview)):
+            if type(data) not in (bytes, bytearray, memoryview):
                 return {
                     **base,
                     "status": "network_error",
@@ -315,13 +445,17 @@ def _probe_download(
                     "truncated": False,
                     "looks_like_xsd": False,
                     "error_kind": "NetworkError",
-                }
+            }
             try:
-                if isinstance(data, memoryview):
+                if type(data) is memoryview:
                     byte_data = data.cast("B")
                     total_bytes = byte_data.nbytes
                     downloaded = min(total_bytes, max_bytes)
                     sample = byte_data[:downloaded].tobytes()
+                elif type(data) is bytes:
+                    total_bytes = len(data)
+                    downloaded = min(total_bytes, max_bytes)
+                    sample = data[:downloaded]
                 else:
                     total_bytes = len(data)
                     downloaded = min(total_bytes, max_bytes)
@@ -339,7 +473,7 @@ def _probe_download(
                     "error_kind": "NetworkError",
                 }
             looks_like_xsd = _looks_like_xsd(sample)
-            if not downloaded or looks_like_xsd and not (200 <= status <= 399):
+            if not downloaded or looks_like_xsd and not (200 <= status <= 299):
                 return {
                     **base,
                     "status": "network_error",
@@ -355,44 +489,49 @@ def _probe_download(
                 **base,
                 "status": (
                     "reachable"
-                    if 200 <= status <= 399
+                    if 200 <= status <= 299
                     and downloaded
                     and looks_like_xsd
                     else "unexpected"
                 ),
                 "http_status": status,
-                "content_type": _content_type(getattr(response, "headers", None)),
+                "content_type": _content_type(_response_headers(response)),
                 "downloaded_bytes": downloaded,
                 "sample_sha256": sha256_hex(sample) if sample else None,
                 "truncated": total_bytes > max_bytes,
                 "looks_like_xsd": looks_like_xsd,
                 "error_kind": None,
             }
+        finally:
+            _close_probe_response(response_context, exit_func)
     except urllib.error.HTTPError as error:
-        status = _http_status_code(getattr(error, "code", None))
-        if status is None or not (400 <= status <= 599):
+        try:
+            status = _http_error_status(error)
+            if status is None or not (400 <= status <= 599):
+                return {
+                    **base,
+                    "status": "network_error",
+                    "http_status": None,
+                    "content_type": None,
+                    "downloaded_bytes": 0,
+                    "sample_sha256": None,
+                    "truncated": False,
+                    "looks_like_xsd": False,
+                    "error_kind": "NetworkError",
+                }
             return {
                 **base,
-                "status": "network_error",
-                "http_status": None,
-                "content_type": None,
+                "status": "http_error",
+                "http_status": status,
+                "content_type": _content_type(_response_headers(error)),
                 "downloaded_bytes": 0,
                 "sample_sha256": None,
                 "truncated": False,
                 "looks_like_xsd": False,
-                "error_kind": "NetworkError",
+                "error_kind": "HTTPError",
             }
-        return {
-            **base,
-            "status": "http_error",
-            "http_status": status,
-            "content_type": _content_type(getattr(error, "headers", None)),
-            "downloaded_bytes": 0,
-            "sample_sha256": None,
-            "truncated": False,
-            "looks_like_xsd": False,
-            "error_kind": "HTTPError",
-        }
+        finally:
+            _close_probe_response(error, None)
     except TimeoutError:
         return {
             **base,
@@ -406,6 +545,18 @@ def _probe_download(
             "error_kind": "TimeoutError",
         }
     except (urllib.error.URLError, socket.timeout, OSError):
+        return {
+            **base,
+            "status": "network_error",
+            "http_status": None,
+            "content_type": None,
+            "downloaded_bytes": 0,
+            "sample_sha256": None,
+            "truncated": False,
+            "looks_like_xsd": False,
+            "error_kind": "NetworkError",
+        }
+    except (RuntimeError, TypeError, ValueError):
         return {
             **base,
             "status": "network_error",
@@ -461,6 +612,7 @@ def build_summary(
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     args.summary_out = xsd._optional_cli_path(
         getattr(args, "summary_out", None),
         "summary_out",
@@ -490,6 +642,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Probe official ISO 20022 pending XSD download endpoints.",
         allow_abbrev=False,
     )
@@ -518,10 +671,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         xsd._preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--max-bytes",
                 "--message-def-id",
@@ -529,9 +683,9 @@ def main(argv: list[str] | None = None) -> int:
                 "--timeout-secs",
             },
         )
-        _preflight_probe_limit_cli_values(argv)
-        xsd._preflight_output_cli_paths(argv, {"--summary-out"})
-        args = parser.parse_args(argv)
+        _preflight_probe_limit_cli_values(normalised_argv)
+        xsd._preflight_output_cli_paths(normalised_argv, {"--summary-out"})
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except ProbeError as error:
         print(f"error: {error}", file=sys.stderr)

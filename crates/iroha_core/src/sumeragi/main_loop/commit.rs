@@ -2433,9 +2433,12 @@ impl Actor {
                                 .retain(|(_, hash, _, _, _, _, _), _| hash != &parent);
                         }
                     } else {
-                        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
                         let (requeued, failures, duplicate_failures, _) =
-                            requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
+                            requeue_block_transactions(
+                                self.queue.as_ref(),
+                                self.state.as_ref(),
+                                pending.block.external_entrypoints_cloned(),
+                            );
                         warn!(
                             height = pending_height,
                             view = pending_view,
@@ -2639,7 +2642,7 @@ impl Actor {
                         let outcome = handle_prev_block_mismatch(
                             self.queue.as_ref(),
                             self.state.as_ref(),
-                            failed_block.external_entrypoints_cloned().collect(),
+                            failed_block.external_entrypoints_cloned(),
                         );
                         if outcome.failures > 0 {
                             warn!(
@@ -7884,7 +7887,7 @@ impl Actor {
 
     /// Return true when the pending block payload is available locally or via RBC.
     pub(super) fn payload_available_for_da(&self, pending: &PendingBlock) -> bool {
-        if Hash::new(pending.payload_bytes()) == pending.payload_hash {
+        if pending.payload_hash_matches_block() {
             return true;
         }
         let key = (pending.block.hash(), pending.height, pending.view);
@@ -7904,7 +7907,7 @@ impl Actor {
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
     ) -> bool {
-        if Hash::new(pending.payload_bytes()) == pending.payload_hash {
+        if pending.payload_hash_matches_block() {
             return true;
         }
         Self::ensure_block_matches_rbc_payload(

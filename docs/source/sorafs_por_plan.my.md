@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fc411c85ecf1d053e51e65518736d616639281acbb445ad77a2cd82f4440db20
+source_hash: ab47380ee5f214b20198f21426d47e91566ce9c24f19c26532f39f9baf2af538
 source_last_modified: "2026-06-25T17:41:33+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS PoR Challenge Scheduler & Randomness Integration

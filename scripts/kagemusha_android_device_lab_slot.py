@@ -168,21 +168,22 @@ def _command_disruption_errors(command: Sequence[str], label: str) -> list[str]:
     if not command:
         return [f"{label} command must not be empty"]
     tokens = [str(token) for token in command]
-    executable = Path(tokens[0]).name
+    normalized_tokens = [token.casefold() for token in tokens]
+    executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].casefold()
     if executable in DISRUPTIVE_EXECUTABLE_NAMES:
         return [
             f"{label} must not manage other running jobs: "
             f"{_safe_adb_command_display(tokens)}"
         ]
-    if any(token in DISRUPTIVE_COMMAND_TOKENS for token in tokens):
+    if any(token in DISRUPTIVE_COMMAND_TOKENS for token in normalized_tokens):
         return [
             f"{label} must not manage other running jobs: "
             f"{_safe_adb_command_display(tokens)}"
         ]
     for sequence in DISRUPTIVE_TOKEN_SEQUENCES:
         width = len(sequence)
-        for index in range(0, len(tokens) - width + 1):
-            if tuple(tokens[index : index + width]) == sequence:
+        for index in range(0, len(normalized_tokens) - width + 1):
+            if tuple(normalized_tokens[index : index + width]) == sequence:
                 return [
                     f"{label} must not manage other running jobs: "
                     f"{_safe_adb_command_display(tokens)}"

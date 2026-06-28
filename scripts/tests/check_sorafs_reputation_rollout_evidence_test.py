@@ -445,6 +445,22 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
     assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
 
 
+def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
+    monkeypatch,
+) -> None:
+    bad_message = "latest\nshadow"
+
+    def raise_malformed_evidence_spec(_spec: str):
+        raise ValueError(bad_message)
+
+    monkeypatch.setattr(MODULE, "parse_evidence_spec", raise_malformed_evidence_spec)
+    loaded, errors = MODULE.load_evidence([], ["latest=/tmp/evidence.json"])
+
+    assert loaded == []
+    assert "<non-canonical-error>" in errors
+    assert bad_message not in "\n".join(errors)
+
+
 def test_prefixed_explicit_evidence_matching_summary_out_fails_before_write(
     tmp_path: Path,
     capsys,

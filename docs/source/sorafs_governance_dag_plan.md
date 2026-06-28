@@ -501,7 +501,8 @@ python3 scripts/check_sorafs_governance_dag_rollout_evidence.py \
 ```
 
 For staged collections with reviewed evidence paths, prefer the planner so the
-verifier command and summary path are reproducible:
+verifier command, summary path, thresholds, and current required payload-free
+field contract are reproducible:
 
 ```sh
 python3 scripts/run_sorafs_governance_dag_rollout_evidence.py \
@@ -517,8 +518,11 @@ every recognized artifact is valid, raw DAG blocks, raw heads, CAR payloads,
 node payloads, response bodies, private keys, bearer tokens, signed
 transactions, and ledgers are absent, route latency, IPFS pin lag, and public
 head age stay under configured thresholds, enough public blocks and payload
-kinds are covered, and governance is bound to `iroha_config`.
+kinds are covered, and governance is bound to `iroha_config`. The collection
+planner's dry-run JSON also includes an `evidence_contract` map so operators
+can inspect the exact required fields for each requested evidence kind before
+collecting or submitting live publication artifacts.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner, operator argfile templates, and focused tests.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export, operator argfile templates, and focused tests.
 - Remaining: implement the always-on ingest/publisher services, IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service, live-head/public-checkpoint publication and recovery operator commands, runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests, and staged/live publication evidence that passes the SF-12 gate.

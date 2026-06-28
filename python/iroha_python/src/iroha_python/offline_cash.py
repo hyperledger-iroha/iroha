@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Protocol, Sequence, Union
 
@@ -46,20 +48,47 @@ class OfflineCashConfigurationSnapshot:
         now_ms: int,
         required_native_bridge_abi_version: Optional[int] = None,
     ) -> None:
-        if not self.offline_payments_enabled:
+        checked_now_ms = _nonnegative_offline_cash_snapshot_timestamp(now_ms, "now_ms")
+        if self.offline_payments_enabled is not True:
             raise OfflineCashConfigurationSnapshotError(
                 "offline_payments_disabled",
                 "Offline cash is disabled in the cached configuration snapshot.",
             )
-        if not _is_canonical_offline_cash_snapshot_text(self.issuer_public_key_base64):
+        _require_canonical_offline_cash_snapshot_text(self.chain_id, "chain_id")
+        _require_canonical_offline_cash_snapshot_text(
+            self.asset_definition_id,
+            "asset_definition_id",
+        )
+        _require_optional_canonical_offline_cash_snapshot_text(
+            self.artifact_set_id,
+            "artifact_set_id",
+        )
+        _require_optional_canonical_offline_cash_snapshot_text(
+            self.circuit_id,
+            "circuit_id",
+        )
+        if not _is_valid_offline_issuer_public_key_base64(self.issuer_public_key_base64):
             raise OfflineCashConfigurationSnapshotError(
                 "missing_issuer_public_key",
                 "Offline cash requires a cached issuer public key before offline exchange.",
             )
-        if self.expires_at_ms is not None and self.expires_at_ms <= now_ms:
+        created_at_ms = _nonnegative_offline_cash_snapshot_timestamp(
+            self.created_at_ms,
+            "created_at_ms",
+        )
+        expires_at_ms = _optional_nonnegative_offline_cash_snapshot_timestamp(
+            self.expires_at_ms,
+            "expires_at_ms",
+        )
+        if expires_at_ms is not None and expires_at_ms <= created_at_ms:
+            raise OfflineCashConfigurationSnapshotError(
+                "malformed_snapshot",
+                "Offline cash configuration snapshot field expires_at_ms must be after created_at_ms.",
+            )
+        if expires_at_ms is not None and expires_at_ms <= checked_now_ms:
             raise OfflineCashConfigurationSnapshotError(
                 "expired",
-                f"Offline cash configuration snapshot expired at {self.expires_at_ms}.",
+                f"Offline cash configuration snapshot expired at {expires_at_ms}.",
             )
         native_bridge_abi_version = _positive_native_bridge_abi_version(
             self.native_bridge_abi_version,
@@ -81,7 +110,31 @@ class OfflineCashConfigurationSnapshot:
 
 
 def _is_canonical_offline_cash_snapshot_text(value: Optional[str]) -> bool:
-    return value is not None and value != "" and all(0x20 < ord(ch) <= 0x7E for ch in value)
+    return (
+        type(value) is str
+        and value != ""
+        and all(0x20 < ord(ch) <= 0x7E for ch in value)
+    )
+
+
+def _require_canonical_offline_cash_snapshot_text(
+    value: Optional[str],
+    field_name: str,
+) -> None:
+    if not _is_canonical_offline_cash_snapshot_text(value):
+        raise OfflineCashConfigurationSnapshotError(
+            "malformed_snapshot",
+            f"Offline cash configuration snapshot field {field_name} must be a non-empty printable ASCII string with no whitespace.",
+        )
+
+
+def _require_optional_canonical_offline_cash_snapshot_text(
+    value: Optional[str],
+    field_name: str,
+) -> None:
+    if value is None:
+        return
+    _require_canonical_offline_cash_snapshot_text(value, field_name)
 
 
 def _positive_native_bridge_abi_version(value: Optional[int], field_name: str) -> Optional[int]:
@@ -93,6 +146,44 @@ def _positive_native_bridge_abi_version(value: Optional[int], field_name: str) -
             f"Offline cash configuration snapshot field {field_name} must be a positive integer.",
         )
     return value
+
+
+def _nonnegative_offline_cash_snapshot_timestamp(value: int, field_name: str) -> int:
+    if type(value) is not int or value < 0:
+        raise OfflineCashConfigurationSnapshotError(
+            "malformed_snapshot",
+            f"Offline cash configuration snapshot field {field_name} must be a nonnegative integer timestamp.",
+        )
+    return value
+
+
+def _optional_nonnegative_offline_cash_snapshot_timestamp(
+    value: Optional[int],
+    field_name: str,
+) -> Optional[int]:
+    if value is None:
+        return None
+    return _nonnegative_offline_cash_snapshot_timestamp(value, field_name)
+
+
+def _is_valid_offline_issuer_public_key_base64(value: Optional[str]) -> bool:
+    if not _is_canonical_offline_cash_snapshot_text(value):
+        return False
+    assert value is not None
+    if "=" in value:
+        return False
+    normalized = value.replace("-", "+").replace("_", "/")
+    if len(normalized) % 4 == 1:
+        return False
+    padded = normalized + ("=" * ((4 - (len(normalized) % 4)) % 4))
+    try:
+        raw = base64.b64decode(padded, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return (
+        len(raw) == 32
+        and base64.b64encode(raw).decode("ascii").rstrip("=") == normalized
+    )
 
 
 @dataclass(frozen=True)

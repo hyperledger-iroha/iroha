@@ -108,6 +108,37 @@ def test_dry_run_prints_complete_appeal_finance_rollout_plan(
     assert plan["external_evidence"]["multi_peer_reconciliation"] == [
         str(tmp_path / "payloads" / "multi-peer-reconciliation.json")
     ]
+    assert plan["evidence_contract"]["pricing_config"]["schema"] == (
+        "sorafs.appeal_finance.pricing_config_canary.v1"
+    )
+    assert (
+        "config_source"
+        in plan["evidence_contract"]["pricing_config"]["required_payload_fields"]
+    )
+    assert (
+        "routes"
+        in plan["evidence_contract"]["deposit_lifecycle"]["required_payload_fields"]
+    )
+    assert (
+        "settlement_probe_count"
+        in plan["evidence_contract"]["settlement_execution"]["required_payload_fields"]
+    )
+    assert (
+        "runtime_signed_dag_verified"
+        in plan["evidence_contract"]["governance_dag_publication"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "qc_quorum_satisfied"
+        in plan["evidence_contract"]["multi_peer_reconciliation"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "iroha_config_bound"
+        in plan["evidence_contract"]["governance_approval"]["required_payload_fields"]
+    )
     assert [step["label"] for step in plan["steps"]] == ["rollout_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_appeal_finance_rollout_evidence.py" in verifier[1]
@@ -128,6 +159,7 @@ def test_response_file_dry_run_prints_complete_plan(tmp_path: Path, capsys) -> N
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["settlement_submitter"]
+    assert "settlement_submitter" in plan["evidence_contract"]
 
 
 def test_split_response_file_dry_run_prints_complete_plan(
@@ -144,6 +176,7 @@ def test_split_response_file_dry_run_prints_complete_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.appeal_finance.rollout_evidence_collection_plan.v1"
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
+    assert "dashboard_metrics" in plan["evidence_contract"]
 
 
 def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -190,6 +223,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["pricing_config"]
+    assert list(plan["evidence_contract"]) == ["pricing_config"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "pricing_config" in verifier

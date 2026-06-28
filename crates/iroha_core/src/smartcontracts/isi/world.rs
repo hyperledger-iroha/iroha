@@ -6,7 +6,10 @@ use iroha_telemetry::metrics;
 use super::prelude::*;
 use crate::{
     prelude::*,
-    state::{WorldTransaction, public_lane_validator_record_matches_key},
+    state::{
+        WorldTransaction, nexus_active_lane_dataspace, nexus_catalog_geometry_lane_dataspace,
+        public_lane_validator_record_matches_key,
+    },
 };
 
 /// Iroha Special Instructions that have `World` as their target.
@@ -527,11 +530,19 @@ pub mod isi {
             .smart_contract_state()
             .get(&key)
             .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)?;
-        decode_verified_lane_relay_record_state(payload).map_err(|err| {
+        let record = decode_verified_lane_relay_record_state(payload).map_err(|err| {
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                 "verified lane relay decode failed: {err}"
             ))
-        })
+        })?;
+        if record.relay_ref != *relay_ref {
+            return Err(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "verified lane relay record/key mismatch".to_owned(),
+                ),
+            );
+        }
+        Ok(record)
     }
 
     fn verified_nexus_fee_budget_state_key(
@@ -14376,7 +14387,7 @@ pub mod isi {
             }
 
             let lane_id = *self.lane_id();
-            if state_transaction.nexus.lane_config.entry(lane_id).is_none() {
+            if nexus_active_lane_dataspace(lane_id, &state_transaction.nexus).is_none() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "unknown lane id {}",
@@ -14521,12 +14532,8 @@ pub mod isi {
                 ))
             })?;
 
-            let Some(lane) = state_transaction
-                .nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .find(|entry| entry.id == envelope.lane_id)
+            let Some(lane_dataspace_id) =
+                nexus_catalog_geometry_lane_dataspace(envelope.lane_id, &state_transaction.nexus)
             else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
@@ -14536,12 +14543,12 @@ pub mod isi {
                 )
                 .into());
             };
-            if lane.dataspace_id != envelope.dataspace_id {
+            if lane_dataspace_id != envelope.dataspace_id {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "lane {} belongs to dataspace {}, not {}",
                         envelope.lane_id.as_u32(),
-                        lane.dataspace_id.as_u64(),
+                        lane_dataspace_id.as_u64(),
                         envelope.dataspace_id.as_u64()
                     )),
                 )
@@ -16111,13 +16118,14 @@ pub mod isi {
 
     #[cfg(test)]
     mod tests {
-        use core::num::NonZeroU64;
+        use core::num::{NonZeroU32, NonZeroU64};
         use std::{
             collections::{BTreeMap, BTreeSet},
             str::FromStr,
             sync::Arc,
         };
 
+        use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
         #[cfg(feature = "zk-stark")]
         use iroha_data_model::zk::{StarkFriOpenProofV1, ZkAcePublicInputsV1};
@@ -16141,7 +16149,7 @@ pub mod isi {
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
                 DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-                LaneId,
+                LaneCatalog, LaneConfig, LaneId,
             },
             permission::Permission,
             proof::{
@@ -17713,6 +17721,33 @@ pub mod isi {
             let decoded =
                 super::decode_verified_lane_relay_record_state(&encoded).expect("decode wrapper");
             assert_eq!(decoded, record);
+        }
+
+        #[test]
+        fn load_verified_lane_relay_record_rejects_payload_ref_mismatch() {
+            let record = sample_verified_lane_relay_record();
+            let encoded = super::encode_verified_lane_relay_record_state(&record).expect("encode");
+            let mut requested_ref = record.relay_ref;
+            requested_ref.lane_id = LaneId::new(requested_ref.lane_id.as_u32() + 1);
+            let requested_key =
+                super::verified_lane_relay_state_key(&requested_ref).expect("state key");
+
+            let mut world = World::default();
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(requested_key, encoded);
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(world, kura, query_handle);
+            let view = state.view();
+
+            let err = super::load_verified_lane_relay_record(&view, &requested_ref)
+                .expect_err("query must reject a record whose payload relay_ref differs from key");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("verified lane relay record/key mismatch"),
+                "unexpected error: {err}"
+            );
         }
 
         fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
@@ -23316,6 +23351,73 @@ pub mod isi {
             assert!(
                 msg.contains("unknown lane id"),
                 "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_stale_geometry_lane() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+
+            let stale_lane = LaneId::new(1);
+            let stale_geometry_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: stale_lane,
+                        alias: "stale-emergency".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("stale lane geometry");
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
+            assert!(
+                stx.nexus.lane_config.entry(stale_lane).is_some(),
+                "test must seed derived geometry for the removed lane"
+            );
+            assert!(
+                stx.nexus
+                    .lane_catalog
+                    .lanes()
+                    .iter()
+                    .all(|lane| lane.id != stale_lane),
+                "test must keep the lane out of the authoritative catalog"
+            );
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: stale_lane,
+                peers: vec![peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("stale geometry must not make a lane active");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("unknown lane id 1"),
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&stale_lane)
+                    .is_none(),
+                "stale-lane override must not be stored"
             );
         }
 

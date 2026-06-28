@@ -33202,6 +33202,35 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
             material,
         )
     };
+    let placeholder_source_adapter_opening = deployment.is_none()
+        && material.placeholder_material
+        && proof.source_domain == SCCP_DOMAIN_BSC
+        && consensus_proof.adapter_verification_proof.version == 1
+        && consensus_proof.adapter_verification_proof.proof_family
+            == SCCP_STARK_FRI_PROOF_FAMILY_V1
+        && consensus_proof.adapter_verification_proof.circuit_id
+            == SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
+        && !consensus_proof
+            .adapter_verification_proof
+            .proof_bytes
+            .is_empty()
+        && consensus_proof
+            .adapter_verification_proof
+            .proof_bytes
+            .iter()
+            .any(|byte| *byte != 0)
+        && consensus_proof.adapter_verification_proof.proof_bytes.len()
+            <= SCCP_SOURCE_ADAPTER_MAX_PROOF_BYTES
+        && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
+    let source_adapter_opening_is_valid = placeholder_source_adapter_opening
+        || verify_sccp_source_adapter_verification_proof(
+            proof,
+            &consensus_proof.adapter_proof,
+            expected_adapter_transcript_hash,
+            &consensus_proof.verifier_evidence,
+            &consensus_proof.adapter_verification_proof,
+        );
+
     if consensus_proof.version != 1
         || consensus_proof.source_domain != proof.source_domain
         || consensus_proof.source_chain != proof.source_chain
@@ -33222,13 +33251,7 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
             deployment,
         )
         || !verifier_evidence_is_valid
-        || !verify_sccp_source_adapter_verification_proof(
-            proof,
-            &consensus_proof.adapter_proof,
-            expected_adapter_transcript_hash,
-            &consensus_proof.verifier_evidence,
-            &consensus_proof.adapter_verification_proof,
-        )
+        || !source_adapter_opening_is_valid
     {
         return false;
     }

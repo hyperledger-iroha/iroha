@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 98594f76eb8da7419e87fb29c6192b904b5faf628a57ed158d2f61187e4d0b3b
+source_hash: 04184b558958fdc24b754cd6b01706d54034cec84c19d023398f81db72a4d1ac
 source_last_modified: "2026-06-25T18:08:03+00:00"
 translation_last_reviewed: 2026-06-25
 ---

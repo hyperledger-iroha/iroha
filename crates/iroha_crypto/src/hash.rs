@@ -80,7 +80,10 @@ impl Hash {
         finalize_blake2b(hasher)
     }
 
-    pub(crate) fn new_from_chunks(chunks: &[&[u8]]) -> Self {
+    /// Hash the concatenation of the provided byte chunks without first
+    /// materializing them into one contiguous buffer.
+    #[must_use]
+    pub fn new_from_chunks(chunks: &[&[u8]]) -> Self {
         let mut hasher = Blake2b256::new();
         for chunk in chunks {
             Digest::update(&mut hasher, chunk);

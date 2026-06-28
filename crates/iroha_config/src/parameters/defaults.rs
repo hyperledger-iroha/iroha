@@ -279,6 +279,8 @@ pub mod queue {
     pub const CAPACITY: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
     /// Maximum number of transactions accepted per authority (prevents flooding).
     pub const CAPACITY_PER_USER: NonZeroUsize = nonzero!(4_usize * 2_usize.pow(16));
+    /// Estimated maximum retained queue memory budget in bytes.
+    pub const MAX_RETAINED_BYTES: NonZeroU64 = nonzero!(128_u64 * 1024 * 1024);
     /// Time-to-live for queued transactions before automatic eviction.
     pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
     /// Minimum interval between expired-transaction sweeps.
@@ -879,6 +881,8 @@ pub mod network {
     pub const DEFERRED_SEND_TTL_MS: u64 = 1_500;
     /// Maximum deferred outbound frames retained per peer while session is missing.
     pub const DEFERRED_SEND_MAX_PER_PEER: usize = 256;
+    /// Maximum encoded deferred outbound frame bytes retained per peer while session is missing.
+    pub const DEFERRED_SEND_MAX_BYTES_PER_PEER: usize = 32 * 1024 * 1024;
     /// Idle timeout before expiring accept throttle buckets.
     pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_secs(10 * 60);
     /// Maximum number of accept throttle buckets to retain.
@@ -921,6 +925,16 @@ pub mod network {
     pub const P2P_QUEUE_CAP_LOW: NonZeroUsize = nonzero!(32768_usize);
     /// Capacity for post-queue tasks (per topic).
     pub const P2P_POST_QUEUE_CAP: NonZeroUsize = nonzero!(2048_usize);
+    /// Maximum encrypted high-priority outbound frame bytes retained per peer.
+    pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES: NonZeroUsize =
+        nonzero!(128 * 1024 * 1024_usize);
+    /// Maximum encrypted low-priority outbound frame bytes retained per peer.
+    pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES: NonZeroUsize =
+        nonzero!(64 * 1024 * 1024_usize);
+    /// Maximum encrypted high-priority outbound frames retained per peer.
+    pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES: NonZeroUsize = nonzero!(8192_usize);
+    /// Maximum encrypted low-priority outbound frames retained per peer.
+    pub const P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES: NonZeroUsize = nonzero!(4096_usize);
     /// Capacity for the inbound P2P subscriber queue feeding the node relay.
     pub const P2P_SUBSCRIBER_QUEUE_CAP: NonZeroUsize = nonzero!(8192_usize);
 
@@ -1186,6 +1200,16 @@ pub mod sorafs {
             pub const CYCLE_SECONDS: u64 = 7 * 24 * 60 * 60;
             /// Default delay after a cycle closes before publication (seconds).
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
+        }
+
+        /// Reserve lifecycle scheduler defaults.
+        pub mod reserve_lifecycle {
+            /// Enable config-backed SFM-6 reserve lifecycle advancement.
+            pub const ENABLED: bool = false;
+            /// Default reserve lifecycle scheduler cadence (seconds).
+            pub const INTERVAL_SECONDS: u64 = 60 * 60;
+            /// Default delay before the first reserve lifecycle scheduler tick (seconds).
+            pub const INITIAL_DELAY_SECONDS: u64 = 0;
         }
 
         /// Stream token issuance defaults.
@@ -3066,6 +3090,8 @@ pub mod sumeragi {
     pub const RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: u32 = 3;
     /// Height margin used to prune stale missing-block requests once head advances.
     pub const RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN: u64 = 16;
+    /// Maximum full pending block bodies retained in memory.
+    pub const RECOVERY_PENDING_BLOCK_CAP: usize = 512;
     /// Maximum deferred block-sync updates retained in memory.
     pub const RECOVERY_PENDING_BLOCK_SYNC_CAP: usize = 256;
     /// Maximum cached proposal entries retained in memory.
@@ -3092,6 +3118,10 @@ pub mod sumeragi {
     pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
     /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
     pub const RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 64;
+    /// Maximum RBC outbound rebroadcast sessions retained in memory.
+    pub const RBC_OUTBOUND_QUEUE_MAX_SESSIONS: usize = 16;
+    /// Maximum RBC outbound rebroadcast bytes retained in memory.
+    pub const RBC_OUTBOUND_QUEUE_MAX_BYTES: usize = 128 * 1024 * 1024; // 128 MiB
     /// Default: seed Proposal + RBC backup for inline frontier BlockCreated payloads.
     pub const RBC_INLINE_BLOCK_CREATED_BACKUP: bool = true;
     /// Default maximum number of persisted RBC session summaries kept on disk.
@@ -3932,9 +3962,10 @@ mod tests {
     }
 
     #[test]
-    fn queue_defaults_allow_four_times_legacy_soak_capacity() {
+    fn queue_defaults_allow_two_times_legacy_soak_capacity() {
         assert_eq!(queue::CAPACITY.get(), 262_144);
         assert_eq!(queue::CAPACITY_PER_USER.get(), queue::CAPACITY.get());
+        assert_eq!(queue::MAX_RETAINED_BYTES.get(), 128 * 1024 * 1024);
     }
 
     #[test]

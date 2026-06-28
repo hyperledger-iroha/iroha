@@ -191,9 +191,7 @@ public final class OfflineNoteV2 {
       final DeviceAttestationRegistrationV2 value) {
     return InstructionBox.fromWirePayload(
         REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-        encodeInstructionWrapper(
-            REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            encodeDeviceAttestationRegistration(value)));
+        encodeRegisterDeviceAttestationInstructionPayload(value));
   }
 
   public static KeyCertificatePayloadV2 decodeCertificatePayload(final byte[] bytes) {
@@ -259,12 +257,7 @@ public final class OfflineNoteV2 {
 
   public static DeviceAttestationRegistrationV2 decodeRegisterDeviceAttestationInstruction(
       final byte[] bytes) {
-    return decodeInstructionModel(
-        bytes,
-        REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-        REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-        DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
-        DEVICE_ATTESTATION_REGISTRATION_ADAPTER);
+    return decodeRegisterDeviceAttestationInstructionModel(bytes);
   }
 
   public static byte[] hash(final byte[] bytes) {
@@ -302,6 +295,45 @@ public final class OfflineNoteV2 {
         schema,
         INSTRUCTION_WRAPPER_ADAPTER,
         0);
+  }
+
+  private static byte[] encodeRegisterDeviceAttestationInstructionPayload(
+      final DeviceAttestationRegistrationV2 value) {
+    return NoritoCodec.encode(
+        value,
+        REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+        REGISTER_DEVICE_ATTESTATION_INSTRUCTION_ADAPTER,
+        NoritoHeader.COMPACT_LEN);
+  }
+
+  private static DeviceAttestationRegistrationV2 decodeRegisterDeviceAttestationInstructionModel(
+      final byte[] bytes) {
+    final byte[] wirePayload =
+        extractInstructionWirePayload(bytes, List.of(REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA));
+    try {
+      return NoritoCodec.decode(
+          wirePayload,
+          REGISTER_DEVICE_ATTESTATION_INSTRUCTION_ADAPTER,
+          REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA);
+    } catch (final RuntimeException canonicalError) {
+      try {
+        final InstructionModelPayload modelPayload =
+            NoritoCodec.decode(
+                wirePayload,
+                INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER,
+                REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA);
+        return decodeModelPayload(
+            modelPayload.bytes(),
+            DEVICE_ATTESTATION_REGISTRATION_SCHEMA,
+            DEVICE_ATTESTATION_REGISTRATION_ADAPTER,
+            modelPayload.flags());
+      } catch (final RuntimeException legacyError) {
+        legacyError.addSuppressed(canonicalError);
+        throw new IllegalArgumentException(
+            "Offline Note V2 register device attestation instruction envelope is invalid",
+            legacyError);
+      }
+    }
   }
 
   private static <T> T decodeInstructionModel(
@@ -2040,6 +2072,23 @@ public final class OfflineNoteV2 {
       };
   private static final TypeAdapter<InstructionModelPayload> INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER =
       INSTRUCTION_WRAPPER_ADAPTER;
+
+  private static final TypeAdapter<DeviceAttestationRegistrationV2>
+      REGISTER_DEVICE_ATTESTATION_INSTRUCTION_ADAPTER =
+          new TypeAdapter<>() {
+            @Override
+            public void encode(
+                final NoritoEncoder encoder, final DeviceAttestationRegistrationV2 value) {
+              writeField(
+                  encoder,
+                  child -> DEVICE_ATTESTATION_REGISTRATION_ADAPTER.encode(child, value));
+            }
+
+            @Override
+            public DeviceAttestationRegistrationV2 decode(final NoritoDecoder decoder) {
+              return readField(decoder, child -> DEVICE_ATTESTATION_REGISTRATION_ADAPTER.decode(child));
+            }
+          };
 
   private static final TypeAdapter<KeyCertificatePayloadV2> KEY_CERTIFICATE_PAYLOAD_ADAPTER =
       new TypeAdapter<>() {

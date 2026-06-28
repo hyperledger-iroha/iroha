@@ -4387,6 +4387,12 @@ pub struct SumeragiConsensusStatus {
     pub tx_queue_depth: u64,
     /// Configured queue capacity on this peer.
     pub tx_queue_capacity: u64,
+    /// Estimated retained queue bytes on this peer.
+    #[norito(default)]
+    pub tx_queue_retained_bytes: u64,
+    /// Configured retained queue byte budget on this peer.
+    #[norito(default)]
+    pub tx_queue_max_retained_bytes: u64,
     /// Whether the local transaction queue is saturated.
     pub tx_queue_saturated: bool,
     /// Epoch length in blocks (NPoS mode; zero when not applicable).
@@ -4535,6 +4541,8 @@ struct SumeragiConsensusStatusPayload {
     commit_qc_epoch: u64,
     commit_qc_signatures_total: u64,
     commit_qc_validator_set_len: u64,
+    tx_queue_retained_bytes: u64,
+    tx_queue_max_retained_bytes: u64,
 }
 
 fn decode_field<'a, T: DecodeFromSlice<'a>>(
@@ -4910,6 +4918,16 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
             commit_qc_signatures_total,
             commit_qc_validator_set_len,
         ) = decode_commit_fields(bytes, &mut used)?;
+        let tx_queue_retained_bytes = if used < bytes.len() {
+            decode_field::<u64>(bytes, &mut used)?
+        } else {
+            0
+        };
+        let tx_queue_max_retained_bytes = if used < bytes.len() {
+            decode_field::<u64>(bytes, &mut used)?
+        } else {
+            0
+        };
 
         Ok((
             Self {
@@ -4959,6 +4977,8 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
                 commit_qc_epoch,
                 commit_qc_signatures_total,
                 commit_qc_validator_set_len,
+                tx_queue_retained_bytes,
+                tx_queue_max_retained_bytes,
             },
             used,
         ))
@@ -4981,6 +5001,8 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
             block_created_proposal_mismatch_total: status.block_created_proposal_mismatch_total,
             tx_queue_depth: status.tx_queue_depth,
             tx_queue_capacity: status.tx_queue_capacity,
+            tx_queue_retained_bytes: status.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: status.tx_queue_max_retained_bytes,
             tx_queue_saturated: status.tx_queue_saturated,
             epoch_length_blocks: status.epoch_length_blocks,
             epoch_commit_deadline_offset: status.epoch_commit_deadline_offset,
@@ -5034,6 +5056,8 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
             block_created_proposal_mismatch_total: payload.block_created_proposal_mismatch_total,
             tx_queue_depth: payload.tx_queue_depth,
             tx_queue_capacity: payload.tx_queue_capacity,
+            tx_queue_retained_bytes: payload.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: payload.tx_queue_max_retained_bytes,
             tx_queue_saturated: payload.tx_queue_saturated,
             epoch_length_blocks: payload.epoch_length_blocks,
             epoch_commit_deadline_offset: payload.epoch_commit_deadline_offset,
@@ -6126,6 +6150,8 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
             .get(),
         tx_queue_depth: metrics.sumeragi_tx_queue_depth.get(),
         tx_queue_capacity: metrics.sumeragi_tx_queue_capacity.get(),
+        tx_queue_retained_bytes: metrics.sumeragi_tx_queue_retained_bytes.get(),
+        tx_queue_max_retained_bytes: metrics.sumeragi_tx_queue_max_retained_bytes.get(),
         tx_queue_saturated: metrics.sumeragi_tx_queue_saturated.get() != 0,
         epoch_length_blocks: metrics.sumeragi_epoch_length_blocks.get(),
         epoch_commit_deadline_offset: metrics.sumeragi_epoch_commit_deadline_offset.get(),
@@ -6692,6 +6718,10 @@ pub struct Metrics {
     pub sumeragi_tx_queue_depth: GenericGauge<AtomicU64>,
     /// Transaction queue capacity observed by consensus.
     pub sumeragi_tx_queue_capacity: GenericGauge<AtomicU64>,
+    /// Estimated retained transaction queue bytes observed by consensus.
+    pub sumeragi_tx_queue_retained_bytes: GenericGauge<AtomicU64>,
+    /// Retained transaction queue byte budget observed by consensus.
+    pub sumeragi_tx_queue_max_retained_bytes: GenericGauge<AtomicU64>,
     /// Queue capacity saturation flag observed by consensus (0 = healthy, 1 = saturated).
     pub sumeragi_tx_queue_saturated: GenericGauge<AtomicU64>,
     /// Total pending blocks tracked by consensus.
@@ -7739,6 +7769,26 @@ pub struct Metrics {
     pub torii_sorafs_billing_statement_ack_backlog: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS billing escrow runway in seconds by cluster and account type.
     pub torii_sorafs_billing_escrow_runway_seconds: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve providers grouped by lifecycle stage.
+    pub torii_sorafs_reserve_lifecycle_stage_providers: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve credit draw in micro-XOR per provider.
+    pub torii_sorafs_reserve_credit_draw_micro_xor: GaugeVec,
+    /// Torii SoraFS reserve credit shortfall in micro-XOR per provider.
+    pub torii_sorafs_reserve_credit_shortfall_micro_xor: GaugeVec,
+    /// Torii SoraFS reserve accrued interest in micro-XOR per provider.
+    pub torii_sorafs_reserve_accrued_interest_micro_xor: GaugeVec,
+    /// Torii SoraFS providers currently in default.
+    pub torii_sorafs_reserve_defaulted_providers: GenericGauge<AtomicU64>,
+    /// Torii SoraFS open reserve appeals awaiting decision.
+    pub torii_sorafs_reserve_appeal_backlog: GenericGauge<AtomicU64>,
+    /// Torii SoraFS reserve movements grouped by custody status.
+    pub torii_sorafs_reserve_custody_movements: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve movements reconciled with terminal chain custody evidence.
+    pub torii_sorafs_reserve_chain_reconciled_movements: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS reserve service requests grouped by route and result.
+    pub torii_sorafs_reserve_service_requests_total: IntCounterVec,
+    /// Torii SoraFS reserve service rate-limit events grouped by route and reason.
+    pub torii_sorafs_reserve_service_rate_limit_total: IntCounterVec,
     /// SoraFS reputation ingest lag observed when a snapshot is published.
     pub sorafs_reputation_ingest_lag_seconds: GenericGauge<AtomicU64>,
     /// SoraFS reputation snapshot age observed when a snapshot is published.
@@ -9135,6 +9185,16 @@ impl Default for Metrics {
         let sumeragi_tx_queue_capacity = GenericGauge::new(
             "sumeragi_tx_queue_capacity",
             "Transaction queue capacity observed by consensus",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_retained_bytes = GenericGauge::new(
+            "sumeragi_tx_queue_retained_bytes",
+            "Estimated retained transaction queue bytes observed by consensus",
+        )
+        .expect("Infallible");
+        let sumeragi_tx_queue_max_retained_bytes = GenericGauge::new(
+            "sumeragi_tx_queue_max_retained_bytes",
+            "Retained transaction queue byte budget observed by consensus",
         )
         .expect("Infallible");
         let sumeragi_tx_queue_saturated = GenericGauge::new(
@@ -12624,6 +12684,80 @@ impl Default for Metrics {
             &["cluster", "account_type"],
         )
         .expect("Infallible");
+        let torii_sorafs_reserve_lifecycle_stage_providers = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_lifecycle_stage_providers",
+                "SoraFS reserve providers grouped by lifecycle stage",
+            ),
+            &["stage"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_credit_draw_micro_xor = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_credit_draw_micro_xor",
+                "SoraFS reserve credit draw in micro-XOR per provider",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_credit_shortfall_micro_xor = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_credit_shortfall_micro_xor",
+                "SoraFS reserve credit shortfall in micro-XOR per provider",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_accrued_interest_micro_xor = GaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_accrued_interest_micro_xor",
+                "SoraFS reserve accrued interest in micro-XOR per provider",
+            ),
+            &["provider_id"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_defaulted_providers = GenericGauge::new(
+            "torii_sorafs_reserve_defaulted_providers",
+            "SoraFS reserve providers currently in default",
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_appeal_backlog = GenericGauge::new(
+            "torii_sorafs_reserve_appeal_backlog",
+            "Open SoraFS reserve appeals awaiting decision",
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_custody_movements = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_custody_movements",
+                "SoraFS reserve movements grouped by custody status",
+            ),
+            &["status"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_chain_reconciled_movements = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_chain_reconciled_movements",
+                "SoraFS reserve movements reconciled with terminal chain custody evidence",
+            ),
+            &["status"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_service_requests_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_service_requests_total",
+                "SoraFS reserve service requests grouped by route and result",
+            ),
+            &["route", "result"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reserve_service_rate_limit_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_reserve_service_rate_limit_total",
+                "SoraFS reserve service rate-limit events grouped by route and reason",
+            ),
+            &["route", "reason"],
+        )
+        .expect("Infallible");
         let sorafs_reputation_ingest_lag_seconds = GenericGauge::new(
             "sorafs_reputation_ingest_lag_seconds",
             "SoraFS reputation ingest lag observed when a snapshot is accepted",
@@ -12805,6 +12939,16 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_billing_statement_failure_total);
         register_guarded(&registry, &torii_sorafs_billing_statement_ack_backlog);
         register_guarded(&registry, &torii_sorafs_billing_escrow_runway_seconds);
+        register_guarded(&registry, &torii_sorafs_reserve_lifecycle_stage_providers);
+        register_guarded(&registry, &torii_sorafs_reserve_credit_draw_micro_xor);
+        register_guarded(&registry, &torii_sorafs_reserve_credit_shortfall_micro_xor);
+        register_guarded(&registry, &torii_sorafs_reserve_accrued_interest_micro_xor);
+        register_guarded(&registry, &torii_sorafs_reserve_defaulted_providers);
+        register_guarded(&registry, &torii_sorafs_reserve_appeal_backlog);
+        register_guarded(&registry, &torii_sorafs_reserve_custody_movements);
+        register_guarded(&registry, &torii_sorafs_reserve_chain_reconciled_movements);
+        register_guarded(&registry, &torii_sorafs_reserve_service_requests_total);
+        register_guarded(&registry, &torii_sorafs_reserve_service_rate_limit_total);
         register_guarded(&registry, &sorafs_reputation_ingest_lag_seconds);
         register_guarded(&registry, &sorafs_reputation_snapshot_age_seconds);
         register_guarded(&registry, &sorafs_reputation_snapshot_generated_at_unix);
@@ -14569,6 +14713,8 @@ impl Default for Metrics {
             settlement_haircut_total,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
+            sumeragi_tx_queue_retained_bytes,
+            sumeragi_tx_queue_max_retained_bytes,
             sumeragi_tx_queue_saturated,
             sumeragi_pending_blocks_total,
             sumeragi_pending_blocks_blocking,
@@ -15146,6 +15292,8 @@ impl Default for Metrics {
             social_open_escrows,
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
+            sumeragi_tx_queue_retained_bytes,
+            sumeragi_tx_queue_max_retained_bytes,
             sumeragi_tx_queue_saturated,
             sumeragi_pending_blocks_total,
             sumeragi_pending_blocks_blocking,
@@ -15671,6 +15819,16 @@ impl Default for Metrics {
             torii_sorafs_billing_statement_failure_total,
             torii_sorafs_billing_statement_ack_backlog,
             torii_sorafs_billing_escrow_runway_seconds,
+            torii_sorafs_reserve_lifecycle_stage_providers,
+            torii_sorafs_reserve_credit_draw_micro_xor,
+            torii_sorafs_reserve_credit_shortfall_micro_xor,
+            torii_sorafs_reserve_accrued_interest_micro_xor,
+            torii_sorafs_reserve_defaulted_providers,
+            torii_sorafs_reserve_appeal_backlog,
+            torii_sorafs_reserve_custody_movements,
+            torii_sorafs_reserve_chain_reconciled_movements,
+            torii_sorafs_reserve_service_requests_total,
+            torii_sorafs_reserve_service_rate_limit_total,
             sorafs_reputation_ingest_lag_seconds,
             sorafs_reputation_snapshot_age_seconds,
             sorafs_reputation_snapshot_generated_at_unix,
@@ -17278,6 +17436,71 @@ impl Metrics {
         self.torii_sorafs_billing_escrow_runway_seconds
             .with_label_values(&[cluster, account_type])
             .set(seconds);
+    }
+
+    /// Record the latest SoraFS reserve runtime snapshot metrics.
+    pub fn record_sorafs_reserve_runtime_metrics(
+        &self,
+        lifecycle_stage_counts: &[(String, u64)],
+        credit_lines: &[(String, u128, u128, u128)],
+        defaulted_providers: u64,
+        open_appeals: u64,
+        custody_counts: &[(String, u64)],
+        chain_reconciled_counts: &[(String, u64)],
+    ) {
+        self.torii_sorafs_reserve_lifecycle_stage_providers.reset();
+        for (stage, count) in lifecycle_stage_counts {
+            self.torii_sorafs_reserve_lifecycle_stage_providers
+                .with_label_values(&[stage.as_str()])
+                .set(*count);
+        }
+
+        self.torii_sorafs_reserve_credit_draw_micro_xor.reset();
+        self.torii_sorafs_reserve_credit_shortfall_micro_xor.reset();
+        self.torii_sorafs_reserve_accrued_interest_micro_xor.reset();
+        for (provider_id, credit_draw, credit_shortfall, accrued_interest) in credit_lines {
+            self.torii_sorafs_reserve_credit_draw_micro_xor
+                .with_label_values(&[provider_id.as_str()])
+                .set(u128_to_f64(*credit_draw));
+            self.torii_sorafs_reserve_credit_shortfall_micro_xor
+                .with_label_values(&[provider_id.as_str()])
+                .set(u128_to_f64(*credit_shortfall));
+            self.torii_sorafs_reserve_accrued_interest_micro_xor
+                .with_label_values(&[provider_id.as_str()])
+                .set(u128_to_f64(*accrued_interest));
+        }
+
+        self.torii_sorafs_reserve_defaulted_providers
+            .set(defaulted_providers);
+        self.torii_sorafs_reserve_appeal_backlog.set(open_appeals);
+
+        self.torii_sorafs_reserve_custody_movements.reset();
+        for (status, count) in custody_counts {
+            self.torii_sorafs_reserve_custody_movements
+                .with_label_values(&[status.as_str()])
+                .set(*count);
+        }
+
+        self.torii_sorafs_reserve_chain_reconciled_movements.reset();
+        for (status, count) in chain_reconciled_counts {
+            self.torii_sorafs_reserve_chain_reconciled_movements
+                .with_label_values(&[status.as_str()])
+                .set(*count);
+        }
+    }
+
+    /// Record a SoraFS reserve service request outcome.
+    pub fn record_sorafs_reserve_service_request(&self, route: &str, result: &str) {
+        self.torii_sorafs_reserve_service_requests_total
+            .with_label_values(&[route, result])
+            .inc();
+    }
+
+    /// Increment a SoraFS reserve service rate-limit counter.
+    pub fn inc_sorafs_reserve_service_rate_limit(&self, route: &str, reason: &str) {
+        self.torii_sorafs_reserve_service_rate_limit_total
+            .with_label_values(&[route, reason])
+            .inc();
     }
 
     /// Record the latest accepted SoraFS reputation snapshot metrics.
@@ -19789,6 +20012,82 @@ mod test {
     }
 
     #[test]
+    fn records_sorafs_reserve_runtime_metrics() {
+        let metrics = Metrics::default();
+
+        metrics.record_sorafs_reserve_runtime_metrics(
+            &[("active".to_string(), 2), ("default".to_string(), 1)],
+            &[("provider-a".to_string(), 120_000_000, 5_000_000, 45_000)],
+            1,
+            3,
+            &[
+                ("intent_recorded".to_string(), 1),
+                ("confirmed".to_string(), 2),
+            ],
+            &[("confirmed".to_string(), 2)],
+        );
+        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
+        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_lifecycle_stage_providers
+                .with_label_values(&["active"])
+                .get(),
+            2
+        );
+        assert_eq!(metrics.torii_sorafs_reserve_defaulted_providers.get(), 1);
+        assert_eq!(metrics.torii_sorafs_reserve_appeal_backlog.get(), 3);
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_custody_movements
+                .with_label_values(&["confirmed"])
+                .get(),
+            2
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_chain_reconciled_movements
+                .with_label_values(&["confirmed"])
+                .get(),
+            2
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_requests_total
+                .with_label_values(&["top_up", "accepted"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_rate_limit_total
+                .with_label_values(&["top_up", "quota"])
+                .get(),
+            1
+        );
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_reserve_lifecycle_stage_providers",
+            "torii_sorafs_reserve_credit_draw_micro_xor",
+            "torii_sorafs_reserve_credit_shortfall_micro_xor",
+            "torii_sorafs_reserve_accrued_interest_micro_xor",
+            "torii_sorafs_reserve_defaulted_providers",
+            "torii_sorafs_reserve_appeal_backlog",
+            "torii_sorafs_reserve_custody_movements",
+            "torii_sorafs_reserve_chain_reconciled_movements",
+            "torii_sorafs_reserve_service_requests_total",
+            "torii_sorafs_reserve_service_rate_limit_total",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing reserve metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
     fn records_sorafs_repair_metrics() {
         let metrics = Metrics::default();
         metrics.inc_sorafs_repair_tasks("queued");
@@ -20032,6 +20331,8 @@ mod test {
                 block_created_proposal_mismatch_total: 0,
                 tx_queue_depth: 5,
                 tx_queue_capacity: 20,
+                tx_queue_retained_bytes: 1_024,
+                tx_queue_max_retained_bytes: 65_536,
                 tx_queue_saturated: false,
                 epoch_length_blocks: 0,
                 epoch_commit_deadline_offset: 0,
@@ -20218,6 +20519,8 @@ mod test {
                 "block_created_proposal_mismatch_total": 0,
                 "tx_queue_depth": 5,
                 "tx_queue_capacity": 20,
+                "tx_queue_retained_bytes": 1_024,
+                "tx_queue_max_retained_bytes": 65_536,
                 "tx_queue_saturated": false,
                 "epoch_length_blocks": 0,
                 "epoch_commit_deadline_offset": 0,
@@ -20388,6 +20691,8 @@ mod test {
                 "block_created_proposal_mismatch_total": 0,
                 "tx_queue_depth": 5,
                 "tx_queue_capacity": 20,
+                "tx_queue_retained_bytes": 1024,
+                "tx_queue_max_retained_bytes": 65536,
                 "tx_queue_saturated": false,
                 "epoch_length_blocks": 0,
                 "epoch_commit_deadline_offset": 0,

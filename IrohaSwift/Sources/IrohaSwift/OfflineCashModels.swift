@@ -25,6 +25,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
     public let attestationKeyId: String
     public let deviceId: String
     public let offlinePublicKey: String
+    public let assertionPublicKey: String?
     public let attestationReportBase64: String
     public let attestationReceipt: ToriiOfflineAttestationReceipt?
     public let iosTeamId: String?
@@ -36,6 +37,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         attestationKeyId: String,
         deviceId: String,
         offlinePublicKey: String,
+        assertionPublicKey: String? = nil,
         attestationReportBase64: String,
         attestationReceipt: ToriiOfflineAttestationReceipt? = nil,
         iosTeamId: String? = nil,
@@ -46,6 +48,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         self.attestationKeyId = attestationKeyId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
+        self.assertionPublicKey = assertionPublicKey
         self.attestationReportBase64 = attestationReportBase64
         self.attestationReceipt = attestationReceipt
         self.iosTeamId = iosTeamId
@@ -58,6 +61,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         case attestationKeyId = "attestation_key_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
+        case assertionPublicKey = "assertion_public_key"
         case attestationReportBase64 = "attestation_report_base64"
         case attestationReceipt = "attestation_receipt"
         case iosTeamId = "ios_team_id"
@@ -71,6 +75,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         try container.encode(attestationKeyId, forKey: .attestationKeyId)
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
+        try container.encodeIfPresent(assertionPublicKey, forKey: .assertionPublicKey)
         try container.encode(attestationReportBase64, forKey: .attestationReportBase64)
         try container.encodeIfPresent(attestationReceipt, forKey: .attestationReceipt)
         try container.encodeIfPresent(iosTeamId, forKey: .iosTeamId)

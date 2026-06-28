@@ -75,6 +75,30 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.reputation.rollout_evidence_collection_plan.v1"
     assert plan["verifier_summary_schema"] == "sorafs.reputation.rollout_evidence_gate.v1"
+    assert plan["evidence_contract"]["publish"]["schema"] is None
+    assert (
+        "generated_at_unix"
+        in plan["evidence_contract"]["latest"]["required_payload_fields"]
+    )
+    assert (
+        "provider"
+        in plan["evidence_contract"]["provider"]["required_payload_fields"]
+    )
+    assert (
+        "proof_verified"
+        in plan["evidence_contract"]["verify"]["required_payload_fields"]
+    )
+    assert plan["evidence_contract"]["metrics"]["schema"] == (
+        "sorafs.reputation.metrics_canary.v1"
+    )
+    assert (
+        "sse_connected"
+        in plan["evidence_contract"]["transport"]["required_payload_fields"]
+    )
+    assert (
+        "routing_score_consumed"
+        in plan["evidence_contract"]["consumption"]["required_payload_fields"]
+    )
     labels = [step["label"] for step in plan["steps"]]
     assert labels == [
         "publish_snapshot",
@@ -109,6 +133,7 @@ def test_response_file_dry_run_prints_complete_reputation_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "publish_snapshot"
     assert plan["steps"][5]["label"] == "rollout_evidence_gate"
+    assert "events" in plan["evidence_contract"]
 
 
 def test_missing_provider_proof_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -144,6 +169,21 @@ def test_extra_provider_proof_fails_before_plan(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "unrequested provider `provider-b`" in captured.err
     assert captured.out == ""
+
+
+def test_malformed_provider_proof_sanitizes_exception_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bad_message = "provider-a\nshadow-proof"
+
+    def raise_malformed_provider_proof(_spec: str):
+        raise ValueError(bad_message)
+
+    monkeypatch.setattr(MODULE, "split_provider_proof_spec", raise_malformed_provider_proof)
+    errors = MODULE.validate_inputs(MODULE.parse_args(complete_args(tmp_path)))
+
+    assert "<non-canonical-error>" in errors
+    assert bad_message not in "\n".join(errors)
 
 
 def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:

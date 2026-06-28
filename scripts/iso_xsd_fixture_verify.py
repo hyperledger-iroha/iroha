@@ -456,6 +456,37 @@ class FixtureManifestError(RuntimeError):
     """Raised when ISO XSD fixture manifest wiring is malformed or incomplete."""
 
 
+def _plain_text(value: str, label: str) -> str:
+    try:
+        return str.__str__(value)
+    except Exception:
+        raise FixtureManifestError(f"{label} must be valid text") from None
+
+
+def _normalise_cli_argv(argv: list[str] | None) -> list[str]:
+    if argv is None:
+        raw_sys_argv = sys.argv
+        if type(raw_sys_argv) is not list:
+            raise FixtureManifestError("sys.argv must be a plain argument list")
+        raw_args = raw_sys_argv[1:]
+    else:
+        raw_args = argv
+    if type(raw_args) is not list:
+        raise FixtureManifestError("argv must be a plain argument list")
+    normalised: list[str] = []
+    for index, value in enumerate(raw_args):
+        if not isinstance(value, str):
+            raise FixtureManifestError(f"argv[{index}] must be a string")
+        normalised.append(_plain_text(value, f"argv[{index}]"))
+    return normalised
+
+
+def _require_plain_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    if type(args) is not argparse.Namespace:
+        raise FixtureManifestError("args must be an argparse.Namespace")
+    return args
+
+
 def sha256_hex(data: bytes) -> str:
     """Return a lowercase SHA-256 hex digest."""
 
@@ -473,7 +504,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _safe_os_error_detail(error: OSError) -> str:
-    detail = getattr(error, "strerror", None)
+    try:
+        detail = getattr(error, "strerror", None)
+    except Exception:
+        return "I/O error"
     if not isinstance(detail, str) or not detail.strip():
         return "I/O error"
     if len(detail) > 128 or not detail.isascii() or _contains_control_character(detail):
@@ -512,10 +546,11 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         return None
     if isinstance(value, bytes):
         raise FixtureManifestError(f"{label} must be a path")
-    try:
+    if isinstance(value, str):
+        return Path(_plain_text(value, label))
+    if type(value) is type(Path()):
         return Path(value)
-    except TypeError as error:
-        raise FixtureManifestError(f"{label} must be a path") from error
+    raise FixtureManifestError(f"{label} must be a path")
 
 
 def _require_policy_booleans(args: argparse.Namespace) -> None:
@@ -539,7 +574,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label or str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise FixtureManifestError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -547,6 +582,11 @@ def _read_regular_file(
         metadata = path.lstat()
     except FileNotFoundError as error:
         raise FixtureManifestError(f"{label} does not exist") from error
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise FixtureManifestError(f"cannot inspect {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise FixtureManifestError(f"cannot inspect {label}: I/O error") from None
     mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise FixtureManifestError(f"{label} must not be a symlink")
@@ -577,9 +617,14 @@ def _read_regular_file(
             raise FixtureManifestError(f"{label} must not be a symlink") from error
         detail = _safe_os_error_detail(error)
         raise FixtureManifestError(f"cannot open {label} for reading: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise FixtureManifestError(f"cannot open {label} for reading: I/O error") from None
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
 
 
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
@@ -684,7 +729,7 @@ def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
 
 
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -706,7 +751,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
 
 
 def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -725,7 +770,7 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
@@ -788,7 +833,7 @@ def _preflight_numeric_cli_values(
     integer_flags: set[str],
     number_flags: set[str],
 ) -> None:
-    raw_args = sys.argv[1:] if argv is None else argv
+    raw_args = _normalise_cli_argv(argv)
     flags = integer_flags | number_flags
     index = 0
     while index < len(raw_args):
@@ -860,9 +905,19 @@ def _same_existing_file(left: Path, right: Path) -> bool:
         right_stat = right.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return False
     return os.path.samestat(left_stat, right_stat)
+
+
+def _path_resolve(path: Path, label: str) -> Path:
+    try:
+        return path.resolve()
+    except OSError as error:
+        detail = _safe_os_error_detail(error)
+        raise FixtureManifestError(f"cannot resolve {label}: {detail}") from error
+    except (RuntimeError, TypeError, ValueError):
+        raise FixtureManifestError(f"cannot resolve {label}: I/O error") from None
 
 
 def _reject_summary_output_input_alias(
@@ -882,17 +937,17 @@ def _summary_material_input_paths(
     manifest_path: Path,
     summary: dict[str, Any],
 ) -> tuple[tuple[str, Path], ...]:
-    manifest_dir = manifest_path.resolve().parent
+    manifest_dir = _path_resolve(manifest_path, "manifest").parent
     material_paths: list[tuple[str, Path]] = []
     for offset, schema in enumerate(summary.get("schemas", [])):
-        path = schema.get("path") if isinstance(schema, dict) else None
-        if isinstance(path, str):
+        path = schema.get("path") if type(schema) is dict else None
+        if type(path) is str:
             material_paths.append(
                 (f"manifest.schemas[{offset}].path", manifest_dir / path)
             )
     for offset, fixture in enumerate(summary.get("fixtures", [])):
-        path = fixture.get("path") if isinstance(fixture, dict) else None
-        if isinstance(path, str):
+        path = fixture.get("path") if type(fixture) is dict else None
+        if type(path) is str:
             material_paths.append(
                 (f"manifest.fixtures[{offset}].path", manifest_dir / path)
             )
@@ -917,14 +972,49 @@ def _ensure_text_output_target(
             path.parent.mkdir(parents=True, exist_ok=True)
         except FileExistsError as error:
             raise FixtureManifestError(f"{label} must be a directory") from error
-    if path.parent.exists() or path.parent.is_symlink():
-        parent_mode = path.parent.lstat().st_mode
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise FixtureManifestError(
+                f"cannot create {label} parent: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise FixtureManifestError(
+                f"cannot create {label} parent: I/O error"
+            ) from None
+    def inspected_exists(target: Path, role: str) -> bool:
+        try:
+            return target.exists() or target.is_symlink()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise FixtureManifestError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise FixtureManifestError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    def inspected_lstat(target: Path, role: str) -> os.stat_result:
+        try:
+            return target.lstat()
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise FixtureManifestError(
+                f"cannot inspect {label} {role}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise FixtureManifestError(
+                f"cannot inspect {label} {role}: I/O error"
+            ) from None
+
+    if inspected_exists(path.parent, "parent"):
+        parent_mode = inspected_lstat(path.parent, "parent").st_mode
         if stat.S_ISLNK(parent_mode):
             raise FixtureManifestError(f"{label} must not be a symlink")
         if not stat.S_ISDIR(parent_mode):
             raise FixtureManifestError(f"{label} must be a directory")
-    if path.exists() or path.is_symlink():
-        metadata = path.lstat()
+    if inspected_exists(path, "leaf"):
+        metadata = inspected_lstat(path, "leaf")
         if stat.S_ISLNK(metadata.st_mode):
             raise FixtureManifestError(f"{label} must not be a symlink")
         if not stat.S_ISREG(metadata.st_mode):
@@ -968,26 +1058,48 @@ def _write_text_output(path: Path, text: str, *, display_label: str | None = Non
             raise FixtureManifestError(f"{label} temp file must be a regular file")
         if opened.st_nlink > 1:
             raise FixtureManifestError(f"{label} temp file must not be hard-linked")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise FixtureManifestError(
+                f"cannot write temporary output for {label}: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            raise FixtureManifestError(
+                f"cannot write temporary output for {label}: I/O error"
+            ) from None
+        try:
+            os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            raise FixtureManifestError(f"cannot replace {label}: {detail}") from error
+        except (RuntimeError, TypeError, ValueError):
+            raise FixtureManifestError(f"cannot replace {label}: I/O error") from None
         tmp_created = False
         try:
             os.fsync(parent_fd)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             pass
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                pass
         if tmp_created:
             try:
                 os.unlink(tmp_name, dir_fd=parent_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
 
 
 def _reject_symlinked_existing_ancestors(
@@ -1003,6 +1115,19 @@ def _reject_symlinked_existing_ancestors(
             mode = current.lstat().st_mode
         except FileNotFoundError:
             return
+        except NotADirectoryError:
+            raise
+        except OSError as error:
+            detail = _safe_os_error_detail(error)
+            label = display_label or str(current)
+            raise FixtureManifestError(
+                f"cannot inspect {label} ancestors: {detail}"
+            ) from error
+        except (RuntimeError, TypeError, ValueError):
+            label = display_label or str(current)
+            raise FixtureManifestError(
+                f"cannot inspect {label} ancestors: I/O error"
+            ) from None
         if stat.S_ISLNK(mode):
             if path.is_absolute() and current.parent == Path(path.anchor):
                 continue
@@ -1053,11 +1178,11 @@ def _load_json_bytes(
 
 
 def _pipe_chunk_bytes(chunk: Any) -> bytes:
-    if isinstance(chunk, bytes):
+    if type(chunk) is bytes:
         return chunk
-    if isinstance(chunk, bytearray):
+    if type(chunk) is bytearray:
         return bytes(chunk)
-    if isinstance(chunk, memoryview):
+    if type(chunk) is memoryview:
         try:
             return chunk.cast("B").tobytes()
         except (TypeError, ValueError):
@@ -1090,8 +1215,7 @@ def _run_command_bounded(
     timeout_secs: float,
 ) -> tuple[int, str, bool, str, bool, bool]:
     if (
-        isinstance(output_limit_bytes, bool)
-        or not isinstance(output_limit_bytes, int)
+        type(output_limit_bytes) is not int
         or output_limit_bytes <= 0
     ):
         raise FixtureManifestError("output limit bytes must be positive")
@@ -1105,7 +1229,7 @@ def _run_command_bounded(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except OSError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         raise FixtureManifestError("xmllint could not be started") from None
     outputs: dict[str, tuple[bytes, bool]] = {}
     read_failed = False
@@ -1114,12 +1238,12 @@ def _run_command_bounded(
         nonlocal read_failed
         try:
             outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
-        except OSError:
+        except (OSError, RuntimeError, TypeError, ValueError):
             read_failed = True
         finally:
             try:
                 pipe.close()
-            except OSError:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 read_failed = True
 
     assert process.stdout is not None
@@ -1137,17 +1261,38 @@ def _run_command_bounded(
     stdout_thread.start()
     stderr_thread.start()
     timed_out = False
+    wait_failed = False
     try:
         returncode = process.wait(timeout=timeout_secs)
     except subprocess.TimeoutExpired:
         timed_out = True
-        process.kill()
-        process.wait()
+        try:
+            process.kill()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        try:
+            process.wait()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
         returncode = 124
-    stdout_thread.join()
-    stderr_thread.join()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        wait_failed = True
+        try:
+            process.kill()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
+        returncode = 124
+    try:
+        stdout_thread.join(timeout=1.0)
+        stderr_thread.join(timeout=1.0)
+        if stdout_thread.is_alive() or stderr_thread.is_alive():
+            read_failed = True
+    except (RuntimeError, TypeError, ValueError):
+        read_failed = True
     if read_failed:
         raise FixtureManifestError("xmllint output could not be read") from None
+    if wait_failed or type(returncode) is not int:
+        raise FixtureManifestError("xmllint did not finish cleanly") from None
     stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
     stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
     return (
@@ -1161,7 +1306,7 @@ def _run_command_bounded(
 
 
 def _require_positive_finite_number(value: Any, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         raise FixtureManifestError(f"{label} must be a positive finite number")
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -1218,9 +1363,12 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, str):
+        value = _plain_text(value, "JSON string")
         if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
             raise FixtureManifestError("JSON contains invalid Unicode surrogate")
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise FixtureManifestError("JSON array must be a plain array")
         if len(value) > MAX_JSON_ARRAY_ITEMS:
             raise FixtureManifestError(
                 f"JSON array must contain at most {MAX_JSON_ARRAY_ITEMS} items"
@@ -1228,6 +1376,8 @@ def _reject_json_surrogates(value: Any, *, _depth: int = 0) -> None:
         for item in value:
             _reject_json_surrogates(item, _depth=_depth + 1)
     elif isinstance(value, dict):
+        if type(value) is not dict:
+            raise FixtureManifestError("JSON object must be a plain object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise FixtureManifestError(
                 f"JSON object must contain at most {MAX_JSON_OBJECT_MEMBERS} members"
@@ -1452,13 +1602,13 @@ def _reject_secret_looking_path_material(value: str, label: str) -> None:
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise FixtureManifestError(f"{label} must be a JSON object")
     return value
 
 
 def _require_array(value: Any, label: str) -> list[Any]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise FixtureManifestError(f"{label} must be a JSON array")
     if len(value) > MAX_JSON_ARRAY_ITEMS:
         raise FixtureManifestError(
@@ -1467,9 +1617,17 @@ def _require_array(value: Any, label: str) -> list[Any]:
     return value
 
 
-def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
-    if set(value) - allowed:
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> set[str]:
+    if type(value) is not dict:
         raise FixtureManifestError(f"{label} contains unknown keys")
+    present: set[str] = set()
+    for key in value:
+        if not isinstance(key, str):
+            raise FixtureManifestError(f"{label} contains unknown keys")
+        present.add(_plain_text(key, f"{label} field"))
+    if present - allowed:
+        raise FixtureManifestError(f"{label} contains unknown keys")
+    return present
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -1600,17 +1758,24 @@ def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) 
             f"JSON nesting depth must be at most {MAX_JSON_NESTING_DEPTH} levels"
         )
     if isinstance(value, dict):
+        if type(value) is not dict:
+            raise FixtureManifestError(f"{label} contains non-plain JSON object")
         if len(value) > MAX_JSON_OBJECT_MEMBERS:
             raise FixtureManifestError(
                 f"{label} must contain at most {MAX_JSON_OBJECT_MEMBERS} object members"
             )
         for key, child in value.items():
-            if _is_secret_looking_key(str(key)):
+            if not isinstance(key, str):
+                raise FixtureManifestError(f"{label} contains forbidden non-string field")
+            key_text = _plain_text(key, f"{label} field")
+            if _is_secret_looking_key(key_text):
                 raise FixtureManifestError(f"{label} contains forbidden secret-looking field")
-            if _is_control_bearing_key(key):
+            if _is_control_bearing_key(key_text):
                 raise FixtureManifestError(f"{label} contains forbidden control-bearing field")
-            _check_no_secret_material(child, f"{label}.{key}", _depth=_depth + 1)
+            _check_no_secret_material(child, f"{label}.{key_text}", _depth=_depth + 1)
     elif isinstance(value, list):
+        if type(value) is not list:
+            raise FixtureManifestError(f"{label} contains non-plain JSON array")
         if len(value) > MAX_JSON_ARRAY_ITEMS:
             raise FixtureManifestError(
                 f"{label} must contain at most {MAX_JSON_ARRAY_ITEMS} items"
@@ -1618,6 +1783,7 @@ def _check_no_secret_material(value: Any, label: str = "$", *, _depth: int = 0) 
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]", _depth=_depth + 1)
     elif isinstance(value, str):
+        value = _plain_text(value, label)
         if _contains_unsafe_json_control(value):
             raise FixtureManifestError(f"{label} contains unsafe control characters")
         if _contains_secret_material(value) or _is_secret_looking_key(value):
@@ -1632,14 +1798,18 @@ def _required_string(
     max_chars: int | None = MAX_CLEAN_STRING_CHARS,
 ) -> str:
     raw = value.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise FixtureManifestError(f"{label}.{key} must be a non-empty string")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise FixtureManifestError(f"{field_label} must be a non-empty string")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise FixtureManifestError(f"{field_label} must be a non-empty string")
     if max_chars is not None and len(raw) > max_chars:
-        raise FixtureManifestError(f"{label}.{key} must be no longer than {max_chars} characters")
+        raise FixtureManifestError(f"{field_label} must be no longer than {max_chars} characters")
     if _contains_control_character(raw):
-        raise FixtureManifestError(f"{label}.{key} must not contain control characters")
+        raise FixtureManifestError(f"{field_label} must not contain control characters")
     if raw != raw.strip():
-        raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
+        raise FixtureManifestError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -1691,14 +1861,18 @@ def _optional_string(
     if key not in value:
         return None
     raw = value.get(key)
-    if not isinstance(raw, str) or not raw.strip():
-        raise FixtureManifestError(f"{label}.{key} must be a non-empty string when set")
+    field_label = f"{label}.{key}"
+    if not isinstance(raw, str):
+        raise FixtureManifestError(f"{field_label} must be a non-empty string when set")
+    raw = _plain_text(raw, field_label)
+    if not raw.strip():
+        raise FixtureManifestError(f"{field_label} must be a non-empty string when set")
     if max_chars is not None and len(raw) > max_chars:
-        raise FixtureManifestError(f"{label}.{key} must be no longer than {max_chars} characters")
+        raise FixtureManifestError(f"{field_label} must be no longer than {max_chars} characters")
     if _contains_control_character(raw):
-        raise FixtureManifestError(f"{label}.{key} must not contain control characters")
+        raise FixtureManifestError(f"{field_label} must not contain control characters")
     if raw != raw.strip():
-        raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
+        raise FixtureManifestError(f"{field_label} must not have surrounding whitespace")
     return raw
 
 
@@ -1715,7 +1889,7 @@ def _optional_nonnegative_int(value: dict[str, Any], key: str, label: str) -> in
     if key not in value:
         return None
     raw = value.get(key)
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+    if type(raw) is not int or raw < 0:
         raise FixtureManifestError(f"{label}.{key} must be a non-negative integer when set")
     if raw > MAX_PROFILE_UNSIGNED_INT:
         raise FixtureManifestError(f"{label}.{key} must fit in u64")
@@ -1736,20 +1910,24 @@ def _optional_string_list(
     result: list[str] = []
     seen: dict[str, int] = {}
     for offset, item in enumerate(items):
-        if not isinstance(item, str) or not item.strip():
-            raise FixtureManifestError(f"{label}.{key}[{offset}] must be a non-empty string")
+        item_label = f"{label}.{key}[{offset}]"
+        if not isinstance(item, str):
+            raise FixtureManifestError(f"{item_label} must be a non-empty string")
+        item = _plain_text(item, item_label)
+        if not item.strip():
+            raise FixtureManifestError(f"{item_label} must be a non-empty string")
         if max_chars is not None and len(item) > max_chars:
             raise FixtureManifestError(
-                f"{label}.{key}[{offset}] must be no longer than {max_chars} characters"
+                f"{item_label} must be no longer than {max_chars} characters"
             )
         if item != item.strip():
-            raise FixtureManifestError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
+            raise FixtureManifestError(f"{item_label} must not have surrounding whitespace")
         if _contains_control_character(item):
-            raise FixtureManifestError(f"{label}.{key}[{offset}] must not contain control characters")
-        _reject_non_ascii_identifier(item, f"{label}.{key}[{offset}]")
+            raise FixtureManifestError(f"{item_label} must not contain control characters")
+        _reject_non_ascii_identifier(item, item_label)
         if item in seen:
             raise FixtureManifestError(
-                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]"
+                f"{item_label} duplicates {label}.{key}[{seen[item]}]"
             )
         seen[item] = offset
         result.append(item)
@@ -2815,8 +2993,8 @@ def _validate_relative_path(
         else:
             seen_child_segment = True
     candidate = base / path
-    resolved_parent = candidate.parent.resolve()
-    root = containment_root.resolve()
+    resolved_parent = _path_resolve(candidate.parent, f"{label} parent")
+    root = _path_resolve(containment_root, "manifest root")
     if not resolved_parent.is_relative_to(root):
         raise FixtureManifestError(f"{label} must stay under manifest root")
     _reject_secret_looking_path_material(raw, label)
@@ -2962,9 +3140,9 @@ def _validate_fixture_xml_schema(
     output_truncated = stdout_truncated or stderr_truncated
     local_paths = (
         str(schema_path),
-        str(schema_path.resolve()),
+        str(_path_resolve(schema_path, f"{label} schema")),
         str(fixture_path),
-        str(fixture_path.resolve()),
+        str(_path_resolve(fixture_path, f"{label} fixture")),
     )
     if returncode != 0:
         detail = _xmllint_output_detail(stderr or stdout, local_paths=local_paths)
@@ -3425,13 +3603,9 @@ def verify_manifest(
     )
     _reject_unknown_keys(manifest, TOP_LEVEL_KEYS, label)
     manifest_version = manifest.get("version")
-    if (
-        isinstance(manifest_version, bool)
-        or not isinstance(manifest_version, int)
-        or manifest_version != MANIFEST_VERSION
-    ):
+    if type(manifest_version) is not int or manifest_version != MANIFEST_VERSION:
         raise FixtureManifestError(f"{label}.version must be {MANIFEST_VERSION}")
-    manifest_dir = path.resolve().parent
+    manifest_dir = _path_resolve(path, label).parent
 
     raw_schemas = _require_array(manifest.get("schemas"), f"{label}.schemas")
     raw_fixtures = _require_array(manifest.get("fixtures"), f"{label}.fixtures")
@@ -3804,6 +3978,7 @@ def verify_manifest(
 
 
 def run(args: argparse.Namespace) -> int:
+    args = _require_plain_namespace(args)
     args.summary_out = _optional_cli_path(getattr(args, "summary_out", None), "summary_out")
     args.manifest = _optional_cli_path(getattr(args, "manifest", None), "--manifest")
     args.profile_catalog = _optional_cli_path(
@@ -3850,6 +4025,7 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog=Path(__file__).name,
         description="Verify ISO 20022 checked-in XSD/XML fixture manifest wiring.",
         allow_abbrev=False,
     )
@@ -3910,10 +4086,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
     try:
+        normalised_argv = _normalise_cli_argv(argv)
+        parser = build_parser()
         _preflight_raw_cli_secrets(
-            argv,
+            normalised_argv,
             {
                 "--manifest",
                 "--profile-catalog",
@@ -3922,7 +4099,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_boolean_cli_flags(
-            argv,
+            normalised_argv,
             {
                 "--require-fixture-for-schema",
                 "--require-profile-schema-backed-versions",
@@ -3931,15 +4108,15 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
         _preflight_numeric_cli_values(
-            argv,
+            normalised_argv,
             integer_flags=set(),
             number_flags={"--xmllint-timeout-secs"},
         )
         _preflight_output_cli_paths(
-            argv,
+            normalised_argv,
             {"--manifest", "--profile-catalog", "--summary-out"},
         )
-        args = parser.parse_args(argv)
+        args = parser.parse_args(normalised_argv)
         return run(args)
     except FixtureManifestError as error:
         print(f"error: {error}", file=sys.stderr)

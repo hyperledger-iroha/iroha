@@ -151,7 +151,7 @@ impl Actor {
                 let (_requeued, _failures, _duplicates, _) = super::requeue_block_transactions(
                     queue,
                     state,
-                    pending.block.external_entrypoints_cloned().collect(),
+                    pending.block.external_entrypoints_cloned(),
                 );
                 KuraStoreFailure {
                     pending: None,

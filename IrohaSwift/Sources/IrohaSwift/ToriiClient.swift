@@ -169,6 +169,17 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
     )
 }
 
+fileprivate func requireToriiExactNonEmptyQueryValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard trimmed == raw else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain surrounding whitespace.")
+    }
+    return raw
+}
+
 fileprivate func normalizeToriiParticipantQueryValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -4486,14 +4497,14 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
             }
             items.append(URLQueryItem(name: "per_page", value: String(perPage)))
         }
-        if let account = account?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !account.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(account, field: "account")
+        if let account {
+            let exactAccount = try requireToriiExactNonEmptyQueryValue(account, field: "account")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactAccount, field: "account")
             items.append(URLQueryItem(name: "account", value: normalized))
         }
-        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !authority.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+        if let authority {
+            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
             items.append(URLQueryItem(name: "authority", value: normalized))
         }
         if let transactionHash = transactionHash?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -4514,10 +4525,13 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
            !kind.isEmpty {
             items.append(URLQueryItem(name: "kind", value: kind))
         }
-        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetDefinitionId.isEmpty {
-            let normalized = try normalizeToriiAssetSelectorQueryValue(
+        if let assetDefinitionId {
+            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
                 assetDefinitionId,
+                field: "assetDefinitionId"
+            )
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                exactAssetDefinitionId,
                 field: "assetDefinitionId"
             )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
@@ -4563,9 +4577,9 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
             }
             items.append(URLQueryItem(name: "per_page", value: String(perPage)))
         }
-        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !authority.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+        if let authority {
+            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
             items.append(URLQueryItem(name: "authority", value: normalized))
         }
         if let block {
@@ -4578,10 +4592,13 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
            !status.isEmpty {
             items.append(URLQueryItem(name: "status", value: status))
         }
-        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetDefinitionId.isEmpty {
-            let normalized = try normalizeToriiAssetSelectorQueryValue(
+        if let assetDefinitionId {
+            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
                 assetDefinitionId,
+                field: "assetDefinitionId"
+            )
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                exactAssetDefinitionId,
                 field: "assetDefinitionId"
             )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
@@ -4621,9 +4638,9 @@ public struct ToriiExplorerRwasParams: Sendable, Equatable {
             }
             items.append(URLQueryItem(name: "per_page", value: String(perPage)))
         }
-        if let ownedBy = ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !ownedBy.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(ownedBy, field: "ownedBy")
+        if let ownedBy {
+            let exactOwnedBy = try requireToriiExactNonEmptyQueryValue(ownedBy, field: "ownedBy")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactOwnedBy, field: "ownedBy")
             items.append(URLQueryItem(name: "owned_by", value: normalized))
         }
         if let domain = try ToriiRequestValidation.normalizedOptionalNonEmpty(domain, field: "domain") {
@@ -4676,19 +4693,22 @@ public struct ToriiContractActivityParams: Sendable, Equatable {
         if let offset {
             items.append(URLQueryItem(name: "offset", value: String(offset)))
         }
-        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !authority.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+        if let authority {
+            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
             items.append(URLQueryItem(name: "authority", value: normalized))
         }
-        if let contractAddress = contractAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !contractAddress.isEmpty {
-            let normalized = try normalizeToriiContractAddressLiteral(contractAddress, field: "contractAddress")
+        if let contractAddress {
+            let exactContractAddress = try requireToriiExactNonEmptyQueryValue(
+                contractAddress,
+                field: "contractAddress"
+            )
+            let normalized = try normalizeToriiContractAddressLiteral(exactContractAddress, field: "contractAddress")
             items.append(URLQueryItem(name: "contract_address", value: normalized))
         }
-        if let contractAlias = contractAlias?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !contractAlias.isEmpty {
-            let normalized = try normalizeToriiContractAliasLiteral(contractAlias, field: "contractAlias")
+        if let contractAlias {
+            let exactContractAlias = try requireToriiExactNonEmptyQueryValue(contractAlias, field: "contractAlias")
+            let normalized = try normalizeToriiContractAliasLiteral(exactContractAlias, field: "contractAlias")
             items.append(URLQueryItem(name: "contract_alias", value: normalized))
         }
         if let contractEntrypoint = try ToriiRequestValidation.normalizedOptionalNonEmpty(
@@ -4765,19 +4785,22 @@ public struct ToriiContractEventParams: Sendable, Equatable {
         if let offset {
             items.append(URLQueryItem(name: "offset", value: String(offset)))
         }
-        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !authority.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+        if let authority {
+            let exactAuthority = try requireToriiExactNonEmptyQueryValue(authority, field: "authority")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactAuthority, field: "authority")
             items.append(URLQueryItem(name: "authority", value: normalized))
         }
-        if let contractAddress = contractAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !contractAddress.isEmpty {
-            let normalized = try normalizeToriiContractAddressLiteral(contractAddress, field: "contractAddress")
+        if let contractAddress {
+            let exactContractAddress = try requireToriiExactNonEmptyQueryValue(
+                contractAddress,
+                field: "contractAddress"
+            )
+            let normalized = try normalizeToriiContractAddressLiteral(exactContractAddress, field: "contractAddress")
             items.append(URLQueryItem(name: "contract_address", value: normalized))
         }
-        if let contractAlias = contractAlias?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !contractAlias.isEmpty {
-            let normalized = try normalizeToriiContractAliasLiteral(contractAlias, field: "contractAlias")
+        if let contractAlias {
+            let exactContractAlias = try requireToriiExactNonEmptyQueryValue(contractAlias, field: "contractAlias")
+            let normalized = try normalizeToriiContractAliasLiteral(exactContractAlias, field: "contractAlias")
             items.append(URLQueryItem(name: "contract_alias", value: normalized))
         }
         if let module = try ToriiRequestValidation.normalizedOptionalNonEmpty(module, field: "module") {
@@ -4786,14 +4809,14 @@ public struct ToriiContractEventParams: Sendable, Equatable {
         if let eventKind = try ToriiRequestValidation.normalizedOptionalNonEmpty(eventKind, field: "eventKind") {
             items.append(URLQueryItem(name: "event_kind", value: eventKind))
         }
-        if let participant = participant?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !participant.isEmpty {
-            let normalized = try normalizeToriiParticipantQueryValue(participant, field: "participant")
+        if let participant {
+            let exactParticipant = try requireToriiExactNonEmptyQueryValue(participant, field: "participant")
+            let normalized = try normalizeToriiParticipantQueryValue(exactParticipant, field: "participant")
             items.append(URLQueryItem(name: "participant", value: normalized))
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetSelectorQueryValue(assetId, field: "assetId")
+        if let assetId {
+            let exactAssetId = try requireToriiExactNonEmptyQueryValue(assetId, field: "assetId")
+            let normalized = try normalizeToriiAssetSelectorQueryValue(exactAssetId, field: "assetId")
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         if let provenance = try ToriiRequestValidation.normalizedOptionalNonEmpty(provenance, field: "provenance") {
@@ -6827,9 +6850,10 @@ public struct ToriiSubscriptionListParams: Sendable, Equatable {
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let ownedBy = ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !ownedBy.isEmpty {
-            items.append(URLQueryItem(name: "owned_by", value: ownedBy))
+        if let ownedBy {
+            let exactOwnedBy = try requireToriiExactNonEmptyQueryValue(ownedBy, field: "ownedBy")
+            let normalized = try normalizeToriiAccountIdQueryValue(exactOwnedBy, field: "ownedBy")
+            items.append(URLQueryItem(name: "owned_by", value: normalized))
         }
         if let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
            !provider.isEmpty {
@@ -8709,9 +8733,9 @@ public struct ToriiUaidPortfolioQuery: Sendable, Equatable {
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "asset_id")
+        if let assetId {
+            let exactAssetId = try requireToriiExactNonEmptyQueryValue(assetId, field: "asset_id")
+            let normalized = try normalizeToriiAssetIdQueryValue(exactAssetId, field: "asset_id")
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
@@ -9279,6 +9303,17 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
 }
 
 public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
+    public let offlineKagemushaAbi7: Bool
+    public let offlineKagemushaAbi7Mode: String
+    public let offlineKagemushaAbi7BridgeAbiVersion: UInt32
+    public let offlineKagemushaAbi7CircuitId: String
+    public let offlineKagemushaAbi7Artifacts: Bool
+    public let offlineKagemushaRecursiveCompactAvailable: Bool
+    public let offlineKagemushaRecursiveCompactMode: String
+    public let offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion: UInt32
+    public let offlineKagemushaRecursiveCompactCircuitId: String
+    public let offlineKagemushaRecursiveCompactArtifactsAvailable: Bool
+    public let offlineTelemetry: Bool
     public let offlineNote: Bool
     public let offlineOneUseKeys: Bool
     public let offlineRecursiveNoteProof: Bool
@@ -9289,7 +9324,18 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
     public let offlineFountainQr: Bool
     public let offlineSyncOptional: Bool
-    public let offlineTelemetry: Bool
+
+    public var hasKagemushaRecursiveCompactMetadata: Bool {
+        offlineKagemushaAbi7
+            && offlineKagemushaAbi7Mode == "recursive_compact_v1"
+            && offlineKagemushaAbi7BridgeAbiVersion == 7
+            && offlineKagemushaAbi7CircuitId == "kagemusha-recursive-compact-v1"
+            && offlineKagemushaRecursiveCompactAvailable
+            && offlineKagemushaRecursiveCompactMode == offlineKagemushaAbi7Mode
+            && offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion == offlineKagemushaAbi7BridgeAbiVersion
+            && offlineKagemushaRecursiveCompactCircuitId == offlineKagemushaAbi7CircuitId
+            && offlineKagemushaRecursiveCompactArtifactsAvailable == offlineKagemushaAbi7Artifacts
+    }
 
     public var hasCanonicalRecursiveVerifierMetadata: Bool {
         guard let schemaHash = offlineRecursiveNoteProofPublicInputsSchemaHash,
@@ -9307,6 +9353,17 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case offlineKagemushaAbi7 = "offline_kagemusha_abi7"
+        case offlineKagemushaAbi7Mode = "offline_kagemusha_abi7_mode"
+        case offlineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
+        case offlineKagemushaAbi7CircuitId = "offline_kagemusha_abi7_circuit_id"
+        case offlineKagemushaAbi7Artifacts = "offline_kagemusha_abi7_artifacts"
+        case offlineKagemushaRecursiveCompactAvailable = "offline_kagemusha_recursive_compact_available"
+        case offlineKagemushaRecursiveCompactMode = "offline_kagemusha_recursive_compact_mode"
+        case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
+        case offlineKagemushaRecursiveCompactCircuitId = "offline_kagemusha_recursive_compact_circuit_id"
+        case offlineKagemushaRecursiveCompactArtifactsAvailable = "offline_kagemusha_recursive_compact_artifacts_available"
+        case offlineTelemetry = "offline_telemetry"
         case offlineNote = "offline_note"
         case offlineOneUseKeys = "offline_one_use_keys"
         case offlineRecursiveNoteProof = "offline_recursive_note_proof"
@@ -9317,7 +9374,282 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
         case offlineFountainQr = "offline_fountain_qr"
         case offlineSyncOptional = "offline_sync_optional"
-        case offlineTelemetry = "offline_telemetry"
+    }
+
+    private struct KagemushaReadinessFamily {
+        let available: Bool
+        let mode: String
+        let bridgeAbiVersion: UInt32
+        let circuitId: String
+        let artifacts: Bool
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let hasAbi7Family = Self.containsAny(
+            container,
+            keys: [
+                .offlineKagemushaAbi7,
+                .offlineKagemushaAbi7Mode,
+                .offlineKagemushaAbi7BridgeAbiVersion,
+                .offlineKagemushaAbi7CircuitId,
+                .offlineKagemushaAbi7Artifacts
+            ]
+        )
+        let hasRecursiveCompactFamily = Self.containsAny(
+            container,
+            keys: [
+                .offlineKagemushaRecursiveCompactAvailable,
+                .offlineKagemushaRecursiveCompactMode,
+                .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
+                .offlineKagemushaRecursiveCompactCircuitId,
+                .offlineKagemushaRecursiveCompactArtifactsAvailable
+            ]
+        )
+        guard hasAbi7Family || hasRecursiveCompactFamily else {
+            throw Self.missingKey(.offlineKagemushaAbi7, in: container)
+        }
+        let abi7Family = hasAbi7Family ? try Self.decodeAbi7Family(from: container) : nil
+        let recursiveCompactFamily = hasRecursiveCompactFamily
+            ? try Self.decodeRecursiveCompactFamily(from: container)
+            : nil
+        if let abi7Family, let recursiveCompactFamily {
+            try Self.requireMatching(
+                abi7Family.available,
+                .offlineKagemushaAbi7,
+                recursiveCompactFamily.available,
+                .offlineKagemushaRecursiveCompactAvailable,
+                in: container
+            )
+            try Self.requireMatching(
+                abi7Family.mode,
+                .offlineKagemushaAbi7Mode,
+                recursiveCompactFamily.mode,
+                .offlineKagemushaRecursiveCompactMode,
+                in: container
+            )
+            try Self.requireMatching(
+                abi7Family.bridgeAbiVersion,
+                .offlineKagemushaAbi7BridgeAbiVersion,
+                recursiveCompactFamily.bridgeAbiVersion,
+                .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
+                in: container
+            )
+            try Self.requireMatching(
+                abi7Family.circuitId,
+                .offlineKagemushaAbi7CircuitId,
+                recursiveCompactFamily.circuitId,
+                .offlineKagemushaRecursiveCompactCircuitId,
+                in: container
+            )
+            try Self.requireMatching(
+                abi7Family.artifacts,
+                .offlineKagemushaAbi7Artifacts,
+                recursiveCompactFamily.artifacts,
+                .offlineKagemushaRecursiveCompactArtifactsAvailable,
+                in: container
+            )
+        }
+        let abi7 = abi7Family ?? recursiveCompactFamily!
+        let recursiveCompact = recursiveCompactFamily ?? abi7Family!
+        offlineKagemushaAbi7 = abi7.available
+        offlineKagemushaAbi7Mode = abi7.mode
+        offlineKagemushaAbi7BridgeAbiVersion = abi7.bridgeAbiVersion
+        offlineKagemushaAbi7CircuitId = abi7.circuitId
+        offlineKagemushaAbi7Artifacts = abi7.artifacts
+        offlineKagemushaRecursiveCompactAvailable = recursiveCompact.available
+        offlineKagemushaRecursiveCompactMode = recursiveCompact.mode
+        offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = recursiveCompact.bridgeAbiVersion
+        offlineKagemushaRecursiveCompactCircuitId = recursiveCompact.circuitId
+        offlineKagemushaRecursiveCompactArtifactsAvailable = recursiveCompact.artifacts
+        offlineTelemetry = try container.decode(Bool.self, forKey: .offlineTelemetry)
+        offlineNote = try container.decodeIfPresent(Bool.self, forKey: .offlineNote) ?? false
+        offlineOneUseKeys = try container.decodeIfPresent(Bool.self, forKey: .offlineOneUseKeys) ?? false
+        offlineRecursiveNoteProof = try container.decodeIfPresent(Bool.self, forKey: .offlineRecursiveNoteProof) ?? false
+        offlineRecursiveNoteProofBackend = try container.decodeIfPresent(
+            String.self,
+            forKey: .offlineRecursiveNoteProofBackend
+        )
+        offlineRecursiveNoteProofCircuitId = try container.decodeIfPresent(
+            String.self,
+            forKey: .offlineRecursiveNoteProofCircuitId
+        )
+        offlineRecursiveNoteProofPublicInputsSchemaHash = try container.decodeIfPresent(
+            String.self,
+            forKey: .offlineRecursiveNoteProofPublicInputsSchemaHash
+        )
+        offlineRecursiveNoteProofPublicInstanceColumns = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .offlineRecursiveNoteProofPublicInstanceColumns
+        )
+        offlineRecursiveNoteProofVerifierKeyId = try container.decodeIfPresent(
+            ToriiVerifyingKeyId.self,
+            forKey: .offlineRecursiveNoteProofVerifierKeyId
+        )
+        offlineFountainQr = try container.decodeIfPresent(Bool.self, forKey: .offlineFountainQr) ?? false
+        offlineSyncOptional = try container.decodeIfPresent(Bool.self, forKey: .offlineSyncOptional) ?? false
+    }
+
+    private static func containsAny(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        keys: [CodingKeys]
+    ) -> Bool {
+        keys.contains { container.contains($0) }
+    }
+
+    private static func decodeAbi7Family(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> KagemushaReadinessFamily {
+        KagemushaReadinessFamily(
+            available: try decodeRequiredBool(from: container, forKey: .offlineKagemushaAbi7),
+            mode: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaAbi7Mode),
+            bridgeAbiVersion: try decodeExactPositiveAbiVersion(
+                from: container,
+                forKey: .offlineKagemushaAbi7BridgeAbiVersion
+            ),
+            circuitId: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaAbi7CircuitId),
+            artifacts: try decodeRequiredBool(from: container, forKey: .offlineKagemushaAbi7Artifacts)
+        )
+    }
+
+    private static func decodeRecursiveCompactFamily(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> KagemushaReadinessFamily {
+        KagemushaReadinessFamily(
+            available: try decodeRequiredBool(from: container, forKey: .offlineKagemushaRecursiveCompactAvailable),
+            mode: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaRecursiveCompactMode),
+            bridgeAbiVersion: try decodeExactPositiveAbiVersion(
+                from: container,
+                forKey: .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion
+            ),
+            circuitId: try decodeRequiredExactString(
+                from: container,
+                forKey: .offlineKagemushaRecursiveCompactCircuitId
+            ),
+            artifacts: try decodeRequiredBool(
+                from: container,
+                forKey: .offlineKagemushaRecursiveCompactArtifactsAvailable
+            )
+        )
+    }
+
+    private static func decodeRequiredBool(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Bool {
+        guard container.contains(key) else {
+            throw missingKey(key, in: container)
+        }
+        return try container.decode(Bool.self, forKey: key)
+    }
+
+    private static func decodeRequiredExactString(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        guard container.contains(key) else {
+            throw missingKey(key, in: container)
+        }
+        let value = try container.decode(String.self, forKey: key)
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be a non-empty string"
+            )
+        }
+        guard trimmed == value else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must not contain surrounding whitespace"
+            )
+        }
+        return value
+    }
+
+    private static func requireMatching<T: Equatable>(
+        _ lhs: T,
+        _ lhsKey: CodingKeys,
+        _ rhs: T,
+        _ rhsKey: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        guard lhs == rhs else {
+            throw DecodingError.dataCorruptedError(
+                forKey: lhsKey,
+                in: container,
+                debugDescription: "\(lhsKey.stringValue) must match \(rhsKey.stringValue)"
+            )
+        }
+    }
+
+    private static func decodeExactPositiveAbiVersion(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> UInt32 {
+        guard container.contains(key) else {
+            throw missingKey(key, in: container)
+        }
+        let maximum = UInt64(Int32.max)
+        if let numeric = try? container.decode(UInt64.self, forKey: key) {
+            guard numeric > 0 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "\(key.stringValue) must be a positive integer"
+                )
+            }
+            guard numeric <= maximum else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
+                )
+            }
+            return UInt32(numeric)
+        }
+        if let string = try? container.decode(String.self, forKey: key) {
+            let bytes = Array(string.utf8)
+            guard let first = bytes.first,
+                  first >= UInt8(ascii: "1"),
+                  first <= UInt8(ascii: "9"),
+                  bytes.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") })
+            else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "\(key.stringValue) must be an exact positive integer string"
+                )
+            }
+            guard let numeric = UInt64(string), numeric <= maximum else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key,
+                    in: container,
+                    debugDescription: "\(key.stringValue) must fit in signed 32-bit range"
+                )
+            }
+            return UInt32(numeric)
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(key.stringValue) must be a positive integer"
+        )
+    }
+
+    private static func missingKey(
+        _ key: CodingKeys,
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) -> DecodingError {
+        DecodingError.keyNotFound(
+            key,
+            DecodingError.Context(
+                codingPath: container.codingPath,
+                debugDescription: "\(key.stringValue) is required"
+            )
+        )
     }
 }
 
@@ -15278,14 +15610,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func getAssets(accountId: String, limit: Int = 100, asset: String? = nil, scope: String? = nil) async throws -> [ToriiAssetBalance] {
         let encodedAccountId = try encodeAccountIdPath(accountId)
         var items = [URLQueryItem(name: "limit", value: String(limit))]
-        if let asset = asset?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !asset.isEmpty {
-            let normalized = try normalizeToriiAssetSelectorQueryValue(asset, field: "asset")
+        if let asset {
+            let exactAsset = try requireToriiExactNonEmptyQueryValue(asset, field: "asset")
+            let normalized = try normalizeToriiAssetSelectorQueryValue(exactAsset, field: "asset")
             items.append(URLQueryItem(name: "asset", value: normalized))
         }
-        if let scope = scope?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !scope.isEmpty {
-            items.append(URLQueryItem(name: "scope", value: scope))
+        if let scope {
+            let exactScope = try requireToriiExactNonEmptyQueryValue(scope, field: "scope")
+            items.append(URLQueryItem(name: "scope", value: exactScope))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/assets",
                                       queryItems: items)
@@ -15518,10 +15850,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset))
         ]
-        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetDefinitionId.isEmpty {
-            let normalized = try normalizeToriiAssetSelectorQueryValue(
+        if let assetDefinitionId {
+            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
                 assetDefinitionId,
+                field: "assetDefinitionId"
+            )
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                exactAssetDefinitionId,
                 field: "assetDefinitionId"
             )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
@@ -15609,11 +15944,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
             effectiveParams.kind = "Transfer"
         }
-        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetDefinitionId.isEmpty {
+        if let assetDefinitionId {
+            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetDefinitionId = assetDefinitionId
+                effectiveParams.assetDefinitionId = exactAssetDefinitionId
             }
         }
         let page = try await getExplorerInstructions(params: effectiveParams)
@@ -15632,11 +15970,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
             effectiveParams.kind = "Transfer"
         }
-        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetDefinitionId.isEmpty {
+        if let assetDefinitionId {
+            let exactAssetDefinitionId = try requireToriiExactNonEmptyQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetDefinitionId = assetDefinitionId
+                effectiveParams.assetDefinitionId = exactAssetDefinitionId
             }
         }
         let page = try await getExplorerInstructions(params: effectiveParams)
@@ -19064,16 +19405,16 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     private func canonicalizeUaidLiteral(_ literal: String) throws -> String {
-        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw ToriiClientError.invalidPayload("uaid must be a non-empty string.")
-        }
-        let prefix = trimmed.prefix(5).lowercased()
+        let exact = try requireToriiExactNonEmptyQueryValue(literal, field: "uaid")
+        let prefix = exact.prefix(5).lowercased()
         let rawHex: String
         if prefix == "uaid:" {
-            rawHex = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            rawHex = String(exact.dropFirst(5))
         } else {
-            rawHex = trimmed
+            rawHex = exact
+        }
+        guard rawHex.trimmingCharacters(in: .whitespacesAndNewlines) == rawHex else {
+            throw ToriiClientError.invalidPayload("uaid must not contain surrounding whitespace.")
         }
         guard rawHex.count == 64 else {
             throw ToriiClientError.invalidPayload("uaid must contain exactly 64 hex characters.")
