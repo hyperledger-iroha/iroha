@@ -199,6 +199,19 @@ where
     }
 }
 
+fn write_polynomial_vec_consuming<W: io::Write, F: SerdePrimeField, B>(
+    polynomials: Vec<Polynomial<F, B>>,
+    writer: &mut W,
+    format: SerdeFormat,
+) {
+    writer
+        .write_all(&(polynomials.len() as u32).to_be_bytes())
+        .unwrap();
+    for poly in polynomials {
+        poly.write(writer, format);
+    }
+}
+
 impl<C: CurveAffine> VerifyingKey<C> {
     fn bytes_length(&self) -> usize {
         8 + (self.fixed_commitments.len() * C::default().to_bytes().as_ref().len())
@@ -414,6 +427,30 @@ where
     pub fn to_bytes(&self, format: SerdeFormat) -> Vec<u8> {
         let mut bytes = Vec::<u8>::with_capacity(self.bytes_length());
         Self::write(self, &mut bytes, format).expect("Writing to vector should not fail");
+        bytes
+    }
+
+    /// Writes a proving key to a vector of bytes while dropping fields as they are serialized.
+    pub fn into_bytes(self, format: SerdeFormat) -> Vec<u8> {
+        let mut bytes = Vec::<u8>::with_capacity(self.bytes_length());
+        let Self {
+            vk,
+            l0,
+            l_last,
+            l_active_row,
+            fixed_values,
+            fixed_polys,
+            permutation,
+            ev: _,
+        } = self;
+        vk.write(&mut bytes, format)
+            .expect("Writing to vector should not fail");
+        l0.write(&mut bytes, format);
+        l_last.write(&mut bytes, format);
+        l_active_row.write(&mut bytes, format);
+        write_polynomial_vec_consuming(fixed_values, &mut bytes, format);
+        write_polynomial_vec_consuming(fixed_polys, &mut bytes, format);
+        permutation.write_consuming(&mut bytes, format);
         bytes
     }
 

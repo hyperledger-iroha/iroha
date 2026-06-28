@@ -1036,7 +1036,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label or str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise ReadinessError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -1868,7 +1868,7 @@ def _optional_cli_path(value: Any, label: str) -> Path | None:
         raise ReadinessError(f"{label} must be a path")
     if isinstance(value, str):
         return Path(_plain_text(value, label))
-    if isinstance(value, Path):
+    if type(value) is type(Path()):
         return Path(value)
     raise ReadinessError(f"{label} must be a path")
 
@@ -2802,11 +2802,7 @@ def _block_receipt_entry_metadata_errors(
                         path,
                     )
         record_count = receipt.get("record_count")
-        if (
-            isinstance(record_count, bool)
-            or not isinstance(record_count, int)
-            or record_count <= 0
-        ):
+        if type(record_count) is not int or record_count <= 0:
             _block_receipt_metadata_error(
                 blockers,
                 metadata_code,
@@ -3024,16 +3020,14 @@ def _receipt_entry_for_readiness_output(
                     ):
                         output["index_path"] = "unsupported"
         if "record_count" in output and (
-            isinstance(output["record_count"], bool)
-            or not isinstance(output["record_count"], int)
-            or output["record_count"] <= 0
+            type(output["record_count"]) is not int or output["record_count"] <= 0
         ):
             output["record_count"] = "unsupported"
     return output
 
 
 def _version_for_readiness_output(value: Any, expected: int) -> int | str:
-    if not isinstance(value, bool) and isinstance(value, int) and value == expected:
+    if type(value) is int and value == expected:
         return value
     return "unsupported"
 
@@ -3108,8 +3102,7 @@ def _evidence_policy_for_readiness_output(
     for field in sorted(EVIDENCE_FRESHNESS_POLICY_FIELDS):
         value = output.get(field)
         if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
+            type(value) is not int
             or value > getattr(args, field)
         ):
             output[field] = "unsupported"
@@ -3148,7 +3141,7 @@ def _freshness_budget_for_readiness_output(
 ) -> int | str | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value > release_budget:
+    if type(value) is not int or value > release_budget:
         return "unsupported"
     return value
 
@@ -5037,7 +5030,7 @@ def _xsd_gap_diagnostic_entries(entries: list[Any]) -> list[dict[str, str]]:
             "message_def_id": entry["message_def_id"],
         }
         for entry in entries
-        if isinstance(entry, dict)
+        if type(entry) is dict
     ]
 
 
@@ -6099,18 +6092,10 @@ def verify_xsd_summary(
     verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
     verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
     schema_backed_fixtures = summary.get("schema_backed_fixtures")
-    if (
-        isinstance(schema_backed_fixtures, bool)
-        or not isinstance(schema_backed_fixtures, int)
-        or schema_backed_fixtures < 0
-    ):
+    if type(schema_backed_fixtures) is not int or schema_backed_fixtures < 0:
         raise ReadinessError(f"{path}.schema_backed_fixtures must be a non-negative integer")
     schema_validated_fixtures = summary.get("schema_validated_fixtures")
-    if (
-        isinstance(schema_validated_fixtures, bool)
-        or not isinstance(schema_validated_fixtures, int)
-        or schema_validated_fixtures < 0
-    ):
+    if type(schema_validated_fixtures) is not int or schema_validated_fixtures < 0:
         raise ReadinessError(
             f"{path}.schema_validated_fixtures must be a non-negative integer"
         )
@@ -6227,12 +6212,12 @@ def verify_xsd_summary(
     missing_schema_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.missing_schema_fixtures")
         for entry in missing_schema_fixtures
-        if isinstance(entry, dict)
+        if type(entry) is dict
     }
     schema_only_message_ids = {
         _require_message_def_id(entry, "message_def_id", f"{path}.schema_only_entries")
         for entry in schema_only_entries
-        if isinstance(entry, dict)
+        if type(entry) is dict
     }
     current_xsd_gap_message_ids = missing_schema_message_ids | schema_only_message_ids
     blocked_schema_message_ids = {
@@ -6278,7 +6263,7 @@ def verify_xsd_summary(
             f"{path}.missing_profile_schema_versions",
         )
         for entry in missing_profile_schema_versions
-        if isinstance(entry, dict)
+        if type(entry) is dict
     }
     for blocked in summary["_validated_blocked_schema_sources"]:
         message_def_id = blocked["message_def_id"]
@@ -6399,7 +6384,7 @@ def verify_xsd_summary(
         reviewed_profile_versions: list[Any] = []
         unreviewed_profile_versions: list[Any] = []
         for raw_missing in missing_profile_schema_versions:
-            if isinstance(raw_missing, dict) and raw_missing.get(
+            if type(raw_missing) is dict and raw_missing.get(
                 "message_def_id"
             ) in reviewed_xsd_gap_message_ids:
                 reviewed_profile_versions.append(raw_missing)
@@ -6682,11 +6667,9 @@ def _pending_xsd_probe_response_metadata_is_publicly_supported(
     return (
         probe.get("status") == "reachable"
         and probe.get("looks_like_xsd") is True
-        and not isinstance(http_status, bool)
-        and isinstance(http_status, int)
+        and type(http_status) is int
         and 200 <= http_status <= 299
-        and not isinstance(downloaded_bytes, bool)
-        and isinstance(downloaded_bytes, int)
+        and type(downloaded_bytes) is int
         and downloaded_bytes > 0
         and _is_lower_sha256(sample_sha256)
         and any(ch != "0" for ch in sample_sha256)
@@ -7460,7 +7443,7 @@ def _trust_profile_for_readiness_output(
     if output.get("embedded_signature_policy") != REQUIRE_VERIFIED:
         output["embedded_signature_policy"] = "unsupported"
     source = output.get("source")
-    if isinstance(source, dict):
+    if type(source) is dict:
         source_output = dict(source)
         for key in ("authority", "version"):
             value = source_output.get(key)
@@ -7695,7 +7678,7 @@ def _block_cross_canary_receipt_reuse(
             continue
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_path = receipt.get("path")
-            if isinstance(receipt_path, str):
+            if type(receipt_path) is str:
                 if receipt_path in seen_paths:
                     first_canary, first_receipt = seen_paths[receipt_path]
                     _blocker(
@@ -7730,7 +7713,7 @@ def _block_cross_canary_receipt_reuse(
                     seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
             for field, code in source_material_checks:
                 value = receipt.get(field)
-                if not isinstance(value, str):
+                if type(value) is not str:
                     continue
                 seen_for_field = seen_source_material[field]
                 previous = seen_for_field.get(value)
@@ -7766,7 +7749,7 @@ def _block_cross_trust_profile_reuse(
     seen_bundle_digests: dict[str, tuple[int, int]] = {}
     for trust_offset, trust in enumerate(trusts):
         profile_json_sha256 = trust.get("profile_json_sha256")
-        if isinstance(profile_json_sha256, str):
+        if type(profile_json_sha256) is str:
             if profile_json_sha256 in seen_profile_json_digests:
                 first_trust = seen_profile_json_digests[profile_json_sha256]
                 _blocker(
@@ -7845,10 +7828,10 @@ def _block_compact_json_artifact_path_role_reuse(
             f"canary_summaries[{canary_offset}].config_path",
         )
         receipt_summary = canary.get("receipt_summary")
-        if isinstance(receipt_summary, dict):
+        if type(receipt_summary) is dict:
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 receipt_path = receipt.get("path")
-                if isinstance(receipt_path, str):
+                if type(receipt_path) is str:
                     material_paths.setdefault(
                         receipt_path,
                         (
@@ -7862,10 +7845,10 @@ def _block_compact_json_artifact_path_role_reuse(
                 profile["path"],
                 f"trust_summaries[{trust_offset}].profiles[{profile_offset}].path",
             )
-    if isinstance(archive_receipts, dict):
+    if type(archive_receipts) is dict:
         for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
             receipt_path = receipt.get("path")
-            if isinstance(receipt_path, str):
+            if type(receipt_path) is str:
                 material_paths.setdefault(
                     receipt_path,
                     f"receipt_verification.receipts[{receipt_offset}].path",
@@ -7950,7 +7933,7 @@ def _block_compact_summary_digest_role_confusion(
     receipt_digest_roles: list[tuple[str, str, str]] = []
     for canary_offset, canary in enumerate(canaries):
         receipt_summary = canary.get("receipt_summary")
-        if not isinstance(receipt_summary, dict):
+        if type(receipt_summary) is not dict:
             continue
         receipt_digest_roles.append(
             (
@@ -7961,7 +7944,7 @@ def _block_compact_summary_digest_role_confusion(
         )
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_digest = receipt.get("receipt_sha256")
-            if isinstance(receipt_digest, str):
+            if type(receipt_digest) is str:
                 receipt_digest_roles.append(
                     (
                         receipt_digest,
@@ -7972,7 +7955,7 @@ def _block_compact_summary_digest_role_confusion(
                 )
             for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                 material_digest = receipt.get(field)
-                if isinstance(material_digest, str):
+                if type(material_digest) is str:
                     receipt_digest_roles.append(
                         (
                             material_digest,
@@ -8001,7 +7984,7 @@ def _block_compact_summary_digest_role_confusion(
     trust_material_roles: list[tuple[str, str, str]] = []
     for trust_offset, trust in enumerate(trusts):
         profile_json_sha256 = trust.get("profile_json_sha256")
-        if isinstance(profile_json_sha256, str):
+        if type(profile_json_sha256) is str:
             trust_material_roles.append(
                 (
                     profile_json_sha256,
@@ -8183,7 +8166,7 @@ def _block_cross_xsd_summary_reuse(
         seen: dict[str, int] = {}
         for summary_offset, summary in enumerate(xsd_summaries):
             profile_catalog = summary.get("profile_catalog")
-            if not isinstance(profile_catalog, dict):
+            if type(profile_catalog) is not dict:
                 continue
             value = profile_catalog.get(field)
             if value is None:
@@ -8323,7 +8306,7 @@ def _xsd_material_path_roles(
                 )
             )
         profile_catalog = summary.get("profile_catalog")
-        if isinstance(profile_catalog, dict):
+        if type(profile_catalog) is dict:
             path_roles.append(
                 (
                     profile_catalog["path"],
@@ -8367,14 +8350,14 @@ def _evidence_receipt_entries(
     if source == "canary":
         for canary_offset, canary in enumerate(summary["canary_summaries"]):
             receipt_summary = canary.get("receipt_summary")
-            if receipt_summary is None:
+            if type(receipt_summary) is not dict:
                 continue
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 entries.append((receipt_offset, canary_offset, receipt))
         return entries
     if source == "archive":
         archive_summary = summary["receipt_verification"]
-        if isinstance(archive_summary, dict):
+        if type(archive_summary) is dict:
             for receipt_offset, receipt in enumerate(archive_summary["receipts"]):
                 entries.append((receipt_offset, None, receipt))
         return entries
@@ -8425,7 +8408,7 @@ def _block_cross_compact_summary_digest_role_confusion(
                 )
             )
             receipt_summary = canary.get("receipt_summary")
-            if not isinstance(receipt_summary, dict):
+            if type(receipt_summary) is not dict:
                 continue
             canary_material_digests.append(
                 (
@@ -8438,7 +8421,7 @@ def _block_cross_compact_summary_digest_role_confusion(
             )
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 receipt_digest = receipt.get("receipt_sha256")
-                if isinstance(receipt_digest, str):
+                if type(receipt_digest) is str:
                     canary_material_digests.append(
                         (
                             receipt_digest,
@@ -8451,7 +8434,7 @@ def _block_cross_compact_summary_digest_role_confusion(
                     )
                 for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                     material_digest = receipt.get(field)
-                    if isinstance(material_digest, str):
+                    if type(material_digest) is str:
                         canary_material_digests.append(
                             (
                                 material_digest,
@@ -8473,7 +8456,7 @@ def _block_cross_compact_summary_digest_role_confusion(
                 )
             )
             profile_json_sha256 = trust.get("profile_json_sha256")
-            if isinstance(profile_json_sha256, str):
+            if type(profile_json_sha256) is str:
                 trust_material_digests.append(
                     (
                         profile_json_sha256,
@@ -8611,10 +8594,10 @@ def _block_cross_evidence_summary_reuse(
                 )
             )
             receipt_summary = canary.get("receipt_summary")
-            if isinstance(receipt_summary, dict):
+            if type(receipt_summary) is dict:
                 for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                     receipt_path = receipt.get("path")
-                    if isinstance(receipt_path, str):
+                    if type(receipt_path) is str:
                         json_material_paths.append(
                             (
                                 receipt_path,
@@ -8647,12 +8630,12 @@ def _block_cross_evidence_summary_reuse(
                             f"[{trust_offset}].profiles[{profile_offset}].path"
                         ),
                     )
-                )
+            )
         archive_receipts = summary.get("receipt_verification")
-        if isinstance(archive_receipts, dict):
+        if type(archive_receipts) is dict:
             for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
                 receipt_path = receipt.get("path")
-                if isinstance(receipt_path, str):
+                if type(receipt_path) is str:
                     json_material_paths.append(
                         (
                             receipt_path,
@@ -9076,7 +9059,7 @@ def _xsd_material_digest_roles(
                 )
             )
         profile_catalog = summary.get("profile_catalog")
-        if isinstance(profile_catalog, dict):
+        if type(profile_catalog) is dict:
             roles.append(
                 (
                     profile_catalog["sha256"],
@@ -9111,7 +9094,7 @@ def _evidence_material_digest_roles(
             )
         )
         archive = summary["receipt_verification"]
-        if isinstance(archive, dict):
+        if type(archive) is dict:
             roles.append(
                 (
                     archive["summary_sha256"],
@@ -9120,7 +9103,7 @@ def _evidence_material_digest_roles(
             )
             for receipt_offset, receipt in enumerate(archive["receipts"]):
                 receipt_digest = receipt.get("receipt_sha256")
-                if isinstance(receipt_digest, str):
+                if type(receipt_digest) is str:
                     roles.append(
                         (
                             receipt_digest,
@@ -9133,7 +9116,7 @@ def _evidence_material_digest_roles(
                     )
                 for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                     digest = receipt.get(field)
-                    if isinstance(digest, str):
+                    if type(digest) is str:
                         roles.append(
                             (
                                 digest,
@@ -9155,7 +9138,7 @@ def _evidence_material_digest_roles(
                 )
             )
             receipt_summary = canary.get("receipt_summary")
-            if not isinstance(receipt_summary, dict):
+            if type(receipt_summary) is not dict:
                 continue
             roles.append(
                 (
@@ -9168,7 +9151,7 @@ def _evidence_material_digest_roles(
             )
             for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                 receipt_digest = receipt.get("receipt_sha256")
-                if isinstance(receipt_digest, str):
+                if type(receipt_digest) is str:
                     roles.append(
                         (
                             receipt_digest,
@@ -9182,7 +9165,7 @@ def _evidence_material_digest_roles(
                     )
                 for field in RECEIPT_MATERIAL_DIGEST_FIELDS:
                     digest = receipt.get(field)
-                    if isinstance(digest, str):
+                    if type(digest) is str:
                         roles.append(
                             (
                                 digest,
@@ -9205,7 +9188,7 @@ def _evidence_material_digest_roles(
                 )
             )
             profile_json_sha256 = trust.get("profile_json_sha256")
-            if isinstance(profile_json_sha256, str):
+            if type(profile_json_sha256) is str:
                 roles.append(
                     (
                         profile_json_sha256,
@@ -9251,7 +9234,7 @@ def _receipt_path_material_roles(
     for receipt_offset, receipt in enumerate(receipts):
         for field in path_fields:
             value = receipt.get(field)
-            if isinstance(value, str):
+            if type(value) is str:
                 roles.append(
                     (
                         value,
@@ -9270,7 +9253,7 @@ def _evidence_material_path_roles(
     for summary_offset, summary in enumerate(evidence_summaries):
         roles.append((summary["path"], f"evidence_summaries[{summary_offset}].path"))
         archive = summary["receipt_verification"]
-        if isinstance(archive, dict):
+        if type(archive) is dict:
             roles.extend(
                 _receipt_path_material_roles(
                     archive["receipts"],
@@ -9285,7 +9268,7 @@ def _evidence_material_path_roles(
             roles.append((canary["path"], f"{canary_label}.path"))
             roles.append((canary["config_path"], f"{canary_label}.config_path"))
             receipt_summary = canary.get("receipt_summary")
-            if isinstance(receipt_summary, dict):
+            if type(receipt_summary) is dict:
                 roles.extend(
                     _receipt_path_material_roles(
                         receipt_summary["receipts"],
@@ -9490,8 +9473,7 @@ def _receipt_response_metadata_is_publicly_supported(receipt: dict[str, Any]) ->
     response_body_sha256 = receipt.get("response_body_sha256")
     return (
         receipt.get("ok") is True
-        and not isinstance(status_code, bool)
-        and isinstance(status_code, int)
+        and type(status_code) is int
         and 200 <= status_code <= 299
         and _is_lower_sha256(response_body_sha256)
         and any(ch != "0" for ch in response_body_sha256)
@@ -9970,7 +9952,7 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
             raise ReadinessError(f"{label}[{offset}] must be a path")
         if isinstance(entry, str):
             paths.append(Path(_plain_text(entry, f"{label}[{offset}]")))
-        elif isinstance(entry, Path):
+        elif type(entry) is type(Path()):
             paths.append(Path(entry))
         else:
             raise ReadinessError(f"{label}[{offset}] must be a path")

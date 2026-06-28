@@ -468,6 +468,48 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             trailingAccumulatorAndTopupAnchors.message,
             trailingAccumulatorCannotMaskInvalidTopupAnchorNullifiers,
         )
+        val maskedTopupAnchorPrecedenceCases = listOf(
+            Triple(
+                "malformed proof cannot mask current-note top-up anchor reuse",
+                recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+                    listOf(init.currentNote.noteCommitment),
+                ),
+                "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+            ),
+            Triple(
+                "trailing accumulator cannot mask current-note top-up anchor reuse",
+                recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+                    listOf(init.currentNote.spendNullifier),
+                ),
+                "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+            ),
+            Triple(
+                "malformed proof cannot mask duplicate top-up anchors",
+                recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+                    listOf(
+                        init.topupAnchorNullifiers[0],
+                        init.topupAnchorNullifiers[0],
+                    ),
+                ),
+                "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+            ),
+            Triple(
+                "trailing accumulator cannot mask descending top-up anchors",
+                recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+                    listOf(
+                        init.topupAnchorNullifiers[1],
+                        init.topupAnchorNullifiers[0],
+                    ),
+                ),
+                "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+            ),
+        )
+        maskedTopupAnchorPrecedenceCases.forEach { (label, archive, expectedMessage) ->
+            val error = assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive)
+            }
+            assertEquals(expectedMessage, error.message, label)
+        }
 
         val append = KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             sharedRecursiveSpendArchive(FixtureAbi.ABI7, "append_bundle"),

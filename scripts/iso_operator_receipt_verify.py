@@ -766,7 +766,7 @@ def _read_regular_file(
 ) -> bytes:
     label = display_label if display_label is not None else str(path)
     if max_bytes is not None and (
-        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+        type(max_bytes) is not int or max_bytes <= 0
     ):
         raise ReceiptError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent, display_label=label)
@@ -1722,7 +1722,7 @@ def _check_failed_receipt_error(
     error: str,
 ) -> None:
     status_code = receipt.get("status_code")
-    if isinstance(status_code, int) and not isinstance(status_code, bool):
+    if type(status_code) is int:
         match = HTTP_RECEIPT_ERROR_RE.fullmatch(error)
         if match is None or int(match.group(1)) != status_code:
             raise ReceiptError(f"{label} failed receipt error must match status_code")
@@ -1733,7 +1733,7 @@ def _check_failed_receipt_error(
 
 def _check_response_metadata(receipt: dict[str, Any], label: str, *, kind: str) -> None:
     status_code = receipt.get("status_code")
-    has_http_response = isinstance(status_code, int) and not isinstance(status_code, bool)
+    has_http_response = type(status_code) is int
     response_body_sha256 = receipt.get("response_body_sha256")
     response_body_preview = receipt.get("response_body_preview")
     if response_body_sha256 is None:
@@ -1875,7 +1875,7 @@ def _verify_audit_index_source(value: Any, label: str) -> dict[str, Any]:
     require_digest_matches(value, INDEX_DIGEST_FIELD, label)
     record_count = value.get("record_count")
     records = value.get("records")
-    if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
+    if type(record_count) is not int or record_count < 0:
         raise ReceiptError(f"{label} record_count must be a non-negative integer")
     records = _require_json_array(records, f"{label} records")
     if len(records) != record_count:
@@ -2032,7 +2032,7 @@ def _verify_anchor_source(
     _reject_all_zero_sha256(anchor_sha256, f"{label} anchor_sha256")
     _reject_all_zero_sha256(index_sha256, f"{label} index_sha256")
     record_count = receipt.get("record_count")
-    if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
+    if type(record_count) is not int or record_count < 0:
         raise ReceiptError(f"{label} record_count must be a non-negative integer")
     if require_source_files and record_count == 0:
         raise ReceiptError(
@@ -2079,11 +2079,7 @@ def _verify_anchor_source(
     if anchor.get(INDEX_DIGEST_FIELD) != index_sha256:
         raise ReceiptError(f"{label} index_sha256 does not match source anchor")
     anchor_record_count = anchor.get("record_count")
-    if (
-        isinstance(anchor_record_count, bool)
-        or not isinstance(anchor_record_count, int)
-        or anchor_record_count < 0
-    ):
+    if type(anchor_record_count) is not int or anchor_record_count < 0:
         raise ReceiptError(f"{anchor_label} record_count must be a non-negative integer")
     if anchor_record_count != record_count:
         raise ReceiptError(f"{label} record_count does not match source anchor")
@@ -2578,7 +2574,7 @@ def _required_cli_path_sequence(value: Any, label: str) -> list[Path]:
         if isinstance(entry, str):
             entry = _plain_text(entry, f"{label}[{offset}]")
             paths.append(Path(entry))
-        elif isinstance(entry, Path):
+        elif type(entry) is type(Path()):
             paths.append(Path(entry))
         else:
             raise ReceiptError(f"{label}[{offset}] must be a path")

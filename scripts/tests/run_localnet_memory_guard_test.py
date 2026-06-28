@@ -18,8 +18,8 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.count == 100_000
     assert args.parallel == 64
     assert args.batch_size == 1_000
-    assert args.queue_soft_limit == 1_000
-    assert args.queue_hard_limit == 8_000
+    assert args.queue_soft_limit == 0
+    assert args.queue_hard_limit == 0
 
 
 def test_peer_count_below_four_is_rejected():

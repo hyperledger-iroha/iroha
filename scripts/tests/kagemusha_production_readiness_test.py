@@ -31187,6 +31187,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             write_compact_key_execution_report(staged_artifact_dir)
             write_compact_key_staged_run_report(staged_artifact_dir)
             exit_file.write_text("0\n", encoding="utf-8")
+            temp_generator_log = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            temp_execution_report = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.EXECUTION_REPORT_FILENAME}.staged-runner.tmp"
+            )
+            temp_generator_log.write_text("stale compact temp log\n", encoding="utf-8")
+            temp_execution_report.write_text(
+                "stale compact execution temp\n",
+                encoding="utf-8",
+            )
             args = compact_key_staged_runner.parse_args(
                 [
                     "--staged-artifact-dir",
@@ -31204,9 +31217,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 args,
                 runner=forbidden_runner,
             )
+            temp_generator_log_exists = temp_generator_log.exists()
+            temp_execution_report_exists = temp_execution_report.exists()
 
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
+        self.assertFalse(temp_generator_log_exists)
+        self.assertFalse(temp_execution_report_exists)
 
     def test_compact_key_staged_runner_resume_reruns_on_noncanonical_exit_marker(
         self,
@@ -32482,6 +32499,100 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(temp_exists)
         self.assertEqual(final_log_text, "replacement compact log\n")
+
+    def test_compact_key_staged_runner_resume_removes_stale_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            temp_log = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            temp_log.write_text("stale interrupted compact keygen log\n", encoding="utf-8")
+            exit_file = root / "staged.exit"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+
+            def fake_runner(
+                _command: list[str],
+                cwd: Path,
+                log_path: Path,
+            ) -> int:
+                self.assertEqual(log_path, temp_log)
+                self.assertFalse(log_path.exists())
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            temp_exists = temp_log.exists()
+            final_log = staged_artifact_dir / compact_key_staged_runner.GENERATOR_LOG_FILENAME
+            final_log_is_file = final_log.is_file()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertFalse(temp_exists)
+        self.assertTrue(final_log_is_file)
+
+    def test_compact_key_staged_runner_resume_rejects_symlinked_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            temp_log = (
+                staged_artifact_dir
+                / f".{compact_key_staged_runner.GENERATOR_LOG_FILENAME}.staged-runner.tmp"
+            )
+            target = root / "temp-target.log"
+            target.write_text("do not remove\n", encoding="utf-8")
+            temp_log.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, temp_log, target)
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--resume-keygen",
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not run after unsafe temp log")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            errors,
+            [
+                (
+                    "staged recursive compact key generator log temporary output "
+                    "must not be a symlink"
+                )
+            ],
+        )
+        self.assertEqual(target_text, "do not remove\n")
 
     def test_compact_key_staged_runner_rejects_symlinked_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -35343,6 +35454,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
             ).write_text("generated init lineage keys\n", encoding="utf-8")
             write_lineage_execution_report(staged_artifact_dir, "init")
+            init_temp_log = (
+                staged_artifact_dir
+                / (
+                    f".{lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES['init']}"
+                    ".staged-runner.tmp"
+                )
+            )
+            proof_temp_execution_report = (
+                staged_artifact_dir
+                / (
+                    f".{lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES['proof']}"
+                    ".staged-runner.tmp"
+                )
+            )
+            init_temp_log.write_text("stale init temp log\n", encoding="utf-8")
+            proof_temp_execution_report.write_text(
+                "stale proof execution temp\n",
+                encoding="utf-8",
+            )
             args = lineage_staged_runner.parse_args(
                 [
                     "--repo-root",
@@ -35389,6 +35519,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES["init"]
                 ).read_text(encoding="utf-8")
             )
+            init_temp_log_exists = init_temp_log.exists()
+            proof_temp_execution_report_exists = proof_temp_execution_report.exists()
 
         self.assertEqual(status, 0)
         self.assertEqual(errors, [])
@@ -35404,6 +35536,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ],
         )
         self.assertEqual(init_execution_report["exit_code"], 0)
+        self.assertFalse(init_temp_log_exists)
+        self.assertFalse(proof_temp_execution_report_exists)
 
     def test_lineage_proof_staged_runner_redacts_control_duplicate_execution_key(
         self,
@@ -37122,6 +37256,198 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(temp_exists)
         self.assertEqual(final_log_text, "replacement lineage log\n")
+
+    def test_lineage_proof_staged_runner_resume_removes_stale_keygen_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            log_name = lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            temp_log = staged_artifact_dir / f".{log_name}.staged-runner.tmp"
+            temp_log.write_text("stale interrupted lineage log\n", encoding="utf-8")
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(
+                command: list[str],
+                _cwd: Path,
+                log_path: Path,
+            ) -> int:
+                calls.append(command)
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                    ),
+                )
+                self.assertEqual(log_path, temp_log)
+                self.assertFalse(log_path.exists())
+                create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                log_path.write_text("resumed lineage log\n", encoding="utf-8")
+                return 17
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+            )
+            temp_exists = temp_log.exists()
+            final_log_text = (staged_artifact_dir / log_name).read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(status, 17)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+                )
+            ],
+        )
+        self.assertFalse(temp_exists)
+        self.assertEqual(final_log_text, "resumed lineage log\n")
+
+    def test_lineage_proof_staged_runner_resume_rejects_symlinked_keygen_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            staged_artifact_dir.mkdir(parents=True)
+            log_name = lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            target = root / "external-temp-log"
+            target.write_text("external temp log\n", encoding="utf-8")
+            temp_log = staged_artifact_dir / f".{log_name}.staged-runner.tmp"
+            try:
+                temp_log.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(
+                    f"symlinks are not available in this test environment: {exc}"
+                )
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                    "--resume-key-artifacts",
+                ]
+            )
+
+            def forbidden_runner(
+                _command: list[str],
+                _cwd: Path,
+                _log_path: Path,
+            ) -> int:
+                raise AssertionError("runner must not run with symlinked temp log")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "staged init lineage key artifact log temporary output must not be a symlink",
+            errors,
+        )
+
+    def test_lineage_proof_staged_runner_resume_removes_stale_proof_temp_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            for profile in ("init", "append"):
+                create_lineage_artifact_files_for_profile(staged_artifact_dir, profile)
+                (
+                    staged_artifact_dir
+                    / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES[profile]
+                ).write_text(
+                    f"generated {profile} lineage keys\n",
+                    encoding="utf-8",
+                )
+                write_lineage_execution_report(staged_artifact_dir, profile)
+            proof_log = (
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            temp_log = staged_artifact_dir / f".{proof_log.name}.staged-runner.tmp"
+            temp_log.write_text("stale proof temp log\n", encoding="utf-8")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "staged.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "staged.elapsed"),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(
+                command: list[str],
+                cwd: Path,
+                log_path: Path,
+            ) -> int:
+                calls.append(command)
+                self.assertEqual(
+                    command,
+                    lineage_staged_runner.shlex.split(
+                        lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                    ),
+                )
+                self.assertEqual(cwd, REPO_ROOT)
+                self.assertEqual(log_path, temp_log)
+                self.assertFalse(log_path.exists())
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[5.0, 6.25]),
+            )
+            temp_exists = temp_log.exists()
+            proof_log_text = proof_log.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                lineage_staged_runner.shlex.split(
+                    lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+                )
+            ],
+        )
+        self.assertFalse(temp_exists)
+        self.assertIn("test result: ok.", proof_log_text)
 
     def test_lineage_proof_staged_runner_rejects_symlinked_exit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -4561,19 +4561,37 @@ class ToriiClient:
     ) -> Mapping[str, Any]:
         """Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`)."""
 
-        if not isinstance(authority, str) or not authority.strip():
-            raise RuntimeError("bridge proof submit authority must be a non-empty string")
-        payload: Dict[str, Any] = {"authority": authority.strip()}
+        payload: Dict[str, Any] = {
+            "authority": _require_exact_non_empty_string(
+                authority,
+                "bridge proof submit.authority",
+            )
+        }
         if private_key is not None:
             payload["private_key"] = private_key
         if public_key_hex is not None:
-            if not isinstance(public_key_hex, str) or not public_key_hex.strip():
-                raise RuntimeError("bridge proof submit public_key_hex must be a non-empty string")
-            payload["public_key_hex"] = public_key_hex.strip()
+            _require_exact_non_empty_string(
+                public_key_hex,
+                "bridge proof submit.public_key_hex",
+            )
+            self._require_exact_inline_hex_string(
+                public_key_hex,
+                context="bridge proof submit.public_key_hex",
+            )
+            payload["public_key_hex"] = self._normalize_hex_string(
+                public_key_hex,
+                context="bridge proof submit.public_key_hex",
+                expected_length=64,
+            )
         if signature_b64 is not None:
-            if not isinstance(signature_b64, str) or not signature_b64.strip():
-                raise RuntimeError("bridge proof submit signature_b64 must be a non-empty string")
-            payload["signature_b64"] = signature_b64.strip()
+            _require_exact_non_empty_string(
+                signature_b64,
+                "bridge proof submit.signature_b64",
+            )
+            payload["signature_b64"] = self._normalize_required_base64_payload(
+                signature_b64,
+                "bridge proof submit.signature_b64",
+            )
         if burn_bundle is not None:
             payload["burn_bundle"] = burn_bundle
         if message_bundle is not None:
@@ -4638,28 +4656,40 @@ class ToriiClient:
     ) -> Mapping[str, Any]:
         """Submit an inbound bridge message DTO (`POST /v1/bridge/messages`)."""
 
-        if not isinstance(authority, str) or not authority.strip():
-            raise RuntimeError("bridge message submit authority must be a non-empty string")
         if not isinstance(message_bundle, Mapping):
             raise RuntimeError("bridge message submit message_bundle must be a mapping")
         payload: Dict[str, Any] = {
-            "authority": authority.strip(),
+            "authority": _require_exact_non_empty_string(
+                authority,
+                "bridge message submit.authority",
+            ),
             "message_bundle": message_bundle,
         }
         if private_key is not None:
             payload["private_key"] = private_key
         if public_key_hex is not None:
-            if not isinstance(public_key_hex, str) or not public_key_hex.strip():
-                raise RuntimeError(
-                    "bridge message submit public_key_hex must be a non-empty string"
-                )
-            payload["public_key_hex"] = public_key_hex.strip()
+            _require_exact_non_empty_string(
+                public_key_hex,
+                "bridge message submit.public_key_hex",
+            )
+            self._require_exact_inline_hex_string(
+                public_key_hex,
+                context="bridge message submit.public_key_hex",
+            )
+            payload["public_key_hex"] = self._normalize_hex_string(
+                public_key_hex,
+                context="bridge message submit.public_key_hex",
+                expected_length=64,
+            )
         if signature_b64 is not None:
-            if not isinstance(signature_b64, str) or not signature_b64.strip():
-                raise RuntimeError(
-                    "bridge message submit signature_b64 must be a non-empty string"
-                )
-            payload["signature_b64"] = signature_b64.strip()
+            _require_exact_non_empty_string(
+                signature_b64,
+                "bridge message submit.signature_b64",
+            )
+            payload["signature_b64"] = self._normalize_required_base64_payload(
+                signature_b64,
+                "bridge message submit.signature_b64",
+            )
         destination_params = self._normalize_sccp_evm_destination_params(
             network_id_hex=network_id_hex,
             verifier_address_hex=verifier_address_hex,

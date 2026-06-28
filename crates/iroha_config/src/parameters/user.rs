@@ -13351,9 +13351,6 @@ pub struct Offline {
     /// Enable Kagemusha shielded offline-offline payments.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
     pub kagemusha_enabled: bool,
-    /// Force legacy non-Kagemusha offline readiness behavior even when Kagemusha is enabled.
-    #[config(default = "false")]
-    pub kagemusha_force_legacy: bool,
 }
 
 impl Default for Offline {
@@ -13366,7 +13363,6 @@ impl Default for Offline {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
             kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
-            kagemusha_force_legacy: false,
         }
     }
 }
@@ -13593,7 +13589,6 @@ impl Offline {
             escrow_required,
             escrow_accounts,
             kagemusha_enabled,
-            kagemusha_force_legacy,
         } = self;
         if hot_retention_blocks == 0 {
             emitter.emit(ParseError::InvalidSettlementConfig.into());
@@ -13648,7 +13643,6 @@ impl Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_enabled,
-            kagemusha_force_legacy,
         }
     }
 }
@@ -25557,6 +25551,29 @@ initial_delay_seconds = 17
         assert!(
             !error.to_string().is_empty(),
             "removed legacy runtime section should produce a parse error"
+        );
+    }
+
+    #[test]
+    fn settlement_offline_parse_rejects_removed_kagemusha_force_legacy() {
+        let mut table = base_table();
+        let settlement = table
+            .entry("settlement")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("settlement table");
+        let offline = settlement
+            .entry("offline")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("settlement.offline table");
+        offline.insert("kagemusha_force_legacy".into(), Value::Boolean(true));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("removed Kagemusha legacy readiness knob must not parse");
+        assert!(
+            !error.to_string().is_empty(),
+            "removed Kagemusha legacy readiness knob should produce a parse error"
         );
     }
 

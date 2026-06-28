@@ -412,6 +412,61 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
                 trailingAccumulatorCannotMaskInvalidTopupAnchorNullifiers
             )
         }
+        let maskedTopupAnchorPrecedenceCases = [
+            (
+                "malformed proof cannot mask current-note top-up anchor reuse",
+                try Self.recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+                    [initBundle.currentNote.noteCommitment]
+                ),
+                KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"
+                )
+            ),
+            (
+                "trailing accumulator cannot mask current-note top-up anchor reuse",
+                try Self.recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+                    [initBundle.currentNote.spendNullifier]
+                ),
+                KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"
+                )
+            ),
+            (
+                "malformed proof cannot mask duplicate top-up anchors",
+                try Self.recursiveSpendBundleWithTopupAnchorNullifiersAndEmptyProofBytes(
+                    [
+                        initBundle.topupAnchorNullifiers[0],
+                        initBundle.topupAnchorNullifiers[0]
+                    ]
+                ),
+                KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"
+                )
+            ),
+            (
+                "trailing accumulator cannot mask descending top-up anchors",
+                try Self.recursiveSpendBundleWithTopupAnchorNullifiersAndTrailingAccumulatorField(
+                    [
+                        initBundle.topupAnchorNullifiers[1],
+                        initBundle.topupAnchorNullifiers[0]
+                    ]
+                ),
+                KagemushaRecursiveSpendRequestCodecError.invalidArchive(
+                    "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"
+                )
+            )
+        ]
+        for (label, archive, expectedError) in maskedTopupAnchorPrecedenceCases {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendRequestCodecs.decodeBundle(archive)
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendRequestCodecError,
+                    expectedError,
+                    label
+                )
+            }
+        }
 
         let appendBundle = try KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             Self.sharedRecursiveSpendArchive(abi: .abi7, name: "append_bundle")

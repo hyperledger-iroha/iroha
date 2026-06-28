@@ -1013,6 +1013,30 @@ def _recursive_spend_bundle_with_trailing_current_note_field() -> bytes:
     )
 
 
+def _recursive_spend_bundle_with_current_note_field_and_trailing_field(
+    field_index: int,
+    replacement: bytes,
+) -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    accumulator_fields = _read_all_fields(bundle_fields[0])
+    current_note_fields = _read_all_fields(accumulator_fields[22])
+    current_note_fields[field_index] = bytes(replacement)
+    current_note_fields.append(kagemusha._kagemusha_string("ignored-extra-current-note-field"))
+    accumulator_fields[22] = _encode_test_fields(current_note_fields)
+    bundle_fields[0] = _encode_test_fields(accumulator_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
 def _recursive_spend_bundle_with_equal_current_note_nullifier() -> bytes:
     payload = _kagemusha_archive_payload(
         _shared_recursive_spend_archive("init_bundle"),
@@ -1022,6 +1046,27 @@ def _recursive_spend_bundle_with_equal_current_note_nullifier() -> bytes:
     accumulator_fields = _read_all_fields(bundle_fields[0])
     current_note_fields = _read_all_fields(accumulator_fields[22])
     current_note_fields[1] = current_note_fields[0]
+    accumulator_fields[22] = _encode_test_fields(current_note_fields)
+    bundle_fields[0] = _encode_test_fields(accumulator_fields)
+    return _kagemusha_norito_frame_from_schema_hash(
+        kagemusha._norito_schema_hash(
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME
+        ),
+        _encode_test_fields(bundle_fields),
+        _TEST_NORITO_COMPACT_LEN_FLAG,
+    )
+
+
+def _recursive_spend_bundle_with_equal_current_note_nullifier_and_trailing_field() -> bytes:
+    payload = _kagemusha_archive_payload(
+        _shared_recursive_spend_archive("init_bundle"),
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
+    )
+    bundle_fields = _read_all_fields(payload)
+    accumulator_fields = _read_all_fields(bundle_fields[0])
+    current_note_fields = _read_all_fields(accumulator_fields[22])
+    current_note_fields[1] = current_note_fields[0]
+    current_note_fields.append(kagemusha._kagemusha_string("ignored-extra-current-note-field"))
     accumulator_fields[22] = _encode_test_fields(current_note_fields)
     bundle_fields[0] = _encode_test_fields(accumulator_fields)
     return _kagemusha_norito_frame_from_schema_hash(
@@ -3549,6 +3594,50 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
     else:
         pytest.fail(trailing_accumulator_cannot_mask_invalid_topup_anchor_nullifiers)
 
+    masked_topup_anchor_precedence_cases = (
+        (
+            "malformed proof cannot mask current-note top-up anchor reuse",
+            _recursive_spend_bundle_with_topup_anchor_nullifiers_and_empty_proof_bytes(
+                [init_summary.current_note.note_commitment]
+            ),
+            "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+        ),
+        (
+            "trailing accumulator cannot mask current-note top-up anchor reuse",
+            _recursive_spend_bundle_with_topup_anchor_nullifiers_and_trailing_accumulator_field(
+                [init_summary.current_note.spend_nullifier]
+            ),
+            "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+        ),
+        (
+            "malformed proof cannot mask duplicate top-up anchors",
+            _recursive_spend_bundle_with_topup_anchor_nullifiers_and_empty_proof_bytes(
+                [
+                    init_summary.topup_anchor_nullifiers[0],
+                    init_summary.topup_anchor_nullifiers[0],
+                ]
+            ),
+            "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+        ),
+        (
+            "trailing accumulator cannot mask descending top-up anchors",
+            _recursive_spend_bundle_with_topup_anchor_nullifiers_and_trailing_accumulator_field(
+                [
+                    init_summary.topup_anchor_nullifiers[1],
+                    init_summary.topup_anchor_nullifiers[0],
+                ]
+            ),
+            "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique",
+        ),
+    )
+    for label, archive, expected_message in masked_topup_anchor_precedence_cases:
+        try:
+            kagemusha.decode_kagemusha_recursive_spend_bundle(archive)
+        except ValueError as error:
+            assert str(error) == expected_message, label
+        else:
+            pytest.fail(label)
+
     append_summary = kagemusha.decode_kagemusha_recursive_spend_bundle(
         _shared_recursive_spend_archive("append_bundle")
     )
@@ -3751,6 +3840,36 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         ),
     )
     for archive, expected_field in malformed_current_notes:
+        with pytest.raises(ValueError, match=expected_field):
+            kagemusha.decode_kagemusha_recursive_spend_bundle(archive)
+    masked_current_notes = (
+        (
+            _recursive_spend_bundle_with_current_note_field_and_trailing_field(
+                0,
+                bytes(32),
+            ),
+            "note_commitment",
+        ),
+        (
+            _recursive_spend_bundle_with_current_note_field_and_trailing_field(
+                1,
+                bytes(32),
+            ),
+            "spend_nullifier",
+        ),
+        (
+            _recursive_spend_bundle_with_equal_current_note_nullifier_and_trailing_field(),
+            "spend_nullifier",
+        ),
+        (
+            _recursive_spend_bundle_with_current_note_field_and_trailing_field(
+                2,
+                _zero_numeric_payload(),
+            ),
+            r"bundle\.accumulator\.current_note\.amount numeric amount must be greater than zero",
+        ),
+    )
+    for archive, expected_field in masked_current_notes:
         with pytest.raises(ValueError, match=expected_field):
             kagemusha.decode_kagemusha_recursive_spend_bundle(archive)
     with pytest.raises(ValueError, match=r"Trailing bytes after bundle"):

@@ -279,7 +279,7 @@ def _response_headers(response: Any) -> Any:
 
 
 def _http_status_code(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         return None
     if 100 <= value <= 599:
         return value

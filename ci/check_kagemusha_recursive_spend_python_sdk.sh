@@ -101,6 +101,8 @@ export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito
   tests/test_address_format.py \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_canonical_request_auth_rejects_padded_fields_before_send" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_proof_rejects_padded_signing_fields_before_request" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_submit_bridge_message_rejects_padded_signing_fields_before_request" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_propose_multisig_rejects_malformed_response_fields" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch" \
