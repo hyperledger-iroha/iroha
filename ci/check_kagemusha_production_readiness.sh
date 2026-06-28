@@ -1976,6 +1976,9 @@ TEXT_REQUIREMENTS = {
         "executable in {\"adb\", \"adb.exe\"}",
         "if _is_adb_executable(display_tokens):",
         "display_tokens[index + 1] = ADB_SERIAL_REDACTION",
+        "normalized_tokens = [token.casefold() for token in tokens]",
+        'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+        "tuple(normalized_tokens[index : index + width]) == sequence",
         "errors = _command_disruption_errors(command, f\"ADB getprop {prop}\")",
         "timeout=_timeout_arg(timeout_seconds)",
         "ADB getprop {prop} timed out after {timeout_seconds} seconds",
@@ -2122,6 +2125,9 @@ TEXT_REQUIREMENTS = {
         "return NON_UTF8_OUTPUT_REDACTION",
         "def _safe_adb_command_display(",
         "def _command_disruption_errors(",
+        "normalized_tokens = [token.casefold() for token in tokens]",
+        'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+        "tuple(normalized_tokens[index : index + width]) == sequence",
         "must not manage other running jobs",
         "errors = _command_disruption_errors(command, \"latest raw slot ADB query\")",
         "errors = _command_disruption_errors(command, \"raw slot tar ADB pull\")",
@@ -2432,6 +2438,9 @@ TEXT_REQUIREMENTS = {
         "ADB_DEVICES_NO_VISIBLE_ROWS",
         "redact_tokens",
         "def _command_disruption_errors",
+        "normalized_tokens = [token.casefold() for token in tokens]",
+        'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+        "tuple(normalized_tokens[index : index + width]) == sequence",
         "must not manage other running jobs",
         "errors = _command_disruption_errors(command, label)",
         "capture_device_lab_slot",
@@ -5447,6 +5456,11 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_blank_identity_override_without_adb",
         "test_kagemusha_slot_assembler_rejects_disruptive_adb_getprop_before_subprocess",
         "test_android_command_gates_reject_package_state_mutations",
+        "mixed-case kill executable path",
+        "mixed-case adb token",
+        "mixed-case adb sequence",
+        "KiLl-SeRvEr",
+        "FORCE-STOP",
         "test_kagemusha_slot_assembler_adb_getprop_uses_timeout",
         "test_kagemusha_slot_assembler_zero_adb_getprop_timeout_disables_timeout",
         "test_kagemusha_slot_assembler_reports_adb_getprop_timeout",
@@ -6292,6 +6306,11 @@ TEXT_REQUIREMENTS = {
         "test_android_capture_command_gate_rejects_process_management",
         "test_android_slot_command_gate_rejects_process_management",
         "test_android_raw_puller_command_gate_rejects_process_management",
+        "mixed-case kill executable path",
+        "mixed-case adb token",
+        "mixed-case adb sequence",
+        "KiLl-SeRvEr",
+        "FORCE-STOP",
         "summary[\"lineage_proof_evidence\"][\"generated_at_utc\"]",
         "test_localnet_lifecycle_evidence_accepts_valid_four_peer_run",
         "test_localnet_lifecycle_evidence_accepts_hash_uri_scheme",
@@ -8000,6 +8019,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-non-disruptive-commands",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-command-gate-casefold",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-diagnostic-state-test",
@@ -10987,6 +11007,40 @@ if mode == "--negative-control-android-device-lab-capture-non-disruptive-command
             "errors = _command_disruption_errors(command, label)",
             "errors = []",
         ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-command-gate-casefold":
+    def mutate_android_device_lab_command_gate_casefold() -> None:
+        for target in (
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+        ):
+            override_text(
+                target,
+                "normalized_tokens = [token.casefold() for token in tokens]",
+                "normalized_tokens = list(tokens)",
+            )
+            override_text(
+                target,
+                'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+                'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1]',
+            )
+        override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            '"mixed-case adb token"',
+            '"mixed-case adb token accepted"',
+        )
+        override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            '"mixed-case adb token"',
+            '"mixed-case adb token accepted"',
+        )
+
+    run_negative_control(
+        "Android device-lab command gate casefold",
+        mutate_android_device_lab_command_gate_casefold,
     )
     raise SystemExit(0)
 

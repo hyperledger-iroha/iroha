@@ -222,6 +222,152 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
         )
         assertTrue(init.topupAnchorNullifiers.size >= 2)
+        val originalInitialRoot = init.initialRoot
+        val mutatedInitialRoot = init.initialRoot
+        mutatedInitialRoot[0] = (mutatedInitialRoot[0].toInt() xor 0xff).toByte()
+        assertContentEquals(originalInitialRoot, init.initialRoot)
+        val originalFinalRoot = init.finalRoot
+        val mutatedFinalRoot = init.finalRoot
+        mutatedFinalRoot[0] = (mutatedFinalRoot[0].toInt() xor 0xff).toByte()
+        assertContentEquals(originalFinalRoot, init.finalRoot)
+        val originalTopupAnchorNullifiers = init.topupAnchorNullifiers.map { it.copyOf() }
+        val mutatedTopupAnchorNullifiers = init.topupAnchorNullifiers.toMutableList()
+        mutatedTopupAnchorNullifiers[0][0] =
+            (mutatedTopupAnchorNullifiers[0][0].toInt() xor 0xff).toByte()
+        mutatedTopupAnchorNullifiers.clear()
+        assertEquals(originalTopupAnchorNullifiers.size, init.topupAnchorNullifiers.size)
+        originalTopupAnchorNullifiers.zip(init.topupAnchorNullifiers).forEach { (expected, actual) ->
+            assertContentEquals(expected, actual)
+        }
+        val originalNoteCommitment = init.currentNote.noteCommitment
+        val mutatedNoteCommitment = init.currentNote.noteCommitment
+        mutatedNoteCommitment[0] = (mutatedNoteCommitment[0].toInt() xor 0xff).toByte()
+        assertContentEquals(originalNoteCommitment, init.currentNote.noteCommitment)
+        val originalSpendNullifier = init.currentNote.spendNullifier
+        val mutatedSpendNullifier = init.currentNote.spendNullifier
+        mutatedSpendNullifier[0] = (mutatedSpendNullifier[0].toInt() xor 0xff).toByte()
+        assertContentEquals(originalSpendNullifier, init.currentNote.spendNullifier)
+        val mutableNoteCommitment = ByteArray(32) { 0x10 }
+        val mutableSpendNullifier = ByteArray(32) { 0x11 }
+        val copiedNote = SpendableNoteDescriptor(mutableNoteCommitment, mutableSpendNullifier, "9")
+        mutableNoteCommitment[0] = 0
+        mutableSpendNullifier[0] = 0
+        assertContentEquals(ByteArray(32) { 0x10 }, copiedNote.noteCommitment)
+        assertContentEquals(ByteArray(32) { 0x11 }, copiedNote.spendNullifier)
+        val mutableSummaryInitialRoot = ByteArray(32) { 0x31 }
+        val mutableSummaryFinalRoot = ByteArray(32) { 0x32 }
+        val mutableTopupAnchors = mutableListOf(
+            ByteArray(32) { 0x01 },
+            ByteArray(32) { 0x02 },
+        )
+        val copiedSummary = SpendBundleSummary(
+            hopCount = 1,
+            proofCircuitId = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            asset = "hex:11111111111111111111111111111111",
+            chainId = "kotlin-recursive-spend-summary-copy",
+            initialRoot = mutableSummaryInitialRoot,
+            finalRoot = mutableSummaryFinalRoot,
+            topupAnchorNullifiers = mutableTopupAnchors,
+            currentNote = copiedNote,
+        )
+        mutableSummaryInitialRoot[0] = 0
+        mutableSummaryFinalRoot[0] = 0
+        mutableTopupAnchors[0][0] = 0xff.toByte()
+        mutableTopupAnchors.clear()
+        assertContentEquals(ByteArray(32) { 0x31 }, copiedSummary.initialRoot)
+        assertContentEquals(ByteArray(32) { 0x32 }, copiedSummary.finalRoot)
+        assertEquals(2, copiedSummary.topupAnchorNullifiers.size)
+        assertContentEquals(ByteArray(32) { 0x01 }, copiedSummary.topupAnchorNullifiers[0])
+        assertContentEquals(ByteArray(32) { 0x02 }, copiedSummary.topupAnchorNullifiers[1])
+        val copiedSummaryTopupAnchors = copiedSummary.topupAnchorNullifiers.toMutableList()
+        copiedSummaryTopupAnchors[0][0] = 0x7f
+        copiedSummaryTopupAnchors.clear()
+        assertEquals(2, copiedSummary.topupAnchorNullifiers.size)
+        assertContentEquals(ByteArray(32) { 0x01 }, copiedSummary.topupAnchorNullifiers[0])
+        fun buildDirectSummary(
+            hopCount: Int = 1,
+            proofCircuitId: String = KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            asset: String = "hex:11111111111111111111111111111111",
+            initialRoot: ByteArray = ByteArray(32) { 0x31 },
+            finalRoot: ByteArray = ByteArray(32) { 0x32 },
+            topupAnchorNullifiers: List<ByteArray> = listOf(
+                ByteArray(32) { 0x01 },
+                ByteArray(32) { 0x02 },
+            ),
+        ) = SpendBundleSummary(
+            hopCount = hopCount,
+            proofCircuitId = proofCircuitId,
+            asset = asset,
+            chainId = "kotlin-recursive-spend-summary-copy",
+            initialRoot = initialRoot,
+            finalRoot = finalRoot,
+            topupAnchorNullifiers = topupAnchorNullifiers,
+            currentNote = copiedNote,
+        )
+
+        fun assertDirectSummaryRejected(
+            label: String,
+            expectedMessage: String,
+            build: () -> Unit,
+        ) {
+            val error = assertFailsWith<IllegalArgumentException> { build() }
+            assertEquals(expectedMessage, error.message, label)
+        }
+
+        val canonicalSummaryAssetBytes = ByteArray(16) { 0x11 }
+        canonicalSummaryAssetBytes[6] = 0x41
+        canonicalSummaryAssetBytes[8] = 0x81.toByte()
+        val canonicalSummaryAsset = AssetDefinitionIdEncoder.encodeFromBytes(canonicalSummaryAssetBytes)
+        assertEquals(canonicalSummaryAsset, buildDirectSummary(asset = canonicalSummaryAsset).asset)
+        assertDirectSummaryRejected(
+            "direct summary hop count zero",
+            "bundle.accumulator.hop_count",
+        ) { buildDirectSummary(hopCount = 0) }
+        assertDirectSummaryRejected(
+            "direct summary empty asset",
+            "bundle.accumulator.asset",
+        ) { buildDirectSummary(asset = "") }
+        assertDirectSummaryRejected(
+            "direct summary uppercase hex asset",
+            "bundle.accumulator.asset",
+        ) { buildDirectSummary(asset = "hex:" + "A".repeat(32)) }
+        assertDirectSummaryRejected(
+            "direct summary short hex asset",
+            "bundle.accumulator.asset",
+        ) { buildDirectSummary(asset = "hex:" + "1".repeat(31)) }
+        assertDirectSummaryRejected(
+            "direct summary padded Base58 asset",
+            "bundle.accumulator.asset",
+        ) { buildDirectSummary(asset = " $canonicalSummaryAsset") }
+        assertDirectSummaryRejected(
+            "direct summary hop count over limit",
+            "bundle.accumulator.hop_count",
+        ) {
+            buildDirectSummary(
+                hopCount = KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 + 1,
+            )
+        }
+        assertDirectSummaryRejected(
+            "direct summary unsupported proof circuit",
+            "bundle.proof_circuit_id unsupported recursive proof circuit id",
+        ) { buildDirectSummary(proofCircuitId = "kagemusha-recursive-spend-lineage-badhop-v1") }
+        assertDirectSummaryRejected(
+            "direct summary zero initial root",
+            "bundle.accumulator.initial_root",
+        ) { buildDirectSummary(initialRoot = ByteArray(32)) }
+        assertDirectSummaryRejected(
+            "direct summary equal final root",
+            "bundle.accumulator.final_root",
+        ) { buildDirectSummary(finalRoot = ByteArray(32) { 0x31 }) }
+        assertDirectSummaryRejected(
+            "direct summary empty top-up anchors",
+            "bundle.accumulator.topup_anchor_nullifiers count is out of range",
+        ) { buildDirectSummary(topupAnchorNullifiers = emptyList()) }
+        assertDirectSummaryRejected(
+            "direct summary current-note top-up reuse",
+            "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+        ) { buildDirectSummary(topupAnchorNullifiers = listOf(copiedNote.noteCommitment)) }
+
         val malformedTopupAnchorCases = listOf(
             Triple(
                 "topup anchor empty list",
@@ -895,6 +1041,16 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         val redeemProof = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_PROOF_ATTACHMENT)
         val lineageWitness = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result")
         val lineageVerifierRecord = sampleVerifierRecord()
+        val mutableVerifierRecordBytes = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD)
+        val copiedVerifierRecordBytes = mutableVerifierRecordBytes.copyOf()
+        val copiedVerifierRecord = VerifierRecordRef("halo2/ipa:copiedVerifierRecord", mutableVerifierRecordBytes)
+        mutableVerifierRecordBytes[mutableVerifierRecordBytes.lastIndex] =
+            (mutableVerifierRecordBytes[mutableVerifierRecordBytes.lastIndex].toInt() xor 0x7f).toByte()
+        assertContentEquals(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes)
+        val returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes
+        returnedVerifierRecordBytes[returnedVerifierRecordBytes.lastIndex] =
+            (returnedVerifierRecordBytes[returnedVerifierRecordBytes.lastIndex].toInt() xor 0x7f).toByte()
+        assertContentEquals(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes)
         val changeOutput = ByteArray(32) { (0x80 + it).toByte() }
         val redeemFields = requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
@@ -981,6 +1137,21 @@ class KagemushaRecursiveSpendRequestCodecsTest {
             ),
             sequencePayloads(pluralRedeemFields[8]).single(),
         )
+
+        val mutableLineageVerifierRecords = mutableListOf(lineageVerifierRecord, lineageVerifierRecord)
+        val copiedPluralRedeemRequest = RedeemSpendRequest(
+            bundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            recipient = sampleRecipient(),
+            publicAmount = "7",
+            redeemProof = redeemProof,
+            lineageVerifierRecords = mutableLineageVerifierRecords,
+        )
+        mutableLineageVerifierRecords.clear()
+        assertEquals(2, copiedPluralRedeemRequest.lineageVerifierRecords.size)
+        assertFailsWith<UnsupportedOperationException> {
+            (copiedPluralRedeemRequest.lineageVerifierRecords as MutableList<VerifierRecordRef>).clear()
+        }
+        assertEquals(2, copiedPluralRedeemRequest.lineageVerifierRecords.size)
 
         val verifyFields = requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(

@@ -54,7 +54,7 @@ use crate::{
     UpdateTopology, UpdateTrustedPeers,
     boilerplate::*,
     peer::{
-        Connection, ConnectionId, SoranetHandshakeConfig,
+        Connection, ConnectionId, OutboundFrameQueueLimits, SoranetHandshakeConfig,
         handles::{PeerHandle, PostError, connected_from, connecting},
         message::*,
     },
@@ -648,22 +648,31 @@ struct DeferredPeerFrame<T: Pload> {
     topic: message::Topic,
     enqueued_at: tokio::time::Instant,
     generation: Option<ConnectionId>,
+    wire_bytes: usize,
 }
 
 #[derive(Debug)]
 struct DeferredPeerFrameQueue<T: Pload> {
     by_peer: HashMap<PeerId, VecDeque<DeferredPeerFrame<T>>>,
     max_per_peer: usize,
+    max_bytes_per_peer: usize,
     ttl: Duration,
 }
 
 impl<T: Pload> DeferredPeerFrameQueue<T> {
-    fn new(max_per_peer: usize, ttl: Duration) -> Self {
+    fn new(max_per_peer: usize, max_bytes_per_peer: usize, ttl: Duration) -> Self {
         Self {
             by_peer: HashMap::new(),
             max_per_peer: max_per_peer.max(1),
+            max_bytes_per_peer: max_bytes_per_peer.max(1),
             ttl,
         }
+    }
+
+    fn retained_wire_bytes(entries: &VecDeque<DeferredPeerFrame<T>>) -> usize {
+        entries.iter().fold(0usize, |total, entry| {
+            total.saturating_add(entry.wire_bytes)
+        })
     }
 
     fn prune_expired(
@@ -695,18 +704,31 @@ impl<T: Pload> DeferredPeerFrameQueue<T> {
         generation: Option<ConnectionId>,
         now: tokio::time::Instant,
     ) -> (usize, usize) {
+        let wire_bytes = crate::peer::data_message_wire_len(frame.clone());
         let entries = self.by_peer.entry(peer_id).or_default();
         let expired = Self::prune_expired(entries, now, self.ttl);
+        let mut retained_bytes = Self::retained_wire_bytes(entries);
         let mut overflow = 0usize;
         while entries.len() >= self.max_per_peer {
-            entries.pop_front();
-            overflow = overflow.saturating_add(1);
+            if let Some(entry) = entries.pop_front() {
+                retained_bytes = retained_bytes.saturating_sub(entry.wire_bytes);
+                overflow = overflow.saturating_add(1);
+            }
+        }
+        while !entries.is_empty()
+            && retained_bytes.saturating_add(wire_bytes) > self.max_bytes_per_peer
+        {
+            if let Some(entry) = entries.pop_front() {
+                retained_bytes = retained_bytes.saturating_sub(entry.wire_bytes);
+                overflow = overflow.saturating_add(1);
+            }
         }
         entries.push_back(DeferredPeerFrame {
             frame,
             topic,
             enqueued_at: now,
             generation,
+            wire_bytes,
         });
         (expired, overflow)
     }
@@ -2057,6 +2079,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             dial_timeout,
             deferred_send_ttl,
             deferred_send_max_per_peer,
+            deferred_send_max_bytes_per_peer,
             peer_gossip_period,
             trust_gossip,
             debug_packet_loss_inbound_percent,
@@ -2073,6 +2096,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
+            p2p_outbound_frame_queue_max_high_bytes,
+            p2p_outbound_frame_queue_max_low_bytes,
+            p2p_outbound_frame_queue_max_high_frames,
+            p2p_outbound_frame_queue_max_low_frames,
             p2p_subscriber_queue_cap,
             dns_refresh_interval,
             dns_refresh_ttl,
@@ -2129,6 +2156,12 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     ) -> Result<(Self, Child), Error> {
         let relay_role = relay_role_from_mode(relay_mode);
         let relay_ttl = relay_ttl;
+        let outbound_frame_queue_limits = OutboundFrameQueueLimits::new(
+            p2p_outbound_frame_queue_max_high_bytes.get(),
+            p2p_outbound_frame_queue_max_low_bytes.get(),
+            p2p_outbound_frame_queue_max_high_frames.get(),
+            p2p_outbound_frame_queue_max_low_frames.get(),
+        );
         let self_id = PeerId::from(key_pair.public_key().clone());
         let trust_gossip_config = trust_gossip;
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
@@ -2403,6 +2436,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 confidential_caps.clone(),
                 crypto_caps.clone(),
                 p2p_post_queue_cap.get(),
+                outbound_frame_queue_limits,
                 trust_gossip,
                 max_frame_bytes,
                 soranet_runtime.clone(),
@@ -2438,6 +2472,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     confidential_caps.clone(),
                     crypto_caps.clone(),
                     p2p_post_queue_cap.get(),
+                    outbound_frame_queue_limits,
                     trust_gossip,
                     max_frame_bytes,
                     quic_datagrams_enabled,
@@ -2533,6 +2568,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             crypto_caps,
             peer_capabilities: HashMap::new(),
             post_queue_cap: p2p_post_queue_cap.get(),
+            outbound_frame_queue_limits,
             max_frame_bytes,
             cap_consensus: max_frame_bytes_consensus,
             cap_control: max_frame_bytes_control,
@@ -2567,6 +2603,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new(
                 deferred_send_max_per_peer,
+                deferred_send_max_bytes_per_peer,
                 deferred_send_ttl,
             ),
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
@@ -3385,6 +3422,8 @@ mod accept_stream_tests {
             ),
             deferred_send_max_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer:
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -3419,6 +3458,14 @@ mod accept_stream_tests {
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
+            p2p_outbound_frame_queue_max_high_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:
@@ -3848,6 +3895,7 @@ mod accept_stream_tests {
             None,
             None,
             8,
+            OutboundFrameQueueLimits::default(),
             true,
             max_frame_bytes,
             false,
@@ -4099,6 +4147,7 @@ mod accept_stream_tests {
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
+            outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             dns_last_refresh: HashMap::new(),
@@ -4129,6 +4178,7 @@ mod accept_stream_tests {
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new(
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                 Duration::from_millis(
                     iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
                 ),
@@ -4272,6 +4322,7 @@ mod accept_stream_tests {
             None,
             None,
             8,
+            OutboundFrameQueueLimits::default(),
             true,
             max_frame_bytes,
             soranet.clone(),
@@ -4455,6 +4506,7 @@ mod accept_stream_tests {
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
+            outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             dns_last_refresh: HashMap::new(),
@@ -4480,6 +4532,7 @@ mod accept_stream_tests {
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new(
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                 Duration::from_millis(
                     iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
                 ),
@@ -4665,6 +4718,7 @@ mod accept_stream_tests {
                 crypto_caps: None,
                 peer_capabilities: HashMap::new(),
                 post_queue_cap: 4,
+                outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
                 debug_packet_loss_outbound_percent: 0,
                 debug_packet_loss_outbound_counter: 0,
                 debug_packet_loss_inbound_percent: 0,
@@ -4694,6 +4748,7 @@ mod accept_stream_tests {
                 pending_connects: Vec::new(),
                 deferred_send_queue: DeferredPeerFrameQueue::new(
                     iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                    iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                     Duration::from_millis(
                         iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
                     ),
@@ -4894,6 +4949,7 @@ mod accept_stream_tests {
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
+            outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
             debug_packet_loss_outbound_percent: 0,
             debug_packet_loss_outbound_counter: 0,
             debug_packet_loss_inbound_percent: 0,
@@ -4923,6 +4979,7 @@ mod accept_stream_tests {
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new(
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                 Duration::from_millis(
                     iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
                 ),
@@ -5191,6 +5248,7 @@ async fn start_quic_listener<T, K, E>(
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
     post_capacity: usize,
+    outbound_frame_queue_limits: OutboundFrameQueueLimits,
     trust_gossip: bool,
     max_frame_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeConfig>,
@@ -5262,6 +5320,7 @@ where
             let crypto_caps = crypto_caps.clone();
             let idle_timeout = idle_timeout;
             let post_capacity = post_capacity;
+            let outbound_frame_queue_limits = outbound_frame_queue_limits;
             let soranet_handshake = soranet_handshake.clone();
             let relay_role = relay_role;
             let trust_gossip = trust_gossip;
@@ -5345,6 +5404,7 @@ where
                             soranet_handshake.clone(),
                             local_scion_supported,
                             post_capacity,
+                            outbound_frame_queue_limits,
                             relay_role,
                             trust_gossip,
                             max_frame_bytes,
@@ -5407,6 +5467,7 @@ mod quic_tests {
             None,
             None,
             1,
+            OutboundFrameQueueLimits::default(),
             true,
             1_048_576,
             soranet,
@@ -5440,6 +5501,7 @@ async fn start_tls_listener<T, K, E>(
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
     crypto_caps: Option<crate::CryptoHandshakeCaps>,
     post_capacity: usize,
+    outbound_frame_queue_limits: OutboundFrameQueueLimits,
     trust_gossip: bool,
     max_frame_bytes: usize,
     quic_datagrams_enabled: bool,
@@ -5498,6 +5560,7 @@ where
             let acceptor = acceptor.clone();
             let idle_timeout = idle_timeout;
             let post_capacity = post_capacity;
+            let outbound_frame_queue_limits = outbound_frame_queue_limits;
             let soranet_handshake = soranet_handshake.clone();
             let relay_role = relay_role;
             let tcp_nodelay = tcp_nodelay;
@@ -5551,6 +5614,7 @@ where
                             soranet_handshake.clone(),
                             local_scion_supported,
                             post_capacity,
+                            outbound_frame_queue_limits,
                             relay_role,
                             trust_gossip,
                             max_frame_bytes,
@@ -5683,6 +5747,8 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     peer_capabilities: HashMap<PeerId, message::PeerTransportCapabilities>,
     /// Per-peer post channel capacity (bounded mode).
     post_queue_cap: usize,
+    /// Per-peer encrypted outbound frame backlog limits.
+    outbound_frame_queue_limits: OutboundFrameQueueLimits,
     /// Optional interval to refresh hostname-based peers.
     dns_refresh_interval: Option<Duration>,
     /// Optional TTL to refresh hostname-based peers individually.
@@ -5994,6 +6060,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                                 self.soranet_handshake.clone(),
                                 self.local_scion_supported,
                                 self.post_queue_cap,
+                                self.outbound_frame_queue_limits,
                                 self.relay_role,
                                 self.trust_gossip,
                                 self.max_frame_bytes,
@@ -6185,6 +6252,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.soranet_handshake.clone(),
             self.local_scion_supported,
             self.post_queue_cap,
+            self.outbound_frame_queue_limits,
             self.relay_role,
             self.trust_gossip,
             self.max_frame_bytes,
@@ -7048,6 +7116,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.crypto_caps.clone(),
             self.soranet_handshake.clone(),
             self.post_queue_cap,
+            self.outbound_frame_queue_limits,
             self.quic_enabled,
             self.tls_enabled,
             self.tls_fallback_to_plain,
@@ -8453,6 +8522,7 @@ mod tests {
             crypto_caps: None,
             peer_capabilities: HashMap::new(),
             post_queue_cap: 4,
+            outbound_frame_queue_limits: OutboundFrameQueueLimits::default(),
             debug_packet_loss_outbound_percent: 0,
             debug_packet_loss_outbound_counter: 0,
             debug_packet_loss_inbound_percent: 0,
@@ -8489,6 +8559,7 @@ mod tests {
             pending_connects: Vec::new(),
             deferred_send_queue: DeferredPeerFrameQueue::new(
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                 Duration::from_millis(
                     iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
                 ),
@@ -8718,7 +8789,8 @@ mod tests {
         let _guard = deferred_send_test_guard();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let now = tokio::time::Instant::now();
-        let mut queue = DeferredPeerFrameQueue::<DummyMsg>::new(8, Duration::from_secs(1));
+        let mut queue =
+            DeferredPeerFrameQueue::<DummyMsg>::new(8, usize::MAX, Duration::from_secs(1));
 
         let frame_one = RelayMessage::new(
             peer_id.clone(),
@@ -8779,7 +8851,8 @@ mod tests {
         let _guard = deferred_send_test_guard();
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let now = tokio::time::Instant::now();
-        let mut queue = DeferredPeerFrameQueue::<DummyMsg>::new(2, Duration::from_millis(5));
+        let mut queue =
+            DeferredPeerFrameQueue::<DummyMsg>::new(2, usize::MAX, Duration::from_millis(5));
 
         let mk_frame = || {
             RelayMessage::new(
@@ -8825,7 +8898,8 @@ mod tests {
             .collect();
         assert_eq!(kept_generations, vec![Some(2), Some(3)]);
 
-        let mut ttl_queue = DeferredPeerFrameQueue::<DummyMsg>::new(2, Duration::from_millis(5));
+        let mut ttl_queue =
+            DeferredPeerFrameQueue::<DummyMsg>::new(2, usize::MAX, Duration::from_millis(5));
         let _ = ttl_queue.enqueue(
             peer_id.clone(),
             mk_frame(),
@@ -8840,6 +8914,101 @@ mod tests {
             expired_after_ttl, 1,
             "expired entries should be dropped on flush"
         );
+    }
+
+    #[test]
+    fn deferred_queue_byte_cap_drops_oldest_but_keeps_oversized_newest() {
+        let _guard = deferred_send_test_guard();
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let now = tokio::time::Instant::now();
+        let mk_frame = |body_len: usize| {
+            RelayMessage::new(
+                peer_id.clone(),
+                RelayTarget::Direct(peer_id.clone()),
+                DEFAULT_RELAY_TTL,
+                Priority::Low,
+                vec![7; body_len],
+            )
+        };
+
+        let sample_frame = mk_frame(32);
+        let sample_bytes = crate::peer::data_message_wire_len(sample_frame.clone());
+        let mut queue = DeferredPeerFrameQueue::<Vec<u8>>::new(
+            8,
+            sample_bytes.saturating_mul(2),
+            Duration::from_secs(1),
+        );
+
+        let (_, overflow_one) = queue.enqueue(
+            peer_id.clone(),
+            sample_frame,
+            message::Topic::Other,
+            Some(1),
+            now,
+        );
+        let (_, overflow_two) = queue.enqueue(
+            peer_id.clone(),
+            mk_frame(32),
+            message::Topic::Other,
+            Some(2),
+            now + Duration::from_millis(1),
+        );
+        let (_, overflow_three) = queue.enqueue(
+            peer_id.clone(),
+            mk_frame(32),
+            message::Topic::Other,
+            Some(3),
+            now + Duration::from_millis(2),
+        );
+        assert_eq!(overflow_one, 0);
+        assert_eq!(overflow_two, 0);
+        assert_eq!(
+            overflow_three, 1,
+            "byte cap should evict the oldest queued frame"
+        );
+
+        let (queued, expired) = queue.take_peer(&peer_id, now + Duration::from_millis(3));
+        assert_eq!(expired, 0);
+        let kept_generations: Vec<Option<ConnectionId>> =
+            queued.iter().map(|entry| entry.generation).collect();
+        assert_eq!(kept_generations, vec![Some(2), Some(3)]);
+        assert!(
+            DeferredPeerFrameQueue::retained_wire_bytes(&queued) <= sample_bytes.saturating_mul(2),
+            "retained bytes should stay within the configured cap"
+        );
+
+        let mut oversized_queue =
+            DeferredPeerFrameQueue::<Vec<u8>>::new(8, sample_bytes, Duration::from_secs(1));
+        let _ = oversized_queue.enqueue(
+            peer_id.clone(),
+            mk_frame(32),
+            message::Topic::Other,
+            Some(7),
+            now,
+        );
+        let large_frame = mk_frame(1024);
+        let large_bytes = crate::peer::data_message_wire_len(large_frame.clone());
+        assert!(
+            large_bytes > sample_bytes,
+            "test must exercise a single frame larger than the byte cap"
+        );
+        let (_, oversized_overflow) = oversized_queue.enqueue(
+            peer_id.clone(),
+            large_frame,
+            message::Topic::Other,
+            Some(8),
+            now + Duration::from_millis(1),
+        );
+        assert_eq!(
+            oversized_overflow, 1,
+            "oversized newest frame should evict older entries"
+        );
+        let (oversized_queued, oversized_expired) =
+            oversized_queue.take_peer(&peer_id, now + Duration::from_millis(2));
+        assert_eq!(oversized_expired, 0);
+        assert_eq!(oversized_queued.len(), 1);
+        assert_eq!(oversized_queued[0].generation, Some(8));
+        assert_eq!(oversized_queued[0].wire_bytes, large_bytes);
     }
 
     #[test]
@@ -9130,7 +9299,7 @@ mod tests {
             return;
         };
 
-        network.deferred_send_queue = DeferredPeerFrameQueue::new(4, Duration::ZERO);
+        network.deferred_send_queue = DeferredPeerFrameQueue::new(4, usize::MAX, Duration::ZERO);
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let peer_addr = socket_addr!(127.0.0.1:45689);
         let (handle, mut receivers) =

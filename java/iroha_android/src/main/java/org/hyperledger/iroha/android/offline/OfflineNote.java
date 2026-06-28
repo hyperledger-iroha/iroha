@@ -82,6 +82,10 @@ public final class OfflineNote {
       "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimage";
   private static final String PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimage";
+  /**
+   * Historical classic Offline Note instruction wire names retained only for
+   * compatibility fixture decoding; production offline payments use Kagemusha flows.
+   */
   public static final String ISSUE_INSTRUCTION_SCHEMA =
       "iroha_data_model::isi::offline::IssueOfflineNote";
   public static final String REDEEM_INSTRUCTION_SCHEMA =

@@ -3107,27 +3107,26 @@ mod new {
 
     impl From<NewBlock> for SignedBlock {
         fn from(block: NewBlock) -> Self {
-            let mut transactions = Vec::new();
             let mut external_entrypoints = Vec::with_capacity(block.transactions.len());
             for accepted in block.transactions {
-                external_entrypoints.push(accepted.entrypoint().clone());
-                if let Some(signed) = accepted.external().cloned() {
-                    transactions.push(signed);
-                }
+                external_entrypoints.push(accepted.into_entrypoint());
             }
-            let mut signed_block = SignedBlock::presigned_with_da(
+            SignedBlock::presigned_with_payload(
                 block.signature,
-                block.header,
-                transactions,
-                block.da_commitments,
-            );
-            signed_block.set_external_entrypoints(external_entrypoints);
-            signed_block.set_da_proof_policies(block.da_proof_policies);
-            signed_block.set_da_pin_intents(block.da_pin_intents);
-            signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
-            signed_block.set_npos_consensus_effects(block.npos_consensus_effects);
-            signed_block.set_execution_context(block.execution_context);
-            signed_block
+                BlockPayload {
+                    header: block.header,
+                    // `external_entrypoints` is the canonical V1 payload store; keeping the
+                    // skipped legacy cache here doubles pending block transaction memory.
+                    transactions: Vec::new(),
+                    external_entrypoints,
+                    execution_context: block.execution_context,
+                    da_commitments: block.da_commitments,
+                    da_proof_policies: block.da_proof_policies,
+                    da_pin_intents: block.da_pin_intents,
+                    previous_roster_evidence: block.previous_roster_evidence,
+                    npos_consensus_effects: block.npos_consensus_effects,
+                },
+            )
         }
     }
 
@@ -3144,7 +3143,7 @@ mod new {
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         #[test]
-        fn into_signed_block_preserves_transactions() {
+        fn into_signed_block_preserves_external_transactions_without_legacy_cache() {
             let chain: ChainId = "new-block-conversion".parse().expect("valid chain id");
             let (authority, keypair) = gen_account_in("wonderland");
 
@@ -3176,7 +3175,14 @@ mod new {
                 .unpack(|_| {});
 
             let signed_block: SignedBlock = new_block.into();
-            assert_eq!(signed_block.transactions_vec(), &expected);
+            assert!(
+                signed_block.transactions_vec().is_empty(),
+                "new blocks should not retain the skipped legacy transaction cache"
+            );
+            assert_eq!(
+                signed_block.external_transactions().collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>()
+            );
         }
 
         #[test]
@@ -3255,7 +3261,14 @@ mod new {
                 .unpack(|_| {});
 
             let signed_block: SignedBlock = new_block.into();
-            assert_eq!(signed_block.transactions_vec(), &expected);
+            assert!(
+                signed_block.transactions_vec().is_empty(),
+                "new blocks should not retain the skipped legacy transaction cache"
+            );
+            assert_eq!(
+                signed_block.external_transactions().collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>()
+            );
         }
     }
 }

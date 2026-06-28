@@ -148,6 +148,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             ),
             deferred_send_max_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer:
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -652,6 +654,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 missing_request_stale_height_margin:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+                pending_block_cap:
+                    iroha_config::parameters::defaults::sumeragi::RECOVERY_PENDING_BLOCK_CAP,
                 pending_block_sync_cap:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_PENDING_BLOCK_SYNC_CAP,
@@ -716,6 +720,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
                 payload_chunks_per_tick:
                     iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
+                outbound_queue_max_sessions:
+                    iroha_config::parameters::defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_SESSIONS,
+                outbound_queue_max_bytes:
+                    iroha_config::parameters::defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_BYTES,
                 inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                 store_max_sessions:
                     iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,

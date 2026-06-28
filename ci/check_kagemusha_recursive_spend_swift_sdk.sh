@@ -3,10 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SWIFTC_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFTC_BIN:-swiftc}"
+SWIFT_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_BIN:-swift}"
 
 cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" --version
+"${SWIFT_BIN}" --version
 "${SWIFTC_BIN}" -parse -parse-as-library \
+  IrohaSwift/Sources/IrohaSwift/AccountAddress.swift \
+  IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift \
   IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift \
   IrohaSwift/Sources/IrohaSwift/Crypto.swift \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
@@ -116,3 +120,18 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/OfflineTransferDiagnosticsTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteV2Tests.swift \
   IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test --filter ToriiClientTests/testGetOfflineReadiness
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test --filter 'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork'
+)
+
+(
+  cd IrohaSwift
+  "${SWIFT_BIN}" test --filter OfflineNoteRedeemPlannerTests
+)

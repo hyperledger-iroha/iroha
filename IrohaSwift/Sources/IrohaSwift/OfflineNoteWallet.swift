@@ -1267,6 +1267,9 @@ public protocol OfflineNoteOutcomeProvider {
     func listOutcomes() async throws -> [OfflineNoteExplorerInstructionOutcome]
 }
 
+/// Retired classic Offline Note outcome names retained for historical
+/// compatibility fixture indexing; production offline payments use Kagemusha
+/// flows.
 public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
     public static let kindIssue = "IssueOfflineNote"
     public static let kindRedeem = "RedeemOfflineNote"

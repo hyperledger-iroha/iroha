@@ -381,7 +381,7 @@ pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
     header.merkle_root = entry_merkle.root();
     BlockPayload {
         header,
-        transactions: block.transactions_vec().clone(),
+        transactions: Vec::new(),
         external_entrypoints,
         execution_context: block.execution_context().cloned(),
         da_commitments: block.da_commitments().cloned(),

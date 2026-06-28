@@ -399,12 +399,16 @@ REQUIRED_RECURSIVE_COMPACT_JNI_ALL_METHODS = (
 )
 
 SOURCE_PATHS = (
+    "Cargo.toml",
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "crates/connect_norito_bridge/include/NoritoBridge.h",
     "crates/iroha_core/src/zk.rs",
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_js_host/src/lib.rs",
+    "crates/iroha_torii/src/lib.rs",
+    "crates/iroha_torii/tests/offline_readiness_smoke.rs",
+    "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
     "docs/source/offline_kagemusha.md",
     "scripts/kagemusha_android_device_lab_slot.py",
     "scripts/tests/check_android_device_lab_slot_test.py",
@@ -429,6 +433,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift",
     "IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift",
     "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
+    "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
@@ -442,6 +447,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
     "IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift",
@@ -496,6 +502,7 @@ SOURCE_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
@@ -622,8 +629,12 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/NativeOfflineNoteProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteV2.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineQrStream.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineToriiException.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java",
@@ -651,6 +662,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelope.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeAdapter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tx/offline/OfflineSigningEnvelopeCodec.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineListParams.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/tools/PendingQueueInspector.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscMainnetSccp.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/BscSccpProver.java",
@@ -675,6 +687,9 @@ SOURCE_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionStatus.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionToriiException.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/subscriptions/SubscriptionUsageRequest.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/NexusAppClient.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/UaidLiteral.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/UaidPortfolioQuery.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountIdLiteralTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java",
@@ -694,6 +709,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/DirectoryPendingTransactionQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueueTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/queue/OfflineJournalPendingTransactionQueueTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamClientTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/stream/ToriiEventStreamSubscriptionTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/transport/UrlConnectionTransportExecutorTests.java",
@@ -704,6 +720,7 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectQueueJournalTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectRetryPolicyTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/connect/ConnectWalletRequestTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/nexus/NexusAppClientTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/keystore/attestation/AttestationVerifierTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/crypto/SigningAlgorithmTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java",
@@ -740,6 +757,22 @@ SOURCE_PATHS = (
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
     "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
     "java/iroha_android/src/test/resources/transaction_payloads.json",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/CRC64.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAdapters.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAoS.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoCodec.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoColumnar.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoCompression.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoDecoder.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoDump.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoEncoder.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoHeader.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreamingCodec.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/Result.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/SchemaHash.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/TypeAdapter.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/Varint.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt",
@@ -798,6 +831,10 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRetryPolicy.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectRole.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/connect/ConnectWalletRequest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/NexusAppClient.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/UaidLiteral.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/UaidPortfolioQuery.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineListParams.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/Executable.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/JsonValue.kt",
@@ -825,8 +862,11 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/NativeOfflineNoteProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteV2.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineSettlementProofs.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineToriiException.kt",
@@ -882,6 +922,7 @@ SOURCE_PATHS = (
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectEnvelopeCodecTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectSequenceTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/connect/ConnectWalletRequestTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/nexus/NexusAppClientTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/TransactionPayloadTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoderParityTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterAccountWirePayloadEncoderParityTest.kt",
@@ -944,6 +985,10 @@ SOURCE_PATHS = (
     "javascript/iroha_js/dist/index.js",
     "javascript/iroha_js/src/instructionBuilders.js",
     "javascript/iroha_js/dist/instructionBuilders.js",
+    "javascript/iroha_js/src/native.js",
+    "javascript/iroha_js/dist/native.js",
+    "javascript/iroha_js/src/nexusApp.js",
+    "javascript/iroha_js/dist/nexusApp.js",
     "javascript/iroha_js/src/offlineCashLifecycle.js",
     "javascript/iroha_js/dist/offlineCashLifecycle.js",
     "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -953,8 +998,11 @@ SOURCE_PATHS = (
     "javascript/iroha_js/src/transaction.js",
     "javascript/iroha_js/dist/transaction.js",
     "javascript/iroha_js/index.d.ts",
+    "javascript/iroha_js/nexus-app.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
+    "javascript/iroha_js/scripts/build-native.mjs",
+    "javascript/iroha_js/scripts/copy-native.mjs",
     "fixtures/soracloud/identifier_receipt_vectors_v1.json",
     "javascript/iroha_js/test/address.test.js",
     "javascript/iroha_js/test/canonicalRequest.test.js",
@@ -972,6 +1020,7 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/instructionBuilders.test.js",
     "javascript/iroha_js/test/transactionBuilder.test.js",
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+    "javascript/iroha_js/test/nexusAppClient.test.js",
     "javascript/iroha_js/test/offlineCashLifecycle.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
     "javascript/iroha_js/test/privacyCatalogParity.test.js",
@@ -981,7 +1030,27 @@ SOURCE_PATHS = (
     "javascript/iroha_js/test/toriiClient.isoAlias.test.js",
     "javascript/iroha_js/test/toriiClient.ramLfe.test.js",
     "javascript/iroha_js/test/toriiClient.test.js",
+    "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/toriiSubscriptions.test.js",
+    "python/norito_py/MANIFEST.in",
+    "python/norito_py/pyproject.toml",
+    "python/norito_py/setup.cfg",
+    "python/norito_py/src/norito/__init__.py",
+    "python/norito_py/src/norito/aos.py",
+    "python/norito_py/src/norito/cli.py",
+    "python/norito_py/src/norito/codec.py",
+    "python/norito_py/src/norito/columnar.py",
+    "python/norito_py/src/norito/compression.py",
+    "python/norito_py/src/norito/crc64.py",
+    "python/norito_py/src/norito/errors.py",
+    "python/norito_py/src/norito/header.py",
+    "python/norito_py/src/norito/heuristics.py",
+    "python/norito_py/src/norito/relay_registry.py",
+    "python/norito_py/src/norito/result.py",
+    "python/norito_py/src/norito/schema.py",
+    "python/norito_py/src/norito/streaming.py",
+    "python/norito_py/src/norito/telemetry_analysis.py",
+    "python/norito_py/src/norito/varint.py",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/_native.py",
     "python/iroha_python/src/iroha_python/_privacy_backends.py",
@@ -991,12 +1060,14 @@ SOURCE_PATHS = (
     "python/iroha_python/src/iroha_python/crypto.py",
     "python/iroha_python/src/iroha_python/event_filter.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
+    "python/iroha_python/src/iroha_python/nexus_app.py",
     "python/iroha_python/src/iroha_python/offline_cash.py",
     "python/iroha_python/src/iroha_python/privacy_catalog.py",
     "python/iroha_python/src/iroha_python/tx.py",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
     "python/iroha_python/tests/client_ledger_helpers_test.py",
     "python/iroha_python/tests/kagemusha_test.py",
+    "python/iroha_python/tests/test_nexus_app.py",
     "python/iroha_python/tests/privacy_catalog_test.py",
     "python/iroha_python/tests/crypto_algorithms_test.py",
     "python/iroha_python/tests/offline_cash_test.py",
@@ -1266,6 +1337,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-confidential-v2-derivation-exactness",
     ),
     (
+        "JavaScript SDK private Kaigi/confidential exactness runner negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-confidential-exactness-filter-script",
+    ),
+    (
+        "JavaScript SDK package declaration runner negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-package-declaration-filter-script",
+    ),
+    (
         "Python Kagemusha instruction transaction builder negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-kagemusha-instruction-transaction-builder",
     ),
@@ -1356,6 +1435,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Android Java lineage witness append availability probe negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe",
+    ),
+    (
+        "JVM/Android native ABI boundary negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-native-abi-boundary",
+    ),
+    (
+        "JVM/Android native availability runtime fail-closed negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-android-native-availability-runtime-fail-closed",
     ),
     (
         "JVM/Android hop evidence shape negative control",
@@ -1564,6 +1651,30 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "non-C# SDK top-up anchor nullifier invariant negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-topup-anchor-nullifier-invariants",
+    ),
+    (
+        "Swift redeem lineage verifier-record list value-semantics negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-redeem-lineage-record-list-value-semantics",
+    ),
+    (
+        "Kotlin redeem lineage verifier-record list immutability negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-redeem-lineage-record-list-immutability",
+    ),
+    (
+        "Android Java redeem lineage verifier-record list immutability negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-redeem-lineage-record-list-immutability",
+    ),
+    (
+        "JVM verifier-record byte copy-isolation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-verifier-record-byte-copy-isolation",
+    ),
+    (
+        "JavaScript recursive spend bundle summary copy-isolation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-bundle-summary-copy-isolation",
+    ),
+    (
+        "mobile recursive spend bundle summary copy-isolation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-bundle-summary-copy-isolation",
     ),
     (
         "SDK redeem lineage preflight negative control",
@@ -1810,6 +1921,30 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-account-alias-resolution-exactness",
     ),
     (
+        "JVM UAID portfolio query selector exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-uaid-portfolio-query-selector-exactness",
+    ),
+    (
+        "JVM UAID path literal exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-uaid-path-literal-exactness",
+    ),
+    (
+        "non-C# UAID path literal exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-non-csharp-uaid-path-literal-exactness",
+    ),
+    (
+        "JavaScript SNS domain route selector exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sns-domain-selector-exactness",
+    ),
+    (
+        "Swift account asset scope selector exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-account-asset-scope-selector-exactness",
+    ),
+    (
+        "JVM offline list asset selector exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-offline-list-asset-selector-exactness",
+    ),
+    (
         "multisig resolved account exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-multisig-resolved-account-exactness",
     ),
@@ -1994,12 +2129,20 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-canonical-request-test-filter-script",
     ),
     (
+        "Python SDK Torii selector test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-torii-selector-test-filter-script",
+    ),
+    (
         "Python SDK identifier receipt test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-identifier-receipt-test-filter-script",
     ),
     (
         "Python SDK multisig response test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-multisig-response-test-filter-script",
+    ),
+    (
+        "Python SDK offline readiness test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-offline-readiness-test-filter-script",
     ),
     (
         "Python typed recursive spend block height vector negative control",
@@ -2086,6 +2229,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-frozen-copy",
     ),
     (
+        "Python recursive spend bundle summary copy-isolation negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-bundle-summary-copy-isolation",
+    ),
+    (
+        "Python redeem lineage verifier-record tuple immutability negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-redeem-lineage-record-tuple-immutability",
+    ),
+    (
         "Python SDK test workflow negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-workflow",
     ),
@@ -2136,6 +2287,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "JVM SDK signing/verifier exactness test filter script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-signing-verifier-test-filter-script",
+    ),
+    (
+        "JVM SDK Nexus test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-nexus-filter-script",
     ),
     (
         "JVM SDK Torii event-stream verifier filter script negative control",
@@ -2254,6 +2409,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kotlin-offline-cash-settlement-coverage",
     ),
     (
+        "Offline readiness artifact contract negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-readiness-artifact-contract",
+    ),
+    (
         "Offline cash issuer-key exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-cash-issuer-key-exactness",
     ),
@@ -2288,6 +2447,30 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Mobile Torii RPC/subscription/WebSocket runner coverage negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage",
+    ),
+    (
+        "Mobile retired Offline Note issuer negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-retired-offline-note-issuers",
+    ),
+    (
+        "Mobile retired Offline Note submitter negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-retired-offline-note-submitters",
+    ),
+    (
+        "Swift retired Offline Note transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-retired-offline-note-transaction-builders",
+    ),
+    (
+        "Bridge retired Offline Note transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bridge-retired-offline-note-transaction-builders",
+    ),
+    (
+        "Mobile classic Offline Note fixture label negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-classic-offline-note-fixture-labels",
+    ),
+    (
+        "Mobile Offline Note draft proof replacement negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-offline-note-draft-proof-replacement",
     ),
     (
         "JVM Offline Note V2 decoder placeholder negative control",
@@ -2440,6 +2623,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift SDK compiler override script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-override-script",
+    ),
+    (
+        "Swift SDK offline readiness test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-offline-readiness-test-filter-script",
+    ),
+    (
+        "Swift SDK redeem planner test filter script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-redeem-planner-test-filter-script",
     ),
     (
         "Swift SDK dependency workflow negative control",
@@ -2699,6 +2890,27 @@ def first_lines_for_labels(message, labels):
             line = label
         detected.append(line)
     return detected
+
+
+def detect_negative_control(mutated_texts, expected_labels, description):
+    expected_labels = tuple(expected_labels)
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            lines = message.splitlines()
+            first_line = lines[0] if lines else str(error)
+            raise SystemExit(
+                f"negative control failed: {description} was rejected for the wrong reason: "
+                + first_line
+            )
+        return first_lines_for_labels(message, expected_labels)
+    raise SystemExit(
+        f"negative control failed: {description} was not detected for "
+        + ", ".join(expected_labels)
+    )
 
 
 def require_tuple_contains(texts, relative, tuple_name, needles, label, errors):
@@ -3416,11 +3628,17 @@ def check_javascript_sdk_script(errors):
         and "privacy native wrappers require binary Norito request archives" in script
         and "privacy algorithm JS catalogs reject malformed internal review evidence" in script
         and "fromAccount rejects control and Unicode-confusable curve algorithm aliases" in script
-        and "offline cash configuration snapshot requires cached issuer key and ABI" in script
+        and "offline cash configuration snapshot requires cached identity, time, issuer key, and ABI" in script
         and "canonical request signing: rejects padded auth fields" in script
         and "streamEvents rejects unsupported production backend event filters before fetch" in script
         and "streamEvents rejects malformed verifying key event names before fetch" in script
         and "streamEvents rejects malformed proof event hashes before fetch" in script
+        and "contract query helpers reject padded selector filters before dispatch" in script
+        and "SNS domain route helpers reject padded selectors before dispatch" in script
+        and "getUaidPortfolio rejects padded UAID path literals before dispatch" in script
+        and "package dist Torii contract query helpers reject padded selector filters before dispatch" in script
+        and "package dist SNS domain route helpers reject padded selectors before dispatch" in script
+        and "package dist UAID path helpers reject padded literals before dispatch" in script
         and "ZK-ACE verifier-key references reject padded selector metadata" in script
         and "privacy proof envelopes preserve pending production backend tags" in script
         and "verifyIdentifierResolutionReceipt rejects adversarial receipt mutations" in script
@@ -3431,6 +3649,9 @@ def check_javascript_sdk_script(errors):
         and "ToriiClient canonical auth uses raw Node transport for UTF-8 account headers" in script
         and "ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available" in script
         and "ToriiClient canonical auth rejects non-byte private key arrays" in script
+        and "getOfflineReadiness fetches canonical readiness payload" in script
+        and "getOfflineReadiness rejects noncanonical ABI versions" in script
+        and "getOfflineReadiness rejects legacy-only readiness payload" in script
         and "subscription plan and create endpoints send normalized payloads" in script
         and "subscription action endpoints send normalized payloads" in script
         and "getSubscription returns null on 404" in script
@@ -3502,11 +3723,43 @@ def check_javascript_sdk_script(errors):
         and "test/toriiClient.test.js" in script
         and "test/toriiSubscriptions.test.js" in script
         and "test/transactionBuilder.test.js" in script,
-        "Kagemusha JavaScript SDK script must run recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter exactness, Torii canonical auth/subscription/Connect/ISO alias exactness, verifier-key exactness, identifier receipt exactness, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
+        "Kagemusha JavaScript SDK script must run recursive spend, address exactness, offline cash issuer-key exactness, canonical request auth exactness, Torii event-filter and contract-query exactness, Torii canonical auth/offline-readiness/subscription/Connect/ISO alias exactness, verifier-key exactness, identifier receipt exactness, browser-stub, privacy native, package-dist, transaction-builder, and runtime-gate meta tests",
         errors,
     )
     for fragment, label in (
         ("|buildKagemusha", "JavaScript SDK transaction-builder focused selector"),
+        (
+            "|private Kaigi transaction builders reject padded identifiers before native dispatch",
+            "JavaScript SDK private Kaigi transaction-builder focused selector",
+        ),
+        (
+            "|package dist private Kaigi transaction builders reject padded identifiers before native dispatch",
+            "JavaScript SDK package-dist private Kaigi transaction-builder focused selector",
+        ),
+        (
+            "|confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "JavaScript SDK confidential v2 derivation focused selector",
+        ),
+        (
+            "|package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "JavaScript SDK package-dist confidential v2 derivation focused selector",
+        ),
+        (
+            "|confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+            "JavaScript SDK confidential proof-builder focused selector",
+        ),
+        (
+            "|package dist confidential proof builders reject padded amount literals before native dispatch",
+            "JavaScript SDK package-dist confidential proof-builder focused selector",
+        ),
+        (
+            "|package declarations expose recursive compact key-package signatures",
+            "JavaScript SDK package-dist recursive compact declaration focused selector",
+        ),
+        (
+            "|package declarations keep accumulator digests native-owned",
+            "JavaScript SDK package-dist accumulator native-owned declaration focused selector",
+        ),
         (
             "  test/transactionBuilder.test.js",
             "JavaScript SDK transaction-builder test file",
@@ -3517,7 +3770,7 @@ def check_javascript_sdk_script(errors):
         ),
         ("  test/privacyNative.test.js", "JavaScript SDK privacy native test file"),
         (
-            "|offline cash configuration snapshot requires cached issuer key and ABI",
+            "|offline cash configuration snapshot requires cached identity, time, issuer key, and ABI",
             "JavaScript SDK offline cash focused selector",
         ),
         (
@@ -3537,6 +3790,30 @@ def check_javascript_sdk_script(errors):
             "|streamEvents rejects malformed verifying key event names before fetch"
             "|streamEvents rejects malformed proof event hashes before fetch",
             "JavaScript SDK event-filter focused selectors",
+        ),
+        (
+            "|contract query helpers reject padded selector filters before dispatch",
+            "JavaScript SDK contract-query focused selector",
+        ),
+        (
+            "|SNS domain route helpers reject padded selectors before dispatch",
+            "JavaScript SDK SNS domain selector focused selector",
+        ),
+        (
+            "|getUaidPortfolio rejects padded UAID path literals before dispatch",
+            "JavaScript SDK UAID path literal focused selector",
+        ),
+        (
+            "|package dist Torii contract query helpers reject padded selector filters before dispatch",
+            "JavaScript SDK package-dist contract-query focused selector",
+        ),
+        (
+            "|package dist SNS domain route helpers reject padded selectors before dispatch",
+            "JavaScript SDK package-dist SNS domain selector focused selector",
+        ),
+        (
+            "|package dist UAID path helpers reject padded literals before dispatch",
+            "JavaScript SDK package-dist UAID path literal focused selector",
         ),
         ("  test/toriiClient.test.js", "JavaScript SDK event-filter test file"),
         (
@@ -3707,8 +3984,18 @@ def check_c_bridge(texts, errors):
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
         (
+            "fn kagemusha_recursive_spend_ffi_rejects_empty_nested_pallas_archives_without_output()",
+            "assert_recursive_spend_single_archive_ffi_rejects_empty_nested_pallas",
             "zero-envelope Pallas archive",
+            "encode zero-envelope init request",
+            '"init zero-envelope",',
+            '"transition profile init zero-envelope",',
+            "encode zero-envelope append request",
+            '"append zero-envelope",',
+            '"transition profile append zero-envelope",',
             "zero-envelope nested Pallas archives",
+            "init lineage witness helper must not return output for zero-envelope nested Pallas archives",
+            "append lineage witness helper must not return output for zero-envelope nested Pallas archives",
         ),
         "Rust C recursive spend nested Pallas guard",
         errors,
@@ -6634,6 +6921,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyStatusTest",
         "org.hyperledger.iroha.sdk.crypto.SigningAlgorithmTest",
+        "org.hyperledger.iroha.sdk.nexus.NexusAppClientTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendRequestCodecsTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
         "org.hyperledger.iroha.sdk.offline.KagemushaInstructionArchivesTest",
@@ -6770,6 +7058,7 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests",
         "org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutorTests",
         "org.hyperledger.iroha.android.connect.ConnectWalletRequestTests",
+        "org.hyperledger.iroha.android.nexus.NexusAppClientTest",
     ):
         require(
             f"--tests {test_class}" in script,
@@ -7297,6 +7586,37 @@ def check_mobile_confidential_note_coverage(texts, errors):
 
 
 def check_mobile_offline_readiness_coverage(texts, errors):
+    torii_readiness = texts["crates/iroha_torii/src/lib.rs"]
+    require(
+        torii_readiness.count("let offline_kagemusha_abi7 = offline.kagemusha_enabled;") == 2,
+        "Torii offline readiness handler missing direct kagemusha_enabled ABI-7 gate",
+        errors,
+    )
+    require(
+        "kagemusha_force_legacy" not in torii_readiness,
+        "Torii offline readiness handler must not reference removed kagemusha_force_legacy",
+        errors,
+    )
+    for relative, label in (
+        (
+            "crates/iroha_torii/tests/offline_readiness_smoke.rs",
+            "Torii offline readiness smoke legacy-field absence",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
+            "Torii offline V2 readiness smoke legacy-field absence",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                '"offline_kagemusha_enabled"',
+                '"offline_kagemusha_force_legacy"',
+            ),
+            label,
+            errors,
+        )
     alias_diagnostics = (
         "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
         "offline_kagemusha_abi7_mode and offline_kagemusha_recursive_compact_mode must match",
@@ -7467,6 +7787,239 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         "Android Java Offline readiness parser tests",
         errors,
     )
+    for relative, label in (
+        (
+            "javascript/iroha_js/src/toriiClient.js",
+            "JavaScript Torii offline readiness alias parser",
+        ),
+        (
+            "javascript/iroha_js/dist/toriiClient.js",
+            "JavaScript package-dist Torii offline readiness alias parser",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "const hasAbi7Family = abi7Keys.some(hasOwn);",
+                "const hasRecursiveCompactFamily = recursiveCompactKeys.some(hasOwn);",
+                "const requireExactBoolean = (value, field) =>",
+                "const decodeAbi7Family = () =>",
+                "const decodeRecursiveCompactFamily = () =>",
+                "requireExactNonEmptyString(",
+                "must match ${context}.${recursiveCompactField}",
+                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+                "const abi7 = abi7Family ?? recursiveCompactFamily;",
+                "const recursiveCompact = recursiveCompactFamily ?? abi7Family;",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            "has_abi7_family = any(field in payload for field in abi7_fields)",
+            "has_recursive_compact_family = any(",
+            "def decode_abi7_family() -> Dict[str, Any]:",
+            "def decode_recursive_compact_family() -> Dict[str, Any]:",
+            "offline readiness.{abi7_field} must match",
+            "offline readiness.{recursive_compact_field}",
+            "abi7 = abi7_family or recursive_compact_family",
+            "recursive_compact = recursive_compact_family or abi7_family",
+        ),
+        "Python Torii offline readiness alias parser",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+        (
+            "private struct KagemushaReadinessFamily",
+            "let hasAbi7Family = Self.containsAny(",
+            "let hasRecursiveCompactFamily = Self.containsAny(",
+            "private static func decodeAbi7Family(",
+            "private static func decodeRecursiveCompactFamily(",
+            "private static func decodeRequiredExactString(",
+            "private static func requireMatching<T: Equatable>(",
+            "must match \\(rhsKey.stringValue)",
+            "let abi7 = abi7Family ?? recursiveCompactFamily!",
+            "let recursiveCompact = recursiveCompactFamily ?? abi7Family!",
+        ),
+        "Swift Torii offline readiness alias parser",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "OFFLINE_READINESS_ABI7_FIELDS",
+            "OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS",
+            "omitOfflineReadinessFields",
+            "assert.deepEqual(await aliasClient.getOfflineReadiness(), readiness);",
+            "offline_kagemusha_abi7 must match offline readiness response\\.offline_kagemusha_recursive_compact_available",
+            "offline_kagemusha_abi7_bridge_abi_version must match offline readiness response\\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
+        ),
+        "JavaScript Torii offline readiness alias tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            "OFFLINE_READINESS_ABI7_FIELDS",
+            "OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS",
+            "_offline_readiness_payload_without",
+            "alias_readiness = client.get_offline_readiness()",
+            "offline readiness.offline_kagemusha_abi7 must match offline readiness.offline_kagemusha_recursive_compact_available",
+            "offline readiness.offline_kagemusha_abi7_bridge_abi_version must match offline readiness.offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "offline readiness.offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
+        ),
+        "Python Torii offline readiness alias tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+        (
+            "let compactOnlyPayload",
+            "let abi7OnlyPayload",
+            "for aliasPayload in [compactOnlyPayload, abi7OnlyPayload]",
+            "XCTAssertTrue(aliasReadiness.hasKagemushaRecursiveCompactMetadata)",
+            "offline_kagemusha_abi7 must match offline_kagemusha_recursive_compact_available",
+            "offline_kagemusha_abi7_bridge_abi_version must match offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace",
+        ),
+        "Swift Torii offline readiness alias tests",
+        errors,
+    )
+
+
+def check_offline_readiness_artifact_contract(texts, errors):
+    require_contains(
+        texts,
+        "crates/iroha_torii/src/lib.rs",
+        (
+            "Mobile artifact archives are",
+            "served and gated by Core API",
+            "let offline_kagemusha_abi7_artifacts = false;",
+            '"offline_kagemusha_abi7_artifacts"',
+            '"offline_kagemusha_recursive_compact_artifacts_available"',
+        ),
+        "Torii offline readiness artifact contract",
+        errors,
+    )
+    for relative, label in (
+        (
+            "crates/iroha_torii/tests/offline_readiness_smoke.rs",
+            "Torii offline readiness smoke artifact contract",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
+            "Torii offline V2 readiness smoke artifact contract",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                '\\"offline_kagemusha_abi7_artifacts\\":false',
+                '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "offline_kagemusha_abi7_artifacts: false",
+            "offline_kagemusha_recursive_compact_artifacts_available: false",
+        ),
+        "JavaScript Torii offline readiness artifact contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/integrationTorii.test.js",
+        (
+            "assert.equal(readiness.offline_kagemusha_abi7_artifacts, false);",
+            "assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);",
+        ),
+        "JavaScript optional Torii offline readiness artifact contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            '"offline_kagemusha_abi7_artifacts": False',
+            '"offline_kagemusha_recursive_compact_artifacts_available": False',
+            "assert readiness.offline_kagemusha_abi7_artifacts is False",
+            "assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False",
+        ),
+        "Python Torii offline readiness artifact contract",
+        errors,
+    )
+    require(
+        "&& offlineKagemushaAbi7Artifacts" not in texts["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"],
+        "Swift Torii offline readiness metadata helper must not require artifact archives for metadata",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+        (
+            '"offline_kagemusha_abi7_artifacts": false',
+            '"offline_kagemusha_recursive_compact_artifacts_available": false',
+            "XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)",
+            "XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+            "XCTAssertTrue(readiness.hasKagemushaRecursiveCompactMetadata)",
+        ),
+        "Swift Torii offline readiness artifact contract",
+        errors,
+    )
+    for relative, label in (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+            "Kotlin Offline readiness artifact contract",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+            "Kotlin Offline V2 readiness artifact contract",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                '"offline_kagemusha_recursive_compact_artifacts_available": false',
+                "assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+        (
+            '"offline_kagemusha_recursive_compact_artifacts_available": false',
+            "assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()",
+        ),
+        "Android Java Offline Torii readiness artifact contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
+        (
+            '"offline_kagemusha_recursive_compact_artifacts_available": false',
+            "assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();",
+        ),
+        "Android Java Offline readiness parser artifact contract",
+        errors,
+    )
 
 
 def check_kotlin_offline_cash_settlement_coverage(texts, errors):
@@ -7557,51 +8110,98 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
     common_vectors = (
         "missing_issuer_public_key",
         "malformed_snapshot",
-        '" issuer-key"',
-        '"issuer-key "',
-        '"issuer key"',
+        '"not base64"',
+        '"!!!!"',
         '"issuer-key\\n"',
         '"issuer-key\\u2603"',
     )
     for relative, label, required_markers in (
         (
             "python/iroha_python/src/iroha_python/offline_cash.py",
-            "Python offline cash ABI exactness guard",
+            "Python offline cash snapshot identity, time, and ABI exactness guard",
             (
+                "_require_canonical_offline_cash_snapshot_text",
+                "_nonnegative_offline_cash_snapshot_timestamp",
+                "_is_valid_offline_issuer_public_key_base64",
                 "_positive_native_bridge_abi_version",
                 "required_native_bridge_abi_version",
+                "chain_id",
+                "asset_definition_id",
+                "offline_payments_enabled is not True",
+                "artifact_set_id",
+                "circuit_id",
+                "created_at_ms",
+                "expires_at_ms",
             ),
         ),
         (
             "javascript/iroha_js/src/offlineCashLifecycle.js",
-            "JavaScript offline cash ABI exactness guard",
+            "JavaScript offline cash snapshot identity, time, and ABI exactness guard",
             (
+                "requireCanonicalOfflineCashSnapshotText",
+                "nonnegativeIntegerOfflineCashSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
                 "positiveIntegerOfflineCashSnapshotNumber",
                 "requiredNativeBridgeAbiVersion",
+                "chainId",
+                "assetDefinitionId",
+                "offlinePaymentsEnabled !== true",
+                "artifactSetId",
+                "circuitId",
+                "createdAtMs",
+                "expiresAtMs",
             ),
         ),
         (
             "javascript/iroha_js/dist/offlineCashLifecycle.js",
-            "JavaScript package offline cash ABI exactness guard",
+            "JavaScript package offline cash snapshot identity, time, and ABI exactness guard",
             (
+                "requireCanonicalOfflineCashSnapshotText",
+                "nonnegativeIntegerOfflineCashSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
                 "positiveIntegerOfflineCashSnapshotNumber",
                 "requiredNativeBridgeAbiVersion",
+                "chainId",
+                "assetDefinitionId",
+                "offlinePaymentsEnabled !== true",
+                "artifactSetId",
+                "circuitId",
+                "createdAtMs",
+                "expiresAtMs",
             ),
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
-            "Kotlin offline cash ABI exactness guard",
+            "Kotlin offline cash snapshot identity, time, and ABI exactness guard",
             (
+                "requireCanonicalOfflineCashSnapshotText",
+                "nonnegativeOfflineCashSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
                 "positiveNativeBridgeAbiVersion",
                 "requiredNativeBridgeAbiVersion",
+                "chainId",
+                "assetDefinitionId",
+                "artifactSetId",
+                "circuitId",
+                "createdAtMs",
+                "expiresAtMs",
             ),
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
-            "Android Java offline cash ABI exactness guard",
+            "Android Java offline cash snapshot identity, time, and ABI exactness guard",
             (
+                "requireCanonicalSnapshotText",
+                "nonnegativeSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
                 "positiveNativeBridgeAbiVersion",
                 "requiredNativeBridgeAbiVersion",
+                "chainId",
+                "assetDefinitionId",
+                "artifactSetId",
+                "circuitId",
+                "createdAtMs",
+                "expiresAtMs",
             ),
         ),
     ):
@@ -7610,62 +8210,125 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
             relative,
             (
                 "must be a positive integer",
+                "nonnegative integer timestamp",
                 "malformed_snapshot",
                 *required_markers,
             ),
             label,
             errors,
         )
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
+        (
+            "case malformedSnapshot(field: String)",
+            "OfflineIssuerPublicKey.isValid",
+            "requireCanonicalSnapshotText",
+            "nativeBridgeAbiVersion == 0",
+            "requiredNativeBridgeAbiVersion == 0",
+            "expiresAtMs <= createdAtMs",
+            "chainId",
+            "assetDefinitionId",
+            "artifactSetId",
+            "circuitId",
+            "unsupportedNativeBridgeAbi",
+        ),
+        "Swift offline cash snapshot identity, time, and ABI exactness guard",
+        errors,
+    )
     for relative, label, extra_vectors in (
         (
             "python/iroha_python/tests/offline_cash_test.py",
-            "Python offline cash issuer-key exactness vectors",
+            "Python offline cash issuer-key and timestamp exactness vectors",
             (
-                "test_offline_cash_snapshot_requires_cached_issuer_key",
+                "test_offline_cash_snapshot_requires_cached_identity_time_issuer_key_and_abi",
+                "ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                "malformed_identity_kwargs",
+                "malformed_time_kwargs",
                 'issuer_public_key_base64=" "',
                 "required_native_bridge_abi_version=7",
+                'for offline_payments_enabled in (False, "true", 1)',
+                "for now_ms in (-1, 999.5, True)",
                 "for native_bridge_abi_version in (0, -1, 7.5, True)",
                 "for required_native_bridge_abi_version in (0, -1, 7.5, True)",
             ),
         ),
         (
             "javascript/iroha_js/test/offlineCashLifecycle.test.js",
-            "JavaScript offline cash issuer-key exactness vectors",
+            "JavaScript offline cash issuer-key and timestamp exactness vectors",
             (
-                "offline cash configuration snapshot requires cached issuer key and ABI",
+                "offline cash configuration snapshot requires cached identity, time, issuer key, and ABI",
+                "ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                '["chainId", ""]',
+                '["assetDefinitionId", "pkr sbp"]',
+                '["artifactSetId", "artifact set"]',
+                '["createdAtMs", undefined]',
+                '["expiresAtMs", 100]',
                 'issuerPublicKeyBase64: " "',
                 "requiredNativeBridgeAbiVersion: 7",
+                'for (const offlinePaymentsEnabled of ["false", "true", 1])',
+                "for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true])",
                 "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
                 "for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5])",
             ),
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            "JavaScript package offline cash ABI exactness vectors",
+            "JavaScript package offline cash time, issuer-key, and ABI exactness vectors",
             (
-                "package dist offline cash lifecycle rejects malformed ABI gates",
+                "package dist offline cash lifecycle rejects malformed identity, time, issuer key, and ABI gates",
                 "OfflineCashConfigurationSnapshotError",
                 "assertOfflineCashConfigurationSnapshotUsable",
+                "ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                '["chainId", ""]',
+                '["assetDefinitionId", "pkr sbp"]',
+                '["artifactSetId", "artifact set"]',
+                '["createdAtMs", undefined]',
+                '["expiresAtMs", 100]',
+                'for (const offlinePaymentsEnabled of [false, "false", "true", 1])',
+                "for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true])",
                 "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
                 "for (const requiredNativeBridgeAbiVersion of [0, -1, 7.5])",
             ),
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
-            "Kotlin offline cash issuer-key exactness vectors",
+            "Kotlin offline cash issuer-key and timestamp exactness vectors",
             (
-                "configuration snapshot requires cached issuer key",
+                "configuration snapshot requires cached identity time issuer key and ABI",
+                "issuerPublicKeyBase64",
+                "issuerPublicKeyBase64Url",
+                "shortIssuerPublicKeyBase64",
+                "longIssuerPublicKeyBase64",
+                "malformedIdentitySnapshots",
+                "malformedTimeSnapshots",
                 'issuerPublicKeyBase64 = " "',
                 "requiredNativeBridgeAbiVersion = 7",
+                "nowMs = -1",
                 "nativeBridgeAbiVersion = 0",
                 "requiredNativeBridgeAbiVersion = 0",
             ),
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
-            "Android Java offline cash issuer-key exactness vectors",
+            "Android Java offline cash issuer-key and timestamp exactness vectors",
             (
                 "configurationSnapshotRequiresCanonicalIssuerKey",
+                "ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                "configurationSnapshotRejectsMalformedIdentityFields",
+                "configurationSnapshotRejectsMalformedTimeFields",
                 "configurationSnapshotRejectsMalformedNativeBridgeAbi",
                 "rejectedIssuerKeys",
                 '" "',
@@ -7679,6 +8342,29 @@ def check_offline_cash_issuer_key_exactness(texts, errors):
             label,
             errors,
         )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
+        (
+            "testOfflineCashConfigurationSnapshotRequiresCachedIdentityTimeAndIssuerKeyForOfflineExchange",
+            "let issuerPublicKeyBase64",
+            "let issuerPublicKeyBase64URL",
+            "let shortIssuerPublicKeyBase64",
+            "let longIssuerPublicKeyBase64",
+            "XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .malformedSnapshot(field: field))",
+            '"not base64"',
+            '"!!!!"',
+            '"artifact set"',
+            '"kagemusha-recursive-compact-v1\\n"',
+            "expiresAtMs: 100",
+            "requiredNativeBridgeAbiVersion: 7",
+            "nativeBridgeAbiVersion: 0",
+            "requiredNativeBridgeAbiVersion: 0",
+            ".unsupportedNativeBridgeAbi(required: 7, actual: 6)",
+        ),
+        "Swift offline cash lifecycle timestamp exactness vectors",
+        errors,
+    )
     require_contains(
         texts,
         "IrohaSwift/Sources/IrohaSwift/OfflineIssuerPublicKey.swift",
@@ -9590,6 +10276,750 @@ def check_mobile_sccp_runner_coverage(texts, errors):
         require_contains(texts, relative, needles, label, errors)
 
 
+def check_mobile_retired_offline_note_issuers(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    android_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "ToriiOfflineNoteIssuerClient.java"
+    )
+    android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    retired_issue_message = (
+        "Classic Offline Note issue transactions are retired; "
+        "use Kagemusha online-to-offline top-up flows."
+    )
+
+    require_contains(
+        texts,
+        swift_source,
+        (
+            "case retiredOfflineNoteIssue",
+            retired_issue_message,
+            "public final class ToriiOfflineNoteIssuerClient: OfflineNoteIssuerClient",
+            "public func issueNote(_ request: OfflineNoteIssueRequest) async throws -> OfflineNoteIssueResponse",
+            "throw ToriiOfflineNoteIssuerClientError.retiredOfflineNoteIssue",
+        ),
+        "Swift retired Offline Note issuer source",
+        errors,
+    )
+    require(
+        re.search(
+            r"public func issueNote\(_ request: OfflineNoteIssueRequest\) async throws -> OfflineNoteIssueResponse \{\s*"
+            r"guard withLock\(\{ pendingLoads\.removeValue\(forKey: request\.loadContext\.operationId\) \}\) != nil else \{\s*"
+            r"throw ToriiOfflineNoteIssuerClientError\.missingLoadContext\(request\.loadContext\.operationId\)\s*"
+            r"\}\s*throw ToriiOfflineNoteIssuerClientError\.retiredOfflineNoteIssue\s*\}",
+            texts[swift_source],
+            re.S,
+        )
+        is not None,
+        "Swift retired Offline Note issuer source must fail issueNote with retiredOfflineNoteIssue",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "testToriiIssuerClientBodySignsRefillAndRetiresNoteIssue",
+            "XCTFail(\"retired Offline Note issue must not POST to Torii\")",
+            "XCTFail(\"classic Offline Note issue must be retired\")",
+            "XCTAssertEqual(error, .retiredOfflineNoteIssue)",
+            "XCTAssertEqual(requests.count, 1)",
+            "XCTAssertEqual(requests[0].url?.path, \"/v1/offline/v2/keys/refill\")",
+        ),
+        "Swift retired Offline Note issuer tests",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        kotlin_source,
+        (
+            "class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(",
+            "override fun issueNote(request: OfflineNoteIssueRequest): CompletableFuture<OfflineNoteIssueResponse>",
+            "return failedFuture(IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE))",
+            "const val RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE: String =",
+            retired_issue_message,
+        ),
+        "Kotlin retired Offline Note issuer source",
+        errors,
+    )
+    require(
+        re.search(
+            r"override fun issueNote\(request: OfflineNoteIssueRequest\): CompletableFuture<OfflineNoteIssueResponse> \{\s*"
+            r"synchronized\(this\) \{ pendingLoads\.remove\(request\.loadContext\.operationId\) \}\s*"
+            r"\?: return failedFuture\(OfflineToriiException\(\"Missing Offline Note load context for operation \$\{request\.loadContext\.operationId\}\.\"\)\)\s*"
+            r"return failedFuture\(IllegalStateException\(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE\)\)\s*\}",
+            texts[kotlin_source],
+            re.S,
+        )
+        is not None,
+        "Kotlin retired Offline Note issuer source must fail issueNote with retired issue helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "toriiIssuerClientBodySignsRefillAndRetiresNoteIssue",
+            "assertFailsWith<ExecutionException>",
+            "client.issueNote(",
+            "assertTrue(issueFailure.cause is IllegalStateException)",
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+            "assertEquals(1, executor.requests.size)",
+            "assertEquals(\"/v1/offline/v2/keys/refill\", executor.requests[0].uri.path)",
+        ),
+        "Kotlin retired Offline Note issuer tests",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        android_source,
+        (
+            "public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient",
+            "public static final String RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE =",
+            retired_issue_message,
+            "public CompletableFuture<OfflineNoteIssueResponse> issueNote(",
+            "return failedFuture(new IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE));",
+        ),
+        "Android Java retired Offline Note issuer source",
+        errors,
+    )
+    require(
+        re.search(
+            r"public CompletableFuture<OfflineNoteIssueResponse> issueNote\(\s*"
+            r"final OfflineNoteIssueRequest request\) \{[\s\S]*?"
+            r"pendingLoads\.remove\(request\.loadContext\(\)\.operationId\(\)\);[\s\S]*?"
+            r"return failedFuture\(new IllegalStateException\(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE\)\);\s*\}",
+            texts[android_source],
+            re.S,
+        )
+        is not None,
+        "Android Java retired Offline Note issuer source must fail issueNote with retired issue helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_test,
+        (
+            "toriiIssuerClientBodySignsRefillAndRetiresNoteIssue",
+            "assertFutureFailsWithin(",
+            "client.issueNote(",
+            "\"classic Offline Note issue must be retired\"",
+            "issueFailure instanceof IllegalStateException",
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+            "\"retired issue message\"",
+            "assertEquals(1L, executor.requests.size(), \"issuer request count\")",
+            "\"/v1/offline/v2/keys/refill\"",
+        ),
+        "Android Java retired Offline Note issuer tests",
+        errors,
+    )
+
+
+def check_mobile_retired_offline_note_submitters(texts, errors):
+    swift_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    android_source = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "IrohaOfflineNoteTransactionSubmitter.java"
+    )
+    android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+
+    require_contains(
+        texts,
+        swift_source,
+        (
+            "public final class IrohaOfflineNoteTransactionSubmitter: OfflineNoteTransactionSubmitter",
+            "public static let gasAssetIdMetadataKey = \"gas_asset_id\"",
+            "public static let feeSponsorMetadataKey = \"fee_sponsor\"",
+            "public func submitAudit(_ audit: OfflineNoteAuditBundle) async throws",
+            "public func submitRedeem(_ redemption: OfflineNoteRedeem) async throws",
+            "public func submitDefund(_ redemption: OfflineNoteRedeem,",
+            "throw SwiftTransactionEncoderError.retiredOfflineNotePayment",
+        ),
+        "Swift retired Offline Note submitter source",
+        errors,
+    )
+    swift_source_text = texts[swift_source]
+    for method, pattern in (
+        (
+            "submitAudit",
+            r"public func submitAudit\(_ audit: OfflineNoteAuditBundle\) async throws \{\s*"
+            r"throw SwiftTransactionEncoderError\.retiredOfflineNotePayment\s*\}",
+        ),
+        (
+            "submitRedeem",
+            r"public func submitRedeem\(_ redemption: OfflineNoteRedeem\) async throws \{\s*"
+            r"throw SwiftTransactionEncoderError\.retiredOfflineNotePayment\s*\}",
+        ),
+        (
+            "submitDefund",
+            r"public func submitDefund\(_ redemption: OfflineNoteRedeem,\s*"
+            r"bearerAuditTrail: \[OfflineNoteAuditBundle\]\) async throws \{\s*"
+            r"throw SwiftTransactionEncoderError\.retiredOfflineNotePayment\s*\}",
+        ),
+    ):
+        require(
+            re.search(pattern, swift_source_text, re.S) is not None,
+            f"Swift retired Offline Note submitter source must fail {method} with retiredOfflineNotePayment",
+            errors,
+        )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "testIrohaOfflineNoteTransactionSubmitterIsRetiredBeforeSdkSubmission",
+            "await assertRetiredOfflineNotePayment",
+            "try await submitter.submitAudit(audit)",
+            "try await submitter.submitRedeem(redemption)",
+            "try await submitter.submitDefund(redemption, bearerAuditTrail: [audit])",
+            "XCTAssertEqual(pipelineClient.submitted.count, 0)",
+        ),
+        "Swift retired Offline Note submitter tests",
+        errors,
+    )
+
+    retired_message = "Classic Offline Note payment transactions are retired; use Kagemusha payment flows."
+    require_contains(
+        texts,
+        kotlin_source,
+        (
+            "class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(",
+            "const val GAS_ASSET_ID_METADATA_KEY: String = \"gas_asset_id\"",
+            "const val FEE_SPONSOR_METADATA_KEY: String = \"fee_sponsor\"",
+            "const val RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE: String =",
+            retired_message,
+            "private fun retiredOfflineNotePaymentFuture(): CompletableFuture<ClientResponse> =",
+            "failedFuture(IllegalStateException(RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE))",
+        ),
+        "Kotlin retired Offline Note submitter source",
+        errors,
+    )
+    kotlin_source_text = texts[kotlin_source]
+    for method, pattern in (
+        (
+            "submitAudit",
+            r"override fun submitAudit\(audit: OfflineNote\.AuditBundle\): CompletableFuture<ClientResponse> =\s*"
+            r"retiredOfflineNotePaymentFuture\(\)",
+        ),
+        (
+            "submitRedeem",
+            r"override fun submitRedeem\(redemption: OfflineNote\.Redeem\): CompletableFuture<ClientResponse> =\s*"
+            r"retiredOfflineNotePaymentFuture\(\)",
+        ),
+        (
+            "submitDefund",
+            r"override fun submitDefund\(\s*redemption: OfflineNote\.Redeem,\s*"
+            r"bearerAuditTrail: List<OfflineNote\.AuditBundle>,\s*"
+            r"\): CompletableFuture<ClientResponse> =\s*retiredOfflineNotePaymentFuture\(\)",
+        ),
+    ):
+        require(
+            re.search(pattern, kotlin_source_text, re.S) is not None,
+            f"Kotlin retired Offline Note submitter source must fail {method} with retired helper",
+            errors,
+        )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper",
+            "IrohaOfflineNoteTransactionSubmitter.RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE",
+            "assertRetiredSubmission(submitter.submitAudit(audit))",
+            "assertRetiredSubmission(submitter.submitRedeem(redemption))",
+            "assertRetiredSubmission(submitter.submitDefund(redemption, listOf(audit)))",
+            "assertNull(client.submittedTransaction)",
+        ),
+        "Kotlin retired Offline Note submitter tests",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        android_source,
+        (
+            "public final class IrohaOfflineNoteTransactionSubmitter implements OfflineNoteTransactionSubmitter",
+            "public static final String GAS_ASSET_ID_METADATA_KEY = \"gas_asset_id\";",
+            "public static final String FEE_SPONSOR_METADATA_KEY = \"fee_sponsor\";",
+            "public static final String RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE =",
+            retired_message,
+            "private static CompletableFuture<ClientResponse> retiredOfflineNotePaymentFuture()",
+            "new IllegalStateException(RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE)",
+        ),
+        "Android Java retired Offline Note submitter source",
+        errors,
+    )
+    android_source_text = texts[android_source]
+    for method, pattern in (
+        (
+            "submitAudit",
+            r"public CompletableFuture<ClientResponse> submitAudit\(final OfflineNote\.AuditBundle audit\) \{\s*"
+            r"return retiredOfflineNotePaymentFuture\(\);\s*\}",
+        ),
+        (
+            "submitRedeem",
+            r"public CompletableFuture<ClientResponse> submitRedeem\(final OfflineNote\.Redeem redemption\) \{\s*"
+            r"return retiredOfflineNotePaymentFuture\(\);\s*\}",
+        ),
+        (
+            "submitDefund",
+            r"public CompletableFuture<ClientResponse> submitDefund\(\s*"
+            r"final OfflineNote\.Redeem redemption,\s*"
+            r"final List<OfflineNote\.AuditBundle> bearerAuditTrail\) \{\s*"
+            r"return retiredOfflineNotePaymentFuture\(\);\s*\}",
+        ),
+    ):
+        require(
+            re.search(pattern, android_source_text, re.S) is not None,
+            f"Android Java retired Offline Note submitter source must fail {method} with retired helper",
+            errors,
+        )
+    require_contains(
+        texts,
+        android_test,
+        (
+            "offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper",
+            "assertRetiredOfflineNoteSubmission(submitter.submitAudit(audit));",
+            "assertRetiredOfflineNoteSubmission(submitter.submitRedeem(redemption));",
+            "submitter.submitDefund(redemption, Collections.singletonList(audit))",
+            "IrohaOfflineNoteTransactionSubmitter.RETIRED_OFFLINE_NOTE_PAYMENT_MESSAGE",
+            "retired submitter must not submit a transaction",
+        ),
+        "Android Java retired Offline Note submitter tests",
+        errors,
+    )
+
+
+def check_swift_retired_offline_note_transaction_builders(texts, errors):
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransactionEncoder.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    source_text = texts[source]
+
+    require_contains(
+        texts,
+        source,
+        (
+            "private static func retiredOfflineNotePaymentTransaction() throws -> SignedTransactionEnvelope",
+            "throw SwiftTransactionEncoderError.retiredOfflineNotePayment",
+            "static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,",
+            "static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,",
+            "static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,",
+            "static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,",
+            "func buildIssueOfflineNote(request: IssueOfflineNoteRequest,",
+            "func buildRedeemOfflineNote(request: RedeemOfflineNoteRequest,",
+            "func buildDefundOfflineNote(request: DefundOfflineNoteRequest,",
+            "func buildAuditOfflineNote(request: AuditOfflineNoteRequest,",
+            "func submit(issueOfflineNote request: IssueOfflineNoteRequest,",
+            "func submit(redeemOfflineNote request: RedeemOfflineNoteRequest,",
+            "func submit(defundOfflineNote request: DefundOfflineNoteRequest,",
+            "func submit(auditOfflineNote request: AuditOfflineNoteRequest,",
+        ),
+        "Swift retired Offline Note transaction builder source",
+        errors,
+    )
+    for method, expected_block, binding_needles in (
+        (
+            "encodeIssueOfflineNote",
+            "    static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,\n"
+            "                                         signingKey: SigningKey,\n"
+            "                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            (),
+        ),
+        (
+            "encodeRedeemOfflineNote",
+            "    static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,\n"
+            "                                          signingKey: SigningKey,\n"
+            "                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        try request.redemption.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            ("try request.redemption.validateProofBinding()",),
+        ),
+        (
+            "encodeDefundOfflineNote",
+            "    static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,\n"
+            "                                          signingKey: SigningKey,\n"
+            "                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        for audit in request.bearerAuditTrail {\n"
+            "            try audit.validateProofBinding()\n"
+            "        }\n"
+            "        try request.redemption.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            (
+                "for audit in request.bearerAuditTrail",
+                "try audit.validateProofBinding()",
+                "try request.redemption.validateProofBinding()",
+            ),
+        ),
+        (
+            "encodeAuditOfflineNote",
+            "    static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,\n"
+            "                                         signingKey: SigningKey,\n"
+            "                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        try request.audit.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            ("try request.audit.validateProofBinding()",),
+        ),
+    ):
+        require(
+            expected_block in source_text,
+            f"Swift retired Offline Note transaction builder source must fail {method} with retiredOfflineNotePayment",
+            errors,
+        )
+        for needle in binding_needles:
+            require(
+                needle in source_text,
+                f"Swift retired Offline Note transaction builder source missing {needle}",
+                errors,
+            )
+    require_contains(
+        texts,
+        test,
+        (
+            "testOfflineNoteTransactionBuildersAreRetired",
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNote(",
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeAuditOfflineNote(",
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeRedeemOfflineNote(",
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeDefundOfflineNote(",
+            "testOfflineNoteTransactionBuilderCoversOptionalNonceAndInputValidation",
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeIssueOfflineNote(",
+        ),
+        "Swift retired Offline Note transaction builder tests",
+        errors,
+    )
+
+
+def check_bridge_retired_offline_note_transaction_builders(texts, errors):
+    rust_relative = "crates/connect_norito_bridge/src/lib.rs"
+    header_relative = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+    rust = texts[rust_relative]
+    header = texts[header_relative]
+    symbol_statuses = (
+        ("connect_norito_encode_redeem_offline_note_signed_transaction", "redeem_status"),
+        (
+            "connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata",
+            "redeem_with_metadata_status",
+        ),
+        ("connect_norito_encode_audit_offline_note_signed_transaction", "audit_status"),
+        (
+            "connect_norito_encode_audit_offline_note_signed_transaction_with_metadata",
+            "audit_with_metadata_status",
+        ),
+        ("connect_norito_encode_issue_offline_note_signed_transaction", "issue_status"),
+        (
+            "connect_norito_encode_issue_offline_note_signed_transaction_with_metadata",
+            "issue_with_metadata_status",
+        ),
+        ("connect_norito_encode_defund_offline_note_signed_transaction", "defund_status"),
+        (
+            "connect_norito_encode_defund_offline_note_signed_transaction_with_metadata",
+            "defund_with_metadata_status",
+        ),
+    )
+    source_order = (
+        "connect_norito_encode_redeem_offline_note_signed_transaction",
+        "connect_norito_encode_audit_offline_note_signed_transaction",
+        "connect_norito_encode_issue_offline_note_signed_transaction",
+        "connect_norito_encode_defund_offline_note_signed_transaction",
+        "connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata",
+        "connect_norito_encode_audit_offline_note_signed_transaction_with_metadata",
+        "connect_norito_encode_issue_offline_note_signed_transaction_with_metadata",
+        "connect_norito_encode_defund_offline_note_signed_transaction_with_metadata",
+    )
+    require(
+        "fn retired_offline_note_payment_transaction() -> BridgeResult<()> {\n"
+        "    Err(BridgeError::OfflineNoteProve)\n"
+        "}"
+        in rust,
+        "Bridge retired Offline Note transaction builder helper must map to BridgeError::OfflineNoteProve",
+        errors,
+    )
+    for index, symbol in enumerate(source_order):
+        start_needle = f'pub unsafe extern "C" fn {symbol}('
+        start = rust.find(start_needle)
+        if start < 0:
+            errors.append(
+                f"Bridge retired Offline Note transaction builder source missing {symbol}"
+            )
+            continue
+        if index + 1 < len(source_order):
+            end = rust.find(
+                f'pub unsafe extern "C" fn {source_order[index + 1]}(',
+                start + len(start_needle),
+            )
+        else:
+            end = rust.find(
+                "/// Generate a recursive Halo2/IPA proof for an Offline redemption",
+                start + len(start_needle),
+            )
+        if end < 0:
+            end = len(rust)
+        source_section = rust[start:end]
+        require(
+            "bridge_result_to_code(retired_offline_note_payment_transaction())"
+            in source_section,
+            f"Bridge retired Offline Note transaction builder source must fail {symbol} with ERR_OFFLINE_NOTE_PROVE",
+            errors,
+        )
+    for symbol, status_name in symbol_statuses:
+        require(
+            f"int32_t {symbol}(" in header,
+            f"Bridge retired Offline Note transaction builder header missing {symbol}",
+            errors,
+        )
+        require(
+            f"{symbol}(" in rust,
+            f"Bridge retired Offline Note transaction builder source missing {symbol}",
+            errors,
+        )
+        require(
+            f"{symbol}(" in rust[
+                rust.find("fn offline_note_signed_transaction_ffis_are_retired()") :
+            ],
+            f"Bridge retired Offline Note transaction builder tests missing {symbol}",
+            errors,
+        )
+        require(
+            f"assert_retired_output({status_name}, out_ptr, out_len, out_hash);"
+            in rust,
+            f"Bridge retired Offline Note transaction builder test assertion missing {status_name}",
+            errors,
+        )
+    require_contains(
+        texts,
+        rust_relative,
+        (
+            "fn offline_note_signed_transaction_ffis_are_retired()",
+            "assert_eq!(status, ERR_OFFLINE_NOTE_PROVE);",
+            "assert!(out_ptr.is_null());",
+            "assert_eq!(out_len, 0);",
+            "assert_eq!(out_hash, [0u8; Hash::LENGTH]);",
+        ),
+        "Bridge retired Offline Note transaction builder tests",
+        errors,
+    )
+
+
+def check_mobile_classic_offline_note_fixture_labels(texts, errors):
+    swift = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt"
+    android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
+    require_contains(
+        texts,
+        swift,
+        (
+            "Retired classic Offline Note outcome names retained for historical",
+            "compatibility fixture indexing; production offline payments use Kagemusha",
+            'public static let kindIssue = "IssueOfflineNote"',
+            'public static let kindRedeem = "RedeemOfflineNote"',
+            'public static let kindAudit = "AuditOfflineNote"',
+        ),
+        "Swift classic Offline Note fixture labels",
+        errors,
+    )
+    for relative, label in (
+        (kotlin, "Kotlin classic Offline Note fixture labels"),
+        (android, "Android Java classic Offline Note fixture labels"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "Historical classic Offline Note instruction wire names retained only for",
+                "compatibility fixture decoding; production offline payments use Kagemusha",
+                "ISSUE_INSTRUCTION_SCHEMA",
+                "REDEEM_INSTRUCTION_SCHEMA",
+                "AUDIT_INSTRUCTION_SCHEMA",
+                "iroha_data_model::isi::offline::IssueOfflineNote",
+                "iroha_data_model::isi::offline::RedeemOfflineNote",
+                "iroha_data_model::isi::offline::AuditOfflineNote",
+            ),
+            label,
+            errors,
+        )
+
+
+def check_mobile_offline_note_draft_proof_replacement(texts, errors):
+    swift = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
+    android = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java"
+    android_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
+    for relative, label, placeholder in (
+        (
+            swift,
+            "Swift Offline Note wallet draft proof placeholder",
+            'proofBackend: "offline-note/draft-placeholder"',
+        ),
+        (
+            kotlin,
+            "Kotlin Offline Note wallet draft proof placeholder",
+            '"offline-note/draft-placeholder"',
+        ),
+        (
+            android,
+            "Android Java Offline Note wallet draft proof placeholder",
+            '"offline-note/draft-placeholder"',
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "draftPlaceholderProof",
+                placeholder,
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        swift_test,
+        (
+            "func testOfflineNoteWalletRejectsAuditWhenRecursiveVerifierFails()",
+            "func testOfflineNoteWalletRejectsRedeemWhenRecursiveVerifierFails()",
+            "RejectingProofVerifier(rejectAudit: true)",
+            "RejectingProofVerifier(rejectRedeem: true)",
+            "XCTAssertEqual(error as? OfflineNoteWalletError, .proofVerificationFailed)",
+            "XCTAssertTrue(submitter.defunds.isEmpty)",
+        ),
+        "Swift Offline Note wallet draft proof verifier failure tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_test,
+        (
+            "fun walletRejectsAuditWhenRecursiveVerifierFails()",
+            "fun walletRejectsRedeemWhenRecursiveVerifierFails()",
+            "RejectingProofVerifier(rejectAudit = true)",
+            "RejectingProofVerifier(rejectRedeem = true)",
+            'assertIllegalArgumentContains("Offline Note recursive audit proof verification failed")',
+            "assertTrue(submitter.defunds.isEmpty())",
+        ),
+        "Kotlin Offline Note wallet draft proof verifier failure tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        android_test,
+        (
+            "walletRejectsAuditWhenRecursiveVerifierFails();",
+            "walletRejectsRedeemWhenRecursiveVerifierFails();",
+            "private static void walletRejectsAuditWhenRecursiveVerifierFails()",
+            "private static void walletRejectsRedeemWhenRecursiveVerifierFails()",
+            "new RejectingProofVerifier(true, false)",
+            "new RejectingProofVerifier(false, true)",
+            "assertEquals(0L, submitter.defunds.size(),",
+        ),
+        "Android Java Offline Note wallet draft proof verifier failure tests",
+        errors,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"recursiveProof: draftPlaceholderProof\(publicInputsHash: auditPublicInputs\.publicInputsHash\(\)\)[\s\S]*?"
+        r"let audit = try draft\.replacingRecursiveProof\(proofProvider\.proveAudit\(draft\)\)[\s\S]*?"
+        r"try audit\.validateProofBinding\(\)[\s\S]*?"
+        r"try validateBearerAuditTrail\(outputBearerAuditTrail, terminalAudit: audit\)",
+        "Swift Offline Note wallet draft audit proof replacement",
+        errors,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"private func validateBearerAuditTrail[\s\S]*?"
+        r"try audit\.validateProofBinding\(\)[\s\S]*?"
+        r"guard try proofVerifier\.verifyAudit\(audit\) else",
+        "Swift Offline Note wallet draft audit proof verification",
+        errors,
+    )
+    require_regex(
+        texts,
+        swift,
+        r"recursiveProof: draftPlaceholderProof\(publicInputsHash: redeemPublicInputs\.publicInputsHash\(\)\)[\s\S]*?"
+        r"let redemption = try draft\.replacingRecursiveProof\(proofProvider\.proveRedeem\(draft\)\)[\s\S]*?"
+        r"try redemption\.validateProofBinding\(\)[\s\S]*?"
+        r"guard try proofVerifier\.verifyRedeem\(redemption\) else[\s\S]*?"
+        r"throw OfflineNoteWalletError\.proofVerificationFailed",
+        "Swift Offline Note wallet draft redeem proof replacement",
+        errors,
+    )
+    require_regex(
+        texts,
+        kotlin,
+        r"recursiveProof = draftPlaceholderProof\(auditPublicInputs\.publicInputsHash\(\)\),[\s\S]*?"
+        r"val audit = draft\.replacingRecursiveProof\(proofProvider\.proveAudit\(draft\)\)[\s\S]*?"
+        r"audit\.validateProofBinding\(\)[\s\S]*?"
+        r"require\(proofVerifier\.verifyAudit\(audit\)\) \{ \"Offline Note recursive audit proof verification failed\" \}",
+        "Kotlin Offline Note wallet draft audit proof replacement",
+        errors,
+    )
+    require_regex(
+        texts,
+        kotlin,
+        r"recursiveProof = draftPlaceholderProof\(redeemPublicInputs\.publicInputsHash\(\)\),[\s\S]*?"
+        r"val redemption = draft\.replacingRecursiveProof\(proofProvider\.proveRedeem\(draft\)\)[\s\S]*?"
+        r"redemption\.validateProofBinding\(\)[\s\S]*?"
+        r"require\(proofVerifier\.verifyRedeem\(redemption\)\) \{[\s\S]*?"
+        r"Offline Note recursive redeem proof verification failed",
+        "Kotlin Offline Note wallet draft redeem proof replacement",
+        errors,
+    )
+    require_regex(
+        texts,
+        android,
+        r"draftPlaceholderProof\(auditPublicInputs\.publicInputsHash\(\)\)\);[\s\S]*?"
+        r"draft\.replacingRecursiveProof\(proofProvider\.proveAudit\(draft\)\);[\s\S]*?"
+        r"audit\.validateProofBinding\(\);[\s\S]*?"
+        r"if \(!proofVerifier\.verifyAudit\(audit\)\) \{[\s\S]*?"
+        r"Offline Note recursive audit proof verification failed",
+        "Android Java Offline Note wallet draft audit proof replacement",
+        errors,
+    )
+    require_regex(
+        texts,
+        android,
+        r"draftPlaceholderProof\(redeemPublicInputs\.publicInputsHash\(\)\)\);[\s\S]*?"
+        r"draft\.replacingRecursiveProof\(proofProvider\.proveRedeem\(draft\)\);[\s\S]*?"
+        r"redemption\.validateProofBinding\(\);[\s\S]*?"
+        r"if \(!proofVerifier\.verifyRedeem\(redemption\)\) \{[\s\S]*?"
+        r"Offline Note recursive redeem proof verification failed",
+        "Android Java Offline Note wallet draft redeem proof replacement",
+        errors,
+    )
+
+
 def check_javascript_torii_runner_coverage(texts, errors):
     runner = read(JS_SDK_TEST_COMMAND)
     for needle in (
@@ -9664,6 +11094,10 @@ def check_javascript_torii_runner_coverage(texts, errors):
                 "async lookupAliasesByAccount",
                 "ALIAS_CANONICAL_AUTH_OPTION_KEYS",
                 "ALIAS_BY_ACCOUNT_OPTION_KEYS",
+                "requireExactPositiveIntegerLike",
+                "exact positive integer string",
+                "MAX_SIGNED_INT32",
+                "must fit in signed 32-bit range",
             ),
             f"{relative} Torii canonical auth/subscription/Connect WebSocket/ISO alias surface",
             errors,
@@ -9707,6 +11141,22 @@ def check_javascript_torii_runner_coverage(texts, errors):
             "usage_trigger_id",
         ),
         "JavaScript Torii subscription tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "getOfflineReadiness rejects noncanonical ABI versions",
+            "canonicalOfflineReadinessPayload",
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "must be an exact positive integer string",
+            "must fit in signed 32-bit range",
+            '"007"',
+            "2147483648",
+        ),
+        "JavaScript Torii offline readiness ABI exactness tests",
         errors,
     )
     require_contains(
@@ -10156,6 +11606,13 @@ def check_javascript(texts, errors):
     ):
         require_contains(texts, relative, constants, f"{relative} constants", errors)
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} public API", errors)
+        require_regex(
+            texts,
+            relative,
+            r"export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId\(",
+            f"{relative} append output selector export",
+            errors,
+        )
 
     for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
         require_contains(
@@ -10170,6 +11627,8 @@ def check_javascript(texts, errors):
             "function kagemushaNormalizeVerifyRequest(",
             "const bundleSummary = decodeKagemushaRecursiveSpendBundle(bundle)",
             "const verifyLineageVerifierRecordSupplied =",
+            "const lineageVerifierRecordsValue =",
+            "const lineageVerifierRecordsSupplied =",
             "const redeemLineageVerifierRecordSupplied =",
             "lineageVerifierRecord is required for reserved-lineage bundles",
             "lineageVerifierRecord is only valid for reserved-lineage bundles",
@@ -10267,8 +11726,8 @@ def check_javascript(texts, errors):
         require_regex(
             texts,
             relative,
-            r"const lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs\([\s\S]*?lineageVerifierRecords\.length > 0[\s\S]*?const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId\([\s\S]*?let lineageVerifierRecord = null;[\s\S]*?if \(finalIsLineage\) \{[\s\S]*?!redeemLineageVerifierRecordSupplied[\s\S]*?lineageVerifierRecord is required for reserved-lineage bundles[\s\S]*?lineageVerifierRecord = kagemushaNormalizeVerifierRecordRef\([\s\S]*?const lineageWitness =[\s\S]*?let witnessHasReservedPrevious = false[\s\S]*?if \(!finalIsLineage\) \{[\s\S]*?witnessHasReservedPrevious && !redeemLineageVerifierRecordSupplied[\s\S]*?!witnessHasReservedPrevious && redeemLineageVerifierRecordSupplied[\s\S]*?lineageVerifierRecords,",
-            f"{relative} typed recursive spend redeem lineage-record selection before witness parse",
+            r"const lineageVerifierRecordsValue = kagemushaObjectValue\([\s\S]*?const lineageVerifierRecordsSupplied =[\s\S]*?!Array\.isArray\(lineageVerifierRecordsValue\)[\s\S]*?lineageVerifierRecordsValue\.length > 0\)[\s\S]*?const redeemLineageVerifierRecordSupplied =[\s\S]*?lineageVerifierRecordsSupplied[\s\S]*?const finalIsLineage = isKagemushaRecursiveSpendLineageProofCircuitId\([\s\S]*?let lineageVerifierRecord = null;[\s\S]*?let lineageVerifierRecords = Object\.freeze\(\[\]\);[\s\S]*?if \(finalIsLineage\) \{[\s\S]*?!redeemLineageVerifierRecordSupplied[\s\S]*?lineageVerifierRecord is required for reserved-lineage bundles[\s\S]*?lineageVerifierRecord = kagemushaNormalizeVerifierRecordRef\([\s\S]*?lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs\([\s\S]*?lineageVerifierRecordsValue[\s\S]*?const lineageWitness =[\s\S]*?let witnessHasReservedPrevious = false[\s\S]*?if \(!finalIsLineage\) \{[\s\S]*?witnessHasReservedPrevious && !redeemLineageVerifierRecordSupplied[\s\S]*?!witnessHasReservedPrevious && redeemLineageVerifierRecordSupplied[\s\S]*?if \(!finalIsLineage && witnessHasReservedPrevious\) \{[\s\S]*?lineageVerifierRecords = kagemushaNormalizeVerifierRecordRefs\([\s\S]*?lineageVerifierRecordsValue[\s\S]*?lineageVerifierRecords,",
+            f"{relative} typed recursive spend redeem lineage-record selection before plural record parse",
             errors,
             flags=re.S,
         )
@@ -10302,6 +11761,14 @@ def check_javascript(texts, errors):
             relative,
             r"canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId\([\s\S]*?throw kagemushaFieldCodecError\(\"outputProofCircuitId\"\);[\s\S]*?const lineageKeyArtifactsValue =",
             f"{relative} append output selection before lineage-key selection",
+            errors,
+            flags=re.S,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"if \(\s*!canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId\(",
+            f"{relative} append output selector call site",
             errors,
             flags=re.S,
         )
@@ -10592,6 +12059,7 @@ def check_javascript(texts, errors):
             "/required for lineage witnesses with reserved-lineage previous proofs/",
             'verifierKeyId: "danglingVerifyLineageRecord"',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            'verifierKeyId: "danglingRedeemLineageRecords"',
             "const reservedMissingRecordMasksMalformedWitness = Buffer.from([0]);",
             'verifierKeyId: "forgedRedeemLineageRecordBeforeWitness"',
             "recordBytes: Buffer.from([0])",
@@ -11109,6 +12577,7 @@ def check_javascript(texts, errors):
             'kagemushaRequestCodecError("archive", "lineageWitness", /truncated/)',
             'kagemushaRequestCodecError(\n      "field",\n      "lineageVerifierRecord",\n      /required for reserved-lineage bundles/,\n    )',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            'verifierKeyId: "danglingRedeemLineageRecords"',
             "const reservedMissingRecordMasksMalformedWitness = Buffer.from([0]);",
             'verifierKeyId: "forgedRedeemLineageRecordBeforeWitness"',
             "recordBytes: Buffer.from([0])",
@@ -11306,6 +12775,28 @@ def check_javascript(texts, errors):
             f"{relative} multisig resolved account exactness",
             errors,
         )
+        require_contains(
+            texts,
+            relative,
+            (
+                "params.contract_address = requireExactNonEmptyString(",
+                "params.contract_alias = requireExactNonEmptyString(",
+                "params.participant = requireExactNonEmptyString(",
+                "params.asset_id = requireExactNonEmptyString(",
+            ),
+            f"{relative} contract query selector exactness",
+            errors,
+        )
+        require_contains(
+            texts,
+            relative,
+            (
+                "_normalizeSnsDomainSelector(selector, context)",
+                'const normalizedSelector = requireExactNonEmptyString(selector, "selector");',
+            ),
+            f"{relative} SNS domain route selector exactness",
+            errors,
+        )
         require_regex(
             texts,
             relative,
@@ -11430,6 +12921,89 @@ def check_javascript(texts, errors):
             "resolved_multisig_account_id must not contain surrounding whitespace",
         ),
         "JavaScript multisig resolved account exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "contract query helpers reject padded selector filters before dispatch",
+            "contractAddress must not contain surrounding whitespace",
+            "contractAlias must not contain surrounding whitespace",
+            "participant must not contain surrounding whitespace",
+            "assetId must not contain surrounding whitespace",
+        ),
+        "JavaScript contract query selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "SNS domain route helpers reject padded selectors before dispatch",
+            "fetch should not run for padded SNS selectors",
+            "selector must not contain surrounding whitespace",
+        ),
+        "JavaScript SNS domain route selector exactness tests",
+        errors,
+    )
+    for relative in ("javascript/iroha_js/src/toriiClient.js", "javascript/iroha_js/dist/toriiClient.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "function normalizeUaidLiteral(value, context = \"uaid\")",
+                "const literal = requireExactNonEmptyString(value, context);",
+                "if (hexPortion.trim() !== hexPortion)",
+                "`${context} must not contain surrounding whitespace`",
+            ),
+            f"{relative} UAID path literal exactness",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/toriiClient.test.js",
+        (
+            "getUaidPortfolio rejects padded UAID path literals before dispatch",
+            "fetch should not run for padded UAID path literals",
+            "getUaidPortfolio\\.uaid must not contain surrounding whitespace",
+        ),
+        "JavaScript UAID path literal exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist Torii contract query helpers reject padded selector filters before dispatch",
+            "contractAddress must not contain surrounding whitespace",
+            "contractAlias must not contain surrounding whitespace",
+            "participant must not contain surrounding whitespace",
+            "assetId must not contain surrounding whitespace",
+        ),
+        "JavaScript package dist contract query selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist SNS domain route helpers reject padded selectors before dispatch",
+            "fetch must not run for padded SNS selectors",
+            "selector must not contain surrounding whitespace",
+        ),
+        "JavaScript package dist SNS domain route selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "package dist UAID path helpers reject padded literals before dispatch",
+            "fetch must not run for padded UAID path literals",
+            "getUaidPortfolio\\.uaid must not contain surrounding whitespace",
+        ),
+        "JavaScript package dist UAID path literal exactness tests",
         errors,
     )
     require_contains(
@@ -11913,6 +13487,11 @@ def check_javascript(texts, errors):
             "package dist Kagemusha recursive spend bundle rejects malformed proof public inputs before native dispatch",
             "decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithEmptyProofPublicInputs()),\n"
             '    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs", null),',
+            "decodeKagemushaRecursiveSpendBundle(\n"
+            "          recursiveSpendBundleWithProofPublicInputsHash(replacement),",
+            "kagemushaFixedArrayPayload(0x44, 31)",
+            "kagemushaCountPrefixedFixedArrayPayload(0x44, 32)",
+            "kagemushaFixedArrayPayload(0x44, 33)",
             "decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithZeroProofPublicInputsHash()),\n"
             '    kagemushaRequestCodecError("archive", "bundle.proof_public_inputs_hash", null),',
             "decodeKagemushaRecursiveSpendBundle(recursiveSpendBundleWithMismatchedProofPublicInputsHash()),\n",
@@ -12014,6 +13593,7 @@ def check_javascript(texts, errors):
             "sharedRecursiveSpendAbi6Archive(\"init_bundle\")",
             'kagemushaRequestCodecError(\n      "field",\n      "lineageVerifierRecord",\n      /required for reserved-lineage bundles/,\n    )',
             'verifierKeyId: "danglingRedeemLineageRecord"',
+            'verifierKeyId: "distDanglingRedeemLineageRecords"',
             "const reservedMissingRecordMasksMalformedWitnessPackageDist = Buffer.from([0]);",
             'verifierKeyId: "forgedRedeemLineageRecordBeforeWitnessPackageDist"',
             "recordBytes: Buffer.from([0])",
@@ -13399,6 +14979,7 @@ def check_python(texts, errors):
         "tests/kagemusha_test.py",
         "tests/privacy_catalog_test.py",
         "tests/crypto_algorithms_test.py",
+        "tests/test_nexus_app.py",
         "tests/offline_cash_test.py",
         "tests/testconnect_codec.py",
         "tests/test_address_format.py",
@@ -13414,6 +14995,13 @@ def check_python(texts, errors):
         errors,
     )
     require(
+        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch" in script,
+        "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions",
+        errors,
+    )
+    require(
         "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_identifier_resolution_receipt_matches_shared_vectors" in script,
         "Kagemusha Python SDK script must run the identifier receipt exactness and adversarial vector regression",
         errors,
@@ -13424,6 +15012,13 @@ def check_python(texts, errors):
         errors,
     )
     require(
+        "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions" in script
+        and "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_legacy_only_payload" in script,
+        "Kagemusha Python SDK script must run Torii offline readiness ABI exactness regressions",
+        errors,
+    )
+    require(
         "tests/client_ledger_helpers_test.py" in script
         and "zk_event_filters_reject_unsupported_backends_before_request" in script
         and "zk_verifying_key_event_filters_reject_malformed_names_before_request" in script
@@ -13431,6 +15026,58 @@ def check_python(texts, errors):
         and "zk_raw_event_filters_reject_malformed_privacy_matchers_before_request" in script
         and "zk_raw_event_filters_canonicalize_privacy_matchers_before_request" in script,
         "Kagemusha Python SDK script must run Torii event-filter verifier/proof exactness regressions",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            'params["asset_id"] = _require_exact_non_empty_string(',
+            '"uaid portfolio asset_id"',
+            '"contract_address": _require_exact_non_empty_string(',
+            '"contract_alias": _require_exact_non_empty_string(',
+            'f"{context}.contract_address"',
+            'f"{context}.contract_alias"',
+        ),
+        "Python Torii query selector exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            "literal = value",
+            "if stripped != literal:",
+            "normalized = hex_portion",
+            "if normalized.strip() != normalized:",
+            "must not contain surrounding whitespace",
+        ),
+        "Python UAID path literal exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            "test_call_contract_rejects_padded_selectors_before_dispatch",
+            "test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch",
+            "call_contract\\\\.contract_address must not contain surrounding whitespace",
+            "call_contract\\\\.contract_alias must not contain surrounding whitespace",
+            "uaid portfolio asset_id must not contain surrounding whitespace",
+            "assert session.calls == []",
+        ),
+        "Python Torii query selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
+            "test_get_uaid_portfolio_rejects_padded_literal_before_dispatch",
+            "uaid must not contain surrounding whitespace",
+            "assert session.calls == []",
+        ),
+        "Python UAID path literal exactness tests",
         errors,
     )
     python_connect = texts["python/iroha_python/src/iroha_python/connect.py"]
@@ -13634,6 +15281,20 @@ def check_python(texts, errors):
         "Python multisig resolved account exactness",
         errors,
     )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/client.py",
+        (
+            "class OfflineReadiness",
+            "def required_positive_int(field: str) -> int:",
+            "isinstance(value, bool)",
+            're.fullmatch(r"[1-9][0-9]*", value)',
+            "must be an exact positive integer string",
+            "must fit in signed 32-bit range",
+        ),
+        "Python Torii offline readiness ABI exactness",
+        errors,
+    )
     require(
         "encode_identifier_resolution_receipt_payload" in torii_init
         and "encode_identifier_resolution_receipt_attestation" in torii_init
@@ -13683,6 +15344,22 @@ def check_python(texts, errors):
         texts,
         "python/iroha_torii_client/tests/test_client.py",
         (
+            "test_get_offline_readiness_rejects_noncanonical_abi_versions",
+            "_offline_readiness_payload",
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "must be an exact positive integer string",
+            "must fit in signed 32-bit range",
+            '"007"',
+            "2_147_483_648",
+        ),
+        "Python Torii offline readiness ABI exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_torii_client/tests/test_client.py",
+        (
             "test_propose_multisig_rejects_malformed_response_fields",
             'f"{CANONICAL_OWNER} "',
             '"multisig@banka"',
@@ -13694,6 +15371,46 @@ def check_python(texts, errors):
     )
     require_contains(texts, wrapper, REQUIRED_PYTHON_PUBLIC_METHODS, "Python SDK", errors)
     require_contains(texts, init, REQUIRED_PYTHON_PUBLIC_METHODS, "Python package re-exports", errors)
+    require_block_contains(
+        texts,
+        wrapper,
+        '"preferred_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+        '"is_kagemusha_compact_payment_token_prover_available",',
+        (
+            '"can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+        ),
+        "Python SDK __all__ helper export",
+        errors,
+    )
+    require_regex(
+        texts,
+        wrapper,
+        r"def can_select_kagemusha_recursive_spend_append_output_proof_circuit_id\(",
+        "Python SDK append output selector definition",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        init,
+        '"preferred_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+        '"is_kagemusha_pallas_open_envelope_builder_available",',
+        (
+            '"can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",',
+        ),
+        "Python package __all__ helper re-export",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        init,
+        "can_redeem_kagemusha_recursive_spend_witnessless,",
+        "is_kagemusha_pallas_open_envelope_builder_available,",
+        (
+            "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id,",
+        ),
+        "Python package import helper re-export",
+        errors,
+    )
     require_contains(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
@@ -13868,6 +15585,13 @@ def check_python(texts, errors):
     require_regex(
         texts,
         "python/iroha_python/src/iroha_python/kagemusha.py",
+        r"if not can_select_kagemusha_recursive_spend_append_output_proof_circuit_id\(",
+        "Python typed recursive spend append output selector call site",
+        errors,
+    )
+    require_regex(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
         r"append_needs_previous_lineage_record =[\s\S]*?if append_needs_previous_lineage_record and self\.previous_lineage_verifier_record is None:[\s\S]*?append_needs_previous_openings =",
         "Python typed recursive spend append previous-lineage preflight before proof-opening selection",
         errors,
@@ -13894,6 +15618,14 @@ def check_python(texts, errors):
         "python/iroha_python/src/iroha_python/kagemusha.py",
         r"bundle_summary = decode_kagemusha_recursive_spend_bundle\(bundle\)[\s\S]*?final_is_lineage = is_kagemusha_recursive_spend_lineage_proof_circuit_id\([\s\S]*?lineage_verifier_records = tuple\(self\.lineage_verifier_records or \(\)\)[\s\S]*?lineage_verifier_record_supplied = \([\s\S]*?self\.lineage_verifier_record is not None or bool\(lineage_verifier_records\)[\s\S]*?def validate_lineage_verifier_records\(\) -> None:[\s\S]*?KagemushaRecursiveSpendVerifierRecordRef[\s\S]*?for lineage_verifier_record in lineage_verifier_records:[\s\S]*?if final_is_lineage:[\s\S]*?if not lineage_verifier_record_supplied:[\s\S]*?lineage_verifier_record is required for reserved-lineage bundles[\s\S]*?validate_lineage_verifier_records\(\)[\s\S]*?lineage_witness = None[\s\S]*?if self\.lineage_witness is not None:[\s\S]*?if not final_is_lineage:[\s\S]*?witness_has_reserved_previous and not lineage_verifier_record_supplied[\s\S]*?not witness_has_reserved_previous[\s\S]*?and lineage_verifier_record_supplied[\s\S]*?lineage_verifier_record is only valid for reserved-lineage bundles or lineage witnesses[\s\S]*?if lineage_verifier_record_supplied:[\s\S]*?validate_lineage_verifier_records\(\)[\s\S]*?redeem_proof = _kagemusha_archive_bytes_named",
         "Python typed recursive spend redeem lineage-record selection before parse",
+        errors,
+        flags=re.S,
+    )
+    require_regex(
+        texts,
+        "python/iroha_python/src/iroha_python/kagemusha.py",
+        r"lineage_verifier_records = tuple\(self\.lineage_verifier_records or \(\)\)[\s\S]*?object\.__setattr__\(\s*self,\s*\"lineage_verifier_records\",\s*lineage_verifier_records,\s*\)",
+        "Python typed recursive spend redeem lineage verifier-record tuple immutability",
         errors,
         flags=re.S,
     )
@@ -13981,6 +15713,20 @@ def check_python(texts, errors):
             'assert abi7_append_summary.asset == "7Y5nGzchCJcxcv98NUoBfwBR1nTk"',
         ),
         "Python typed recursive spend request codec tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "mutable_lineage_verifier_records = [verifier_record, verifier_record]",
+            "mutable_lineage_verifier_records.clear()",
+            "assert copied_plural_redeem_request.lineage_verifier_records == (",
+            "assert isinstance(copied_plural_redeem_request.lineage_verifier_records, tuple)",
+            "copied_plural_redeem_request.lineage_verifier_records = ()",
+            "assert len(_read_sequence_fields(copied_plural_fields[8])) == 2",
+        ),
+        "Python typed recursive spend redeem lineage verifier-record tuple immutability tests",
         errors,
     )
     require_block_contains(
@@ -14573,8 +16319,29 @@ def check_python(texts, errors):
         "change_output=bytes([0x42]) * 32",
         'match="lineage_verifier_key is required for recursive spend lineage proving"',
         (
+            'with pytest.raises(ValueError, match="lineage_witness is required for this bundle"):\n'
+            '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
+            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),\n'
+            "            recipient=_recursive_spend_recipient(),\n"
+            '            public_amount="7",\n'
+            "            redeem_proof=_synthetic_kagemusha_archive(\n"
+            "                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,\n"
+            "                0x80,\n"
+            "            ),",
             'match="lineage_witness is required for this bundle"',
             '_shared_recursive_spend_abi7_archive("append_bundle")',
+            'with pytest.raises(\n'
+            '        ValueError,\n'
+            '        match="lineage_verifier_record is required for reserved-lineage bundles",\n'
+            '    ):\n'
+            '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
+            '            bundle=_shared_recursive_spend_archive("init_bundle"),\n'
+            "            recipient=_recursive_spend_recipient(),\n"
+            '            public_amount="7",\n'
+            "            redeem_proof=_synthetic_kagemusha_archive(\n"
+            "                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,\n"
+            "                0x81,\n"
+            "            ),",
             'match="lineage_verifier_record is required for reserved-lineage bundles"',
             '_shared_recursive_spend_archive("init_bundle")',
             'semantic_missing_witness_redeem_proof = b""',
@@ -14638,10 +16405,10 @@ def check_python(texts, errors):
         "python/iroha_python/tests/kagemusha_test.py",
         (
             "KagemushaRecursiveSpendRedeemRequest(",
-            "forgedRedeemLineageRecord",
-            "forgedRedeemLineageRecordBeforeWitness",
-            "danglingRedeemLineageRecord",
-            "danglingRedeemLineageRecords",
+            '"verifier_key_id": "forgedRedeemLineageRecord"',
+            '"verifier_key_id": "forgedRedeemLineageRecordBeforeWitness"',
+            '"verifier_key_id": "danglingRedeemLineageRecord"',
+            '"verifier_key_id": "danglingRedeemLineageRecords"',
             'match="lineage_verifier_record"',
             'match="lineage_verifier_record is only valid"',
             '_shared_recursive_spend_archive("init_bundle")',
@@ -15081,6 +16848,69 @@ def check_python(texts, errors):
         "Python lineage key artifact copy tests",
         errors,
     )
+    require_block_contains(
+        texts,
+        wrapper,
+        "class KagemushaRecursiveSpendBundleSummary:",
+        "def encode_kagemusha_recursive_spend_init_request",
+        (
+            "not isinstance(self.hop_count, int)",
+            "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
+            "raise ValueError(\"hop_count\")",
+            "is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(",
+            "raise ValueError(\"proof_circuit_id\")",
+            "_kagemusha_require_recursive_spend_asset_summary(self.asset, \"asset\")",
+            "_kagemusha_require_recursive_spend_accumulator_roots(",
+            "topup_anchor_nullifiers: tuple[bytes, ...]",
+            "tuple(\n                _kagemusha_fixed32(nullifier, \"topup_anchor_nullifiers\")",
+            "if not isinstance(self.current_note, KagemushaRecursiveSpendableNoteDescriptor):",
+            "raise ValueError(\"current_note\")",
+        ),
+        "Python recursive spend bundle summary copy-isolation source",
+        errors,
+    )
+    require_contains(
+        texts,
+        wrapper,
+        (
+            "def _kagemusha_base58_decode(value: str) -> bytes:",
+            "def _kagemusha_require_recursive_spend_asset_summary(value: str, field: str) -> None:",
+            "value.startswith(\"hex:\")",
+            "_kagemusha_blake3_hash_small_input(body)[:4]",
+        ),
+        "Python recursive spend bundle summary asset canonicalization source",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "init_summary.initial_root = bytes(32)",
+            "init_summary.current_note.amount = \"8\"",
+            "mutable_note_commitment = bytearray([0x10]) * 32",
+            "mutable_spend_nullifier = bytearray([0x11]) * 32",
+            "mutable_topup_anchors = [mutable_topup_anchor_0, mutable_topup_anchor_1]",
+            "final_root=memoryview(mutable_final_root)",
+            "mutable_topup_anchor_0[:] = b\"\\xff\" * 32",
+            "mutable_topup_anchors.clear()",
+            "assert copied_summary.topup_anchor_nullifiers == (",
+            "assert isinstance(copied_summary.topup_anchor_nullifiers, tuple)",
+            "with pytest.raises(ValueError, match=\"current_note\"):",
+            "current_note=object(),  # type: ignore[arg-type]",
+            "def build_direct_summary(**overrides: object)",
+            "canonical_base58_asset",
+            "direct summary hop count zero",
+            "direct summary empty asset",
+            "direct summary uppercase hex asset",
+            "direct summary padded Base58 asset",
+            "direct summary unsupported proof circuit",
+            "direct summary zero initial root",
+            "direct summary empty top-up anchors",
+            "direct summary current-note top-up reuse",
+        ),
+        "Python recursive spend bundle summary copy-isolation tests",
+        errors,
+    )
     require_regex(
         texts,
         "python/iroha_python/tests/kagemusha_test.py",
@@ -15312,7 +17142,10 @@ def check_swift(texts, errors):
             "[2, 4, 8, 16, 32, 64, 128]",
             "KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1",
             "bundle.accumulator.hop_count",
-            "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)",
+            "guard KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId) else {\n"
+            "            throw KagemushaRecursiveSpendRequestCodecError.invalidArchive(\"bundle.proof_circuit_id\")\n"
+            "        }\n"
+            "        try Self.requireAccumulatorAsset(asset)",
             "bundle.proof_circuit_id",
             "KagemushaRecursiveSpendProver.recursiveAggregationProofBackend",
             "bundle.proof_backend",
@@ -15326,6 +17159,18 @@ def check_swift(texts, errors):
             "public var lineageWitnessRequiredForRedeem: Bool",
         ),
         "Swift typed recursive spend request codecs",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        request_codecs,
+        "public struct KagemushaRecursiveSpendVerifierRecordRef",
+        "public struct KagemushaRecursiveSpendInitRequest",
+        (
+            "public let recordBytes: Data",
+            "self.recordBytes = recordBytes",
+        ),
+        "Swift typed recursive spend verifier-record byte value semantics",
         errors,
     )
     require_regex(
@@ -15376,6 +17221,16 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendRequestCodecError.invalidField(\"lineageVerifierRecord\")",
         ),
         "Swift redeem request constructor lineage-witness record preflight",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs,
+        (
+            "public let lineageVerifierRecords: [KagemushaRecursiveSpendVerifierRecordRef]",
+            "self.lineageVerifierRecords = lineageVerifierRecords",
+        ),
+        "Swift typed recursive spend redeem lineage verifier-record list value semantics",
         errors,
     )
     require_regex(
@@ -16073,6 +17928,31 @@ def check_swift(texts, errors):
         "Swift typed recursive spend redeem lineage preflight tests",
         errors,
     )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "var mutableVerifierRecordBytes = Self.syntheticArchive(",
+            "let copiedVerifierRecordBytes = mutableVerifierRecordBytes",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^=",
+            "var returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.index(before: returnedVerifierRecordBytes.endIndex)] ^=",
+        ),
+        "Swift typed recursive spend verifier-record byte value-semantics tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        request_codecs_test,
+        (
+            "var mutableLineageVerifierRecords = [lineageVerifierRecord, lineageVerifierRecord]",
+            "mutableLineageVerifierRecords.removeAll()",
+            "XCTAssertEqual(copiedPluralRedeemRequest.lineageVerifierRecords.count, 2)",
+            "XCTAssertEqual(try Self.sequencePayloads(copiedPluralFields[8]).count, 2)",
+        ),
+        "Swift typed recursive spend redeem lineage verifier-record list value-semantics tests",
+        errors,
+    )
     require_block_contains(
         texts,
         request_codecs_test,
@@ -16249,6 +18129,13 @@ def check_swift(texts, errors):
         texts,
         torii_client,
         (
+            "requireToriiExactNonEmptyQueryValue",
+            'URLQueryItem(name: "contract_address"',
+            'URLQueryItem(name: "asset_id"',
+            'field: "contractAddress"',
+            'field: "participant"',
+            'field: "assetId"',
+            'field: "assetDefinitionId"',
             "decodeOptionalExactStringValue",
             "decodeOptionalExactStringArrayValue",
             'debugName: "account alias resolution.alias"',
@@ -16263,11 +18150,37 @@ def check_swift(texts, errors):
         texts,
         torii_client,
         (
+            'let exactScope = try requireToriiExactNonEmptyQueryValue(scope, field: "scope")',
+            'URLQueryItem(name: "scope", value: exactScope)',
+        ),
+        "Swift account asset scope selector exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
             "decodeExactToriiAccountId",
             'guard !raw.contains("@")',
             'debugName: "resolved_multisig_account_id"',
         ),
         "Swift multisig resolved account exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            "public struct ToriiOfflineReadiness",
+            "offlineKagemushaAbi7",
+            "offlineKagemushaAbi7BridgeAbiVersion",
+            "offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion",
+            "hasKagemushaRecursiveCompactMetadata",
+            "decodeExactPositiveAbiVersion",
+            "must be an exact positive integer string",
+            "must fit in signed 32-bit range",
+        ),
+        "Swift Torii offline readiness ABI exactness",
         errors,
     )
     require_contains(
@@ -16344,6 +18257,15 @@ def check_swift(texts, errors):
         texts,
         torii_client_test,
         (
+            "testCanonicalQuerySelectorsRejectSurroundingWhitespace",
+            "testAccountAssetQueryHelpersRejectSurroundingWhitespace",
+            "testGetAssetsEncodesScopeSelectorFilter",
+            "testGetAssetsRejectsPaddedScopeBeforeNetwork",
+            "Expected whitespace diagnostic",
+            "getAssets should validate scope before dispatch",
+            "scope must not contain surrounding whitespace",
+            "contract event participant",
+            "uaid portfolio asset",
             "testResolveAccountAliasRejectsNonExactResponseFields",
             "account alias resolution.account_ids",
             "account alias resolution.source",
@@ -16355,11 +18277,62 @@ def check_swift(texts, errors):
         texts,
         torii_client_test,
         (
+            "testGetAssetsEncodesScopeSelectorFilter",
+            "testGetAssetsRejectsPaddedScopeBeforeNetwork",
+            "getAssets should validate scope before dispatch",
+            "scope must not contain surrounding whitespace",
+        ),
+        "Swift account asset scope selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client,
+        (
+            'let exact = try requireToriiExactNonEmptyQueryValue(literal, field: "uaid")',
+            "guard rawHex.trimmingCharacters(in: .whitespacesAndNewlines) == rawHex else",
+            "uaid must not contain surrounding whitespace.",
+        ),
+        "Swift UAID path literal exactness",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork",
+            "getUaidPortfolio should validate UAID before dispatch",
+            "uaid must not contain surrounding whitespace",
+        ),
+        "Swift UAID path literal exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
             "testMultisigResponsesRejectNonExactResolvedAccountIds",
             "paddedAccountId",
             "resolved_multisig_account_id",
         ),
         "Swift multisig resolved account exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        torii_client_test,
+        (
+            "testGetOfflineReadinessParsesKagemushaAbi7Metadata",
+            "testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions",
+            '"offline_kagemusha_abi7_bridge_abi_version": "7"',
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+            "hasKagemushaRecursiveCompactMetadata",
+            "must be an exact positive integer string",
+            "must fit in signed 32-bit range",
+            "\\\"007\\\"",
+            "2147483648",
+        ),
+        "Swift Torii offline readiness ABI exactness tests",
         errors,
     )
     require_contains(
@@ -17123,7 +19096,34 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "Kagemusha Swift SDK script must print the selected swiftc version",
         errors,
     )
+    require(
+        'SWIFT_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_BIN:-swift}"' in script,
+        "Kagemusha Swift SDK script must keep the documented swift override variable",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" --version' in script,
+        "Kagemusha Swift SDK script must print the selected swift version",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test --filter ToriiClientTests/testGetOfflineReadiness' in script,
+        "Kagemusha Swift SDK script must run Torii offline readiness ABI exactness tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test --filter \'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork\'' in script,
+        "Kagemusha Swift SDK script must run Torii query selector exactness tests",
+        errors,
+    )
+    require(
+        '"${SWIFT_BIN}" test --filter OfflineNoteRedeemPlannerTests' in script,
+        "Kagemusha Swift SDK script must run Offline Note redeem planner draft/finalize tests",
+        errors,
+    )
     for relative in (
+        "IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
+        "IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
         "IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift",
         "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
@@ -17143,6 +19143,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Sources/IrohaSwift/ConnectReplayRecorder.swift",
         "IrohaSwift/Sources/IrohaSwift/ConnectRetryPolicy.swift",
         "IrohaSwift/Sources/IrohaSwift/ConnectSession.swift",
+        "IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
         "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
         "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
         "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
@@ -17210,6 +19211,7 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
         "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionEventStreamTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/ConnectTestUtilities.swift",
+        "IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift",
@@ -17287,12 +19289,14 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
 def check_java_kotlin(texts, errors):
     java_compact = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
     java_recursive_aggregation = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java"
+    java_native_note = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/NativeOfflineNoteProver.java"
     java = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
     java_request_codecs = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java"
     java_offline = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java"
     java_vk_box = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/VerifyingKeyBoxCodec.java"
     kotlin_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
     kotlin_recursive_aggregation = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
+    kotlin_native_note = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/NativeOfflineNoteProver.kt"
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
     kotlin_request_codecs = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt"
     kotlin_offline = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt"
@@ -17313,6 +19317,12 @@ def check_java_kotlin(texts, errors):
     java_identifier_verifier = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierReceiptVerifier.java"
     kotlin_identifier_encoder = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptCanonicalEncoder.kt"
     kotlin_identifier_verifier = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierReceiptVerifier.kt"
+    java_uaid_literal = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/UaidLiteral.java"
+    kotlin_uaid_literal = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/UaidLiteral.kt"
+    java_uaid_query = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/UaidPortfolioQuery.java"
+    kotlin_uaid_query = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/UaidPortfolioQuery.kt"
+    java_offline_list_params = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineListParams.java"
+    kotlin_offline_list_params = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineListParams.kt"
     java_claim_identifier = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ClaimIdentifierWirePayloadEncoder.java"
     kotlin_claim_identifier = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ClaimIdentifierWirePayloadEncoder.kt"
     android_device_lab_exporter = "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
@@ -17386,6 +19396,45 @@ def check_java_kotlin(texts, errors):
         "Kotlin redeem request constructor reserved-lineage record preflight before witness parse",
         errors,
         flags=re.S,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs,
+        (
+            "private val recordArchiveBytes = recordBytes.copyOf()",
+            "val recordBytes: ByteArray get() = recordArchiveBytes.copyOf()",
+        ),
+        "Kotlin typed recursive spend verifier-record byte copy isolation",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs,
+        (
+            "import java.util.Collections",
+            "Collections.unmodifiableList(lineageVerifierRecords.toList())",
+        ),
+        "Kotlin typed recursive spend redeem lineage verifier-record list immutability",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_request_codecs,
+        (
+            "this.recordBytes = Arrays.copyOf(Objects.requireNonNull(recordBytes, \"recordBytes\"), recordBytes.length);",
+            "return Arrays.copyOf(recordBytes, recordBytes.length);",
+        ),
+        "Android Java typed recursive spend verifier-record byte copy isolation",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_request_codecs,
+        (
+            "Collections.unmodifiableList(\n              new ArrayList<>(Objects.requireNonNull(lineageVerifierRecords, \"lineageVerifierRecords\")))",
+        ),
+        "Android Java typed recursive spend redeem lineage verifier-record list immutability",
+        errors,
     )
     require_regex(
         texts,
@@ -17633,6 +19682,57 @@ def check_java_kotlin(texts, errors):
             "outputProofCircuitId is not valid for the previous bundle",
         ),
         "Kotlin typed recursive spend append lineage-key selection tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "val mutableVerifierRecordBytes = syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD)",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.lastIndex] =",
+            "val returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.lastIndex] =",
+            "assertContentEquals(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes)",
+        ),
+        "Kotlin typed recursive spend verifier-record byte copy-isolation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_request_codecs_test,
+        (
+            "val mutableLineageVerifierRecords = mutableListOf(lineageVerifierRecord, lineageVerifierRecord)",
+            "mutableLineageVerifierRecords.clear()",
+            "assertFailsWith<UnsupportedOperationException> {",
+            "(copiedPluralRedeemRequest.lineageVerifierRecords as MutableList<VerifierRecordRef>).clear()",
+        ),
+        "Kotlin typed recursive spend redeem lineage verifier-record list immutability tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "final byte[] mutableVerifierRecordBytes =\n        syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD);",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] =",
+            "final byte[] returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes();",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] =",
+            "assert Arrays.equals(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes());",
+        ),
+        "Android Java typed recursive spend verifier-record byte copy-isolation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_test,
+        (
+            "mutableLineageVerifierRecords =\n            new ArrayList<>(Arrays.asList(lineageVerifierRecord, lineageVerifierRecord))",
+            "mutableLineageVerifierRecords.clear();",
+            "copiedPluralRedeemRequest.lineageVerifierRecords.clear();",
+            "UnsupportedOperationException",
+            "assert sequencePayloads(copiedPluralFields.get(8)).size() == 2;",
+        ),
+        "Android Java typed recursive spend redeem lineage verifier-record list immutability tests",
         errors,
     )
     require_contains(
@@ -19488,6 +21588,71 @@ def check_java_kotlin(texts, errors):
             "Kotlin multisig resolved account canonical validation",
         ),
         (
+            java_uaid_query,
+            'throw new IllegalArgumentException(field + " must not contain surrounding whitespace")',
+            "Android Java UAID portfolio query selector exactness",
+        ),
+        (
+            java_uaid_literal,
+            "final String literal = requireExactNonEmpty(value, context);",
+            "Android Java UAID path literal exactness",
+        ),
+        (
+            java_uaid_literal,
+            "if (!hexPortion.trim().equals(hexPortion))",
+            "Android Java UAID path hex literal whitespace rejection",
+        ),
+        (
+            java_uaid_query,
+            'params.put("asset", asset);',
+            "Android Java UAID portfolio query asset no-trim dispatch",
+        ),
+        (
+            java_uaid_query,
+            'params.put("scope", scope);',
+            "Android Java UAID portfolio query scope no-trim dispatch",
+        ),
+        (
+            kotlin_uaid_query,
+            'assetId?.let { put("asset_id", requireExactNonEmpty(it, "assetId")) }',
+            "Kotlin UAID portfolio query selector exactness",
+        ),
+        (
+            kotlin_uaid_literal,
+            "val literal = requireExactNonEmpty(value, context)",
+            "Kotlin UAID path literal exactness",
+        ),
+        (
+            kotlin_uaid_literal,
+            'require(hexPortion.trim() == hexPortion) { "$context must not contain surrounding whitespace" }',
+            "Kotlin UAID path hex literal whitespace rejection",
+        ),
+        (
+            kotlin_uaid_query,
+            '"$field must not contain surrounding whitespace"',
+            "Kotlin UAID portfolio query selector whitespace rejection",
+        ),
+        (
+            java_offline_list_params,
+            'params.put("asset_id", requireExactNonEmpty(assetId, "assetId"));',
+            "Android Java offline list asset selector exactness",
+        ),
+        (
+            java_offline_list_params,
+            'throw new IllegalArgumentException(field + " must not contain surrounding whitespace");',
+            "Android Java offline list asset selector whitespace rejection",
+        ),
+        (
+            kotlin_offline_list_params,
+            'assetId?.let { params["asset_id"] = requireExactNonEmpty(it, "assetId") }',
+            "Kotlin offline list asset selector exactness",
+        ),
+        (
+            kotlin_offline_list_params,
+            '"$field must not contain surrounding whitespace"',
+            "Kotlin offline list asset selector whitespace rejection",
+        ),
+        (
             java_ram_lfe_json,
             'requiredExactString(root.get("program_id"), "ram-lfe execute response.program_id")',
             "Android Java RAM-LFE execute response program-id exactness",
@@ -19838,6 +22003,53 @@ def check_java_kotlin(texts, errors):
         texts,
         java_identifier_parser_test,
         (
+            "uaidPortfolioQueryRejectsPaddedSelectorsBeforeDispatch",
+            "Padded asset selector must fail before sending an HTTP request",
+            "Padded scope selector must fail before sending an HTTP request",
+        ),
+        "Android Java UAID portfolio query selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        (
+            "uaidPathLiteralRejectsPaddedInputBeforeDispatch",
+            "UAID path literal must reject surrounding whitespace before dispatch",
+            "Padded UAID path literal must fail before sending an HTTP request",
+        ),
+        "Android Java UAID path literal exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java",
+        (
+            "public static void main(final String[] args)",
+            "uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsMalformedSelectors",
+            'UaidPortfolioQuery.builder().setAsset(" " + asset)',
+            'UaidPortfolioQuery.builder().setAsset(asset + " ")',
+            'UaidPortfolioQuery.builder().setAsset(asset).setScope(" global")',
+        ),
+        "Android Java UAID portfolio direct selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java",
+        (
+            "offlineListParamsAcceptsAssetSelectorsAndRejectsMalformedSelectors",
+            'OfflineListParams.builder().assetId(" " + asset)',
+            'OfflineListParams.builder().assetId(asset + " ")',
+            'OfflineListParams.builder().assetId(" ")',
+        ),
+        "Android Java offline list asset selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_identifier_parser_test,
+        (
             "padded resolved multisig account id must be rejected",
             "non-canonical resolved multisig account id must be rejected",
             "TestAccountIds.ed25519Authority(0x37)",
@@ -19855,6 +22067,41 @@ def check_java_kotlin(texts, errors):
             "account alias resolution.source",
         ),
         "Kotlin account alias resolution exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "uaidPortfolioQueryRejectsPaddedAssetIdBeforeDispatch",
+            "assetId must not contain surrounding whitespace",
+            "assetId must not be blank",
+            "assertEquals(requestCount, executor.requestCount)",
+        ),
+        "Kotlin UAID portfolio query selector exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "uaidPathLiteralRejectsPaddedInputBeforeDispatch",
+            "uaid portfolio must not contain surrounding whitespace",
+            'for (uaid in listOf(" uaid:$hex", "uaid:$hex ", "uaid: $hex"))',
+        ),
+        "Kotlin UAID path literal exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_identifier_parser_test,
+        (
+            "offlineListParamsRejectsPaddedAssetIdBeforeDispatch",
+            'assertEquals("pkr#paynet", params.toQueryParameters()["asset_id"])',
+            "assetId must not contain surrounding whitespace",
+            "assetId must not be blank",
+        ),
+        "Kotlin offline list asset selector exactness tests",
         errors,
     )
     require_contains(
@@ -20478,6 +22725,7 @@ def check_java_kotlin(texts, errors):
                 "nativeLineageAppendBoundary",
                 "nativeLineageWitnessFromInitResult(probe, probe)",
                 "nativeLineageWitnessAppendResult(probe, probe, probe)",
+                "requiredNativeBridgeAbiVersion <= 0",
             ),
             f"{label} native availability probes",
             errors,
@@ -20496,6 +22744,31 @@ def check_java_kotlin(texts, errors):
             f"{label} recursive spend input Norito guard",
             errors,
         )
+    for relative, label, required_markers in (
+        (
+            java_test,
+            "Android Java recursive spend native availability ABI boundary tests",
+            (
+                "loadedInvalidRequiredAbi",
+                "must not load for invalid required ABI",
+                "() -> 0, () -> true",
+                "() -> -1, () -> true",
+            ),
+        ),
+        (
+            kotlin_test,
+            "Kotlin recursive spend native availability ABI boundary tests",
+            (
+                "loadedInvalidRequiredAbi",
+                "must not load for invalid required ABI",
+                "requiredNativeBridgeAbiVersion = 0",
+                "requiredNativeBridgeAbiVersion = -1",
+                "nativeBridgeAbiVersionProbe = { 0 }",
+                "nativeBridgeAbiVersionProbe = { -1 }",
+            ),
+        ),
+    ):
+        require_contains(texts, relative, required_markers, label, errors)
 
     for relative, label in (
         (java_compact, "Android Java compact-token prover"),
@@ -20515,6 +22788,71 @@ def check_java_kotlin(texts, errors):
                 "must contain a non-empty Norito payload",
             ),
             f"{label} input Norito guard",
+            errors,
+        )
+
+    for relative, label, runtime_marker in (
+        (
+            java_native_note,
+            "Android Java native Offline Note prover",
+            "catch (final RuntimeException ignored)",
+        ),
+        (
+            java_compact,
+            "Android Java compact-token prover",
+            "catch (final RuntimeException error)",
+        ),
+        (
+            java_recursive_aggregation,
+            "Android Java recursive aggregation prover",
+            "catch (final RuntimeException error)",
+        ),
+        (
+            kotlin_native_note,
+            "Kotlin native Offline Note prover",
+            "catch (_: RuntimeException)",
+        ),
+        (
+            kotlin_compact,
+            "Kotlin compact-token prover",
+            "catch (_: RuntimeException)",
+        ),
+        (
+            kotlin_recursive_aggregation,
+            "Kotlin recursive aggregation prover",
+            "catch (_: RuntimeException)",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "detectNativeAvailability",
+                runtime_marker,
+            ),
+            f"{label} native availability runtime fail-closed guard",
+            errors,
+        )
+
+    for relative, label in (
+        (
+            java_offline_test,
+            "Android Java native availability runtime fail-closed tests",
+        ),
+        (
+            kotlin_offline_test,
+            "Kotlin native availability runtime fail-closed tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "bad library name",
+                "bad native loader",
+                "bad native probe",
+            ),
+            label,
             errors,
         )
 
@@ -21134,6 +23472,60 @@ def check_java_kotlin(texts, errors):
         ),
     ):
         require_contains(texts, relative, needles, label, errors)
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        'match=r"pallas_open_envelopes\\[0\\]\\.domain_tag is required",',
+        "malformed_pallas_metadata_payloads = (",
+        (
+            'for malformed_transcript_label in ("", "\\u00e9" * 65):',
+            'match=r"pallas_open_envelopes\\[0\\]\\.transcript_label is invalid"',
+            "transcript_label=malformed_transcript_label",
+        ),
+        "Python typed recursive spend Pallas init transcript-label diagnostics",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        'match=r"previous_proof_open_envelopes requires exactly 1 envelope\\(s\\)",',
+        "for _metadata_field, metadata_kwargs, expected in malformed_pallas_metadata_payloads:",
+        (
+            'for malformed_transcript_label in ("", "\\u00e9" * 65):',
+            'match=r"previous_proof_open_envelopes\\[0\\]\\.transcript_label is invalid"',
+            "transcript_label=malformed_transcript_label",
+        ),
+        "Python typed recursive spend Pallas append previous-proof diagnostics",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        '.invalidArchive("pallasOpenEnvelopes.domain_tag")',
+        "let malformedPallasMetadataArchives",
+        (
+            'String(repeating: "\\u{00e9}", count: 65)',
+            "pallasOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(",
+            "transcriptLabel: transcriptLabel",
+            '.invalidArchive("pallasOpenEnvelopes")',
+        ),
+        "Swift typed recursive spend Pallas archive malformed diagnostics",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(count: 2),",
+        "for (metadataField, archive) in malformedPallasMetadataArchives {",
+        (
+            'String(repeating: "\\u{00e9}", count: 65)',
+            "previousProofOpenEnvelopes: Self.syntheticPallasOpenEnvelopesArchive(",
+            "transcriptLabel: transcriptLabel",
+            '.invalidArchive("previousProofOpenEnvelopes")',
+        ),
+        "Swift typed recursive spend append previous-proof Pallas diagnostics",
+        errors,
+    )
     require_contains(
         texts,
         "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
@@ -21652,6 +24044,7 @@ def check_java_kotlin(texts, errors):
     )
     for pattern, label in (
         (
+            r"currentNote,\s*"
             r"lineageProvingKeyArchive: initProvingKey,\s*\}\),\s*"
             r'kagemushaRequestCodecError\("field", "lineageVerifierKey", null\),\s*'
             r'"package dist accepted init raw lineage proving key without verifier key"',
@@ -23745,6 +26138,10 @@ def check_offline_doc_redeem_lineage_record_selection(texts, errors):
         "decode the lineage-witness previous-proof summary",
         "require lineage verifier records when semantic witnesses contain prior Reserved-lineage proofs",
         "reject dangling records for init-only or absent lineage witnesses",
+        "The same non-C# plural record paths pin request-state ownership",
+        "JavaScript normalizes to frozen record refs with copied record bytes",
+        "Kotlin/JVM plus Java Android copy caller-owned lists into unmodifiable request state before encoding",
+        "JVM/Android record refs also copy verifier-record archive bytes on construction and accessor reads",
         "Full record-backed lineage-witness validation remains enforced by native/core",
     )
     for needle in required:
@@ -24450,6 +26847,264 @@ def check_sdk_topup_anchor_nullifier_invariants(texts, errors):
     )
 
 
+def check_mobile_recursive_spend_bundle_summary_copy_isolation(texts, errors):
+    require_contains(
+        texts,
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+        (
+            "public struct KagemushaRecursiveSpendableNoteDescriptor: Equatable, Sendable",
+            "public let noteCommitment: Data",
+            "public let spendNullifier: Data",
+            "public struct KagemushaRecursiveSpendBundleSummary: Equatable, Sendable",
+            "public let initialRoot: Data",
+            "public let finalRoot: Data",
+            "public let topupAnchorNullifiers: [Data]",
+            "public let currentNote: KagemushaRecursiveSpendableNoteDescriptor",
+            "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)",
+            "try Self.requireAccumulatorAsset(asset)",
+            "AssetDefinitionAddress.decode(asset) != nil || isHexAssetDefinitionFallback(asset)",
+            "try Self.requireAccumulatorRoots(initialRoot: initialRoot, finalRoot: finalRoot)",
+            "try Self.requireTopupAnchorNullifiers(",
+        ),
+        "Swift recursive spend bundle summary value-copy surface",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+        (
+            "let originalInitialRoot = initBundle.initialRoot",
+            "var mutatedInitialRoot = initBundle.initialRoot",
+            "mutatedInitialRoot[0] ^= 0xff",
+            "XCTAssertEqual(initBundle.initialRoot, originalInitialRoot)",
+            "var mutatedTopupAnchorNullifiers = initBundle.topupAnchorNullifiers",
+            "mutatedTopupAnchorNullifiers[0][0] ^= 0xff",
+            "mutatedTopupAnchorNullifiers.removeAll()",
+            "XCTAssertEqual(initBundle.topupAnchorNullifiers, originalTopupAnchorNullifiers)",
+            "var mutableNoteCommitment = Data(repeating: 0x10, count: 32)",
+            "mutableNoteCommitment[0] = 0",
+            "XCTAssertEqual(copiedNote.noteCommitment, Data(repeating: 0x10, count: 32))",
+            "var mutableTopupAnchors = [",
+            "mutableTopupAnchors[0][0] = 0xff",
+            "mutableTopupAnchors.removeAll()",
+            "XCTAssertEqual(copiedSummary.initialRoot, Data(repeating: 0x31, count: 32))",
+            "copiedSummary.topupAnchorNullifiers,",
+            "canonicalSummaryAssetBytes[6] = 0x41",
+            "direct summary empty asset",
+            "direct summary uppercase hex asset",
+            "direct summary padded Base58 asset",
+            "direct summary hop count zero",
+            "direct summary hop count over limit",
+            "direct summary unsupported proof circuit",
+            "direct summary zero initial root",
+            "direct summary empty top-up anchors",
+            "direct summary current-note top-up reuse",
+        ),
+        "Swift recursive spend bundle summary copy-isolation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+        (
+            "private val noteCommitmentBytes = fixed32(noteCommitment, \"noteCommitment\")",
+            "private val spendNullifierBytes = fixed32(spendNullifier, \"spendNullifier\")",
+            "val noteCommitment: ByteArray get() = noteCommitmentBytes.copyOf()",
+            "val spendNullifier: ByteArray get() = spendNullifierBytes.copyOf()",
+            "private val initialRootBytes = fixed32(initialRoot, \"initialRoot\")",
+            "private val finalRootBytes = fixed32(finalRoot, \"finalRoot\")",
+            "private val topupAnchorNullifierBytes = topupAnchorNullifiers.map {",
+            "fixed32(it, \"topupAnchorNullifier\")",
+            "require(hopCount in 1..KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1)",
+            "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(proofCircuitId)",
+            "requireAccumulatorAsset(asset)",
+            "private fun requireAccumulatorAsset(asset: String)",
+            "AssetDefinitionIdEncoder.isCanonicalAddress(asset)",
+            "requireAccumulatorRoots(initialRootBytes, finalRootBytes)",
+            "requireTopupAnchorNullifiers(topupAnchorNullifierBytes, currentNote)",
+            "val initialRoot: ByteArray get() = initialRootBytes.copyOf()",
+            "val finalRoot: ByteArray get() = finalRootBytes.copyOf()",
+            "val topupAnchorNullifiers: List<ByteArray> get() = topupAnchorNullifierBytes.map { it.copyOf() }",
+        ),
+        "Kotlin recursive spend bundle summary defensive-copy accessors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+        (
+            "val originalInitialRoot = init.initialRoot",
+            "val mutatedInitialRoot = init.initialRoot",
+            "mutatedInitialRoot[0] = (mutatedInitialRoot[0].toInt() xor 0xff).toByte()",
+            "assertContentEquals(originalInitialRoot, init.initialRoot)",
+            "val originalTopupAnchorNullifiers = init.topupAnchorNullifiers.map { it.copyOf() }",
+            "val mutatedTopupAnchorNullifiers = init.topupAnchorNullifiers.toMutableList()",
+            "mutatedTopupAnchorNullifiers[0][0] =",
+            "mutatedTopupAnchorNullifiers.clear()",
+            "val mutableNoteCommitment = ByteArray(32) { 0x10 }",
+            "mutableNoteCommitment[0] = 0",
+            "assertContentEquals(ByteArray(32) { 0x10 }, copiedNote.noteCommitment)",
+            "val mutableTopupAnchors = mutableListOf(",
+            "mutableTopupAnchors[0][0] = 0xff.toByte()",
+            "mutableTopupAnchors.clear()",
+            "assertContentEquals(ByteArray(32) { 0x31 }, copiedSummary.initialRoot)",
+            "val copiedSummaryTopupAnchors = copiedSummary.topupAnchorNullifiers.toMutableList()",
+            "copiedSummaryTopupAnchors[0][0] = 0x7f",
+            "canonicalSummaryAssetBytes",
+            "direct summary empty asset",
+            "direct summary uppercase hex asset",
+            "direct summary padded Base58 asset",
+            "direct summary hop count zero",
+            "direct summary hop count over limit",
+            "direct summary unsupported proof circuit",
+            "direct summary zero initial root",
+            "direct summary empty top-up anchors",
+            "direct summary current-note top-up reuse",
+        ),
+        "Kotlin recursive spend bundle summary copy-isolation tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+        (
+            "private final byte[] noteCommitment;",
+            "private final byte[] spendNullifier;",
+            "this.noteCommitment = fixedBytes(noteCommitment, 32, \"noteCommitment\");",
+            "return Arrays.copyOf(noteCommitment, noteCommitment.length);",
+            "return Arrays.copyOf(spendNullifier, spendNullifier.length);",
+            "private final byte[] initialRoot;",
+            "private final byte[] finalRoot;",
+            "private final List<byte[]> topupAnchorNullifiers;",
+            "this.initialRoot = fixedBytes(initialRoot, 32, \"initialRoot\");",
+            "this.finalRoot = fixedBytes(finalRoot, 32, \"finalRoot\");",
+            "KagemushaRecursiveSpendProver.isSupportedPreviousProofCircuitId(this.proofCircuitId)",
+            "requireAccumulatorAsset(this.asset);",
+            "private static void requireAccumulatorAsset(final String asset)",
+            "AssetDefinitionIdEncoder.isCanonicalAddress(asset) || isHexAssetDefinitionFallback(asset)",
+            "requireAccumulatorRoots(this.initialRoot, this.finalRoot);",
+            "copiedTopupAnchorNullifiers.add(fixedBytes(value, 32, \"topupAnchorNullifier\"));",
+            "this.topupAnchorNullifiers = Collections.unmodifiableList(copiedTopupAnchorNullifiers);",
+            "requireTopupAnchorNullifiers(this.topupAnchorNullifiers, this.currentNote);",
+            "return Arrays.copyOf(initialRoot, initialRoot.length);",
+            "return Arrays.copyOf(finalRoot, finalRoot.length);",
+            "copied.add(Arrays.copyOf(value, value.length));",
+            "return Collections.unmodifiableList(copied);",
+        ),
+        "Android Java recursive spend bundle summary defensive-copy accessors",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            "final byte[] originalInitialRoot = init.initialRoot();",
+            "final byte[] mutatedInitialRoot = init.initialRoot();",
+            "mutatedInitialRoot[0] ^= (byte) 0xff;",
+            "assert Arrays.equals(originalInitialRoot, init.initialRoot());",
+            "final List<byte[]> originalTopupAnchorNullifiers = init.topupAnchorNullifiers();",
+            "final List<byte[]> mutatedTopupAnchorNullifiers = init.topupAnchorNullifiers();",
+            "mutatedTopupAnchorNullifiers.get(0)[0] ^= (byte) 0xff;",
+            "topupAnchorListIsImmutable = true;",
+            "final byte[] mutableNoteCommitment = repeat((byte) 0x10, 32);",
+            "mutableNoteCommitment[0] = 0;",
+            "assert Arrays.equals(repeat((byte) 0x10, 32), copiedNote.noteCommitment());",
+            "final ArrayList<byte[]> mutableTopupAnchors = new ArrayList<>();",
+            "mutableTopupAnchors.get(0)[0] = (byte) 0xff;",
+            "mutableTopupAnchors.clear();",
+            "assert Arrays.equals(repeat((byte) 0x31, 32), copiedSummary.initialRoot());",
+            "final List<byte[]> copiedSummaryTopupAnchors = copiedSummary.topupAnchorNullifiers();",
+            "copiedSummaryTopupAnchors.get(0)[0] = 0x7f;",
+            "copiedSummaryTopupListIsImmutable = true;",
+            "final List<byte[]> directSummaryTopupAnchors =",
+            "final byte[] canonicalSummaryAssetBytes = repeat((byte) 0x11, 16);",
+            "bundle.accumulator.asset",
+            "bundle.accumulator.hop_count",
+            "bundle.proof_circuit_id unsupported recursive proof circuit id",
+            "bundle.accumulator.initial_root",
+            "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+        ),
+        "Android Java recursive spend bundle summary copy-isolation tests",
+        errors,
+    )
+
+
+def check_js_recursive_spend_bundle_summary_copy_isolation(texts, errors):
+    for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "const initialRoot = Buffer.from(accumulator.initialRoot);",
+                "const finalRoot = Buffer.from(accumulator.finalRoot);",
+                "const topupAnchorNullifiers = accumulator.topupAnchorNullifiers.map((value) =>\n    Buffer.from(value),\n  );",
+                "get initialRoot() {\n      return Buffer.from(initialRoot);\n    }",
+                "get initial_root() {\n      return Buffer.from(initialRoot);\n    }",
+                "get finalRoot() {\n      return Buffer.from(finalRoot);\n    }",
+                "get final_root() {\n      return Buffer.from(finalRoot);\n    }",
+                "get topupAnchorNullifiers() {\n      return topupAnchorNullifiers.map((value) => Buffer.from(value));\n    }",
+                "get topup_anchor_nullifiers() {\n      return topupAnchorNullifiers.map((value) => Buffer.from(value));\n    }",
+                "const commitment = Buffer.from(noteCommitment);",
+                "const nullifier = Buffer.from(spendNullifier);",
+                "get noteCommitment() {\n      return Buffer.from(commitment);\n    }",
+                "get note_commitment() {\n      return Buffer.from(commitment);\n    }",
+                "get spendNullifier() {\n      return Buffer.from(nullifier);\n    }",
+                "get spend_nullifier() {\n      return Buffer.from(nullifier);\n    }",
+                "const storedRecord = Buffer.from(recordBytes);",
+                "get recordBytes() {\n      return Buffer.from(storedRecord);\n    }",
+                "get record_bytes() {\n      return Buffer.from(storedRecord);\n    }",
+            ),
+            f"{relative} recursive spend bundle summary defensive-copy getters",
+            errors,
+        )
+    for relative, label in (
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "JavaScript typed recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "JavaScript package dist recursive spend bundle summary copy-isolation tests",
+        ),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "const originalInitialRoot = Buffer.from(initBundle.initialRoot);",
+                "const mutatedInitialRoot = initBundle.initialRoot;",
+                "mutatedInitialRoot[0] ^= 0xff;",
+                "assert.deepEqual(initBundle.initial_root, originalInitialRoot);",
+                "const originalFinalRoot = Buffer.from(initBundle.finalRoot);",
+                "const mutatedFinalRoot = initBundle.final_root;",
+                "mutatedFinalRoot[0] ^= 0xff;",
+                "assert.deepEqual(initBundle.final_root, originalFinalRoot);",
+                "const originalTopupAnchorNullifiers = initBundle.topupAnchorNullifiers.map((value) =>",
+                "const mutatedTopupAnchors = initBundle.topupAnchorNullifiers;",
+                "mutatedTopupAnchors[0][0] ^= 0xff;",
+                "mutatedTopupAnchors.length = 0;",
+                "assert.deepEqual(initBundle.topup_anchor_nullifiers, originalTopupAnchorNullifiers);",
+                "const originalNoteCommitment = Buffer.from(initBundle.currentNote.noteCommitment);",
+                "const mutatedNoteCommitment = initBundle.currentNote.note_commitment;",
+                "mutatedNoteCommitment[0] ^= 0xff;",
+                "assert.deepEqual(initBundle.current_note.note_commitment, originalNoteCommitment);",
+                "const originalSpendNullifier = Buffer.from(initBundle.currentNote.spendNullifier);",
+                "const mutatedSpendNullifier = initBundle.current_note.spend_nullifier;",
+                "mutatedSpendNullifier[0] ^= 0xff;",
+                "assert.deepEqual(initBundle.current_note.spend_nullifier, originalSpendNullifier);",
+                "const mutableVerifierRecordBytes = syntheticKagemushaArchive(",
+                "KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,",
+                "const copiedVerifierRecordBytes = Buffer.from(mutableVerifierRecordBytes);",
+                "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0xff;",
+                "const returnedVerifierRecordBytes = copiedVerifierRecord.record_bytes;",
+                "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0xff;",
+                "assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);",
+            ),
+            label,
+            errors,
+        )
+
+
 def run_checks(texts):
     errors = []
     check_workflow_paths(errors)
@@ -24476,6 +27131,7 @@ def run_checks(texts):
     check_mobile_zk_torii_parser_shape_coverage(texts, errors)
     check_mobile_confidential_note_coverage(texts, errors)
     check_mobile_offline_readiness_coverage(texts, errors)
+    check_offline_readiness_artifact_contract(texts, errors)
     check_kotlin_offline_cash_settlement_coverage(texts, errors)
     check_offline_cash_issuer_key_exactness(texts, errors)
     check_android_offline_transfer_persistence_coverage(texts, errors)
@@ -24486,6 +27142,12 @@ def run_checks(texts):
     check_mobile_transport_inspector_attestation_coverage(texts, errors)
     check_mobile_torii_rpc_subscription_websocket_runner_coverage(texts, errors)
     check_mobile_sccp_runner_coverage(texts, errors)
+    check_mobile_retired_offline_note_issuers(texts, errors)
+    check_mobile_retired_offline_note_submitters(texts, errors)
+    check_swift_retired_offline_note_transaction_builders(texts, errors)
+    check_bridge_retired_offline_note_transaction_builders(texts, errors)
+    check_mobile_classic_offline_note_fixture_labels(texts, errors)
+    check_mobile_offline_note_draft_proof_replacement(texts, errors)
     check_javascript_torii_runner_coverage(texts, errors)
     check_javascript_connect_runner_coverage(texts, errors)
     check_javascript(texts, errors)
@@ -24494,6 +27156,8 @@ def run_checks(texts):
     check_java_kotlin(texts, errors)
     check_sdk_redeem_change_output_reserved_collisions(texts, errors)
     check_sdk_topup_anchor_nullifier_invariants(texts, errors)
+    check_mobile_recursive_spend_bundle_summary_copy_isolation(texts, errors)
+    check_js_recursive_spend_bundle_summary_copy_isolation(texts, errors)
     check_abi7_sdk_manifest_coverage(texts, errors)
     check_csharp(texts, errors)
     check_mobile_halo2_canonical_vk_hash(texts, errors)
@@ -24877,7 +27541,7 @@ if mode == "--negative-control-native-bridge-test-workflow":
             "native recursive compact windowed-record bridge test",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for old, new, label in mutations:
         updated = mutated.replace(old, new, 1)
         if updated == mutated:
@@ -25409,26 +28073,45 @@ if mode == "--negative-control-python-sdk-bytecode-script":
 if mode == "--negative-control-python-sdk-test-filter-script":
     target = PYTHON_SDK_TEST_COMMAND
     original = read(target)
-    mutated = original.replace("  tests/offline_cash_test.py \\\n", "", 1)
-    if mutated == original:
-        raise SystemExit("negative control failed: unable to mutate Python SDK test filter")
-    text_overrides[target] = mutated
-    try:
-        run_checks(texts)
-    except ParityError as error:
-        message = str(error)
-        expected = "Kagemusha Python SDK script must run tests/offline_cash_test.py"
-        expected_labels = (expected,)
-        if expected not in message:
-            raise SystemExit(
-                "negative control failed: Python SDK test filter drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
-            )
-        print("negative control rejected Python SDK test filter drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
+    cases = (
+        ("  tests/kagemusha_test.py \\\n", "Kagemusha Python SDK script must run tests/kagemusha_test.py"),
+        ("  tests/privacy_catalog_test.py \\\n", "Kagemusha Python SDK script must run tests/privacy_catalog_test.py"),
+        ("  tests/crypto_algorithms_test.py \\\n", "Kagemusha Python SDK script must run tests/crypto_algorithms_test.py"),
+        ("  tests/test_nexus_app.py \\\n", "Kagemusha Python SDK script must run tests/test_nexus_app.py"),
+        ("  tests/offline_cash_test.py \\\n", "Kagemusha Python SDK script must run tests/offline_cash_test.py"),
+        ("  tests/testconnect_codec.py \\\n", "Kagemusha Python SDK script must run tests/testconnect_codec.py"),
+        ("  tests/test_address_format.py \\\n", "Kagemusha Python SDK script must run tests/test_address_format.py"),
+    )
+    detected_messages = []
+    for old, label in cases:
+        mutated = original.replace(old, "", 1)
+        if mutated == original:
+            raise SystemExit("negative control failed: unable to mutate Python SDK test filter " + label)
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: Python SDK test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit("negative control failed: Python SDK test filter drift was not detected for " + label)
+    if not detected_messages:
+        raise SystemExit("negative control failed: Python SDK test filter drift was not detected")
+    print("negative control rejected Python SDK test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-sdk-abi7-fixture-native-guard":
     target = PYTHON_SDK_TEST_COMMAND
@@ -25607,6 +28290,59 @@ if mode == "--negative-control-python-sdk-canonical-request-test-filter-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK canonical request test filter drift was not detected")
 
+if mode == "--negative-control-python-sdk-torii-selector-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    cases = (
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_call_contract_rejects_padded_selectors_before_dispatch"',
+            "Python SDK contract selector exactness test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_literal_before_dispatch"',
+            "Python SDK UAID path literal exactness test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch"',
+            "Python SDK UAID portfolio selector exactness test filter",
+        ),
+    )
+    detected_messages = []
+    for needle, label in cases:
+        mutated = original.replace(needle, "", 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python SDK Torii selector test filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected = "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions"
+            expected_labels = (expected,)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Python SDK Torii selector test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Python SDK Torii selector test filter drift was not detected for "
+            + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Python SDK Torii selector test filter drift was not detected")
+    print("negative control rejected Python SDK Torii selector test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-python-sdk-identifier-receipt-test-filter-script":
     target = PYTHON_SDK_TEST_COMMAND
     original = read(target)
@@ -25662,6 +28398,60 @@ if mode == "--negative-control-python-sdk-multisig-response-test-filter-script":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python SDK multisig response test filter drift was not detected")
+
+if mode == "--negative-control-python-sdk-offline-readiness-test-filter-script":
+    target = PYTHON_SDK_TEST_COMMAND
+    original = read(target)
+    cases = (
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload"',
+            "Python SDK offline readiness canonical payload test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions"',
+            "Python SDK offline readiness noncanonical ABI test filter",
+        ),
+        (
+            ' \\\n  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_legacy_only_payload"',
+            "Python SDK offline readiness legacy-only payload test filter",
+        ),
+    )
+    detected_messages = []
+    for needle, label in cases:
+        mutated = original.replace(needle, "", 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python SDK offline readiness test filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        try:
+            try:
+                run_checks(texts)
+            except ParityError as error:
+                message = str(error)
+                expected = "Kagemusha Python SDK script must run Torii offline readiness ABI exactness regressions"
+                expected_labels = (expected,)
+                if expected not in message:
+                    raise SystemExit(
+                        "negative control failed: Python SDK offline readiness test filter drift was rejected for the wrong reason: "
+                        + message.splitlines()[0]
+                    )
+                for detected_message in first_lines_for_labels(message, expected_labels):
+                    detected_messages.append(f"{label}: {detected_message}")
+                continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Python SDK offline readiness test filter drift was not detected for "
+            + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Python SDK offline readiness test filter drift was not detected")
+    print("negative control rejected Python SDK offline readiness test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-block-height-vectors":
     mutated_texts = dict(texts)
@@ -26637,6 +29427,190 @@ if mode == "--negative-control-python-lineage-frozen-copy":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Python lineage frozen copy test drift was not detected")
 
+if mode == "--negative-control-python-bundle-summary-copy-isolation":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "raise ValueError(\"hop_count\")",
+            "raise ValueError(\"proof_circuit_id\")",
+            "Python recursive spend bundle summary copy-isolation source",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "_kagemusha_require_recursive_spend_accumulator_roots(",
+            "_kagemusha_skip_recursive_spend_accumulator_roots(",
+            "Python recursive spend bundle summary copy-isolation source",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "_kagemusha_require_recursive_spend_asset_summary(self.asset, \"asset\")",
+            "_kagemusha_skip_recursive_spend_asset_summary(self.asset, \"asset\")",
+            "Python recursive spend bundle summary copy-isolation source",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "if not isinstance(self.current_note, KagemushaRecursiveSpendableNoteDescriptor):\n            raise ValueError(\"current_note\")\n        _kagemusha_require_recursive_spend_topup_anchor_nullifiers(",
+            "if not hasattr(self.current_note, \"note_commitment\"):\n            raise ValueError(\"current_note\")\n        _kagemusha_require_recursive_spend_topup_anchor_nullifiers(",
+            "Python recursive spend bundle summary copy-isolation source",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "tuple(\n                _kagemusha_fixed32(nullifier, \"topup_anchor_nullifiers\")",
+            "list(\n                _kagemusha_fixed32(nullifier, \"topup_anchor_nullifiers\")",
+            "Python recursive spend bundle summary copy-isolation source",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "init_summary.initial_root = bytes(32)",
+            "init_summary.initial_root = init_summary.initial_root",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "mutable_topup_anchors.clear()",
+            "mutable_topup_anchors.copy()",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "assert isinstance(copied_summary.topup_anchor_nullifiers, tuple)",
+            "assert isinstance(copied_summary.topup_anchor_nullifiers, list)",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "direct summary hop count zero",
+            "direct summary hop count accepted",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "direct summary empty asset",
+            "direct summary asset accepted",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "direct summary empty top-up anchors",
+            "direct summary top-up-empty accepted",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "with pytest.raises(ValueError, match=\"current_note\"):",
+            "with pytest.raises(AttributeError, match=\"note_commitment\"):",
+            "Python recursive spend bundle summary copy-isolation tests",
+        ),
+    )
+    detected_messages = []
+
+    def detect_python_bundle_summary_copy_mutation(target, old, new, label):
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python bundle summary copy isolation in "
+                + target
+                + ": "
+                + old
+            )
+        mutated[target] = updated
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Python bundle summary copy-isolation drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            return
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Python bundle summary copy-isolation drift was not detected for "
+            + expected_label
+        )
+
+    for target, old, new, label in replacements:
+        detect_python_bundle_summary_copy_mutation(target, old, new, label)
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Python bundle summary copy-isolation drift was not detected"
+        )
+    print("negative control rejected Python bundle summary copy-isolation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-python-redeem-lineage-record-tuple-immutability":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            "\"lineage_verifier_records\",\n            lineage_verifier_records,",
+            "\"lineage_verifier_records\",\n            self.lineage_verifier_records,",
+            "Python typed recursive spend redeem lineage verifier-record tuple immutability",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "mutable_lineage_verifier_records.clear()",
+            "mutable_lineage_verifier_records.copy()",
+            "Python typed recursive spend redeem lineage verifier-record tuple immutability tests",
+        ),
+        (
+            "python/iroha_python/tests/kagemusha_test.py",
+            "assert isinstance(copied_plural_redeem_request.lineage_verifier_records, tuple)",
+            "assert isinstance(copied_plural_redeem_request.lineage_verifier_records, list)",
+            "Python typed recursive spend redeem lineage verifier-record tuple immutability tests",
+        ),
+    )
+    detected_messages = []
+
+    for target, old, new, label in replacements:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Python redeem lineage verifier-record tuple immutability in "
+                + target
+                + ": "
+                + old
+            )
+        mutated[target] = updated
+        if target == "python/iroha_python/src/iroha_python/kagemusha.py":
+            expected_label = f"{label} missing pattern"
+        else:
+            expected_label = f"{label} missing {old}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Python redeem lineage verifier-record tuple immutability drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Python redeem lineage verifier-record tuple immutability drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Python redeem lineage verifier-record tuple immutability drift was not detected"
+        )
+    print("negative control rejected Python redeem lineage verifier-record tuple immutability drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-python-sdk-test-workflow":
     target = WORKFLOW_PATH
     original = read(target)
@@ -27113,6 +30087,57 @@ if mode == "--negative-control-jvm-sdk-signing-verifier-test-filter-script":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-jvm-sdk-nexus-filter-script":
+    target = JVM_SDK_TEST_COMMAND
+    original = read(target)
+    cases = (
+        (
+            "  --tests org.hyperledger.iroha.sdk.nexus.NexusAppClientTest \\\n",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.sdk.nexus.NexusAppClientTest",
+        ),
+        (
+            " \\\n  --tests org.hyperledger.iroha.android.nexus.NexusAppClientTest",
+            "",
+            "Kagemusha JVM SDK script must run org.hyperledger.iroha.android.nexus.NexusAppClientTest",
+        ),
+    )
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM SDK Nexus test filter " + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JVM SDK Nexus test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JVM SDK Nexus test filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JVM SDK Nexus test filter drift was not detected")
+    print("negative control rejected JVM SDK Nexus test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-jvm-sdk-torii-event-stream-verifier-filter-script":
     target = JVM_SDK_TEST_COMMAND
     original = read(target)
@@ -27397,8 +30422,14 @@ if mode == "--negative-control-jvm-recursive-compact-verifier-availability":
 if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
     mutated_texts = dict(texts)
     targets = (
-        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+            "Kotlin recursive compact verifier tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "Android Java recursive compact verifier tests",
+        ),
     )
     mutations = (
         (
@@ -27410,41 +30441,43 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
             "envelope key mismatch may be unavailable",
         ),
     )
-    changed = False
-    for target in targets:
-        mutated = read(target)
+    detected_messages = []
+    for target, label in targets:
+        original = mutated_texts[target]
         for needle, replacement in mutations:
-            updated = mutated.replace(needle, replacement, 1)
-            changed = changed or updated != mutated
-            mutated = updated
-        mutated_texts[target] = mutated
-    if not changed:
-        raise SystemExit("negative control failed: unable to mutate JVM recursive compact shape classifier coverage")
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
-            "Kotlin recursive compact verifier tests missing "
-            "public instance column 0 must contain exactly one row; found 2",
-            "Kotlin recursive compact verifier tests missing "
-            "envelope verifier-key hash mismatch",
-            "Android Java recursive compact verifier tests missing "
-            "public instance column 0 must contain exactly one row; found 2",
-            "Android Java recursive compact verifier tests missing "
-            "envelope verifier-key hash mismatch",
-        )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+            updated = original.replace(needle, replacement, 1)
+            if updated == original or original.count(needle) - updated.count(needle) != 1:
+                raise SystemExit(
+                    "negative control failed: unable to mutate JVM recursive compact shape classifier coverage: "
+                    + target
+                    + " "
+                    + needle
+                )
+            mutated_texts[target] = updated
+            expected = f"{label} missing {needle}"
+            try:
+                run_checks(mutated_texts)
+            except ParityError as error:
+                message = str(error)
+                if expected not in message:
+                    raise SystemExit(
+                        "negative control failed: JVM recursive compact shape classifier drift was rejected for the wrong reason: "
+                        + message.splitlines()[0]
+                    )
+                detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+                continue
+            finally:
+                mutated_texts[target] = original
             raise SystemExit(
                 "negative control failed: JVM recursive compact shape classifier drift was not detected for "
-                + ", ".join(missing)
+                + expected
             )
-        print("negative control rejected JVM recursive compact shape classifier drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JVM recursive compact shape classifier drift was not detected")
+    if not detected_messages:
+        raise SystemExit("negative control failed: JVM recursive compact shape classifier drift was not detected")
+    print("negative control rejected JVM recursive compact shape classifier drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
     mutated_texts = dict(texts)
@@ -27458,89 +30491,104 @@ if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
             "Android Java recursive spend native output Norito guard tests",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original.replace(
             "invalidFieldBitset[39] = 0x20",
             "invalidFieldBitset[39] = 0x06",
             1,
         )
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing invalidFieldBitset[39] = 0x20")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile native output header coverage for "
-            + ", ".join(missing_targets)
+        removed = original.count("invalidFieldBitset[39] = 0x20") - mutated.count(
+            "invalidFieldBitset[39] = 0x20"
         )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+        if mutated == original or removed != 1:
             raise SystemExit(
-                "negative control failed: mobile native output header drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile native output header coverage for "
+                + target
             )
-        print("negative control rejected mobile native output header drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile native output header drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing invalidFieldBitset[39] = 0x20"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile native output header drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile native output header drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile native output header drift was not detected")
+    print("negative control rejected mobile native output header drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-privacy-production-gate-exactness":
     mutated_texts = dict(texts)
-    swift_bridge = "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"
-    kotlin_bridge = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
-    java_bridge = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
-    swift_mutated = read(swift_bridge).replace(
-        "rows.contains(where: { !nativeCapabilityRowIsExact($0) })",
-        "rows.contains(where: { $0.productionGate.version != version })",
-        1,
-    )
-    kotlin_mutated = read(kotlin_bridge).replace(
-        "rows.any { !nativeCapabilityRowIsExact(it) }",
-        "rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }",
-        1,
-    )
-    java_mutated = read(java_bridge).replace(
-        "if (!nativeCapabilityRowIsExact(row))",
-        "if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version))",
-        1,
-    )
-    if (
-        swift_mutated == read(swift_bridge)
-        or kotlin_mutated == read(kotlin_bridge)
-        or java_mutated == read(java_bridge)
-    ):
-        raise SystemExit("negative control failed: unable to mutate mobile privacy production-gate exactness")
-    mutated_texts[swift_bridge] = swift_mutated
-    mutated_texts[kotlin_bridge] = kotlin_mutated
-    mutated_texts[java_bridge] = java_mutated
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
+            "rows.contains(where: { !nativeCapabilityRowIsExact($0) })",
+            "rows.contains(where: { $0.productionGate.version != version })",
             "Swift privacy production-gate exactness",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+            "rows.any { !nativeCapabilityRowIsExact(it) }",
+            "rows.any { it.productionGate.version != PRODUCTION_GATE_VERSION }",
             "Kotlin privacy production-gate exactness",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+            "if (!nativeCapabilityRowIsExact(row))",
+            "if (!PRODUCTION_GATE_VERSION.equals(row.productionGate.version))",
             "Android Java privacy production-gate exactness",
-        )
-        for label in expected_labels:
-            if label not in message:
+        ),
+    )
+    detected_messages = []
+    for target, old, new, label in mutations:
+        original = mutated_texts[target]
+        updated = original.replace(old, new, 1)
+        if updated == original or original.count(old) - updated.count(old) != 1:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile privacy production-gate exactness in "
+                + target
+            )
+        mutated_texts[target] = updated
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
                 raise SystemExit(
-                    "negative control failed: mobile privacy production-gate drift was not detected for "
-                    + label
+                    "negative control failed: mobile privacy production-gate drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
                 )
-        print("negative control rejected mobile privacy production-gate exactness drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile privacy production-gate exactness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile privacy production-gate exactness drift was not detected")
+    print("negative control rejected mobile privacy production-gate exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":
     mutated_texts = dict(texts)
@@ -27613,7 +30661,6 @@ if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":
             "Android Java privacy production-gate exactness tests",
         ),
     )
-    expected_labels = []
     def expected_mobile_privacy_audit_hash_label(old, label):
         if "reused audit hash" in old:
             return f"{label} missing reused audit hash"
@@ -27622,32 +30669,42 @@ if mode == "--negative-control-mobile-privacy-audit-hash-uniqueness":
             marker = marker[:-1]
         return f"{label} missing {marker}"
 
+    detected_messages = []
     for target, old, new, extra_old, extra_new, label in mutations:
-        updated = mutated_texts[target].replace(old, new, 1)
+        original = mutated_texts[target]
+        updated = original.replace(old, new, 1)
         if extra_old is not None:
             updated = updated.replace(extra_old, extra_new, 1)
-        if updated == mutated_texts[target]:
+        if updated == original:
             raise SystemExit(
                 "negative control failed: unable to mutate mobile privacy audit hash uniqueness in "
                 + target
             )
         mutated_texts[target] = updated
-        expected_labels.append(expected_mobile_privacy_audit_hash_label(old, label))
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: mobile privacy audit hash uniqueness drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected mobile privacy audit hash uniqueness drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile privacy audit hash uniqueness drift was not detected")
+        expected = expected_mobile_privacy_audit_hash_label(old, label)
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile privacy audit hash uniqueness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile privacy audit hash uniqueness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile privacy audit hash uniqueness drift was not detected")
+    print("negative control rejected mobile privacy audit hash uniqueness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":
     mutated_texts = dict(texts)
@@ -27677,39 +30734,44 @@ if mode == "--negative-control-mobile-privacy-localnet-lifecycle-audit":
             "Android Java privacy production-gate exactness tests",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original.replace(
             "localnet_lifecycle_redeem_tx_hash:",
             "localnet_lifecycle_generic_redeem_tx_hash:",
             1,
         )
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing localnet_lifecycle_redeem_tx_hash:")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile privacy localnet lifecycle audit coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile privacy localnet lifecycle audit drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile privacy localnet lifecycle audit coverage for "
+                + target
             )
-        print("negative control rejected mobile privacy localnet lifecycle audit drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile privacy localnet lifecycle audit drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing localnet_lifecycle_redeem_tx_hash:"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile privacy localnet lifecycle audit drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile privacy localnet lifecycle audit drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile privacy localnet lifecycle audit drift was not detected")
+    print("negative control rejected mobile privacy localnet lifecycle audit drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
     mutated_texts = dict(texts)
@@ -27763,42 +30825,45 @@ if mode == "--negative-control-public-privacy-localnet-lifecycle-catalog":
             "ready gate invariants ignore review/fuzz hash reuse",
         ),
     )
-    missing_targets = []
-    expected_labels = []
     def expected_public_privacy_localnet_lifecycle_label(target, label, needle):
         if target.startswith("python/"):
             return label
         return f"{label} missing {needle}"
 
+    detected_messages = []
     for target, label, needle, replacement in targets:
-        original = mutated_texts.get(target, read(target))
+        original = mutated_texts[target]
         mutated = original.replace(needle, replacement, 1)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(
-            expected_public_privacy_localnet_lifecycle_label(target, label, needle)
-        )
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy localnet lifecycle catalog coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: public privacy localnet lifecycle catalog drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate public privacy localnet lifecycle catalog coverage for "
+                + target
             )
-        print("negative control rejected public privacy localnet lifecycle catalog drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy localnet lifecycle catalog drift was not detected")
+        mutated_texts[target] = mutated
+        expected = expected_public_privacy_localnet_lifecycle_label(target, label, needle)
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: public privacy localnet lifecycle catalog drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: public privacy localnet lifecycle catalog drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: public privacy localnet lifecycle catalog drift was not detected")
+    print("negative control rejected public privacy localnet lifecycle catalog drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":
     mutated_texts = dict(texts)
@@ -27840,37 +30905,42 @@ if mode == "--negative-control-public-privacy-sdk-export-review-scope-evidence":
             "function privacyPackageProductionEvidenceManifestIgnored(",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, needle, replacement in targets:
-        original = mutated_texts.get(target, read(target))
+        original = mutated_texts[target]
         mutated = original.replace(needle, replacement, 1)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {needle}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy SDK export/review-scope evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: public privacy SDK export/review-scope drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate public privacy SDK export/review-scope evidence coverage for "
+                + target
             )
-        print("negative control rejected public privacy SDK export/review-scope drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: public privacy SDK export/review-scope drift was not detected"
-    )
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {needle}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: public privacy SDK export/review-scope drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: public privacy SDK export/review-scope drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: public privacy SDK export/review-scope drift was not detected"
+        )
+    print("negative control rejected public privacy SDK export/review-scope drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 def expected_public_privacy_catalog_label(target, label, needle):
     if target.startswith("python/"):
@@ -27884,8 +30954,52 @@ def expected_public_privacy_catalog_label(target, label, needle):
         marker = marker[:-1].strip()
     return f"{label} missing {marker}"
 
-if mode == "--negative-control-public-privacy-zero-hash-evidence":
+def run_public_privacy_catalog_drift_control(mode_label, targets):
     mutated_texts = dict(texts)
+    detected_messages = []
+    for mutation in targets:
+        if len(mutation) == 4:
+            target, label, needle, replacement = mutation
+            replace_count = 1
+        else:
+            target, label, needle, replacement, replace_count = mutation
+        original = mutated_texts[target]
+        if replace_count is None:
+            mutated = original.replace(needle, replacement)
+        else:
+            mutated = original.replace(needle, replacement, replace_count)
+        if mutated == original:
+            raise SystemExit(
+                f"negative control failed: unable to mutate {mode_label} coverage for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        expected = expected_public_privacy_catalog_label(target, label, needle)
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    f"negative control failed: {mode_label} drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            f"negative control failed: {mode_label} drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(f"negative control failed: {mode_label} drift was not detected")
+    print(f"negative control rejected {mode_label} drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-public-privacy-zero-hash-evidence":
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -27918,42 +31032,9 @@ if mode == "--negative-control-public-privacy-zero-hash-evidence":
             "placeholder-localnet-lifecycle-hash",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement, 1)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy zero-hash evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy zero-hash evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy zero-hash evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy zero-hash evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy zero-hash evidence", targets)
 
 if mode == "--negative-control-public-privacy-repeated-hash-evidence":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -27986,42 +31067,9 @@ if mode == "--negative-control-public-privacy-repeated-hash-evidence":
             "uniform-review-artifact-digest-marker",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement, 1)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy repeated-hash evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy repeated-hash evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy repeated-hash evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy repeated-hash evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy repeated-hash evidence", targets)
 
 if mode == "--negative-control-public-privacy-zero-signature-evidence":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -28054,42 +31102,9 @@ if mode == "--negative-control-public-privacy-zero-signature-evidence":
             "placeholder-review-artifact-signature",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement, 1)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy zero-signature evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy zero-signature evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy zero-signature evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy zero-signature evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy zero-signature evidence", targets)
 
 if mode == "--negative-control-public-privacy-repeated-signature-evidence":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -28122,42 +31137,9 @@ if mode == "--negative-control-public-privacy-repeated-signature-evidence":
             "placeholder-review-artifact-sig-marker",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement, 1)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy repeated-signature evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy repeated-signature evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy repeated-signature evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy repeated-signature evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy repeated-signature evidence", targets)
 
 if mode == "--negative-control-public-privacy-reviewer-identity-evidence":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -28190,54 +31172,23 @@ if mode == "--negative-control-public-privacy-reviewer-identity-evidence":
             "placeholder-reviewer-marker",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement, 1)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy reviewer-identity evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy reviewer-identity evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy reviewer-identity evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy reviewer-identity evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy reviewer-identity evidence", targets)
 
 if mode == "--negative-control-public-privacy-artifact-label-evidence":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
             "javascript/iroha_js/src/privacyAlgorithms.js privacy localnet lifecycle catalog",
             "const label = artifactLabelValue(value.label);",
             "const label = evidenceTextValue(value.label, 160);",
+            None,
         ),
         (
             "javascript/iroha_js/dist/privacyAlgorithms.js",
             "javascript/iroha_js/dist/privacyAlgorithms.js privacy localnet lifecycle catalog",
             "const label = artifactLabelValue(value.label);",
             "const label = evidenceTextValue(value.label, 160);",
+            None,
         ),
         (
             "javascript/iroha_js/test/privacyCatalogParity.test.js",
@@ -28250,6 +31201,7 @@ if mode == "--negative-control-public-privacy-artifact-label-evidence":
             "Python privacy catalog must require full localnet lifecycle evidence",
             'label = _privacy_evidence_artifact_label(value.get("label"))',
             'label = _privacy_evidence_text_value(value.get("label"), limit=160)',
+            None,
         ),
         (
             "python/iroha_python/tests/privacy_catalog_test.py",
@@ -28258,42 +31210,9 @@ if mode == "--negative-control-public-privacy-artifact-label-evidence":
             "placeholder-production-gate-artifact-marker",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy artifact-label evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy artifact-label evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy artifact-label evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy artifact-label evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy artifact-label evidence", targets)
 
 if mode == "--negative-control-public-privacy-duplicate-row-evidence":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/src/privacyAlgorithms.js",
@@ -28326,48 +31245,16 @@ if mode == "--negative-control-public-privacy-duplicate-row-evidence":
             "test_privacy_catalog_accepts_duplicate_internal_review_evidence_rows",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_expected_labels = set()
-    for target, label, needle, replacement in targets:
-        original = read(target)
-        mutated = original.replace(needle, replacement, 1)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_label = expected_public_privacy_catalog_label(target, label, needle)
-        if expected_label not in seen_expected_labels:
-            expected_labels.append(expected_label)
-            seen_expected_labels.add(expected_label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy duplicate-row evidence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy duplicate-row evidence drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy duplicate-row evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy duplicate-row evidence drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy duplicate-row evidence", targets)
 
 if mode == "--negative-control-public-privacy-deterministic-test-artifact":
-    mutated_texts = dict(texts)
     targets = (
         (
             "javascript/iroha_js/test/privacyCatalogParity.test.js",
             "JavaScript privacy localnet lifecycle catalog tests",
             'createHash("sha256").update(label).digest("hex")',
             'Buffer.from(label).toString("hex").slice(0, 64).padEnd(64, "0")',
+            None,
         ),
         (
             "javascript/iroha_js/test/privacyCatalogParity.test.js",
@@ -28388,38 +31275,7 @@ if mode == "--negative-control-public-privacy-deterministic-test-artifact":
             "test_privacy_catalog_internal_review_evidence_test_artifact_helper_uses_hash",
         ),
     )
-    missing_targets = []
-    expected_labels = []
-    seen_labels = set()
-    for target, label, needle, replacement in targets:
-        original = mutated_texts.get(target, read(target))
-        mutated = original.replace(needle, replacement)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        if label not in seen_labels:
-            expected_labels.append(expected_public_privacy_catalog_label(target, label, needle))
-            seen_labels.add(label)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate public privacy deterministic test artifact coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in set(expected_labels) if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: public privacy deterministic test artifact drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected public privacy deterministic test artifact drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: public privacy deterministic test artifact drift was not detected")
+    run_public_privacy_catalog_drift_control("public privacy deterministic test artifact", targets)
 
 if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":
     mutated_texts = dict(texts)
@@ -28435,40 +31291,45 @@ if mode == "--negative-control-mobile-zk-merkle-provider-adversarial-coverage":
             "toriiProviderRejectsPathCountDriftAndReorderedNodeResponses",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original.replace(
             "toriiProviderRejectsPathCountDriftAndReorderedNodeResponses",
             "toriiProviderAllowsPathCountDriftAndReorderedNodeResponses",
         )
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile ZK Merkle provider adversarial coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile ZK Merkle provider adversarial coverage for "
+                + target
             )
-        print("negative control rejected mobile ZK Merkle provider adversarial coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected"
-    )
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile ZK Merkle provider adversarial coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile ZK Merkle provider adversarial coverage drift was not detected"
+        )
+    print("negative control rejected mobile ZK Merkle provider adversarial coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":
     mutated_texts = dict(texts)
@@ -28484,10 +31345,9 @@ if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":
             "rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -28501,29 +31361,35 @@ if mode == "--negative-control-mobile-zk-torii-parser-shape-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile ZK Torii parser shape coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile ZK Torii parser shape coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile ZK Torii parser shape coverage for "
+                + target
             )
-        print("negative control rejected mobile ZK Torii parser shape coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile ZK Torii parser shape coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile ZK Torii parser shape coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile ZK Torii parser shape coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile ZK Torii parser shape coverage drift was not detected")
+    print("negative control rejected mobile ZK Torii parser shape coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-confidential-note-coverage":
     mutated_texts = dict(texts)
@@ -28549,10 +31415,9 @@ if mode == "--negative-control-mobile-confidential-note-coverage":
             "derivesRustConfidentialV2Vectors",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -28570,29 +31435,35 @@ if mode == "--negative-control-mobile-confidential-note-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile confidential note coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile confidential note coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile confidential note coverage for "
+                + target
             )
-        print("negative control rejected mobile confidential note coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile confidential note coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile confidential note coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile confidential note coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile confidential note coverage drift was not detected")
+    print("negative control rejected mobile confidential note coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-confidential-witness-codecs":
     mutated_texts = dict(texts)
@@ -28683,15 +31554,39 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
         ("publicInputs must not be empty", "publicInputs may be empty"),
         ("witness must not exceed 33554432 bytes", "witness may exceed 33554432 bytes"),
     )
-    missing_targets = []
-    expected_labels = []
-    for target, old, new, label in targets:
+    detected_messages = []
+    def run_confidential_witness_mutation(target, old, new, label):
         original = mutated_texts[target]
         mutated = original.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile confidential witness codec coverage for "
+                + target
+                + ": "
+                + old
+            )
         mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {old}")
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile confidential witness codec drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            return
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile confidential witness codec drift was not detected for "
+            + expected
+        )
+
+    for target, old, new, label in targets:
+        run_confidential_witness_mutation(target, old, new, label)
     for target, label in (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
@@ -28702,34 +31597,14 @@ if mode == "--negative-control-mobile-confidential-witness-codecs":
             "Android Java privacy confidential witness codec tests",
         ),
     ):
-        mutated = mutated_texts[target]
         for old, new in diagnostic_replacements:
-            updated = mutated.replace(old, new)
-            if updated == mutated:
-                missing_targets.append(f"{target}: {old}")
-            mutated = updated
-            expected_labels.append(f"{label} missing {old}")
-        mutated_texts[target] = mutated
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile confidential witness codec coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: mobile confidential witness codec drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected mobile confidential witness codec drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile confidential witness codec drift was not detected")
+            run_confidential_witness_mutation(target, old, new, label)
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile confidential witness codec drift was not detected")
+    print("negative control rejected mobile confidential witness codec drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-offline-readiness-coverage":
     mutated_texts = dict(texts)
@@ -28758,83 +31633,93 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
             "Android Java Offline readiness parser tests",
         ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            "Torii offline readiness handler",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_readiness_smoke.rs",
+            "Torii offline readiness smoke legacy-field absence",
+        ),
+        (
+            "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
+            "Torii offline V2 readiness smoke legacy-field absence",
+        ),
     )
-    missing_targets = []
-    expected_labels = []
-    for target, label in targets:
-        original = read(target)
-        mutated = original
-        for old, new in (
-            (
-                "readinessRejectsMalformedPresentAliasValues",
-                "readinessAllowsMalformedPresentAliasValues",
-            ),
-            (
-                "v2ReadinessUsesCanonicalGetPathAndParsesResponse",
-                "v2ReadinessUsesNoncanonicalGetPathAndParsesResponse",
-            ),
-            (
-                "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
-                "allowsOfflineV2ReadinessMalformedAbi7Aliases",
-            ),
-            (
-                "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
-                "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available may diverge",
-            ),
-            (
-                "must be an exact integer string",
-                "may be coerced",
-            ),
-            (
-                "must be a positive integer",
-                "may be non-positive",
-            ),
-            (
-                "must fit in signed 32-bit range",
-                "may overflow",
-            ),
-            (
-                "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
-                "offline_kagemusha_recursive_compact_mode may be padded",
-            ),
-            (
-                "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
-                "offline_kagemusha_abi7_bridge_abi_version may be coerced",
-            ),
-            (
-                "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
-                "offline_kagemusha_abi7_bridge_abi_version may be non-positive",
-            ),
-            (
-                "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
-                "offline_kagemusha_abi7_bridge_abi_version may overflow",
-            ),
-            (
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be noncanonical",
-            ),
-            (
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be coerced",
-            ),
-            (
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be non-positive",
-            ),
-            (
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may overflow",
-            ),
-        ):
-            mutated = mutated.replace(old, new)
-        if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile offline readiness coverage for "
-            + ", ".join(missing_targets)
-        )
+    replacements = (
+        (
+            "readinessRejectsMalformedPresentAliasValues",
+            "readinessAllowsMalformedPresentAliasValues",
+        ),
+        (
+            "v2ReadinessUsesCanonicalGetPathAndParsesResponse",
+            "v2ReadinessUsesNoncanonicalGetPathAndParsesResponse",
+        ),
+        (
+            "rejectsOfflineV2ReadinessMalformedAbi7Aliases",
+            "allowsOfflineV2ReadinessMalformedAbi7Aliases",
+        ),
+        (
+            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available must match",
+            "offline_kagemusha_abi7 and offline_kagemusha_recursive_compact_available may diverge",
+        ),
+        (
+            "must be an exact integer string",
+            "may be coerced",
+        ),
+        (
+            "must be a positive integer",
+            "may be non-positive",
+        ),
+        (
+            "must fit in signed 32-bit range",
+            "may overflow",
+        ),
+        (
+            "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
+            "offline_kagemusha_recursive_compact_mode may be padded",
+        ),
+        (
+            "offline_kagemusha_abi7_bridge_abi_version must be an exact integer string",
+            "offline_kagemusha_abi7_bridge_abi_version may be coerced",
+        ),
+        (
+            "offline_kagemusha_abi7_bridge_abi_version must be a positive integer",
+            "offline_kagemusha_abi7_bridge_abi_version may be non-positive",
+        ),
+        (
+            "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range",
+            "offline_kagemusha_abi7_bridge_abi_version may overflow",
+        ),
+        (
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact integer string",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be noncanonical",
+        ),
+        (
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an integer",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be coerced",
+        ),
+        (
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may be non-positive",
+        ),
+        (
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
+            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version may overflow",
+        ),
+        (
+            "let offline_kagemusha_abi7 = offline.kagemusha_enabled;",
+            "let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;",
+        ),
+        (
+            '"offline_kagemusha_enabled"',
+            '"offline_kagemusha_enabled_removed_from_test"',
+        ),
+        (
+            '"offline_kagemusha_force_legacy"',
+            '"offline_kagemusha_force_legacy_removed_from_test"',
+        ),
+    )
     exact_alias_drift_labels = [
         (
             "Kotlin Offline readiness client tests",
@@ -28945,30 +31830,80 @@ if mode == "--negative-control-mobile-offline-readiness-coverage":
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range",
         ),
     ]
-    expected_labels = [
-        "Kotlin Offline readiness ABI-7 parser missing must be an exact integer string",
-        "Android Java Offline readiness ABI-7 parser missing must be an exact integer string",
-        "Android Java Offline Torii readiness client tests missing v2ReadinessUsesCanonicalGetPathAndParsesResponse",
-        *[
-            f"{label} missing {diagnostic}"
-            for label, diagnostic in exact_alias_drift_labels
-        ],
-    ]
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+    def expected_offline_readiness_labels(label):
+        explicit_labels = {
+            "Kotlin Offline readiness ABI-7 parser": (
+                "Kotlin Offline readiness ABI-7 parser missing must be an exact integer string",
+            ),
+            "Android Java Offline readiness ABI-7 parser": (
+                "Android Java Offline readiness ABI-7 parser missing must be an exact integer string",
+            ),
+            "Android Java Offline Torii readiness client tests": (
+                "Android Java Offline Torii readiness client tests missing v2ReadinessUsesCanonicalGetPathAndParsesResponse",
+            ),
+            "Torii offline readiness handler": (
+                "Torii offline readiness handler missing direct kagemusha_enabled ABI-7 gate",
+                "Torii offline readiness handler must not reference removed kagemusha_force_legacy",
+            ),
+            "Torii offline readiness smoke legacy-field absence": (
+                'Torii offline readiness smoke legacy-field absence missing "offline_kagemusha_enabled"',
+                'Torii offline readiness smoke legacy-field absence missing "offline_kagemusha_force_legacy"',
+            ),
+            "Torii offline V2 readiness smoke legacy-field absence": (
+                'Torii offline V2 readiness smoke legacy-field absence missing "offline_kagemusha_enabled"',
+                'Torii offline V2 readiness smoke legacy-field absence missing "offline_kagemusha_force_legacy"',
+            ),
+        }
+        labels = list(explicit_labels.get(label, ()))
+        labels.extend(
+            f"{expected_label} missing {diagnostic}"
+            for expected_label, diagnostic in exact_alias_drift_labels
+            if expected_label == label
+        )
+        return labels
+
+    detected_messages = []
+    for target, label in targets:
+        original = mutated_texts[target]
+        mutated = original
+        for old, new in replacements:
+            mutated = mutated.replace(old, new)
+        if mutated == original:
             raise SystemExit(
-                "negative control failed: mobile offline readiness coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile offline readiness coverage for "
+                + target
             )
-        print("negative control rejected mobile offline readiness coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile offline readiness coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected_labels = expected_offline_readiness_labels(label)
+        if not expected_labels:
+            raise SystemExit(
+                "negative control failed: mobile offline readiness coverage has no expected labels for "
+                + label
+            )
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            missing = [expected for expected in expected_labels if expected not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: mobile offline readiness coverage drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile offline readiness coverage drift was not detected for "
+            + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile offline readiness coverage drift was not detected")
+    print("negative control rejected mobile offline readiness coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
     mutated_texts = dict(texts)
@@ -28984,10 +31919,9 @@ if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
             "redeemProofsMatchRustFixtures",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29001,76 +31935,392 @@ if mode == "--negative-control-kotlin-offline-cash-settlement-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate Kotlin offline cash settlement coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: Kotlin offline cash settlement coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate Kotlin offline cash settlement coverage for "
+                + target
             )
-        print("negative control rejected Kotlin offline cash settlement coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Kotlin offline cash settlement coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin offline cash settlement coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin offline cash settlement coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Kotlin offline cash settlement coverage drift was not detected")
+    print("negative control rejected Kotlin offline cash settlement coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-offline-readiness-artifact-contract":
+    mutated_texts = dict(texts)
+    targets = (
+        (
+            "crates/iroha_torii/src/lib.rs",
+            (
+                (
+                    "let offline_kagemusha_abi7_artifacts = false;",
+                    "let offline_kagemusha_abi7_artifacts = true;",
+                ),
+            ),
+            (
+                "Torii offline readiness artifact contract missing let offline_kagemusha_abi7_artifacts = false;",
+            ),
+        ),
+        (
+            "crates/iroha_torii/tests/offline_readiness_smoke.rs",
+            (
+                (
+                    '\\"offline_kagemusha_abi7_artifacts\\":false',
+                    '\\"offline_kagemusha_abi7_artifacts\\":true',
+                ),
+                (
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
+                ),
+            ),
+            (
+                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_abi7_artifacts\\":false',
+                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+            ),
+        ),
+        (
+            "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
+            (
+                (
+                    '\\"offline_kagemusha_abi7_artifacts\\":false',
+                    '\\"offline_kagemusha_abi7_artifacts\\":true',
+                ),
+                (
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
+                ),
+            ),
+            (
+                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_abi7_artifacts\\":false',
+                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+            ),
+        ),
+        (
+            "javascript/iroha_js/test/toriiClient.test.js",
+            (
+                (
+                    "offline_kagemusha_abi7_artifacts: false",
+                    "offline_kagemusha_abi7_artifacts: true",
+                ),
+                (
+                    "offline_kagemusha_recursive_compact_artifacts_available: false",
+                    "offline_kagemusha_recursive_compact_artifacts_available: true",
+                ),
+            ),
+            (
+                "JavaScript Torii offline readiness artifact contract missing offline_kagemusha_abi7_artifacts: false",
+                "JavaScript Torii offline readiness artifact contract missing offline_kagemusha_recursive_compact_artifacts_available: false",
+            ),
+        ),
+        (
+            "javascript/iroha_js/test/integrationTorii.test.js",
+            (
+                (
+                    "assert.equal(readiness.offline_kagemusha_abi7_artifacts, false);",
+                    "assert.equal(readiness.offline_kagemusha_abi7_artifacts, true);",
+                ),
+                (
+                    "assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);",
+                    "assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, true);",
+                ),
+            ),
+            (
+                "JavaScript optional Torii offline readiness artifact contract missing assert.equal(readiness.offline_kagemusha_abi7_artifacts, false);",
+                "JavaScript optional Torii offline readiness artifact contract missing assert.equal(readiness.offline_kagemusha_recursive_compact_artifacts_available, false);",
+            ),
+        ),
+        (
+            "python/iroha_torii_client/tests/test_client.py",
+            (
+                (
+                    '"offline_kagemusha_abi7_artifacts": False',
+                    '"offline_kagemusha_abi7_artifacts": True',
+                ),
+                (
+                    '"offline_kagemusha_recursive_compact_artifacts_available": False',
+                    '"offline_kagemusha_recursive_compact_artifacts_available": True',
+                ),
+                (
+                    "assert readiness.offline_kagemusha_abi7_artifacts is False",
+                    "assert readiness.offline_kagemusha_abi7_artifacts is True",
+                ),
+                (
+                    "assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False",
+                    "assert readiness.offline_kagemusha_recursive_compact_artifacts_available is True",
+                ),
+            ),
+            (
+                'Python Torii offline readiness artifact contract missing "offline_kagemusha_abi7_artifacts": False',
+                'Python Torii offline readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": False',
+                "Python Torii offline readiness artifact contract missing assert readiness.offline_kagemusha_abi7_artifacts is False",
+                "Python Torii offline readiness artifact contract missing assert readiness.offline_kagemusha_recursive_compact_artifacts_available is False",
+            ),
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+            (
+                (
+                    "&& offlineKagemushaRecursiveCompactAvailable",
+                    "&& offlineKagemushaAbi7Artifacts\n            && offlineKagemushaRecursiveCompactAvailable",
+                ),
+            ),
+            (
+                "Swift Torii offline readiness metadata helper must not require artifact archives for metadata",
+            ),
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
+            (
+                (
+                    '"offline_kagemusha_abi7_artifacts": false',
+                    '"offline_kagemusha_abi7_artifacts": true',
+                ),
+                (
+                    '"offline_kagemusha_recursive_compact_artifacts_available": false',
+                    '"offline_kagemusha_recursive_compact_artifacts_available": true',
+                ),
+                (
+                    "XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)",
+                    "XCTAssertTrue(readiness.offlineKagemushaAbi7Artifacts)",
+                ),
+                (
+                    "XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+                    "XCTAssertTrue(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+                ),
+            ),
+            (
+                'Swift Torii offline readiness artifact contract missing "offline_kagemusha_abi7_artifacts": false',
+                'Swift Torii offline readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": false',
+                "Swift Torii offline readiness artifact contract missing XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)",
+                "Swift Torii offline readiness artifact contract missing XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientReadinessTest.kt",
+            (
+                (
+                    '"offline_kagemusha_recursive_compact_artifacts_available": false',
+                    '"offline_kagemusha_recursive_compact_artifacts_available": true',
+                ),
+                (
+                    "assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+                    "assertEquals(true, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+                ),
+            ),
+            (
+                'Kotlin Offline readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": false',
+                "Kotlin Offline readiness artifact contract missing assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+            ),
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/OfflineToriiClientV2ReadinessTest.kt",
+            (
+                (
+                    '"offline_kagemusha_recursive_compact_artifacts_available": false',
+                    '"offline_kagemusha_recursive_compact_artifacts_available": true',
+                ),
+                (
+                    "assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+                    "assertEquals(true, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+                ),
+            ),
+            (
+                'Kotlin Offline V2 readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": false',
+                "Kotlin Offline V2 readiness artifact contract missing assertEquals(false, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
+            (
+                (
+                    '"offline_kagemusha_recursive_compact_artifacts_available": false',
+                    '"offline_kagemusha_recursive_compact_artifacts_available": true',
+                ),
+                (
+                    "assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()",
+                    "assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()",
+                ),
+            ),
+            (
+                'Android Java Offline Torii readiness artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": false',
+                "Android Java Offline Torii readiness artifact contract missing assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable()",
+            ),
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJsonParserTest.java",
+            (
+                (
+                    '"offline_kagemusha_recursive_compact_artifacts_available": false',
+                    '"offline_kagemusha_recursive_compact_artifacts_available": true',
+                ),
+                (
+                    "assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();",
+                    "assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();",
+                ),
+            ),
+            (
+                'Android Java Offline readiness parser artifact contract missing "offline_kagemusha_recursive_compact_artifacts_available": false',
+                "Android Java Offline readiness parser artifact contract missing assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();",
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, replacements, expected in targets:
+        original = mutated_texts[target]
+        mutated = original
+        for old, new in replacements:
+            mutated = mutated.replace(old, new)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate offline readiness artifact contract for "
+                + target
+            )
+        mutated_texts[target] = mutated
+        expected_labels = tuple(expected)
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: offline readiness artifact contract drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: offline readiness artifact contract drift was not detected for "
+            + target
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: offline readiness artifact contract drift was not detected")
+    print("negative control rejected offline readiness artifact contract drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-offline-cash-issuer-key-exactness":
     mutated_texts = dict(texts)
     targets = (
         (
             "python/iroha_python/src/iroha_python/offline_cash.py",
-            "Python offline cash ABI exactness guard",
-            ("_positive_native_bridge_abi_version",),
+            "Python offline cash snapshot identity, time, and ABI exactness guard",
+            (
+                "_positive_native_bridge_abi_version",
+                "_nonnegative_offline_cash_snapshot_timestamp",
+                "_is_valid_offline_issuer_public_key_base64",
+                "offline_payments_enabled is not True",
+            ),
             (
                 ("_positive_native_bridge_abi_version", "_coerced_native_bridge_abi_version"),
+                ("_nonnegative_offline_cash_snapshot_timestamp", "_coerced_offline_cash_snapshot_timestamp"),
+                ("_is_valid_offline_issuer_public_key_base64", "_has_offline_issuer_public_key_text"),
+                ("offline_payments_enabled is not True", "not self.offline_payments_enabled"),
                 ("must be a positive integer", "may be non-positive"),
             ),
         ),
         (
             "javascript/iroha_js/src/offlineCashLifecycle.js",
-            "JavaScript offline cash ABI exactness guard",
-            ("positiveIntegerOfflineCashSnapshotNumber",),
+            "JavaScript offline cash snapshot identity, time, and ABI exactness guard",
+            (
+                "positiveIntegerOfflineCashSnapshotNumber",
+                "nonnegativeIntegerOfflineCashSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
+                "offlinePaymentsEnabled !== true",
+            ),
             (
                 ("positiveIntegerOfflineCashSnapshotNumber", "finiteOfflineCashSnapshotNumber"),
+                ("nonnegativeIntegerOfflineCashSnapshotTimestamp", "finiteOfflineCashSnapshotNumber"),
+                ("isValidOfflineIssuerPublicKeyBase64", "isCanonicalOfflineCashSnapshotText"),
+                ("offlinePaymentsEnabled !== true", "!snapshot.offlinePaymentsEnabled"),
                 ("must be a positive integer", "may be non-positive"),
             ),
         ),
         (
             "javascript/iroha_js/dist/offlineCashLifecycle.js",
-            "JavaScript package offline cash ABI exactness guard",
-            ("positiveIntegerOfflineCashSnapshotNumber",),
+            "JavaScript package offline cash snapshot identity, time, and ABI exactness guard",
+            (
+                "positiveIntegerOfflineCashSnapshotNumber",
+                "nonnegativeIntegerOfflineCashSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
+                "offlinePaymentsEnabled !== true",
+            ),
             (
                 ("positiveIntegerOfflineCashSnapshotNumber", "finiteOfflineCashSnapshotNumber"),
+                ("nonnegativeIntegerOfflineCashSnapshotTimestamp", "finiteOfflineCashSnapshotNumber"),
+                ("isValidOfflineIssuerPublicKeyBase64", "isCanonicalOfflineCashSnapshotText"),
+                ("offlinePaymentsEnabled !== true", "!snapshot.offlinePaymentsEnabled"),
                 ("must be a positive integer", "may be non-positive"),
             ),
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycle.kt",
-            "Kotlin offline cash ABI exactness guard",
-            ("positiveNativeBridgeAbiVersion",),
+            "Kotlin offline cash snapshot identity, time, and ABI exactness guard",
+            (
+                "positiveNativeBridgeAbiVersion",
+                "nonnegativeOfflineCashSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
+            ),
             (
                 ("positiveNativeBridgeAbiVersion", "coercedNativeBridgeAbiVersion"),
+                ("nonnegativeOfflineCashSnapshotTimestamp", "coercedOfflineCashSnapshotTimestamp"),
+                ("isValidOfflineIssuerPublicKeyBase64", "isCanonicalOfflineCashSnapshotText"),
                 ("must be a positive integer", "may be non-positive"),
             ),
         ),
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycle.java",
-            "Android Java offline cash ABI exactness guard",
-            ("positiveNativeBridgeAbiVersion",),
+            "Android Java offline cash snapshot identity, time, and ABI exactness guard",
+            (
+                "positiveNativeBridgeAbiVersion",
+                "nonnegativeSnapshotTimestamp",
+                "isValidOfflineIssuerPublicKeyBase64",
+            ),
             (
                 ("positiveNativeBridgeAbiVersion", "coercedNativeBridgeAbiVersion"),
+                ("nonnegativeSnapshotTimestamp", "coercedSnapshotTimestamp"),
+                ("isValidOfflineIssuerPublicKeyBase64", "isCanonicalSnapshotText"),
                 ("must be a positive integer", "may be non-positive"),
+            ),
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift",
+            "Swift offline cash snapshot identity, time, and ABI exactness guard",
+            (
+                "expiresAtMs <= createdAtMs",
+                "nativeBridgeAbiVersion == 0",
+                "requiredNativeBridgeAbiVersion == 0",
+                "requireCanonicalSnapshotText",
+                "OfflineIssuerPublicKey.isValid",
+            ),
+            (
+                ("expiresAtMs <= createdAtMs", "expiresAtMs <= UInt64.max"),
+                ("nativeBridgeAbiVersion == 0", "nativeBridgeAbiVersion == UInt32.max"),
+                ("requiredNativeBridgeAbiVersion == 0", "requiredNativeBridgeAbiVersion == UInt32.max"),
+                ("requireCanonicalSnapshotText", "allowSnapshotText"),
+                ("OfflineIssuerPublicKey.isValid", "Self.isCanonicalSnapshotText"),
             ),
         ),
         (
@@ -29105,15 +32355,55 @@ if mode == "--negative-control-offline-cash-issuer-key-exactness":
             ),
         ),
         (
-            "python/iroha_python/tests/offline_cash_test.py",
-            "Python offline cash issuer-key exactness vectors",
-            ('" issuer-key"', "for native_bridge_abi_version in (0, -1, 7.5, True)"),
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
+            "Swift offline cash lifecycle timestamp exactness vectors",
             (
-                ('" issuer-key"', '"issuer-key"'),
-                ('"issuer-key "', '"issuer-key"'),
-                ('"issuer key"', '"issuer-key"'),
+                "testOfflineCashConfigurationSnapshotRequiresCachedIdentityTimeAndIssuerKeyForOfflineExchange",
+                "expiresAtMs: 100",
+                "nativeBridgeAbiVersion: 0",
+                "requiredNativeBridgeAbiVersion: 0",
+                "let issuerPublicKeyBase64URL",
+                "let shortIssuerPublicKeyBase64",
+                "let longIssuerPublicKeyBase64",
+            ),
+            (
+                (
+                    "testOfflineCashConfigurationSnapshotRequiresCachedIdentityTimeAndIssuerKeyForOfflineExchange",
+                    "testOfflineCashConfigurationSnapshotAllowsMalformedTimeForOfflineExchange",
+                ),
+                ("expiresAtMs: 100", "expiresAtMs: 1_000"),
+                ("nativeBridgeAbiVersion: 0", "nativeBridgeAbiVersion: 7"),
+                ("requiredNativeBridgeAbiVersion: 0", "requiredNativeBridgeAbiVersion: 7"),
+                ("issuerPublicKeyBase64URL", "ignoredUrlKey"),
+                ("shortIssuerPublicKeyBase64", "ignoredShortKey"),
+                ("longIssuerPublicKeyBase64", "ignoredLongKey"),
+            ),
+        ),
+        (
+            "python/iroha_python/tests/offline_cash_test.py",
+            "Python offline cash issuer-key and timestamp exactness vectors",
+            (
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                "for native_bridge_abi_version in (0, -1, 7.5, True)",
+                'for offline_payments_enabled in (False, "true", 1)',
+                "for now_ms in (-1, 999.5, True)",
+            ),
+            (
+                ("SHORT_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_SHORT_KEY"),
+                ("ISSUER_PUBLIC_KEY_BASE64URL", "IGNORED_URL_KEY"),
+                ("LONG_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_LONG_KEY"),
                 ('"issuer-key\\n"', '"issuer-key"'),
                 ('"issuer-key\\u2603"', '"issuer-key"'),
+                (
+                    'for offline_payments_enabled in (False, "true", 1)',
+                    "for offline_payments_enabled in (False,)",
+                ),
+                (
+                    "for now_ms in (-1, 999.5, True)",
+                    "for now_ms in (999,)",
+                ),
                 (
                     "for native_bridge_abi_version in (0, -1, 7.5, True)",
                     "for native_bridge_abi_version in (7,)",
@@ -29126,14 +32416,29 @@ if mode == "--negative-control-offline-cash-issuer-key-exactness":
         ),
         (
             "javascript/iroha_js/test/offlineCashLifecycle.test.js",
-            "JavaScript offline cash issuer-key exactness vectors",
-            ('" issuer-key"', "for (const nativeBridgeAbiVersion of [0, -1, 7.5])"),
+            "JavaScript offline cash issuer-key and timestamp exactness vectors",
             (
-                ('" issuer-key"', '"issuer-key"'),
-                ('"issuer-key "', '"issuer-key"'),
-                ('"issuer key"', '"issuer-key"'),
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
+                'for (const offlinePaymentsEnabled of ["false", "true", 1])',
+                "for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true])",
+            ),
+            (
+                ("SHORT_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_SHORT_KEY"),
+                ("ISSUER_PUBLIC_KEY_BASE64URL", "IGNORED_URL_KEY"),
+                ("LONG_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_LONG_KEY"),
                 ('"issuer-key\\n"', '"issuer-key"'),
                 ('"issuer-key\\u2603"', '"issuer-key"'),
+                (
+                    'for (const offlinePaymentsEnabled of ["false", "true", 1])',
+                    "for (const offlinePaymentsEnabled of [false])",
+                ),
+                (
+                    "for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true])",
+                    "for (const nowMs of [999])",
+                ),
                 (
                     "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
                     "for (const nativeBridgeAbiVersion of [7])",
@@ -29146,21 +32451,33 @@ if mode == "--negative-control-offline-cash-issuer-key-exactness":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
-            "JavaScript package offline cash ABI exactness vectors",
+            "JavaScript package offline cash time, issuer-key, and ABI exactness vectors",
             (
-                '" issuer-key"',
-                "package dist offline cash lifecycle rejects malformed ABI gates",
+                "SHORT_ISSUER_PUBLIC_KEY_BASE64",
+                "ISSUER_PUBLIC_KEY_BASE64URL",
+                "LONG_ISSUER_PUBLIC_KEY_BASE64",
+                "package dist offline cash lifecycle rejects malformed identity, time, issuer key, and ABI gates",
+                'for (const offlinePaymentsEnabled of [false, "false", "true", 1])',
+                "for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true])",
                 "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
             ),
             (
-                ('" issuer-key"', '"issuer-key"'),
-                ('"issuer-key "', '"issuer-key"'),
-                ('"issuer key"', '"issuer-key"'),
+                ("SHORT_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_SHORT_KEY"),
+                ("ISSUER_PUBLIC_KEY_BASE64URL", "IGNORED_URL_KEY"),
+                ("LONG_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_LONG_KEY"),
                 ('"issuer-key\\n"', '"issuer-key"'),
                 ('"issuer-key\\u2603"', '"issuer-key"'),
                 (
-                    "package dist offline cash lifecycle rejects malformed ABI gates",
-                    "package dist offline cash lifecycle allows malformed ABI gates",
+                    "package dist offline cash lifecycle rejects malformed identity, time, issuer key, and ABI gates",
+                    "package dist offline cash lifecycle allows malformed identity, time, issuer key, and ABI gates",
+                ),
+                (
+                    'for (const offlinePaymentsEnabled of [false, "false", "true", 1])',
+                    "for (const offlinePaymentsEnabled of [false])",
+                ),
+                (
+                    "for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true])",
+                    "for (const nowMs of [999])",
                 ),
                 (
                     "for (const nativeBridgeAbiVersion of [0, -1, 7.5])",
@@ -29174,64 +32491,72 @@ if mode == "--negative-control-offline-cash-issuer-key-exactness":
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineCashLifecycleTest.kt",
-            "Kotlin offline cash issuer-key exactness vectors",
-            ('" issuer-key"', "nativeBridgeAbiVersion = 0"),
+            "Kotlin offline cash issuer-key and timestamp exactness vectors",
+            ("issuerPublicKeyBase64Url", "shortIssuerPublicKeyBase64", "longIssuerPublicKeyBase64", "nativeBridgeAbiVersion = 0", "nowMs = -1"),
             (
-                ('" issuer-key"', '"issuer-key"'),
-                ('"issuer-key "', '"issuer-key"'),
-                ('"issuer key"', '"issuer-key"'),
+                ("issuerPublicKeyBase64Url", "ignoredUrlKey"),
+                ("shortIssuerPublicKeyBase64", "ignoredShortKey"),
+                ("longIssuerPublicKeyBase64", "ignoredLongKey"),
                 ('"issuer-key\\n"', '"issuer-key"'),
                 ('"issuer-key\\u2603"', '"issuer-key"'),
+                ("nowMs = -1", "nowMs = 999"),
                 ("nativeBridgeAbiVersion = 0", "nativeBridgeAbiVersion = 7"),
                 ("requiredNativeBridgeAbiVersion = 0", "requiredNativeBridgeAbiVersion = 7"),
             ),
         ),
         (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
-            "Android Java offline cash issuer-key exactness vectors",
-            ('" "', "configurationSnapshotRejectsMalformedNativeBridgeAbi"),
+            "Android Java offline cash issuer-key and timestamp exactness vectors",
+            ("ISSUER_PUBLIC_KEY_BASE64URL", "SHORT_ISSUER_PUBLIC_KEY_BASE64", "LONG_ISSUER_PUBLIC_KEY_BASE64", "configurationSnapshotRejectsMalformedNativeBridgeAbi", "configurationSnapshotRejectsMalformedTimeFields"),
             (
-                ('" issuer-key"', '"issuer-key"'),
-                ('"issuer-key "', '"issuer-key"'),
-                ('"issuer key"', '"issuer-key"'),
+                ("ISSUER_PUBLIC_KEY_BASE64URL", "IGNORED_URL_KEY"),
+                ("SHORT_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_SHORT_KEY"),
+                ("LONG_ISSUER_PUBLIC_KEY_BASE64", "IGNORED_LONG_KEY"),
                 ('"issuer-key\\n"', '"issuer-key"'),
                 ('"issuer-key\\u2603"', '"issuer-key"'),
-                ('" "', '"issuer-key"'),
+                ('" "', 'ISSUER_PUBLIC_KEY_BASE64'),
+                ("configurationSnapshotRejectsMalformedTimeFields", "configurationSnapshotAllowsMalformedTimeFields"),
                 ("configurationSnapshotRejectsMalformedNativeBridgeAbi", "configurationSnapshotAllowsMalformedNativeBridgeAbi"),
             ),
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_markers, replacements in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in replacements:
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.extend(f"{label} missing {marker}" for marker in expected_markers)
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate offline cash issuer-key exactness for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: offline cash issuer-key exactness drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate offline cash issuer-key exactness for "
+                + target
             )
-        print("negative control rejected offline cash issuer-key exactness drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: offline cash issuer-key exactness drift was not detected")
+        mutated_texts[target] = mutated
+        expected_labels = tuple(f"{label} missing {marker}" for marker in expected_markers)
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            missing = [expected for expected in expected_labels if expected not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: offline cash issuer-key exactness drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: offline cash issuer-key exactness drift was not detected for "
+            + target
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: offline cash issuer-key exactness drift was not detected")
+    print("negative control rejected offline cash issuer-key exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-android-offline-transfer-persistence-coverage":
     mutated_texts = dict(texts)
@@ -29252,10 +32577,9 @@ if mode == "--negative-control-android-offline-transfer-persistence-coverage":
             "queuesFailedSubmissionAndEmitsTelemetry",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             ("recoversMissingChunk", "allowsMissingChunkLoss"),
@@ -29264,29 +32588,35 @@ if mode == "--negative-control-android-offline-transfer-persistence-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate Android offline transfer persistence coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: Android offline transfer persistence coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate Android offline transfer persistence coverage for "
+                + target
             )
-        print("negative control rejected Android offline transfer persistence coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Android offline transfer persistence coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Android offline transfer persistence coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Android offline transfer persistence coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Android offline transfer persistence coverage drift was not detected")
+    print("negative control rejected Android offline transfer persistence coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-transaction-norito-runner-coverage":
     mutated_texts = dict(texts)
@@ -29322,10 +32652,9 @@ if mode == "--negative-control-mobile-transaction-norito-runner-coverage":
             "roundTripWithExportedKey",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29355,29 +32684,35 @@ if mode == "--negative-control-mobile-transaction-norito-runner-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile transaction/Norito coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile transaction/Norito coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile transaction/Norito coverage for "
+                + target
             )
-        print("negative control rejected mobile transaction/Norito coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile transaction/Norito coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile transaction/Norito coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile transaction/Norito coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile transaction/Norito coverage drift was not detected")
+    print("negative control rejected mobile transaction/Norito coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-kotlin-norito-framing-runner-coverage":
     mutated_texts = dict(texts)
@@ -29393,10 +32728,9 @@ if mode == "--negative-control-kotlin-norito-framing-runner-coverage":
             "optional string columnar matches Rust golden and rejects malformed payloads",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29422,29 +32756,35 @@ if mode == "--negative-control-kotlin-norito-framing-runner-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate Kotlin Norito framing coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: Kotlin Norito framing coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate Kotlin Norito framing coverage for "
+                + target
             )
-        print("negative control rejected Kotlin Norito framing coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Kotlin Norito framing coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin Norito framing coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Kotlin Norito framing coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Kotlin Norito framing coverage drift was not detected")
+    print("negative control rejected Kotlin Norito framing coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-account-address-canonical-coverage":
     mutated_texts = dict(texts)
@@ -29500,10 +32840,9 @@ if mode == "--negative-control-mobile-account-address-canonical-coverage":
             "complianceFixtureSuite",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29561,31 +32900,37 @@ if mode == "--negative-control-mobile-account-address-canonical-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile account address canonical coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile account address canonical coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile account address canonical coverage for "
+                + target
             )
-        print("negative control rejected mobile account address canonical coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: mobile account address canonical coverage drift was not detected"
-    )
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile account address canonical coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile account address canonical coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile account address canonical coverage drift was not detected"
+        )
+    print("negative control rejected mobile account address canonical coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-connect-runner-coverage":
     mutated_texts = dict(texts)
@@ -29636,10 +32981,9 @@ if mode == "--negative-control-mobile-connect-runner-coverage":
             "relayAuthHashMatchesSharedFixture",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29705,29 +33049,35 @@ if mode == "--negative-control-mobile-connect-runner-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile Connect runner coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile Connect runner coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile Connect runner coverage for "
+                + target
             )
-        print("negative control rejected mobile Connect runner coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile Connect runner coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile Connect runner coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile Connect runner coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile Connect runner coverage drift was not detected")
+    print("negative control rejected mobile Connect runner coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":
     mutated_texts = dict(texts)
@@ -29753,10 +33103,9 @@ if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":
             "strongBoxAttestationPasses",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29798,31 +33147,37 @@ if mode == "--negative-control-mobile-transport-inspector-attestation-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile transport/inspector/attestation coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile transport/inspector/attestation coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile transport/inspector/attestation coverage for "
+                + target
             )
-        print("negative control rejected mobile transport/inspector/attestation coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: mobile transport/inspector/attestation coverage drift was not detected"
-    )
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile transport/inspector/attestation coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile transport/inspector/attestation coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile transport/inspector/attestation coverage drift was not detected"
+        )
+    print("negative control rejected mobile transport/inspector/attestation coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-sccp-runner-coverage":
     mutated_texts = dict(texts)
@@ -29878,10 +33233,9 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
             "derivesSourceAdapterVerifierVkHashesForUiTooling",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -29931,29 +33285,35 @@ if mode == "--negative-control-mobile-sccp-runner-coverage":
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile SCCP runner coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile SCCP runner coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile SCCP runner coverage for "
+                + target
             )
-        print("negative control rejected mobile SCCP runner coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile SCCP runner coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile SCCP runner coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile SCCP runner coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile SCCP runner coverage drift was not detected")
+    print("negative control rejected mobile SCCP runner coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-coverage":
     mutated_texts = dict(texts)
@@ -29999,10 +33359,9 @@ if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-co
             "recordsSubmitRequests",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, label, expected_marker in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original
         for old, new in (
             (
@@ -30040,31 +33399,626 @@ if mode == "--negative-control-mobile-torii-rpc-subscription-websocket-runner-co
         ):
             mutated = mutated.replace(old, new)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate mobile Torii RPC/subscription/WebSocket coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate mobile Torii RPC/subscription/WebSocket coverage for "
+                + target
             )
-        print("negative control rejected mobile Torii RPC/subscription/WebSocket coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected"
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile Torii RPC/subscription/WebSocket coverage drift was not detected"
+        )
+    print("negative control rejected mobile Torii RPC/subscription/WebSocket coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-retired-offline-note-issuers":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
+            "        throw ToriiOfflineNoteIssuerClientError.retiredOfflineNoteIssue",
+            "        throw ToriiOfflineNoteIssuerClientError.invalidJSON(\"issue\")",
+            "Swift retired Offline Note issuer source must fail issueNote with retiredOfflineNoteIssue",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "XCTFail(\"classic Offline Note issue must be retired\")",
+            "XCTFail(\"classic Offline Note issue unexpectedly succeeded\")",
+            "Swift retired Offline Note issuer tests missing XCTFail(\"classic Offline Note issue must be retired\")",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
+            "        return failedFuture(IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE))",
+            "        return CompletableFuture.completedFuture(null)",
+            "Kotlin retired Offline Note issuer source must fail issueNote with retired issue helper",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+            "\"retired issue message drift\"",
+            "Kotlin retired Offline Note issuer tests missing ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+            "ToriiOfflineNoteIssuerClient.java",
+            "    return failedFuture(new IllegalStateException(RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE));",
+            "    return CompletableFuture.completedFuture(null);",
+            "Android Java retired Offline Note issuer source must fail issueNote with retired issue helper",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+            "\"retired issue message drift\"",
+            "Android Java retired Offline Note issuer tests missing ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+        ),
     )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile retired Offline Note issuer coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile retired Offline Note issuer drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile retired Offline Note issuer drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile retired Offline Note issuer drift was not detected"
+        )
+    print("negative control rejected mobile retired Offline Note issuer drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-retired-offline-note-submitters":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "    public func submitAudit(_ audit: OfflineNoteAuditBundle) async throws {\n"
+            "        throw SwiftTransactionEncoderError.retiredOfflineNotePayment\n"
+            "    }",
+            "    public func submitAudit(_ audit: OfflineNoteAuditBundle) async throws {\n"
+            "        return\n"
+            "    }",
+            "Swift retired Offline Note submitter source must fail submitAudit with retiredOfflineNotePayment",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "try await submitter.submitRedeem(redemption)",
+            "try await submitter.submitRedeemDisabled(redemption)",
+            "Swift retired Offline Note submitter tests missing try await submitter.submitRedeem(redemption)",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "    override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =\n"
+            "        retiredOfflineNotePaymentFuture()",
+            "    override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =\n"
+            "        CompletableFuture.completedFuture(ClientResponse(200, ByteArray(0), \"ok\", null, null))",
+            "Kotlin retired Offline Note submitter source must fail submitAudit with retired helper",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "assertRetiredSubmission(submitter.submitRedeem(redemption))",
+            "assertTrue(true)",
+            "Kotlin retired Offline Note submitter tests missing assertRetiredSubmission(submitter.submitRedeem(redemption))",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+            "IrohaOfflineNoteTransactionSubmitter.java",
+            "  public CompletableFuture<ClientResponse> submitAudit(final OfflineNote.AuditBundle audit) {\n"
+            "    return retiredOfflineNotePaymentFuture();\n"
+            "  }",
+            "  public CompletableFuture<ClientResponse> submitAudit(final OfflineNote.AuditBundle audit) {\n"
+            "    return CompletableFuture.completedFuture(null);\n"
+            "  }",
+            "Android Java retired Offline Note submitter source must fail submitAudit with retired helper",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "assertRetiredOfflineNoteSubmission(submitter.submitRedeem(redemption));",
+            "assertTrue(true, \"missing retired assertion\");",
+            "Android Java retired Offline Note submitter tests missing assertRetiredOfflineNoteSubmission(submitter.submitRedeem(redemption));",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile retired Offline Note submitter coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile retired Offline Note submitter drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile retired Offline Note submitter drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile retired Offline Note submitter drift was not detected"
+        )
+    print("negative control rejected mobile retired Offline Note submitter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-retired-offline-note-transaction-builders":
+    mutated = dict(texts)
+    source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTransactionEncoder.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
+    mutations = (
+        (
+            source,
+            "    static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,\n"
+            "                                         signingKey: SigningKey,\n"
+            "                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            "    static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,\n"
+            "                                         signingKey: SigningKey,\n"
+            "                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        throw TransactionInputError.emptyChainId\n"
+            "    }",
+            "Swift retired Offline Note transaction builder source must fail encodeIssueOfflineNote with retiredOfflineNotePayment",
+        ),
+        (
+            source,
+            "    static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,\n"
+            "                                          signingKey: SigningKey,\n"
+            "                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        try request.redemption.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            "    static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,\n"
+            "                                          signingKey: SigningKey,\n"
+            "                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        try request.redemption.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        throw TransactionInputError.emptyChainId\n"
+            "    }",
+            "Swift retired Offline Note transaction builder source must fail encodeRedeemOfflineNote with retiredOfflineNotePayment",
+        ),
+        (
+            source,
+            "    static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,\n"
+            "                                          signingKey: SigningKey,\n"
+            "                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        for audit in request.bearerAuditTrail {\n"
+            "            try audit.validateProofBinding()\n"
+            "        }\n"
+            "        try request.redemption.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            "    static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,\n"
+            "                                          signingKey: SigningKey,\n"
+            "                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        for audit in request.bearerAuditTrail {\n"
+            "            try audit.validateProofBinding()\n"
+            "        }\n"
+            "        try request.redemption.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        throw TransactionInputError.emptyChainId\n"
+            "    }",
+            "Swift retired Offline Note transaction builder source must fail encodeDefundOfflineNote with retiredOfflineNotePayment",
+        ),
+        (
+            source,
+            "    static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,\n"
+            "                                         signingKey: SigningKey,\n"
+            "                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        try request.audit.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        return try retiredOfflineNotePaymentTransaction()\n"
+            "    }",
+            "    static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,\n"
+            "                                         signingKey: SigningKey,\n"
+            "                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {\n"
+            "        _ = try TransactionInputValidator.validate(\n"
+            "            chainId: request.chainId,\n"
+            "            authorityId: request.authority\n"
+            "        )\n"
+            "        try request.audit.validateProofBinding()\n"
+            "        _ = (signingKey, creationTimeMs)\n"
+            "        throw TransactionInputError.emptyChainId\n"
+            "    }",
+            "Swift retired Offline Note transaction builder source must fail encodeAuditOfflineNote with retiredOfflineNotePayment",
+        ),
+        (
+            test,
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeDefundOfflineNote(",
+            "assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeDefundOfflineNoteDisabled(",
+            "Swift retired Offline Note transaction builder tests missing assertRetiredOfflineNotePayment(try SwiftTransactionEncoder.encodeDefundOfflineNote(",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift retired Offline Note transaction builder coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Swift retired Offline Note transaction builder drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Swift retired Offline Note transaction builder drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Swift retired Offline Note transaction builder drift was not detected"
+        )
+    print("negative control rejected Swift retired Offline Note transaction builder drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-bridge-retired-offline-note-transaction-builders":
+    mutated = dict(texts)
+    source = "crates/connect_norito_bridge/src/lib.rs"
+    header = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+    source_symbols = (
+        "connect_norito_encode_redeem_offline_note_signed_transaction",
+        "connect_norito_encode_audit_offline_note_signed_transaction",
+        "connect_norito_encode_issue_offline_note_signed_transaction",
+        "connect_norito_encode_defund_offline_note_signed_transaction",
+        "connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata",
+        "connect_norito_encode_audit_offline_note_signed_transaction_with_metadata",
+        "connect_norito_encode_issue_offline_note_signed_transaction_with_metadata",
+        "connect_norito_encode_defund_offline_note_signed_transaction_with_metadata",
+    )
+
+    def mutate_bridge_symbol(current, symbol):
+        marker = f'pub unsafe extern "C" fn {symbol}('
+        start = current.find(marker)
+        if start < 0:
+            return current
+        call = "    bridge_result_to_code(retired_offline_note_payment_transaction())"
+        call_index = current.find(call, start + len(marker))
+        if call_index < 0:
+            return current
+        return (
+            current[:call_index]
+            + "    bridge_result_to_code(Ok(()))"
+            + current[call_index + len(call) :]
+        )
+
+    mutations = [
+        (
+            "source_symbol",
+            source,
+            symbol,
+            "",
+            f"Bridge retired Offline Note transaction builder source must fail {symbol} with ERR_OFFLINE_NOTE_PROVE",
+        )
+        for symbol in source_symbols
+    ]
+    mutations.extend(
+        (
+            (
+                "replace",
+                source,
+                "fn retired_offline_note_payment_transaction() -> BridgeResult<()> {\n"
+                "    Err(BridgeError::OfflineNoteProve)\n"
+                "}",
+                "fn retired_offline_note_payment_transaction() -> BridgeResult<()> {\n"
+                "    Err(BridgeError::InvalidUtf8)\n"
+                "}",
+                "Bridge retired Offline Note transaction builder helper must map to BridgeError::OfflineNoteProve",
+            ),
+            (
+                "replace",
+                header,
+                "int32_t connect_norito_encode_defund_offline_note_signed_transaction_with_metadata(",
+                "int32_t connect_norito_encode_defund_offline_note_signed_transaction_metadata_disabled(",
+                "Bridge retired Offline Note transaction builder header missing connect_norito_encode_defund_offline_note_signed_transaction_with_metadata",
+            ),
+            (
+                "replace",
+                source,
+                "let defund_with_metadata_status = unsafe {\n"
+                "            connect_norito_encode_defund_offline_note_signed_transaction_with_metadata(",
+                "let defund_with_metadata_status = unsafe {\n"
+                "            connect_norito_encode_defund_offline_note_signed_transaction_metadata_disabled(",
+                "Bridge retired Offline Note transaction builder tests missing connect_norito_encode_defund_offline_note_signed_transaction_with_metadata",
+            ),
+            (
+                "replace",
+                source,
+                "assert_retired_output(defund_with_metadata_status, out_ptr, out_len, out_hash);",
+                "assert_retired_output(defund_metadata_status, out_ptr, out_len, out_hash);",
+                "Bridge retired Offline Note transaction builder test assertion missing defund_with_metadata_status",
+            ),
+        )
+    )
+    detected_messages = []
+    for mutation_kind, target, old, new, expected_label in mutations:
+        current = mutated[target]
+        if mutation_kind == "source_symbol":
+            updated = mutate_bridge_symbol(current, old)
+        else:
+            updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate bridge retired Offline Note transaction builder coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: bridge retired Offline Note transaction builder drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: bridge retired Offline Note transaction builder drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: bridge retired Offline Note transaction builder drift was not detected"
+        )
+    print("negative control rejected bridge retired Offline Note transaction builder drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-classic-offline-note-fixture-labels":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "Retired classic Offline Note outcome names retained for historical",
+            "Classic Offline Note outcome names",
+            "Swift classic Offline Note fixture labels missing Retired classic Offline Note outcome names retained for historical",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
+            "Historical classic Offline Note instruction wire names retained only for",
+            "Classic Offline Note instruction wire names",
+            "Kotlin classic Offline Note fixture labels missing Historical classic Offline Note instruction wire names retained only for",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
+            "Historical classic Offline Note instruction wire names retained only for",
+            "Classic Offline Note instruction wire names",
+            "Android Java classic Offline Note fixture labels missing Historical classic Offline Note instruction wire names retained only for",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile classic Offline Note fixture label coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile classic Offline Note fixture label drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile classic Offline Note fixture label drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile classic Offline Note fixture label drift was not detected"
+        )
+    print("negative control rejected mobile classic Offline Note fixture label drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-offline-note-draft-proof-replacement":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "proofProvider.proveRedeem(draft)",
+            "draft.recursiveProof",
+            "Swift Offline Note wallet draft redeem proof replacement",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+            "guard try proofVerifier.verifyAudit(audit) else",
+            "guard true else",
+            "Swift Offline Note wallet draft audit proof verification",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "proofProvider.proveAudit(draft)",
+            "draft.recursiveProof",
+            "Kotlin Offline Note wallet draft audit proof replacement",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
+            "require(proofVerifier.verifyRedeem(redemption)) {",
+            "require(true) {",
+            "Kotlin Offline Note wallet draft redeem proof replacement",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+            "proofProvider.proveAudit(draft)",
+            "draft.recursiveProof()",
+            "Android Java Offline Note wallet draft audit proof replacement",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
+            "if (!proofVerifier.verifyRedeem(redemption)) {",
+            "if (false) {",
+            "Android Java Offline Note wallet draft redeem proof replacement",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
+            "func testOfflineNoteWalletRejectsAuditWhenRecursiveVerifierFails()",
+            "func testOfflineNoteWalletAllowsAuditWhenRecursiveVerifierFails()",
+            "Swift Offline Note wallet draft proof verifier failure tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "fun walletRejectsAuditWhenRecursiveVerifierFails()",
+            "fun walletAllowsAuditWhenRecursiveVerifierFails()",
+            "Kotlin Offline Note wallet draft proof verifier failure tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "private static void walletRejectsAuditWhenRecursiveVerifierFails()",
+            "private static void walletAllowsAuditWhenRecursiveVerifierFails()",
+            "Android Java Offline Note wallet draft proof verifier failure tests",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile Offline Note draft proof replacement coverage for "
+                + target
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile Offline Note draft proof replacement drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile Offline Note draft proof replacement drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile Offline Note draft proof replacement drift was not detected"
+        )
+    print("negative control rejected mobile Offline Note draft proof replacement drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-sdk-android-harness-script":
     target = JVM_SDK_TEST_COMMAND
@@ -30284,6 +34238,16 @@ if mode == "--negative-control-swift-sdk-parse-surface-script":
     original = read(target)
     cases = (
         (
+            "  IrohaSwift/Sources/IrohaSwift/AccountAddress.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/AccountAddress.swift",
+        ),
+        (
+            "  IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/AssetDefinitionAddress.swift",
+        ),
+        (
             "  IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift \\\n",
             "",
             "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
@@ -30292,6 +34256,16 @@ if mode == "--negative-control-swift-sdk-parse-surface-script":
             "  IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift \\\n",
             "",
             "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
+        ),
+        (
+            "  IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Sources/IrohaSwift/NexusAppClient.swift",
+        ),
+        (
+            "  IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift \\\n",
+            "",
+            "Kagemusha Swift SDK script must parse IrohaSwift/Tests/IrohaSwiftTests/NexusAppClientTests.swift",
         ),
     )
     detected_messages = []
@@ -30706,8 +34680,7 @@ if mode == "--negative-control-swift-native-output-headers":
             "Swift recursive compact native output header guard tests",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     swift_native_output_header_patterns = {
         "Swift recursive spend native output header guard tests": (
             r"testRejectsMalformedNativeOutput[\s\S]*"
@@ -30734,35 +34707,42 @@ if mode == "--negative-control-swift-native-output-headers":
         ),
     }
     for target, label in targets:
-        mutated = texts[target].replace(
+        original = mutated_texts[target]
+        mutated = original.replace(
             "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
             "invalidFieldBitset[39] = NoritoHeader.packedStruct | NoritoHeader.compactLen",
             1,
         )
-        if mutated == texts[target]:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing pattern {swift_native_output_header_patterns[label]}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate Swift native output header coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+        if mutated == original:
             raise SystemExit(
-                "negative control failed: Swift native output header drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate Swift native output header coverage for "
+                + target
             )
-        print("negative control rejected Swift native output header drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Swift native output header drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing pattern {swift_native_output_header_patterns[label]}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Swift native output header drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift native output header drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift native output header drift was not detected")
+    print("negative control rejected Swift native output header drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-native-input-headers":
     mutated_texts = dict(texts)
@@ -30784,8 +34764,7 @@ if mode == "--negative-control-swift-native-input-headers":
             "Swift recursive compact input header guard tests",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     swift_native_input_header_patterns = {
         "Swift recursive spend input header guard tests": (
             r"testRejectsMalformedInputArchivesBeforeBridgeCall[\s\S]*"
@@ -30817,35 +34796,42 @@ if mode == "--negative-control-swift-native-input-headers":
         ),
     }
     for target, label in targets:
-        mutated = texts[target].replace(
+        original = mutated_texts[target]
+        mutated = original.replace(
             "invalidFieldBitset[39] = NoritoHeader.fieldBitset",
             "invalidFieldBitset[39] = NoritoHeader.packedStruct | NoritoHeader.compactLen",
             1,
         )
-        if mutated == texts[target]:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing pattern {swift_native_input_header_patterns[label]}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate Swift native input header coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+        if mutated == original:
             raise SystemExit(
-                "negative control failed: Swift native input header drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate Swift native input header coverage for "
+                + target
             )
-        print("negative control rejected Swift native input header drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Swift native input header drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing pattern {swift_native_input_header_patterns[label]}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Swift native input header drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift native input header drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift native input header drift was not detected")
+    print("negative control rejected Swift native input header drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
     mutated_texts = dict(texts)
@@ -31382,6 +35368,84 @@ if mode == "--negative-control-swift-sdk-override-script":
             print(detected_message)
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift SDK compiler override drift was not detected")
+
+if mode == "--negative-control-swift-sdk-offline-readiness-test-filter-script":
+    target = SWIFT_SDK_PARSE_COMMAND
+    original = read(target)
+    cases = (
+        (
+            '  "${SWIFT_BIN}" test --filter ToriiClientTests/testGetOfflineReadiness\n',
+            "Kagemusha Swift SDK script must run Torii offline readiness ABI exactness tests",
+            "offline readiness",
+        ),
+        (
+            '  "${SWIFT_BIN}" test --filter \'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork\'\n',
+            "Kagemusha Swift SDK script must run Torii query selector exactness tests",
+            "query selector",
+        ),
+    )
+    detected_messages = []
+    for old, expected, label in cases:
+        mutated = original.replace(old, "", 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift SDK Torii test filter " + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (expected,)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Swift SDK Torii test filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: Swift SDK Torii test filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Swift SDK Torii test filter drift was not detected")
+    print("negative control rejected Swift SDK Torii test filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-sdk-redeem-planner-test-filter-script":
+    target = SWIFT_SDK_PARSE_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        '  "${SWIFT_BIN}" test --filter OfflineNoteRedeemPlannerTests\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate Swift SDK redeem planner test filter")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        message = str(error)
+        expected = "Kagemusha Swift SDK script must run Offline Note redeem planner draft/finalize tests"
+        expected_labels = (expected,)
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Swift SDK redeem planner test filter drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected Swift SDK redeem planner test filter drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift SDK redeem planner test filter drift was not detected")
 
 if mode == "--negative-control-swift-sdk-needs-workflow":
     target = WORKFLOW_PATH
@@ -32239,6 +36303,130 @@ if mode == "--negative-control-js-sdk-transaction-builder-filter-script":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-js-sdk-confidential-exactness-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    cases = (
+        (
+            "|private Kaigi transaction builders reject padded identifiers before native dispatch",
+            "",
+            "JavaScript SDK private Kaigi transaction-builder focused selector",
+        ),
+        (
+            "|package dist private Kaigi transaction builders reject padded identifiers before native dispatch",
+            "",
+            "JavaScript SDK package-dist private Kaigi transaction-builder focused selector",
+        ),
+        (
+            "|confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "",
+            "JavaScript SDK confidential v2 derivation focused selector",
+        ),
+        (
+            "|package dist confidential v2 derivation helpers reject padded chain and asset IDs before native dispatch",
+            "",
+            "JavaScript SDK package-dist confidential v2 derivation focused selector",
+        ),
+        (
+            "|confidential proof builders reject padded chain IDs and hex fields before native dispatch",
+            "",
+            "JavaScript SDK confidential proof-builder focused selector",
+        ),
+        (
+            "|package dist confidential proof builders reject padded amount literals before native dispatch",
+            "",
+            "JavaScript SDK package-dist confidential proof-builder focused selector",
+        ),
+    )
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK confidential exactness filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK confidential exactness filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK confidential exactness filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK confidential exactness filter drift was not detected")
+    print("negative control rejected JavaScript SDK confidential exactness filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-js-sdk-package-declaration-filter-script":
+    target = JS_SDK_TEST_COMMAND
+    original = read(target)
+    cases = (
+        (
+            "|package declarations expose recursive compact key-package signatures",
+            "",
+            "JavaScript SDK package-dist recursive compact declaration focused selector",
+        ),
+        (
+            "|package declarations keep accumulator digests native-owned",
+            "",
+            "JavaScript SDK package-dist accumulator native-owned declaration focused selector",
+        ),
+    )
+    detected_messages = []
+    for old, new, label in cases:
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate JavaScript SDK package declaration filter "
+                + label
+            )
+        text_overrides[target] = mutated
+        texts[target] = mutated
+        try:
+            run_checks(texts)
+        except ParityError as error:
+            message = str(error)
+            expected_labels = (label,)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript SDK package declaration filter drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            for detected_message in first_lines_for_labels(message, expected_labels):
+                detected_messages.append(f"{label}: {detected_message}")
+            continue
+        finally:
+            text_overrides.pop(target, None)
+            texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript SDK package declaration filter drift was not detected for " + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript SDK package declaration filter drift was not detected")
+    print("negative control rejected JavaScript SDK package declaration filter drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-js-sdk-privacy-native-filter-script":
     target = JS_SDK_TEST_COMMAND
     original = read(target)
@@ -32296,7 +36484,7 @@ if mode == "--negative-control-js-sdk-offline-cash-filter-script":
     original = read(target)
     cases = (
         (
-            "|offline cash configuration snapshot requires cached issuer key and ABI",
+            "|offline cash configuration snapshot requires cached identity, time, issuer key, and ABI",
             "",
             "JavaScript SDK offline cash focused selector",
         ),
@@ -32405,6 +36593,26 @@ if mode == "--negative-control-js-sdk-event-filter-filter-script":
             "|streamEvents rejects malformed proof event hashes before fetch",
             "",
             "JavaScript SDK event-filter focused selectors",
+        ),
+        (
+            "|contract query helpers reject padded selector filters before dispatch",
+            "",
+            "JavaScript SDK contract-query focused selector",
+        ),
+        (
+            "|SNS domain route helpers reject padded selectors before dispatch",
+            "",
+            "JavaScript SDK SNS domain selector focused selector",
+        ),
+        (
+            "|package dist Torii contract query helpers reject padded selector filters before dispatch",
+            "",
+            "JavaScript SDK package-dist contract-query focused selector",
+        ),
+        (
+            "|package dist SNS domain route helpers reject padded selectors before dispatch",
+            "",
+            "JavaScript SDK package-dist SNS domain selector focused selector",
         ),
         (
             " \\\n  test/toriiClient.test.js",
@@ -32583,36 +36791,47 @@ if mode == "--negative-control-js-torii-runner-coverage":
             "resolveAliasByIndex allows negative indices before issuing requests",
             "JavaScript ISO alias tests",
         ),
+        (
+            "javascript/iroha_js/test/toriiClient.test.js",
+            "getOfflineReadiness rejects noncanonical ABI versions",
+            "getOfflineReadiness allows noncanonical ABI versions",
+            "JavaScript Torii offline readiness ABI exactness tests",
+        ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original.replace(old, new, 1)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {old}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate JavaScript Torii runner coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript Torii runner coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate JavaScript Torii runner coverage for "
+                + target
             )
-        print("negative control rejected JavaScript Torii runner coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript Torii runner coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript Torii runner coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript Torii runner coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript Torii runner coverage drift was not detected")
+    print("negative control rejected JavaScript Torii runner coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-connect-runner-coverage":
     mutated_texts = dict(texts)
@@ -32666,35 +36885,40 @@ if mode == "--negative-control-js-connect-runner-coverage":
             "JavaScript Connect journal record tests",
         ),
     )
-    missing_targets = []
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in targets:
-        original = read(target)
+        original = mutated_texts[target]
         mutated = original.replace(old, new, 1)
         if mutated == original:
-            missing_targets.append(target)
-        mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {old}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate JavaScript Connect runner coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
             raise SystemExit(
-                "negative control failed: JavaScript Connect runner coverage drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate JavaScript Connect runner coverage for "
+                + target
             )
-        print("negative control rejected JavaScript Connect runner coverage drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JavaScript Connect runner coverage drift was not detected")
+        mutated_texts[target] = mutated
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JavaScript Connect runner coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: JavaScript Connect runner coverage drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JavaScript Connect runner coverage drift was not detected")
+    print("negative control rejected JavaScript Connect runner coverage drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-sdk-workflow-inventory":
     target = WORKFLOW_PATH
@@ -33863,7 +38087,7 @@ if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
         ),
     )
     updated = texts[target]
-    expected_labels = []
+    detected_messages = []
 
     def replace_in_package_dist_vector_block(updated, block_start_marker, replacements, block_name):
         block_end_marker = "  ];"
@@ -34055,35 +38279,42 @@ if mode == "--negative-control-js-package-dist-raw-lineage-key-vectors":
             "JavaScript dist typed recursive spend raw lineage append wrong-circuit proving-key input vector",
         ),
     )
-    updated = texts[target]
-    expected_labels = []
+    detected_messages = []
     for old, new, label in message_replacements + input_replacements:
-        next_updated = updated.replace(old, new, 1)
-        if next_updated == updated:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 "negative control failed: unable to mutate JS package-dist raw lineage key vector "
                 + old
             )
-        updated = next_updated
-        expected_labels.append(label)
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JS package-dist raw lineage key vector drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JS package-dist raw lineage key vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JS package-dist raw lineage key vector drift was not detected"
-    )
+        mutated[target] = updated
+        expected_label = label
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JS package-dist raw lineage key vector drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JS package-dist raw lineage key vector drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JS package-dist raw lineage key vector drift was not detected"
+        )
+    print("negative control rejected JS package-dist raw lineage key vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-python-native-output-headers":
     mutated = dict(texts)
@@ -34101,8 +38332,7 @@ if mode == "--negative-control-js-python-native-output-headers":
             "Python recursive spend native output header guard tests",
         ),
     )
-    expected_labels = []
-    missing_targets = []
+    detected_messages = []
     native_output_header_labels = {
         "JavaScript recursive spend native output header guard tests": (
             r"Kagemusha recursive spend helpers reject malformed Norito native outputs[\s\S]*"
@@ -34118,31 +38348,38 @@ if mode == "--negative-control-js-python-native-output-headers":
         ),
     }
     for target, needle, replacement, label in targets:
-        updated = texts[target].replace(needle, replacement, 1)
-        if updated == texts[target]:
-            missing_targets.append(target)
-        mutated[target] = updated
-        expected_labels.append(f"{label} missing pattern {native_output_header_labels[label]}")
-    if missing_targets:
-        raise SystemExit(
-            "negative control failed: unable to mutate JS/Python native output header coverage for "
-            + ", ".join(missing_targets)
-        )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+        original = mutated[target]
+        updated = original.replace(needle, replacement, 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: JS/Python native output header drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate JS/Python native output header coverage for "
+                + target
             )
-        print("negative control rejected JS/Python native output header drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JS/Python native output header drift was not detected")
+        mutated[target] = updated
+        expected = f"{label} missing pattern {native_output_header_labels[label]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JS/Python native output header drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: JS/Python native output header drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JS/Python native output header drift was not detected")
+    print("negative control rejected JS/Python native output header drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-confidential-v2-derivation-exactness":
     mutated = dict(texts)
@@ -34270,7 +38507,7 @@ if mode == "--negative-control-js-confidential-v2-derivation-exactness":
             "package dist confidential proof builders reject padded amount literals before native dispatch",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, needle, replacement, label, expected_needle in mutations:
         current = mutated[target]
         updated = current.replace(needle, replacement, 1)
@@ -34280,24 +38517,32 @@ if mode == "--negative-control-js-confidential-v2-derivation-exactness":
                 + target
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {expected_needle}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JS confidential v2 derivation exactness drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JS confidential v2 derivation exactness drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JS confidential v2 derivation exactness drift was not detected"
-    )
+        expected = f"{label} missing {expected_needle}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: JS confidential v2 derivation exactness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JS confidential v2 derivation exactness drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JS confidential v2 derivation exactness drift was not detected"
+        )
+    print("negative control rejected JS confidential v2 derivation exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-kagemusha-instruction-transaction-builder":
     mutated = dict(texts)
@@ -35125,6 +39370,133 @@ if mode == "--negative-control-android-lineage-witness-append-availability-probe
         raise SystemExit(0)
     raise SystemExit("negative control failed: Android Java lineage witness append availability probe drift was not detected")
 
+if mode == "--negative-control-jvm-android-native-abi-boundary":
+    mutated = dict(texts)
+    source_targets = (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+    )
+    test_targets = (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    )
+    for target in source_targets:
+        mutated[target] = mutated[target].replace(
+            "requiredNativeBridgeAbiVersion <= 0",
+            "requiredNativeBridgeAbiVersion < 0",
+            1,
+        )
+        if mutated[target] == texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM/Android native ABI boundary source"
+            )
+    for target in test_targets:
+        mutated[target] = mutated[target].replace(
+            "loadedInvalidRequiredAbi",
+            "loadedBadRequiredAbi",
+        )
+        if mutated[target] == texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM/Android native ABI boundary tests"
+            )
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin JVM SDK native availability probes missing requiredNativeBridgeAbiVersion <= 0",
+            "Android Java SDK native availability probes missing requiredNativeBridgeAbiVersion <= 0",
+            "Kotlin recursive spend native availability ABI boundary tests missing loadedInvalidRequiredAbi",
+            "Android Java recursive spend native availability ABI boundary tests missing loadedInvalidRequiredAbi",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android native ABI boundary drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android native ABI boundary drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM/Android native ABI boundary drift was not detected")
+
+if mode == "--negative-control-jvm-android-native-availability-runtime-fail-closed":
+    mutated = dict(texts)
+    kotlin_source_targets = (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/NativeOfflineNoteProver.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
+    )
+    java_source_targets = (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/NativeOfflineNoteProver.java",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
+    )
+    test_targets = (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+    )
+    for target in kotlin_source_targets:
+        mutated[target] = mutated[target].replace(
+            "catch (_: RuntimeException)",
+            "catch (_: IllegalStateException)",
+        )
+        if mutated[target] == texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate Kotlin native availability runtime guard"
+            )
+    for target in java_source_targets:
+        updated = mutated[target].replace(
+            "catch (final RuntimeException ignored)",
+            "catch (final IllegalStateException ignored)",
+        )
+        updated = updated.replace(
+            "catch (final RuntimeException error)",
+            "catch (final IllegalStateException error)",
+        )
+        if updated == texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate Android Java native availability runtime guard"
+            )
+        mutated[target] = updated
+    for target in test_targets:
+        mutated[target] = mutated[target].replace("bad native loader", "bad loader")
+        mutated[target] = mutated[target].replace("bad native probe", "bad probe")
+        if mutated[target] == texts[target]:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM/Android native availability tests"
+            )
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Kotlin native Offline Note prover native availability runtime fail-closed guard missing catch (_: RuntimeException)",
+            "Kotlin compact-token prover native availability runtime fail-closed guard missing catch (_: RuntimeException)",
+            "Kotlin recursive aggregation prover native availability runtime fail-closed guard missing catch (_: RuntimeException)",
+            "Android Java native Offline Note prover native availability runtime fail-closed guard missing catch (final RuntimeException ignored)",
+            "Android Java compact-token prover native availability runtime fail-closed guard missing catch (final RuntimeException error)",
+            "Android Java recursive aggregation prover native availability runtime fail-closed guard missing catch (final RuntimeException error)",
+            "Kotlin native availability runtime fail-closed tests missing bad native loader",
+            "Kotlin native availability runtime fail-closed tests missing bad native probe",
+            "Android Java native availability runtime fail-closed tests missing bad native loader",
+            "Android Java native availability runtime fail-closed tests missing bad native probe",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM/Android native availability runtime fail-closed drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM/Android native availability runtime fail-closed drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JVM/Android native availability runtime fail-closed drift was not detected"
+    )
+
 if mode == "--negative-control-jvm-android-hop-evidence-shape":
     mutated = dict(texts)
     replacements = (
@@ -35189,32 +39561,41 @@ if mode == "--negative-control-jvm-android-hop-evidence-shape":
             'Android Java typed hop evidence shape and binding tests missing "hop 1 asset does not match first hop".equals(assetError.getMessage())',
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate JVM/Android hop evidence shape in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JVM/Android hop evidence shape drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM/Android hop evidence shape drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM/Android hop evidence shape drift was not detected"
-    )
+        expected_label = label
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM/Android hop evidence shape drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM/Android hop evidence shape drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM/Android hop evidence shape drift was not detected"
+        )
+    print("negative control rejected JVM/Android hop evidence shape drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-note-amount-vectors":
     mutated = dict(texts)
@@ -35580,31 +39961,40 @@ if mode == "--negative-control-jvm-note-amount-vectors":
             'Android Java typed recursive spend note digest diagnostics missing "spendNullifier must differ from noteCommitment"',
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 "negative control failed: unable to mutate JVM/Android note amount vectors in "
                 + target
             )
         mutated[target] = updated
-        expected_labels.append(label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JVM/Android note amount vector drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM/Android note amount vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: JVM/Android note amount vector drift was not detected")
+        expected_label = label
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM/Android note amount vector drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM/Android note amount vector drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: JVM/Android note amount vector drift was not detected")
+    print("negative control rejected JVM/Android note amount vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-redeem-public-amount-vectors":
     mutated = dict(texts)
@@ -35998,34 +40388,38 @@ if mode == "--negative-control-non-csharp-pallas-builder-input-guards":
             "Python typed recursive spend Pallas preflight tests",
         ),
     }
-    for target_key, (old, new, _label) in replacements.items():
+    detected_messages = []
+    for target_key, (old, new, label) in replacements.items():
         target = target_key.split("::", 1)[0]
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate non-C# Pallas builder input guards in {target_key}")
         mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [
-            label
-            for _target_key, (_old, _new, label) in replacements.items()
-            if label not in message
-        ]
-        if missing:
-            raise SystemExit(
-                "negative control failed: non-C# Pallas builder input guard drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected non-C# Pallas builder input guard drift")
-        for detected_message in first_lines_for_labels(
-            message,
-            [label for _target_key, (_old, _new, label) in replacements.items()],
-        ):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: non-C# Pallas builder input guard drift was not detected")
+        expected_label = f"{label} missing {old.splitlines()[0].strip()}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# Pallas builder input guard drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# Pallas builder input guard drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: non-C# Pallas builder input guard drift was not detected")
+    print("negative control rejected non-C# Pallas builder input guard drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":
     mutated = dict(texts)
@@ -36041,35 +40435,39 @@ if mode == "--negative-control-non-csharp-pallas-builder-native-output-guards":
             "Python native output Norito guard tests",
         ),
     }
-    for target, (old, new, _label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+    detected_messages = []
+    for target, (old, new, label) in replacements.items():
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate non-C# Pallas builder native output guards in {target}"
             )
         mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [
-            label
-            for _target, (_old, _new, label) in replacements.items()
-            if label not in message
-        ]
-        if missing:
-            raise SystemExit(
-                "negative control failed: non-C# Pallas builder native output drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected non-C# Pallas builder native output drift")
-        for detected_message in first_lines_for_labels(
-            message,
-            [label for _target, (_old, _new, label) in replacements.items()],
-        ):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: non-C# Pallas builder native output drift was not detected")
+        expected_label = f"{label} missing {old.splitlines()[0].strip()}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# Pallas builder native output drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# Pallas builder native output drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: non-C# Pallas builder native output drift was not detected")
+    print("negative control rejected non-C# Pallas builder native output drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
     mutated = dict(texts)
@@ -36155,7 +40553,7 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
             "JavaScript package dist Pallas metadata option malformed fixed-array vectors",
         ),
     }
-    expected_labels = []
+    detected_messages = []
     replace_all_labels = {
         "Kotlin Pallas metadata option malformed fixed-array vectors",
         "Android Java Pallas metadata option malformed fixed-array vectors",
@@ -36212,16 +40610,34 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
         return f"{label} missing {marker}"
 
     for target, (old, new, label) in replacements.items():
+        current = mutated[target]
         if label in replace_all_labels:
-            updated = mutated[target].replace(old, new)
+            updated = current.replace(old, new)
         else:
-            updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+            updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate Pallas metadata option shape in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_pallas_metadata_option_shape_label(old, label))
+        expected_label = expected_pallas_metadata_option_shape_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# Pallas metadata option-shape drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# Pallas metadata option-shape drift was not detected for "
+            + expected_label
+        )
     extra_replacements = (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
@@ -36399,30 +40815,39 @@ if mode == "--negative-control-non-csharp-pallas-metadata-option-shape":
         ),
     )
     for target, old, new, label in extra_replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate Pallas metadata option trailing-byte marker in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_pallas_metadata_option_shape_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: non-C# Pallas metadata option-shape drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected non-C# Pallas metadata option-shape drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: non-C# Pallas metadata option-shape drift was not detected"
-    )
+        expected_label = expected_pallas_metadata_option_shape_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# Pallas metadata option-shape drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# Pallas metadata option-shape drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: non-C# Pallas metadata option-shape drift was not detected"
+        )
+    print("negative control rejected non-C# Pallas metadata option-shape drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":
     mutated = dict(texts)
@@ -36500,36 +40925,45 @@ if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":
             "Android Java Pallas sequence count-prefix vectors",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
         replace_all = label in (
             "Kotlin Pallas sequence count-prefix vectors",
             "Android Java Pallas sequence count-prefix vectors",
         )
-        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate Pallas sequence-count precheck marker in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old.splitlines()[0].strip()}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: non-C# Pallas sequence-count precheck drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected non-C# Pallas sequence-count precheck drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: non-C# Pallas sequence-count precheck drift was not detected"
-    )
+        expected = f"{label} missing {old.splitlines()[0].strip()}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# Pallas sequence-count precheck drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# Pallas sequence-count precheck drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: non-C# Pallas sequence-count precheck drift was not detected"
+        )
+    print("negative control rejected non-C# Pallas sequence-count precheck drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":
     mutated = dict(texts)
@@ -36576,34 +41010,55 @@ if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":
     def expected_pallas_transcript_label(old, label):
         return f"{label} missing {old.splitlines()[0].strip()}"
 
-    expected_labels = []
+    def replace_nth(text, old, new, occurrence):
+        start = 0
+        index = -1
+        for _ in range(occurrence + 1):
+            index = text.find(old, start)
+            if index < 0:
+                return text
+            start = index + len(old)
+        return text[:index] + new + text[index + len(old):]
+
+    detected_messages = []
+    occurrence_counts = {}
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        occurrence_key = (target, old)
+        occurrence = occurrence_counts.get(occurrence_key, 0)
+        occurrence_counts[occurrence_key] = occurrence + 1
+        current = mutated[target]
+        updated = replace_nth(current, old, new, occurrence)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate Pallas transcript-label byte limit in {target}"
             )
         mutated[target] = updated
         expected_label = expected_pallas_transcript_label(old, label)
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JVM/Android Pallas transcript-label byte-limit drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM/Android Pallas transcript-label byte-limit drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM/Android Pallas transcript-label byte-limit drift was not detected"
-    )
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM/Android Pallas transcript-label byte-limit drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM/Android Pallas transcript-label byte-limit drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM/Android Pallas transcript-label byte-limit drift was not detected"
+        )
+    print("negative control rejected JVM/Android Pallas transcript-label byte-limit drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-pallas-transcript-label-byte-limit":
     mutated = dict(texts)
@@ -36618,46 +41073,67 @@ if mode == "--negative-control-swift-pallas-transcript-label-byte-limit":
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             'String(repeating: "\\u{00e9}", count: 65)',
             'String(repeating: "x", count: 129)',
-            "Swift typed recursive spend Pallas preflight tests",
+            "Swift typed recursive spend Pallas archive malformed diagnostics",
         ),
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
             'String(repeating: "\\u{00e9}", count: 65)',
             'String(repeating: "x", count: 129)',
-            "Swift typed recursive spend Pallas preflight tests",
+            "Swift typed recursive spend append previous-proof Pallas diagnostics",
         ),
     )
     def expected_pallas_transcript_label(old, label):
         return f"{label} missing {old.splitlines()[0].strip()}"
 
-    expected_labels = []
+    def replace_nth(text, old, new, occurrence):
+        start = 0
+        index = -1
+        for _ in range(occurrence + 1):
+            index = text.find(old, start)
+            if index < 0:
+                return text
+            start = index + len(old)
+        return text[:index] + new + text[index + len(old):]
+
+    detected_messages = []
+    occurrence_counts = {}
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        occurrence_key = (target, old)
+        occurrence = occurrence_counts.get(occurrence_key, 0)
+        occurrence_counts[occurrence_key] = occurrence + 1
+        current = mutated[target]
+        updated = replace_nth(current, old, new, occurrence)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate Swift Pallas transcript-label byte limit in {target}"
             )
         mutated[target] = updated
         expected_label = expected_pallas_transcript_label(old, label)
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: Swift Pallas transcript-label byte-limit drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected Swift Pallas transcript-label byte-limit drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: Swift Pallas transcript-label byte-limit drift was not detected"
-    )
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Swift Pallas transcript-label byte-limit drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Swift Pallas transcript-label byte-limit drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Swift Pallas transcript-label byte-limit drift was not detected"
+        )
+    print("negative control rejected Swift Pallas transcript-label byte-limit drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-python-pallas-transcript-label-byte-limit":
     mutated = dict(texts)
@@ -36696,13 +41172,13 @@ if mode == "--negative-control-js-python-pallas-transcript-label-byte-limit":
             "python/iroha_python/tests/kagemusha_test.py",
             'for malformed_transcript_label in ("", "\\u00e9" * 65):',
             'for malformed_transcript_label in ("", "x" * 129):',
-            "Python typed recursive spend Pallas preflight tests",
+            "Python typed recursive spend Pallas init transcript-label diagnostics",
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
             'for malformed_transcript_label in ("", "\\u00e9" * 65):',
             'for malformed_transcript_label in ("", "x" * 129):',
-            "Python typed recursive spend Pallas preflight tests",
+            "Python typed recursive spend Pallas append previous-proof diagnostics",
         ),
     )
     def expected_pallas_transcript_label(old, label):
@@ -36711,34 +41187,55 @@ if mode == "--negative-control-js-python-pallas-transcript-label-byte-limit":
             marker = marker.rstrip(",")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    def replace_nth(text, old, new, occurrence):
+        start = 0
+        index = -1
+        for _ in range(occurrence + 1):
+            index = text.find(old, start)
+            if index < 0:
+                return text
+            start = index + len(old)
+        return text[:index] + new + text[index + len(old):]
+
+    detected_messages = []
+    occurrence_counts = {}
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        occurrence_key = (target, old)
+        occurrence = occurrence_counts.get(occurrence_key, 0)
+        occurrence_counts[occurrence_key] = occurrence + 1
+        current = mutated[target]
+        updated = replace_nth(current, old, new, occurrence)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate JS/Python Pallas transcript-label byte limit in {target}"
             )
         mutated[target] = updated
         expected_label = expected_pallas_transcript_label(old, label)
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JS/Python Pallas transcript-label byte-limit drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JS/Python Pallas transcript-label byte-limit drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JS/Python Pallas transcript-label byte-limit drift was not detected"
-    )
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JS/Python Pallas transcript-label byte-limit drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JS/Python Pallas transcript-label byte-limit drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JS/Python Pallas transcript-label byte-limit drift was not detected"
+        )
+    print("negative control rejected JS/Python Pallas transcript-label byte-limit drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-lineage-readonly-declarations":
     mutated = dict(texts)
@@ -36755,32 +41252,40 @@ if mode == "--negative-control-js-lineage-readonly-declarations":
             "JavaScript TypeScript declarations missing readonly lineageProvingKeyArchive: Buffer;",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate JS lineage key artifact readonly declaration {old}"
             )
         mutated[target] = updated
-        expected_labels.append(label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JS lineage key artifact readonly declaration drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JS lineage key artifact readonly declaration drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JS lineage key artifact readonly declaration drift was not detected"
-    )
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: JS lineage key artifact readonly declaration drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JS lineage key artifact readonly declaration drift was not detected for "
+            + label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JS lineage key artifact readonly declaration drift was not detected"
+        )
+    print("negative control rejected JS lineage key artifact readonly declaration drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-archive-input-copy":
     mutated = dict(texts)
@@ -37165,35 +41670,42 @@ if mode == "--negative-control-sdk-archive-input-copy":
             marker = marker.rstrip(";")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for mutation in mutations:
         if len(mutation) == 5:
             target, old, new, label, replace_all = mutation
         else:
             target, old, new, label = mutation
             replace_all = False
-        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {target}")
         mutated[target] = updated
         expected_label = expected_archive_input_copy_label(target, old, label)
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK archive input copy drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK archive input copy drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK archive input copy drift was not detected")
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK archive input copy drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK archive input copy drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: SDK archive input copy drift was not detected")
+    print("negative control rejected SDK archive input copy drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-lineage-proving-key-copy":
     mutated = dict(texts)
@@ -37251,30 +41763,34 @@ if mode == "--negative-control-sdk-lineage-proving-key-copy":
         marker = old.splitlines()[0].strip().rstrip(";")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate {label} proving key copy guard"
             )
         mutated[target] = updated
-        expected_labels.append(expected_lineage_proving_key_copy_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK lineage proving key copy drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_lineage_proving_key_copy_label(old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK lineage proving key artifact copy drift",
+                )
             )
-        print("negative control rejected SDK lineage proving key artifact copy drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK lineage proving key artifact copy drift was not detected")
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK lineage proving key artifact copy drift was not detected"
+        )
+    print("negative control rejected SDK lineage proving key artifact copy drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-helper-surface":
     mutated = dict(texts)
@@ -37400,7 +41916,53 @@ if mode == "--negative-control-sdk-helper-surface":
             "Kotlin witnessless Reserved-lineage helper bounds",
         ),
     )
-    def expected_helper_surface_label(old, label):
+    def expected_helper_surface_label(target, old, label):
+        if target == "javascript/iroha_js/index.d.ts" and old.startswith(
+            "export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId("
+        ):
+            return (
+                "JavaScript TypeScript declarations missing "
+                "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId"
+            )
+        if old.startswith("export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId("):
+            return (
+                f"{target} append output selector export missing pattern "
+                r"export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId\("
+            )
+        if old.startswith("!canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId("):
+            return (
+                f"{target} append output selector call site missing pattern "
+                r"if \(\s*!canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId\("
+            )
+        if target == "python/iroha_python/src/iroha_python/kagemusha.py" and old == (
+            '"can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",'
+        ):
+            return f"Python SDK __all__ helper export missing {old}"
+        if target == "python/iroha_python/src/iroha_python/kagemusha.py" and old.startswith(
+            "def can_select_kagemusha_recursive_spend_append_output_proof_circuit_id("
+        ):
+            return (
+                "Python SDK append output selector definition missing pattern "
+                r"def can_select_kagemusha_recursive_spend_append_output_proof_circuit_id\("
+            )
+        if target == "python/iroha_python/src/iroha_python/kagemusha.py" and old.startswith(
+            "        if not can_select_kagemusha_recursive_spend_append_output_proof_circuit_id("
+        ):
+            return (
+                "Python typed recursive spend append output selector call site missing pattern "
+                r"if not can_select_kagemusha_recursive_spend_append_output_proof_circuit_id\("
+            )
+        if target == "python/iroha_python/src/iroha_python/__init__.py" and old == (
+            '"can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",'
+        ):
+            return f"Python package __all__ helper re-export missing {old}"
+        if target == "python/iroha_python/src/iroha_python/__init__.py" and old.strip().startswith(
+            "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id,"
+        ):
+            return (
+                "Python package import helper re-export missing "
+                "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id,"
+            )
         if "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId" in old:
             return (
                 f"{label} missing "
@@ -37413,30 +41975,37 @@ if mode == "--negative-control-sdk-helper-surface":
             )
         return f"{label} missing {old.splitlines()[0].strip()}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
         mutated[target] = updated
-        expected_label = expected_helper_surface_label(old, label)
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK public helper surface drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK public helper surface drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK public helper surface drift was not detected")
+        expected_label = expected_helper_surface_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK public helper surface drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK public helper surface drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: SDK public helper surface drift was not detected")
+    print("negative control rejected SDK public helper surface drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-mobile-halo2-vk-hash":
     mutated = dict(texts)
@@ -37457,34 +42026,43 @@ if mode == "--negative-control-mobile-halo2-vk-hash":
             f'Kotlin Halo2 canonical VK hash missing hexBytes("{KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1}")',
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, needle, label in mutations:
         replacement = needle.replace(
             KAGEMUSHA_HALO2_CANONICAL_VK_HASH_V1,
             KAGEMUSHA_HALO2_STALE_CANONICAL_VK_HASH_V1,
             1,
         )
-        mutated[target] = mutated[target].replace(needle, replacement, 1)
-        if mutated[target] == texts[target]:
+        current = mutated[target]
+        updated = current.replace(needle, replacement, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate mobile Halo2 VK hash for {target}"
             )
-        expected_labels.append(label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: mobile Halo2 VK hash drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected mobile Halo2 VK hash drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: mobile Halo2 VK hash drift was not detected")
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile Halo2 VK hash drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile Halo2 VK hash drift was not detected for "
+            + label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: mobile Halo2 VK hash drift was not detected")
+    print("negative control rejected mobile Halo2 VK hash drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-readme-boundary":
     mutated = dict(texts)
@@ -37510,45 +42088,60 @@ if mode == "--negative-control-sdk-readme-boundary":
             "may rewrite the previous proof archive before native dispatch.",
         ),
     }
+    mutations = []
     for target, (old, new) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(f"negative control failed: unable to mutate SDK README boundary in {target}")
-        mutated[target] = updated
-    for target in replacements:
-        updated = mutated[target].replace(
-            "multi-profile",
-            "single-profile",
-            1,
+        mutations.append(
+            (
+                target,
+                old,
+                new,
+                f"{target} missing previous-proof opening archive boundary",
+                f"SDK README boundary in {target}",
+            )
         )
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate SDK README plural lineage-record boundary in {target}"
+        mutations.append(
+            (
+                target,
+                "multi-profile",
+                "single-profile",
+                (
+                    f"{target} missing redeem lineage verifier-record README boundary: "
+                    "multi-profile record-backed lineage witnesses"
+                ),
+                f"SDK README plural lineage-record boundary in {target}",
             )
+        )
+
+    detected_messages = []
+    for target, old, new, expected_label, failure_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(f"negative control failed: unable to mutate {failure_label}")
         mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = [
-            f"{target} missing previous-proof opening archive boundary"
-            for target in replacements
-        ]
-        missing = [
-            target
-            for target in replacements
-            if f"{target} missing previous-proof opening archive boundary" not in message
-        ]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK README boundary drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK README boundary drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK README boundary drift was not detected")
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK README boundary drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK README boundary drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: SDK README boundary drift was not detected")
+    print("negative control rejected SDK README boundary drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
     mutated = dict(texts)
@@ -37568,36 +42161,39 @@ if mode == "--negative-control-sdk-readme-proof-chain-accumulator":
         "SDK code must not derive, supply, or patch accumulator state."
     )
     new = "Native append treats previous recursive proof bytes and accumulator digests as optional SDK metadata."
+    detected_messages = []
     for target in targets:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate SDK README proof-chain accumulator boundary in {target}"
             )
         mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = [
-            f"{target} missing previous-proof opening archive boundary"
-            for target in targets
-        ]
-        missing = [
-            target
-            for target in targets
-            if f"{target} missing previous-proof opening archive boundary" not in message
-        ]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK README proof-chain accumulator drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK README proof-chain accumulator drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK README proof-chain accumulator drift was not detected")
+        expected_label = f"{target} missing previous-proof opening archive boundary"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK README proof-chain accumulator drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK README proof-chain accumulator drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: SDK README proof-chain accumulator drift was not detected")
+    print("negative control rejected SDK README proof-chain accumulator drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-readme-native-material-aliases":
     mutated = dict(texts)
@@ -37658,41 +42254,47 @@ if mode == "--negative-control-sdk-readme-native-material-aliases":
             "Proof-state and accumulator material aliases may be Python request fields.",
         ),
     }
+    detected_messages = []
     for target, (old, new) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate SDK README native material aliases in {target}"
             )
         mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
         expected_labels = [
             f"{target} missing native material alias README boundary: {needle}"
-            for target in replacements
             for needle in NON_CSHARP_NATIVE_MATERIAL_README_NEEDLES
         ]
-        expected_labels.extend(
-            f"{target} missing native material alias README request-field boundary: {needle}"
-            for target, needle in NON_CSHARP_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES.items()
+        expected_labels.append(
+            f"{target} missing native material alias README request-field boundary: "
+            + NON_CSHARP_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES[target]
         )
-        missing = [
-            label
-            for label in expected_labels
-            if label not in message
-        ]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK README native material alias drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK README native material alias drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK README native material alias drift was not detected")
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: SDK README native material alias drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK README native material alias drift was not detected for "
+            + target
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: SDK README native material alias drift was not detected")
+    print("negative control rejected SDK README native material alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-readme-pallas-builder-surface":
     mutated = dict(texts)
@@ -37795,100 +42397,129 @@ if mode == "--negative-control-sdk-readme-pallas-builder-surface":
 if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
     mutated = dict(texts)
     target = "docs/source/offline_kagemusha.md"
-    mutated[target] = mutated[target].replace(
-        "Native append streams the previous recursive proof bytes and per-hop\n"
-        "accumulator material into native-owned accumulator digests\n"
-        "(`recursive_proof_chain_digest`, lineage/aggregation transcript, fixed-window\n"
-        "schedule/shared-manifest/table-base, verifier-witness batch, transition-profile,\n"
-        "append-opening-preflight, append-boundary, scalar-projection, and\n"
-        "previous/resulting accumulator digests); SDKs must not derive, supply, or patch\n"
-        "accumulator state themselves.",
-        "Native append lets SDKs supply accumulator digests as optional metadata.",
-        1,
+    mutations = (
+        (
+            "Native append streams the previous recursive proof bytes and per-hop\n"
+            "accumulator material into native-owned accumulator digests\n"
+            "(`recursive_proof_chain_digest`, lineage/aggregation transcript, fixed-window\n"
+            "schedule/shared-manifest/table-base, verifier-witness batch, transition-profile,\n"
+            "append-opening-preflight, append-boundary, scalar-projection, and\n"
+            "previous/resulting accumulator digests); SDKs must not derive, supply, or patch\n"
+            "accumulator state themselves.",
+            "Native append lets SDKs supply accumulator digests as optional metadata.",
+            (
+                "offline Kagemusha docs missing native-owned accumulator boundary: Native append streams the previous "
+                "recursive proof bytes and per-hop accumulator material into native-owned accumulator digests",
+            ),
+        ),
+        (
+            "generic proof-state (`proofState`, `ProofState`, `proof_state`),\n"
+            "recursive/lineage proof-state, aggregation-transcript, fixed-window\n"
+            "table-schedule/shared-manifest/table-base, verifier-witness batch,\n"
+            "transition-profile binding, append-opening preflight, recursive\n"
+            "verifier scalar-projection, and previous/resulting accumulator aliases as\n"
+            "native-owned accumulator bytes.",
+            "proof-state and native material aliases may be SDK metadata.",
+            (
+                "offline Kagemusha docs missing native-owned accumulator boundary: generic proof-state (`proofState`, `ProofState`, `proof_state`)",
+                "offline Kagemusha docs missing native-owned accumulator boundary: previous/resulting accumulator aliases as native-owned accumulator bytes",
+            ),
+        ),
     )
-    mutated[target] = mutated[target].replace(
-        "generic proof-state (`proofState`, `ProofState`, `proof_state`),\n"
-        "recursive/lineage proof-state, aggregation-transcript, fixed-window\n"
-        "table-schedule/shared-manifest/table-base, verifier-witness batch,\n"
-        "transition-profile binding, append-opening preflight, recursive\n"
-        "verifier scalar-projection, and previous/resulting accumulator aliases as\n"
-        "native-owned accumulator bytes.",
-        "proof-state and native material aliases may be SDK metadata.",
-        1,
-    )
-    if (
-        "Native append lets SDKs supply accumulator digests as optional metadata."
-        not in mutated[target]
-        or "proof-state and native material aliases may be SDK metadata." not in mutated[target]
-    ):
-        raise SystemExit("negative control failed: unable to mutate offline Kagemusha accumulator boundary")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
-            "offline Kagemusha docs missing native-owned accumulator boundary: Native append streams the previous "
-            "recursive proof bytes and per-hop accumulator material into native-owned accumulator digests",
-            "offline Kagemusha docs missing native-owned accumulator boundary: generic proof-state (`proofState`, `ProofState`, `proof_state`)",
-            "offline Kagemusha docs missing native-owned accumulator boundary: previous/resulting accumulator aliases as native-owned accumulator bytes",
+    detected_messages = []
+    for old, new, expected_labels in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit("negative control failed: unable to mutate offline Kagemusha accumulator boundary")
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: offline Kagemusha accumulator boundary drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: offline Kagemusha accumulator boundary drift was not detected for "
+            + expected_labels[0]
         )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: offline Kagemusha accumulator boundary drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected offline Kagemusha accumulator boundary drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: offline Kagemusha accumulator boundary drift was not detected")
+    if not detected_messages:
+        raise SystemExit("negative control failed: offline Kagemusha accumulator boundary drift was not detected")
+    print("negative control rejected offline Kagemusha accumulator boundary drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-offline-doc-localnet-lifecycle-release-evidence":
     mutated = dict(texts)
     target = "docs/source/offline_kagemusha.md"
-    mutated[target] = mutated[target].replace(
-        "  --localnet-lifecycle-evidence artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json \\\n",
-        "",
-        1,
-    ).replace(
-        "The localnet lifecycle evidence binds a production 4-peer run id, chain id,\n"
-        "peer ids, smoke/replay/restart/state-recovery hashes, and the eight\n"
-        "shield-to-redeem lifecycle hashes.",
-        "The localnet lifecycle evidence may be attached by release tooling defaults.",
-        1,
+    mutations = (
+        (
+            "  --localnet-lifecycle-evidence artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json \\\n",
+            "",
+            (
+                "offline Kagemusha docs missing localnet lifecycle release evidence: "
+                "--localnet-lifecycle-evidence artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json",
+            ),
+        ),
+        (
+            "The localnet lifecycle evidence binds a production 4-peer run id, chain id,\n"
+            "peer ids, smoke/replay/restart/state-recovery hashes, and the eight\n"
+            "shield-to-redeem lifecycle hashes.",
+            "The localnet lifecycle evidence may be attached by release tooling defaults.",
+            (
+                "offline Kagemusha docs missing localnet lifecycle release evidence: "
+                "production 4-peer run id, chain id, peer ids",
+                "offline Kagemusha docs missing localnet lifecycle release evidence: "
+                "smoke/replay/restart/state-recovery hashes",
+                "offline Kagemusha docs missing localnet lifecycle release evidence: "
+                "eight shield-to-redeem lifecycle hashes",
+            ),
+        ),
     )
-    if mutated[target] == texts[target]:
-        raise SystemExit(
-            "negative control failed: unable to mutate offline Kagemusha localnet lifecycle evidence docs"
-        )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
-            "offline Kagemusha docs missing localnet lifecycle release evidence: "
-            "--localnet-lifecycle-evidence artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json",
-            "offline Kagemusha docs missing localnet lifecycle release evidence: "
-            "production 4-peer run id, chain id, peer ids",
-            "offline Kagemusha docs missing localnet lifecycle release evidence: "
-            "smoke/replay/restart/state-recovery hashes",
-            "offline Kagemusha docs missing localnet lifecycle release evidence: "
-            "eight shield-to-redeem lifecycle hashes",
-        )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+    detected_messages = []
+    for old, new, expected_labels in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
-                "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate offline Kagemusha localnet lifecycle evidence docs"
             )
-        print("negative control rejected offline Kagemusha localnet lifecycle evidence drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected"
-    )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected for "
+                    + ", ".join(missing)
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected for "
+            + expected_labels[0]
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: offline Kagemusha localnet lifecycle evidence drift was not detected"
+        )
+    print("negative control rejected offline Kagemusha localnet lifecycle evidence drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-offline-doc-pallas-builder-surface":
     mutated = dict(texts)
@@ -37995,7 +42626,12 @@ if mode == "--negative-control-offline-doc-redeem-lineage-selection":
         "different semantic-bundle rule: they decode the lineage-witness previous-proof\n"
         "summary, require lineage verifier records when semantic witnesses contain prior\n"
         "Reserved-lineage proofs, and reject dangling records for init-only or absent\n"
-        "lineage witnesses.",
+        "lineage witnesses. The same non-C# plural record paths pin request-state\n"
+        "ownership: Swift stores value-typed `Data` and arrays, JavaScript normalizes to\n"
+        "frozen record refs with copied record bytes, Python freezes tuple inputs, and\n"
+        "Kotlin/JVM plus Java Android copy caller-owned lists into unmodifiable request\n"
+        "state before encoding. JVM/Android record refs also copy verifier-record archive\n"
+        "bytes on construction and accessor reads.",
         "Non-C# typed redeem request encoders reject lineage verifier records on all\n"
         "semantic final bundles before native dispatch.",
         1,
@@ -38016,6 +42652,14 @@ if mode == "--negative-control-offline-doc-redeem-lineage-selection":
             "require lineage verifier records when semantic witnesses contain prior Reserved-lineage proofs",
             "offline Kagemusha docs missing redeem lineage-record selection boundary: "
             "reject dangling records for init-only or absent lineage witnesses",
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "The same non-C# plural record paths pin request-state ownership",
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "JavaScript normalizes to frozen record refs with copied record bytes",
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "Kotlin/JVM plus Java Android copy caller-owned lists into unmodifiable request state before encoding",
+            "offline Kagemusha docs missing redeem lineage-record selection boundary: "
+            "JVM/Android record refs also copy verifier-record archive bytes on construction and accessor reads",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -38097,31 +42741,33 @@ if mode == "--negative-control-sdk-proof-chain-accumulator-input":
         "javascript/iroha_js/dist/crypto.js": r"\b[A-Za-z0-9_]*proofChainDigest",
         "javascript/iroha_js/index.d.ts": r"\b[A-Za-z0-9_]*recursiveProofChainDigest",
     }
-    expected_labels = []
+    detected_messages = []
     for target, addition, label in mutations:
-        if addition in mutated[target]:
+        current = mutated[target]
+        if addition in current:
             raise SystemExit(f"negative control failed: stale proof-chain digest fixture already present in {target}")
-        mutated[target] += addition
-        expected_labels.append(
+        mutated[target] = current + addition
+        expected_label = (
             f"{label} contains forbidden pattern {proof_chain_accumulator_patterns[target]}"
         )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK proof-chain accumulator public input drift was not detected for "
-                + ", ".join(missing)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK proof-chain accumulator public input drift",
+                )
             )
-        print("negative control rejected SDK proof-chain accumulator public input drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK proof-chain accumulator public input drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK proof-chain accumulator public input drift was not detected"
+        )
+    print("negative control rejected SDK proof-chain accumulator public input drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-digest-inputs":
     mutated = dict(texts)
@@ -38189,31 +42835,33 @@ if mode == "--negative-control-sdk-accumulator-digest-inputs":
         "javascript/iroha_js/dist/crypto.js": r"\b[A-Za-z0-9_]*fixedWindowTableScheduleDigest",
         "javascript/iroha_js/index.d.ts": r"\b[A-Za-z0-9_]*lineageDigest",
     }
-    expected_labels = []
+    detected_messages = []
     for target, addition, label in mutations:
-        if addition in mutated[target]:
+        current = mutated[target]
+        if addition in current:
             raise SystemExit(f"negative control failed: stale accumulator digest fixture already present in {target}")
-        mutated[target] += addition
-        expected_labels.append(
+        mutated[target] = current + addition
+        expected_label = (
             f"{label} contains forbidden pattern {accumulator_digest_patterns[target]}"
         )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator digest public input drift was not detected for "
-                + ", ".join(missing)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK accumulator digest public input drift",
+                )
             )
-        print("negative control rejected SDK accumulator digest public input drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator digest public input drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator digest public input drift was not detected"
+        )
+    print("negative control rejected SDK accumulator digest public input drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-material-inputs":
     mutated = dict(texts)
@@ -38281,16 +42929,6 @@ if mode == "--negative-control-sdk-accumulator-material-inputs":
         "javascript/iroha_js/dist/crypto.js": r"\b[A-Za-z0-9_]*FixedWindowSharedTableManifest(?!Digest)",
         "javascript/iroha_js/index.d.ts": r"\b[A-Za-z0-9_]*aggregationTranscript(?!Digest)",
     }
-    expected_labels = []
-    for target, addition, label in mutations:
-        if addition in mutated[target]:
-            raise SystemExit(
-                f"negative control failed: stale accumulator material fixture already present in {target}"
-            )
-        mutated[target] += addition
-        expected_labels.append(
-            f"{label} contains forbidden pattern {accumulator_material_patterns[target]}"
-        )
     expected_snapshot_alias_labels = (
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*lineageSnapshot",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*RecursiveSnapshot",
@@ -38338,29 +42976,46 @@ if mode == "--negative-control-sdk-accumulator-material-inputs":
         "javascript/iroha_js/index.d.ts accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*recursiveVerifierScalarProjection(?!Digest)",
         "javascript/iroha_js/index.d.ts accumulator material public input contains forbidden pattern \\b[A-Za-z0-9_]*resultingAccumulator(?!Digest)",
     )
-    expected_messages = (
-        tuple(expected_labels)
-        + expected_snapshot_alias_labels
+    extra_material_labels = (
+        expected_snapshot_alias_labels
         + expected_proof_state_alias_labels
         + expected_native_material_alias_labels
     )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_messages if label not in message]
-        if missing:
+    detected_messages = []
+    for target, addition, label in mutations:
+        current = mutated[target]
+        if addition in current:
             raise SystemExit(
-                "negative control failed: SDK accumulator material public input drift was not detected for "
-                + ", ".join(missing)
+                f"negative control failed: stale accumulator material fixture already present in {target}"
             )
-        print("negative control rejected SDK accumulator material public input drift")
-        for detected_message in first_lines_for_labels(message, expected_messages):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator material public input drift was not detected"
-    )
+        mutated[target] = current + addition
+        expected_base_label = (
+            f"{label} contains forbidden pattern {accumulator_material_patterns[target]}"
+        )
+        expected_prefix = f"{label} contains forbidden pattern "
+        expected_messages = (expected_base_label,) + tuple(
+            extra_label
+            for extra_label in extra_material_labels
+            if extra_label.startswith(expected_prefix)
+        )
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    expected_messages,
+                    "SDK accumulator material public input drift",
+                )
+            )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator material public input drift was not detected"
+        )
+    print("negative control rejected SDK accumulator material public input drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
     mutated = dict(texts)
@@ -38428,33 +43083,35 @@ if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":
         "javascript/iroha_js/dist/crypto.js": r"\b[A-Za-z0-9_]*appendOpeningPreflightDigest",
         "javascript/iroha_js/index.d.ts": r"\b[A-Za-z0-9_]*transitionProfileBindingDigest(?!Domain)",
     }
-    expected_labels = []
+    detected_messages = []
     for target, addition, label in mutations:
-        if addition in mutated[target]:
+        current = mutated[target]
+        if addition in current:
             raise SystemExit(
                 f"negative control failed: stale accumulator boundary digest fixture already present in {target}"
             )
-        mutated[target] += addition
-        expected_labels.append(
+        mutated[target] = current + addition
+        expected_label = (
             f"{label} contains forbidden pattern {accumulator_boundary_digest_patterns[target]}"
         )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator boundary digest public input drift was not detected for "
-                + ", ".join(missing)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK accumulator boundary digest public input drift",
+                )
             )
-        print("negative control rejected SDK accumulator boundary digest public input drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator boundary digest public input drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator boundary digest public input drift was not detected"
+        )
+    print("negative control rejected SDK accumulator boundary digest public input drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-field-length-vectors":
     mutated = dict(texts)
@@ -39658,32 +44315,34 @@ if mode == "--negative-control-sdk-accumulator-hop-count-vectors":
             marker = marker.rstrip(",")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate accumulator hop-count vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_accumulator_hop_count_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator hop-count vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_accumulator_hop_count_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK accumulator hop-count vector drift",
+                )
             )
-        print("negative control rejected SDK accumulator hop-count vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator hop-count vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator hop-count vector drift was not detected"
+        )
+    print("negative control rejected SDK accumulator hop-count vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-chain-id-shape":
     mutated = dict(texts)
@@ -39799,6 +44458,8 @@ if mode == "--negative-control-sdk-accumulator-chain-id-shape":
         ),
     )
     def expected_accumulator_chain_id_shape_label(target, old, label):
+        if target.startswith("python/") and '"kagemusha recursive-spend-abi-chain"' in old:
+            return f'{label} missing "kagemusha recursive-spend-abi-chain"'
         marker = old.splitlines()[0]
         if target.startswith("python/"):
             marker = marker.strip()
@@ -39808,32 +44469,34 @@ if mode == "--negative-control-sdk-accumulator-chain-id-shape":
         (target, (old, new, label))
         for target, old, new, label in semantic_replacements
     ]
-    expected_labels = []
+    detected_messages = []
     for target, (old, new, label) in replacement_entries:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate accumulator chain-id shape vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_accumulator_chain_id_shape_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator chain-id shape drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_accumulator_chain_id_shape_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK accumulator chain-id shape drift",
+                )
             )
-        print("negative control rejected SDK accumulator chain-id shape drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator chain-id shape drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator chain-id shape drift was not detected"
+        )
+    print("negative control rejected SDK accumulator chain-id shape drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-asset-address-vectors":
     mutated = dict(texts)
@@ -39915,32 +44578,41 @@ if mode == "--negative-control-sdk-accumulator-asset-address-vectors":
         marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate accumulator asset address vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_accumulator_asset_address_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator asset address vector drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK accumulator asset address vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator asset address vector drift was not detected"
-    )
+        expected = expected_accumulator_asset_address_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: SDK accumulator asset address vector drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK accumulator asset address vector drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator asset address vector drift was not detected"
+        )
+    print("negative control rejected SDK accumulator asset address vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-asset-uuid-boundary-vectors":
     mutated = dict(texts)
@@ -39999,32 +44671,41 @@ if mode == "--negative-control-sdk-accumulator-asset-uuid-boundary-vectors":
             )
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate accumulator asset UUID boundary vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_accumulator_asset_uuid_boundary_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator asset UUID boundary drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK accumulator asset UUID boundary drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator asset UUID boundary drift was not detected"
-    )
+        expected = expected_accumulator_asset_uuid_boundary_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: SDK accumulator asset UUID boundary drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK accumulator asset UUID boundary drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator asset UUID boundary drift was not detected"
+        )
+    print("negative control rejected SDK accumulator asset UUID boundary drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
     mutated = dict(texts)
@@ -40144,32 +44825,34 @@ if mode == "--negative-control-sdk-bundle-summary-trailing-field-vectors":
             "C# recursive spend bundle trailing-field guard tests",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate bundle summary trailing-field vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old.splitlines()[0]}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle summary trailing-field vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle summary trailing-field vector drift",
+                )
             )
-        print("negative control rejected SDK bundle summary trailing-field vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle summary trailing-field vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle summary trailing-field vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle summary trailing-field vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-verify-lineage-record-preflight":
     mutation_sets = (
@@ -40649,35 +45332,34 @@ if mode == "--negative-control-sdk-verify-lineage-record-preflight":
     detected_messages = []
     for vector_name, replacements in mutation_sets:
         mutated = dict(texts)
-        expected_labels = []
         for replacement in replacements:
             if len(replacement) == 5:
                 target, old, new, label, replace_all = replacement
             else:
                 target, old, new, label = replacement
                 replace_all = False
-            updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-            if updated == mutated[target]:
+            current = mutated[target]
+            updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+            if updated == current:
                 raise SystemExit(
                     f"negative control failed: unable to mutate verify lineage-record {vector_name} preflight in {target}"
                 )
             mutated[target] = updated
-            expected_labels.append(expected_verify_lineage_record_label(target, old, label))
-        try:
-            run_checks(mutated)
-        except ParityError as error:
-            message = str(error)
-            missing = [label for label in expected_labels if label not in message]
-            if missing:
-                raise SystemExit(
-                    f"negative control failed: SDK verify lineage-record {vector_name} preflight drift was not detected for "
-                    + ", ".join(missing)
+            expected_label = expected_verify_lineage_record_label(target, old, label)
+            try:
+                detected_messages.extend(
+                    f"{vector_name}: {detected_message}"
+                    for detected_message in detect_negative_control(
+                        mutated,
+                        (expected_label,),
+                        f"SDK verify lineage-record {vector_name} preflight drift",
+                    )
                 )
-            for detected_message in first_lines_for_labels(message, expected_labels):
-                detected_messages.append(f"{vector_name}: {detected_message}")
-            continue
+            finally:
+                mutated[target] = current
+    if not detected_messages:
         raise SystemExit(
-            f"negative control failed: SDK verify lineage-record {vector_name} preflight drift was not detected"
+            "negative control failed: SDK verify lineage-record preflight drift was not detected"
         )
     print("negative control rejected SDK verify lineage-record preflight drift")
     for detected_message in detected_messages:
@@ -40748,32 +45430,34 @@ if mode == "--negative-control-sdk-verify-result-trailing-field-vectors":
             marker = "decodeKagemushaRecursiveSpendVerifyResult("
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate verify-result trailing-field vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_verify_result_trailing_field_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK verify-result trailing-field vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_verify_result_trailing_field_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK verify-result trailing-field vector drift",
+                )
             )
-        print("negative control rejected SDK verify-result trailing-field vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK verify-result trailing-field vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK verify-result trailing-field vector drift was not detected"
+        )
+    print("negative control rejected SDK verify-result trailing-field vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-verify-result-redeem-aliases":
     mutated = dict(texts)
@@ -40870,32 +45554,41 @@ if mode == "--negative-control-sdk-verify-result-redeem-aliases":
             True,
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label, replace_all in replacements:
-        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate verify-result redeem alias in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK verify-result redeem alias drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK verify-result redeem alias drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK verify-result redeem alias drift was not detected"
-    )
+        expected_label = f"{label} missing {old}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK verify-result redeem alias drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK verify-result redeem alias drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK verify-result redeem alias drift was not detected"
+        )
+    print("negative control rejected SDK verify-result redeem alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
     mutated = dict(texts)
@@ -41351,10 +46044,11 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             "C# recursive spend lineage-witness trailing-field guard tests",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate lineage-witness trailing-field vector in {target}"
             )
@@ -41380,24 +46074,25 @@ if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":
             expected_marker = old.splitlines()[1].strip()
             if expected_marker.startswith("fieldIndex:") and len(old.splitlines()) > 2:
                 expected_marker = old.splitlines()[2].strip()
-        expected_labels.append(f"{label} missing {expected_marker}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK lineage-witness trailing-field vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = f"{label} missing {expected_marker}"
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK lineage-witness trailing-field vector drift",
+                )
             )
-        print("negative control rejected SDK lineage-witness trailing-field vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK lineage-witness trailing-field vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK lineage-witness trailing-field vector drift was not detected"
+        )
+    print("negative control rejected SDK lineage-witness trailing-field vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":
     mutated = dict(texts)
@@ -41494,10 +46189,11 @@ if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks
             "Android Java lineage-witness previous-proof count-prefix vectors",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate lineage-witness count-prefix marker in {target}"
             )
@@ -41508,24 +46204,32 @@ if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks
             "Android Java lineage-witness previous-proof count precheck decoder",
         ):
             expected_marker = "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS"
-        expected_labels.append(f"{label} missing {expected_marker}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: non-C# lineage-witness count-prefix drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected non-C# lineage-witness count-prefix drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: non-C# lineage-witness count-prefix drift was not detected"
-    )
+        expected_label = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# lineage-witness count-prefix drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# lineage-witness count-prefix drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: non-C# lineage-witness count-prefix drift was not detected"
+        )
+    print("negative control rejected non-C# lineage-witness count-prefix drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":
     mutated = dict(texts)
@@ -41689,32 +46393,41 @@ if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-precheck
             "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label, expected_marker in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate record-bundle fold-step count-prefix marker in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {expected_marker}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected non-C# record-bundle fold-step count-prefix drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected"
-    )
+        expected_label = f"{label} missing {expected_marker}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: non-C# record-bundle fold-step count-prefix drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected"
+        )
+    print("negative control rejected non-C# record-bundle fold-step count-prefix drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
     mutated = dict(texts)
@@ -41801,32 +46514,34 @@ if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":
             )
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate current-note amount trailing-field vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_current_note_amount_trailing_field_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK current-note amount trailing-field vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_current_note_amount_trailing_field_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK current-note amount trailing-field vector drift",
+                )
             )
-        print("negative control rejected SDK current-note amount trailing-field vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK current-note amount trailing-field vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK current-note amount trailing-field vector drift was not detected"
+        )
+    print("negative control rejected SDK current-note amount trailing-field vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":
     mutated = dict(texts)
@@ -41875,15 +46590,6 @@ if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":
             marker = marker.removeprefix("assert ")
         return f"{label} missing {marker}"
 
-    expected_labels = []
-    for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-circuit vector in {target}"
-            )
-        mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_circuit_label(target, old, label))
     assertion_replacements = (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -41902,31 +46608,38 @@ if mode == "--negative-control-sdk-bundle-proof-circuit-vectors":
             "Android Java recursive spend bundle proof-circuit guard tests",
         ),
     )
-    for target, old, new, label in assertion_replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+    mutation_entries = [
+        (target, old, new, label)
+        for target, (old, new, label) in replacements.items()
+    ] + list(assertion_replacements)
+    detected_messages = []
+    for target, old, new, label in mutation_entries:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-circuit assertion in {target}"
+                f"negative control failed: unable to mutate bundle proof-circuit vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_circuit_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle proof-circuit vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_bundle_proof_circuit_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle proof-circuit vector drift",
+                )
             )
-        print("negative control rejected SDK bundle proof-circuit vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle proof-circuit vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle proof-circuit vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle proof-circuit vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-backend-vectors":
     mutated = dict(texts)
@@ -42015,15 +46728,6 @@ if mode == "--negative-control-sdk-bundle-proof-backend-vectors":
             marker = marker.removeprefix("assert ")
         return f"{label} missing {marker}"
 
-    expected_labels = []
-    for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-backend vector in {target}"
-            )
-        mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_backend_label(target, old, label))
     assertion_replacements = (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -42039,31 +46743,38 @@ if mode == "--negative-control-sdk-bundle-proof-backend-vectors":
             "Android Java recursive spend bundle proof-backend guard tests",
         ),
     )
-    for target, old, new, label in assertion_replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+    mutation_entries = [
+        (target, old, new, label)
+        for target, (old, new, label) in replacements.items()
+    ] + list(assertion_replacements)
+    detected_messages = []
+    for target, old, new, label in mutation_entries:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-backend assertion in {target}"
+                f"negative control failed: unable to mutate bundle proof-backend vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_backend_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle proof-backend vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_bundle_proof_backend_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle proof-backend vector drift",
+                )
             )
-        print("negative control rejected SDK bundle proof-backend vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle proof-backend vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle proof-backend vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle proof-backend vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
     mutated = dict(texts)
@@ -42110,15 +46821,6 @@ if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
             marker = marker.removeprefix("assert ")
         return f"{label} missing {marker}"
 
-    expected_labels = []
-    for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-box backend vector in {target}"
-            )
-        mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_box_backend_label(target, old, label))
     combined_replacements = (
         (
             "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
@@ -42173,14 +46875,6 @@ if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
             "JavaScript package dist recursive spend bundle proof-box backend coverage",
         ),
     )
-    for target, old, new, label in combined_replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate combined bundle proof-box backend vector in {target}"
-            )
-        mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_box_backend_label(target, old, label))
     assertion_replacements = (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -42196,31 +46890,38 @@ if mode == "--negative-control-sdk-bundle-proof-box-backend-vectors":
             "Android Java recursive spend bundle proof-box backend guard tests",
         ),
     )
-    for target, old, new, label in assertion_replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+    mutation_entries = [
+        (target, old, new, label)
+        for target, (old, new, label) in replacements.items()
+    ] + list(combined_replacements) + list(assertion_replacements)
+    detected_messages = []
+    for target, old, new, label in mutation_entries:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-box backend assertion in {target}"
+                f"negative control failed: unable to mutate bundle proof-box backend vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_box_backend_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle proof-box backend vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_bundle_proof_box_backend_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle proof-box backend vector drift",
+                )
             )
-        print("negative control rejected SDK bundle proof-box backend vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle proof-box backend vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle proof-box backend vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle proof-box backend vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":
     mutated = dict(texts)
@@ -42376,32 +47077,34 @@ if mode == "--negative-control-sdk-bundle-proof-trailing-field-vectors":
             "C# recursive spend bundle trailing-field guard tests",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate bundle proof trailing-field vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old.splitlines()[0]}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle proof trailing-field vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle proof trailing-field vector drift",
+                )
             )
-        print("negative control rejected SDK bundle proof trailing-field vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle proof trailing-field vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle proof trailing-field vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle proof trailing-field vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":
     mutated = dict(texts)
@@ -42452,15 +47155,6 @@ if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":
             "JavaScript package dist recursive spend bundle proof-bytes coverage",
         ),
     }
-    expected_labels = []
-    for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-bytes vector in {target}"
-            )
-        mutated[target] = updated
-        expected_labels.append(f"{label} missing {old.splitlines()[0]}")
     assertion_replacements = (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -42475,31 +47169,38 @@ if mode == "--negative-control-sdk-bundle-proof-bytes-vectors":
             "Android Java recursive spend bundle proof-bytes guard tests",
         ),
     )
-    for target, old, new, label in assertion_replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+    mutation_entries = [
+        (target, old, new, label)
+        for target, (old, new, label) in replacements.items()
+    ] + list(assertion_replacements)
+    detected_messages = []
+    for target, old, new, label in mutation_entries:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
-                f"negative control failed: unable to mutate bundle proof-bytes assertion in {target}"
+                f"negative control failed: unable to mutate bundle proof-bytes vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old.splitlines()[0]}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle proof-bytes vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle proof-bytes vector drift",
+                )
             )
-        print("negative control rejected SDK bundle proof-bytes vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle proof-bytes vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle proof-bytes vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle proof-bytes vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":
     mutated = dict(texts)
@@ -42539,7 +47240,7 @@ if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":
         (
             "python/iroha_python/tests/kagemusha_test.py",
             "_fixed_array_payload(0x44, 31)",
-            "_fixed_array_payload(0x44, 32)",
+            "_fixed_array_payload(0x44, 30)",
             "Python recursive spend bundle proof-public-input guard tests",
         ),
         (
@@ -42766,32 +47467,38 @@ if mode == "--negative-control-sdk-bundle-proof-public-input-vectors":
             marker = marker.removeprefix("assert ")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        replace_all = (
+            target == "python/iroha_python/tests/kagemusha_test.py"
+            and old == "_fixed_array_payload(0x44, 31)"
+        )
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate bundle proof-public-input vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_bundle_proof_public_input_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle proof-public-input vector drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_bundle_proof_public_input_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle proof-public-input vector drift",
+                )
             )
-        print("negative control rejected SDK bundle proof-public-input vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle proof-public-input vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle proof-public-input vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle proof-public-input vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-bundle-proof-metadata-exact-diagnostics":
     replacements = (
@@ -43696,40 +48403,38 @@ if mode == "--negative-control-sdk-bundle-current-note-vectors":
                 marker = "kagemushaNumericPayload(Buffer.concat([Buffer.alloc(16), Buffer.from([1])]))"
         return f"{label} missing {marker}"
 
-    expected_labels = []
-    for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+    mutation_entries = list(replacements) + [
+        (target, old, new, label)
+        for target, (old, new, label) in implementation_replacements.items()
+    ]
+    detected_messages = []
+    for target, old, new, label in mutation_entries:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate bundle current-note vector in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_bundle_current_note_label(target, old, label))
-    for target, (old, new, label) in implementation_replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
-            raise SystemExit(
-                f"negative control failed: unable to mutate current-note implementation guard in {target}"
+        expected_label = expected_bundle_current_note_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK bundle current-note vector drift",
+                )
             )
-        mutated[target] = updated
-        expected_labels.append(expected_bundle_current_note_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK bundle current-note vector drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK bundle current-note vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK bundle current-note vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK bundle current-note vector drift was not detected"
+        )
+    print("negative control rejected SDK bundle current-note vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-accumulator-domain-vectors":
     mutated = dict(texts)
@@ -43898,39 +48603,39 @@ if mode == "--negative-control-sdk-accumulator-domain-vectors":
             marker = marker.strip('"')
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for replacement in replacements:
         if len(replacement) == 5:
             target, old, new, label, replace_all = replacement
         else:
             target, old, new, label = replacement
             replace_all = False
-        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate accumulator domain vector in {target}"
             )
         mutated[target] = updated
         expected_label = expected_accumulator_domain_label(target, old, label)
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK accumulator domain vector drift was not detected for "
-                + ", ".join(missing)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK accumulator domain vector drift",
+                )
             )
-        print("negative control rejected SDK accumulator domain vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK accumulator domain vector drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK accumulator domain vector drift was not detected"
+        )
+    print("negative control rejected SDK accumulator domain vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":
     mutation_sets = (
@@ -44024,30 +48729,29 @@ if mode == "--negative-control-sdk-redeem-change-output-fixed32-vectors":
     detected_messages = []
     for vector_name, replacements in mutation_sets:
         mutated = dict(texts)
-        expected_labels = []
         for target, (old, new, label) in replacements.items():
-            updated = mutated[target].replace(old, new, 1)
-            if updated == mutated[target]:
+            current = mutated[target]
+            updated = current.replace(old, new, 1)
+            if updated == current:
                 raise SystemExit(
                     f"negative control failed: unable to mutate redeem change-output {vector_name} fixed32 vector in {target}"
                 )
             mutated[target] = updated
-            expected_labels.append(expected_redeem_change_output_fixed32_label(target, old, label))
-        try:
-            run_checks(mutated)
-        except ParityError as error:
-            message = str(error)
-            missing = [label for label in expected_labels if label not in message]
-            if missing:
-                raise SystemExit(
-                    f"negative control failed: SDK redeem change-output {vector_name} fixed32 vector drift was not detected for "
-                    + ", ".join(missing)
+            expected_label = expected_redeem_change_output_fixed32_label(target, old, label)
+            try:
+                detected_messages.extend(
+                    f"{vector_name}: {detected_message}"
+                    for detected_message in detect_negative_control(
+                        mutated,
+                        (expected_label,),
+                        f"SDK redeem change-output {vector_name} fixed32 vector drift",
+                    )
                 )
-            for detected_message in first_lines_for_labels(message, expected_labels):
-                detected_messages.append(f"{vector_name}: {detected_message}")
-            continue
+            finally:
+                mutated[target] = current
+    if not detected_messages:
         raise SystemExit(
-            f"negative control failed: SDK redeem change-output {vector_name} fixed32 vector drift was not detected"
+            "negative control failed: SDK redeem change-output fixed32 vector drift was not detected"
         )
     print("negative control rejected SDK redeem change-output fixed32 vector drift")
     for detected_message in detected_messages:
@@ -44111,32 +48815,34 @@ if mode == "--negative-control-sdk-redeem-change-output-relationships":
             marker = f"block start {marker}"
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, (old, new, label) in replacements.items():
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate redeem change-output relationship in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_redeem_change_output_relationship_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK redeem change-output relationship drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_redeem_change_output_relationship_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK redeem change-output relationship drift",
+                )
             )
-        print("negative control rejected SDK redeem change-output relationship drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK redeem change-output relationship drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK redeem change-output relationship drift was not detected"
+        )
+    print("negative control rejected SDK redeem change-output relationship drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-redeem-change-output-reserved-collisions":
     mutated = dict(texts)
@@ -44224,33 +48930,42 @@ if mode == "--negative-control-sdk-redeem-change-output-reserved-collisions":
         marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 "negative control failed: unable to mutate redeem change-output reserved collision in "
                 + target
             )
         mutated[target] = updated
-        expected_labels.append(expected_redeem_change_output_reserved_collision_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK redeem change-output reserved collision drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK redeem change-output reserved collision drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK redeem change-output reserved collision drift was not detected"
-    )
+        expected_label = expected_redeem_change_output_reserved_collision_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK redeem change-output reserved collision drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK redeem change-output reserved collision drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK redeem change-output reserved collision drift was not detected"
+        )
+    print("negative control rejected SDK redeem change-output reserved collision drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
     mutated = dict(texts)
@@ -44475,7 +49190,6 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             return f"{label} missing pattern {marker}"
         return f"{label} missing {marker}"
 
-    expected_labels = []
     test_label_targets = (
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
@@ -44502,20 +49216,50 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
             "Android Java typed recursive spend top-up anchor nullifier invariant tests",
         ),
     )
+    detected_messages = []
+
+    def detect_topup_anchor_nullifier_invariant_mutation(target, old, new, label, kind, replace_all=False):
+        current = mutated[target]
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate top-up anchor nullifier "
+                + kind
+                + " in "
+                + target
+                + ": "
+                + old
+            )
+        mutated[target] = updated
+        expected_label = expected_topup_anchor_nullifier_invariant_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK top-up anchor nullifier invariant drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            return
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK top-up anchor nullifier invariant drift was not detected for "
+            + expected_label
+        )
+
     for target, label in test_label_targets:
         for case_label in topup_anchor_case_labels:
             replacement = case_label.replace(" ", "_") + "_removed"
-            updated = mutated[target].replace(case_label, replacement)
-            if updated == mutated[target]:
-                raise SystemExit(
-                    "negative control failed: unable to mutate top-up anchor nullifier case label in "
-                    + target
-                    + ": "
-                    + case_label
-                )
-            mutated[target] = updated
-            expected_labels.append(
-                expected_topup_anchor_nullifier_invariant_label(case_label, label)
+            detect_topup_anchor_nullifier_invariant_mutation(
+                target,
+                case_label,
+                replacement,
+                label,
+                "case label",
+                replace_all=True,
             )
     message_targets = (
         (
@@ -44570,44 +49314,641 @@ if mode == "--negative-control-sdk-topup-anchor-nullifier-invariants":
     for target, label in message_targets:
         for diagnostic in topup_anchor_diagnostics:
             replacement = diagnostic.replace("topup_anchor_nullifiers", "topup_anchor_nullifiers_drifted")
-            updated = mutated[target].replace(diagnostic, replacement)
-            if updated == mutated[target]:
-                raise SystemExit(
-                    "negative control failed: unable to mutate top-up anchor nullifier diagnostic in "
-                    + target
-                    + ": "
-                    + diagnostic
-                )
-            mutated[target] = updated
-            expected_labels.append(
-                expected_topup_anchor_nullifier_invariant_label(diagnostic, label)
+            detect_topup_anchor_nullifier_invariant_mutation(
+                target,
+                diagnostic,
+                replacement,
+                label,
+                "diagnostic",
+                replace_all=True,
             )
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        detect_topup_anchor_nullifier_invariant_mutation(
+            target,
+            old,
+            new,
+            label,
+            "invariant",
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK top-up anchor nullifier invariant drift was not detected"
+        )
+    print("negative control rejected SDK top-up anchor nullifier invariant drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-kotlin-redeem-lineage-record-list-immutability":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "Collections.unmodifiableList(lineageVerifierRecords.toList())",
+            "lineageVerifierRecords.toList()",
+            "Kotlin typed recursive spend redeem lineage verifier-record list immutability",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "(copiedPluralRedeemRequest.lineageVerifierRecords as MutableList<VerifierRecordRef>).clear()",
+            "copiedPluralRedeemRequest.lineageVerifierRecords.size",
+            "Kotlin typed recursive spend redeem lineage verifier-record list immutability tests",
+        ),
+    )
+
+    detected_messages = []
+    for target, old, new, label in replacements:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
-                "negative control failed: unable to mutate top-up anchor nullifier invariant in "
+                "negative control failed: unable to mutate Kotlin redeem lineage verifier-record list immutability in "
                 + target
             )
         mutated[target] = updated
-        expected_labels.append(expected_topup_anchor_nullifier_invariant_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK top-up anchor nullifier invariant drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK top-up anchor nullifier invariant drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK top-up anchor nullifier invariant drift was not detected"
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Kotlin redeem lineage verifier-record list immutability drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Kotlin redeem lineage verifier-record list immutability drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Kotlin redeem lineage verifier-record list immutability drift was not detected"
+        )
+    print("negative control rejected Kotlin redeem lineage verifier-record list immutability drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-swift-redeem-lineage-record-list-value-semantics":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "public let recordBytes: Data",
+            "public var recordBytes: Data",
+            "Swift typed recursive spend verifier-record byte value semantics",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^=",
+            "mutableVerifierRecordBytes.reserveCapacity(0)",
+            "Swift typed recursive spend verifier-record byte value-semantics tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.index(before: returnedVerifierRecordBytes.endIndex)] ^=",
+            "returnedVerifierRecordBytes.reserveCapacity(0)",
+            "Swift typed recursive spend verifier-record byte value-semantics tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "public let lineageVerifierRecords: [KagemushaRecursiveSpendVerifierRecordRef]",
+            "public var lineageVerifierRecords: [KagemushaRecursiveSpendVerifierRecordRef]",
+            "Swift typed recursive spend redeem lineage verifier-record list value semantics",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "mutableLineageVerifierRecords.removeAll()",
+            "mutableLineageVerifierRecords.reserveCapacity(0)",
+            "Swift typed recursive spend redeem lineage verifier-record list value-semantics tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "XCTAssertEqual(copiedPluralRedeemRequest.lineageVerifierRecords.count, 2)",
+            "XCTAssertEqual(copiedPluralRedeemRequest.lineageVerifierRecords.count, 1)",
+            "Swift typed recursive spend redeem lineage verifier-record list value-semantics tests",
+        ),
     )
+
+    detected_messages = []
+    for target, old, new, label in replacements:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Swift redeem lineage verifier-record list value semantics in "
+                + target
+            )
+        mutated[target] = updated
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Swift redeem lineage verifier-record list value-semantics drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Swift redeem lineage verifier-record list value-semantics drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Swift redeem lineage verifier-record list value-semantics drift was not detected"
+        )
+    print("negative control rejected Swift redeem lineage verifier-record list value-semantics drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-redeem-lineage-record-list-immutability":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "Collections.unmodifiableList(\n              new ArrayList<>(Objects.requireNonNull(lineageVerifierRecords, \"lineageVerifierRecords\")))",
+            "new ArrayList<>(Objects.requireNonNull(lineageVerifierRecords, \"lineageVerifierRecords\"))",
+            "Android Java typed recursive spend redeem lineage verifier-record list immutability",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "mutableLineageVerifierRecords.clear();",
+            "mutableLineageVerifierRecords.size();",
+            "Android Java typed recursive spend redeem lineage verifier-record list immutability tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "copiedPluralRedeemRequest.lineageVerifierRecords.clear();",
+            "copiedPluralRedeemRequest.lineageVerifierRecords.size();",
+            "Android Java typed recursive spend redeem lineage verifier-record list immutability tests",
+        ),
+    )
+
+    detected_messages = []
+    for target, old, new, label in replacements:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate Android Java redeem lineage verifier-record list immutability in "
+                + target
+            )
+        mutated[target] = updated
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Android Java redeem lineage verifier-record list immutability drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Android Java redeem lineage verifier-record list immutability drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Android Java redeem lineage verifier-record list immutability drift was not detected"
+        )
+    print("negative control rejected Android Java redeem lineage verifier-record list immutability drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-jvm-verifier-record-byte-copy-isolation":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "private val recordArchiveBytes = recordBytes.copyOf()",
+            "private val recordArchiveBytes = recordBytes",
+            "Kotlin typed recursive spend verifier-record byte copy isolation",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "val recordBytes: ByteArray get() = recordArchiveBytes.copyOf()",
+            "val recordBytes: ByteArray get() = recordArchiveBytes",
+            "Kotlin typed recursive spend verifier-record byte copy isolation",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.lastIndex] =",
+            "mutableVerifierRecordBytes.lastIndex",
+            "Kotlin typed recursive spend verifier-record byte copy-isolation tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.lastIndex] =",
+            "returnedVerifierRecordBytes.lastIndex",
+            "Kotlin typed recursive spend verifier-record byte copy-isolation tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "this.recordBytes = Arrays.copyOf(Objects.requireNonNull(recordBytes, \"recordBytes\"), recordBytes.length);",
+            "this.recordBytes = Objects.requireNonNull(recordBytes, \"recordBytes\");",
+            "Android Java typed recursive spend verifier-record byte copy isolation",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "return Arrays.copyOf(recordBytes, recordBytes.length);",
+            "return recordBytes;",
+            "Android Java typed recursive spend verifier-record byte copy isolation",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] =",
+            "mutableVerifierRecordBytes.length;",
+            "Android Java typed recursive spend verifier-record byte copy-isolation tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] =",
+            "returnedVerifierRecordBytes.length;",
+            "Android Java typed recursive spend verifier-record byte copy-isolation tests",
+        ),
+    )
+
+    detected_messages = []
+    for target, old, new, label in replacements:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate JVM verifier-record byte copy isolation in "
+                + target
+            )
+        mutated[target] = updated
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM verifier-record byte copy-isolation drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM verifier-record byte copy-isolation drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM verifier-record byte copy-isolation drift was not detected"
+        )
+    print("negative control rejected JVM verifier-record byte copy-isolation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-mobile-bundle-summary-copy-isolation":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "public let topupAnchorNullifiers: [Data]",
+            "public var topupAnchorNullifiers: [Data]",
+            "Swift recursive spend bundle summary value-copy surface",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "mutatedTopupAnchorNullifiers.removeAll()",
+            "mutatedTopupAnchorNullifiers.reserveCapacity(0)",
+            "Swift recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "try Self.requireAccumulatorAsset(asset)",
+            "try Self.requireFixed32(initialRoot, field: \"initialRoot\")",
+            "Swift recursive spend bundle summary value-copy surface",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "AssetDefinitionAddress.decode(asset) != nil || isHexAssetDefinitionFallback(asset)",
+            "isHexAssetDefinitionFallback(asset)",
+            "Swift recursive spend bundle summary value-copy surface",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
+            "try Self.requireAccumulatorRoots(initialRoot: initialRoot, finalRoot: finalRoot)",
+            "try Self.requireAccumulatorRoots(initialRoot: finalRoot, finalRoot: initialRoot)",
+            "Swift recursive spend bundle summary value-copy surface",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "direct summary hop count zero",
+            "direct summary hop count accepted",
+            "Swift recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "direct summary hop count over limit",
+            "direct summary hop over-limit accepted",
+            "Swift recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "direct summary empty asset",
+            "direct summary asset accepted",
+            "Swift recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "direct summary current-note top-up reuse",
+            "direct summary current-note top-up accepted",
+            "Swift recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+            "canonicalSummaryAssetBytes[6] = 0x41",
+            "canonicalSummaryAssetBytes[6] = 0x11",
+            "Swift recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "requireAccumulatorRoots(initialRootBytes, finalRootBytes)",
+            "skipAccumulatorRoots(initialRootBytes, finalRootBytes)",
+            "Kotlin recursive spend bundle summary defensive-copy accessors",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "requireAccumulatorAsset(asset)",
+            "skipAccumulatorAsset(asset)",
+            "Kotlin recursive spend bundle summary defensive-copy accessors",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecs.kt",
+            "val topupAnchorNullifiers: List<ByteArray> get() = topupAnchorNullifierBytes.map { it.copyOf() }",
+            "val topupAnchorNullifiers: List<ByteArray> get() = topupAnchorNullifierBytes",
+            "Kotlin recursive spend bundle summary defensive-copy accessors",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "direct summary hop count zero",
+            "direct summary hop count accepted",
+            "Kotlin recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "direct summary empty asset",
+            "direct summary asset accepted",
+            "Kotlin recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
+            "copiedSummaryTopupAnchors[0][0] = 0x7f",
+            "copiedSummaryTopupAnchors.size",
+            "Kotlin recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "requireAccumulatorRoots(this.initialRoot, this.finalRoot);",
+            "skipAccumulatorRoots(this.initialRoot, this.finalRoot);",
+            "Android Java recursive spend bundle summary defensive-copy accessors",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "requireAccumulatorAsset(this.asset);",
+            "skipAccumulatorAsset(this.asset);",
+            "Android Java recursive spend bundle summary defensive-copy accessors",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendRequestCodecs.java",
+            "return Collections.unmodifiableList(copied);",
+            "return copied;",
+            "Android Java recursive spend bundle summary defensive-copy accessors",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "final List<byte[]> directSummaryTopupAnchors =",
+            "final List<byte[]> directSummaryAnchors =",
+            "Android Java recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "final byte[] canonicalSummaryAssetBytes = repeat((byte) 0x11, 16);",
+            "final byte[] canonicalSummaryBytes = repeat((byte) 0x11, 16);",
+            "Android Java recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "copiedSummaryTopupAnchors.get(0)[0] = 0x7f;",
+            "copiedSummaryTopupAnchors.size();",
+            "Android Java recursive spend bundle summary copy-isolation tests",
+        ),
+    )
+
+    detected_messages = []
+    for target, old, new, label in replacements:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate mobile bundle summary copy isolation in "
+                + target
+            )
+        mutated[target] = updated
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: mobile bundle summary copy-isolation drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: mobile bundle summary copy-isolation drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: mobile bundle summary copy-isolation drift was not detected"
+        )
+    print("negative control rejected mobile bundle summary copy-isolation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-js-bundle-summary-copy-isolation":
+    mutated = dict(texts)
+    replacements = (
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "get initialRoot() {\n      return Buffer.from(initialRoot);\n    }",
+            "get initialRoot() {\n      return initialRoot;\n    }",
+            "javascript/iroha_js/src/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "get initialRoot() {\n      return Buffer.from(initialRoot);\n    }",
+            "get initialRoot() {\n      return initialRoot;\n    }",
+            "javascript/iroha_js/dist/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "get topupAnchorNullifiers() {\n      return topupAnchorNullifiers.map((value) => Buffer.from(value));\n    }",
+            "get topupAnchorNullifiers() {\n      return topupAnchorNullifiers;\n    }",
+            "javascript/iroha_js/src/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "get topupAnchorNullifiers() {\n      return topupAnchorNullifiers.map((value) => Buffer.from(value));\n    }",
+            "get topupAnchorNullifiers() {\n      return topupAnchorNullifiers;\n    }",
+            "javascript/iroha_js/dist/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "get noteCommitment() {\n      return Buffer.from(commitment);\n    }",
+            "get noteCommitment() {\n      return commitment;\n    }",
+            "javascript/iroha_js/src/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "get noteCommitment() {\n      return Buffer.from(commitment);\n    }",
+            "get noteCommitment() {\n      return commitment;\n    }",
+            "javascript/iroha_js/dist/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "get recordBytes() {\n      return Buffer.from(storedRecord);\n    }",
+            "get recordBytes() {\n      return storedRecord;\n    }",
+            "javascript/iroha_js/src/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "get recordBytes() {\n      return Buffer.from(storedRecord);\n    }",
+            "get recordBytes() {\n      return storedRecord;\n    }",
+            "javascript/iroha_js/dist/crypto.js recursive spend bundle summary defensive-copy getters",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "mutatedInitialRoot[0] ^= 0xff;",
+            "mutatedInitialRoot[0] ^= 0x00;",
+            "JavaScript typed recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "mutatedTopupAnchors.length = 0;",
+            "mutatedTopupAnchors.length = mutatedTopupAnchors.length;",
+            "JavaScript typed recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "mutatedNoteCommitment[0] ^= 0xff;",
+            "mutatedNoteCommitment[0] ^= 0x00;",
+            "JavaScript typed recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0xff;",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0x00;",
+            "JavaScript typed recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0xff;",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0x00;",
+            "JavaScript typed recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "mutatedInitialRoot[0] ^= 0xff;",
+            "mutatedInitialRoot[0] ^= 0x00;",
+            "JavaScript package dist recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "mutatedTopupAnchors.length = 0;",
+            "mutatedTopupAnchors.length = mutatedTopupAnchors.length;",
+            "JavaScript package dist recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "mutatedSpendNullifier[0] ^= 0xff;",
+            "mutatedSpendNullifier[0] ^= 0x00;",
+            "JavaScript package dist recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0xff;",
+            "mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0x00;",
+            "JavaScript package dist recursive spend bundle summary copy-isolation tests",
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0xff;",
+            "returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0x00;",
+            "JavaScript package dist recursive spend bundle summary copy-isolation tests",
+        ),
+    )
+    detected_messages = []
+
+    def detect_js_bundle_summary_copy_isolation_mutation(target, old, new, label):
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate JS bundle summary copy isolation in "
+                + target
+                + ": "
+                + old
+            )
+        mutated[target] = updated
+        expected_label = f"{label} missing {old.splitlines()[0]}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JS bundle summary copy-isolation drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            return
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JS bundle summary copy-isolation drift was not detected for "
+            + expected_label
+        )
+
+    for target, old, new, label in replacements:
+        detect_js_bundle_summary_copy_isolation_mutation(target, old, new, label)
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JS bundle summary copy-isolation drift was not detected"
+        )
+    print("negative control rejected JS bundle summary copy-isolation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-redeem-lineage-preflight":
     mutated = dict(texts)
@@ -44620,9 +49961,9 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
         ),
         (
             "javascript/iroha_js/src/crypto.js",
-            "lineageVerifierRecords.length > 0;",
+            "lineageVerifierRecordsSupplied;",
             "false;",
-            "javascript/iroha_js/src/crypto.js typed recursive spend redeem lineage-record selection before witness parse missing pattern",
+            "javascript/iroha_js/src/crypto.js typed recursive spend redeem lineage-record selection before plural record parse missing pattern",
         ),
         (
             "javascript/iroha_js/dist/crypto.js",
@@ -44632,9 +49973,9 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
         ),
         (
             "javascript/iroha_js/dist/crypto.js",
-            "lineageVerifierRecords.length > 0;",
+            "lineageVerifierRecordsSupplied;",
             "false;",
-            "javascript/iroha_js/dist/crypto.js typed recursive spend redeem lineage-record selection before witness parse missing pattern",
+            "javascript/iroha_js/dist/crypto.js typed recursive spend redeem lineage-record selection before plural record parse missing pattern",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
@@ -44662,6 +50003,12 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            'verifierKeyId: "danglingRedeemLineageRecords"',
+            'verifierKeyId: "danglingRedeemLineageRecordsOptional"',
+            'JavaScript typed recursive spend redeem lineage preflight tests missing verifierKeyId: "danglingRedeemLineageRecords"',
+        ),
+        (
+            "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             "const reservedMissingRecordMasksMalformedWitness = Buffer.from([0]);",
             "const reservedMissingRecordAllowsMalformedWitness = Buffer.from([0]);",
             "JavaScript typed recursive spend redeem lineage preflight tests",
@@ -44684,10 +50031,22 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             "python/iroha_python/tests/kagemusha_test.py",
             'with pytest.raises(ValueError, match="lineage_witness is required for this bundle"):\n'
             '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
-            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),',
+            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),\n'
+            "            recipient=_recursive_spend_recipient(),\n"
+            '            public_amount="7",\n'
+            "            redeem_proof=_synthetic_kagemusha_archive(\n"
+            "                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,\n"
+            "                0x80,\n"
+            "            ),",
             'with pytest.raises(ValueError, match="lineage_witness is optional for this bundle"):\n'
             '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
-            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),',
+            '            bundle=_shared_recursive_spend_abi7_archive("append_bundle"),\n'
+            "            recipient=_recursive_spend_recipient(),\n"
+            '            public_amount="7",\n'
+            "            redeem_proof=_synthetic_kagemusha_archive(\n"
+            "                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,\n"
+            "                0x80,\n"
+            "            ),",
             "Python typed recursive spend redeem lineage preflight tests",
         ),
         (
@@ -44705,13 +50064,25 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             '        match="lineage_verifier_record is required for reserved-lineage bundles",\n'
             '    ):\n'
             '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
-            '            bundle=_shared_recursive_spend_archive("init_bundle"),',
+            '            bundle=_shared_recursive_spend_archive("init_bundle"),\n'
+            "            recipient=_recursive_spend_recipient(),\n"
+            '            public_amount="7",\n'
+            "            redeem_proof=_synthetic_kagemusha_archive(\n"
+            "                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,\n"
+            "                0x81,\n"
+            "            ),",
             'with pytest.raises(\n'
             '        ValueError,\n'
             '        match="lineage_verifier_record is optional for reserved-lineage bundles",\n'
             '    ):\n'
             '        kagemusha.KagemushaRecursiveSpendRedeemRequest(\n'
-            '            bundle=_shared_recursive_spend_archive("init_bundle"),',
+            '            bundle=_shared_recursive_spend_archive("init_bundle"),\n'
+            "            recipient=_recursive_spend_recipient(),\n"
+            '            public_amount="7",\n'
+            "            redeem_proof=_synthetic_kagemusha_archive(\n"
+            "                kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,\n"
+            "                0x81,\n"
+            "            ),",
             "Python typed recursive spend redeem lineage preflight tests",
         ),
         (
@@ -44746,25 +50117,25 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
             "python/iroha_python/tests/kagemusha_test.py",
             '"verifier_key_id": "forgedRedeemLineageRecord"',
             '"verifier_key_id": "typedRedeemLineageRecordAccepted"',
-            "Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecord",
+            'Python typed recursive spend redeem lineage-record preflight tests missing "verifier_key_id": "forgedRedeemLineageRecord"',
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
             '"verifier_key_id": "forgedRedeemLineageRecordBeforeWitness"',
             '"verifier_key_id": "typedRedeemLineageRecordBeforeWitnessAccepted"',
-            "Python typed recursive spend redeem lineage-record preflight tests missing forgedRedeemLineageRecordBeforeWitness",
+            'Python typed recursive spend redeem lineage-record preflight tests missing "verifier_key_id": "forgedRedeemLineageRecordBeforeWitness"',
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
             '"verifier_key_id": "danglingRedeemLineageRecord"',
             '"verifier_key_id": "optionalRedeemLineageRecord"',
-            "Python typed recursive spend redeem lineage-record preflight tests missing danglingRedeemLineageRecord",
+            'Python typed recursive spend redeem lineage-record preflight tests missing "verifier_key_id": "danglingRedeemLineageRecord"',
         ),
         (
             "python/iroha_python/tests/kagemusha_test.py",
             '"verifier_key_id": "danglingRedeemLineageRecords"',
             '"verifier_key_id": "optionalRedeemLineageRecords"',
-            "Python typed recursive spend redeem lineage-record preflight tests missing danglingRedeemLineageRecords",
+            'Python typed recursive spend redeem lineage-record preflight tests missing "verifier_key_id": "danglingRedeemLineageRecords"',
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -44816,6 +50187,12 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
         ),
         (
             "javascript/iroha_js/test/package_dist.test.js",
+            'verifierKeyId: "distDanglingRedeemLineageRecords"',
+            'verifierKeyId: "distDanglingRedeemLineageRecordsOptional"',
+            'JavaScript package dist recursive spend redeem lineage preflight coverage missing verifierKeyId: "distDanglingRedeemLineageRecords"',
+        ),
+        (
+            "javascript/iroha_js/test/package_dist.test.js",
             "const reservedMissingRecordMasksMalformedWitnessPackageDist = Buffer.from([0]);",
             "const reservedMissingRecordAllowsMalformedWitnessPackageDist = Buffer.from([0]);",
             "JavaScript package dist recursive spend redeem lineage preflight coverage",
@@ -44853,8 +50230,20 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
         else:
             marker = old.splitlines()[0]
             if target == "python/iroha_python/tests/kagemusha_test.py":
-                if 'match="lineage_witness is required for this bundle"' in old:
-                    marker = 'match="lineage_witness is required for this bundle"'
+                if old.startswith(
+                    'with pytest.raises(ValueError, match="lineage_witness is required for this bundle"):'
+                ):
+                    marker = old.splitlines()[0]
+                elif old.startswith('semantic_missing_witness_redeem_proof = b""'):
+                    marker = 'semantic_missing_witness_redeem_proof = b""'
+                elif old.startswith(
+                    'with pytest.raises(\n'
+                    '        ValueError,\n'
+                    '        match="lineage_verifier_record is required for reserved-lineage bundles",'
+                ):
+                    marker = old.splitlines()[0]
+                elif old.startswith('reserved_missing_record_redeem_proof = b""'):
+                    marker = 'reserved_missing_record_redeem_proof = b""'
                 elif (
                     'match="lineage_verifier_record is required for reserved-lineage bundles"'
                     in old
@@ -44869,32 +50258,34 @@ if mode == "--negative-control-sdk-redeem-lineage-preflight":
                 marker = f"block start {marker}"
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate redeem lineage preflight in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_redeem_lineage_preflight_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK redeem lineage preflight drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_redeem_lineage_preflight_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "SDK redeem lineage preflight drift",
+                )
             )
-        print("negative control rejected SDK redeem lineage preflight drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK redeem lineage preflight drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK redeem lineage preflight drift was not detected"
+        )
+    print("negative control rejected SDK redeem lineage preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-redeem-lineage-witness-shape":
     mutated = dict(texts)
@@ -45013,32 +50404,41 @@ if mode == "--negative-control-sdk-redeem-lineage-witness-shape":
             marker = "0x7d"
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate redeem lineage witness shape in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_redeem_lineage_witness_shape_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK redeem lineage witness shape drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK redeem lineage witness shape drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK redeem lineage witness shape drift was not detected"
-    )
+        expected_label = expected_redeem_lineage_witness_shape_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK redeem lineage witness shape drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK redeem lineage witness shape drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK redeem lineage witness shape drift was not detected"
+        )
+    print("negative control rejected SDK redeem lineage witness shape drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
     mutated = dict(texts)
@@ -45214,32 +50614,41 @@ if mode == "--negative-control-sdk-init-lineage-key-auto-preflight":
                 marker = f"final String {marker} ="
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate init lineage key auto preflight in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_init_lineage_key_auto_preflight_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK init lineage key auto preflight drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK init lineage key auto preflight drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK init lineage key auto preflight drift was not detected"
-    )
+        expected_label = expected_init_lineage_key_auto_preflight_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK init lineage key auto preflight drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK init lineage key auto preflight drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK init lineage key auto preflight drift was not detected"
+        )
+    print("negative control rejected SDK init lineage key auto preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-append-lineage-key-material-selection":
     mutated = dict(texts)
@@ -45400,32 +50809,41 @@ if mode == "--negative-control-sdk-append-lineage-key-material-selection":
                 marker = marker.rstrip(",")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate append lineage key material selection in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_append_lineage_key_material_selection_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK append lineage key material selection drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK append lineage key material selection drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK append lineage key material selection drift was not detected"
-    )
+        expected_label = expected_append_lineage_key_material_selection_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append lineage key material selection drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append lineage key material selection drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK append lineage key material selection drift was not detected"
+        )
+    print("negative control rejected SDK append lineage key material selection drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-append-output-selection-preflight":
     mutated = dict(texts)
@@ -45581,32 +50999,41 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
                 marker = marker.rstrip(",")
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate append output selection preflight in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_append_output_selection_preflight_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK append output selection preflight drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK append output selection preflight drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK append output selection preflight drift was not detected"
-    )
+        expected_label = expected_append_output_selection_preflight_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append output selection preflight drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append output selection preflight drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK append output selection preflight drift was not detected"
+        )
+    print("negative control rejected SDK append output selection preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
     mutated = dict(texts)
@@ -45781,15 +51208,33 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
     def expected_append_previous_proof_opening_selection_label(old, label):
         return f"{label} missing {old.splitlines()[0]}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate append previous proof opening selection in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_append_previous_proof_opening_selection_label(old, label))
+        expected_label = expected_append_previous_proof_opening_selection_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append previous proof opening selection drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append previous proof opening selection drift was not detected for "
+            + expected_label
+        )
     block_replacements = (
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -46037,20 +51482,20 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
         ),
     )
     for target, block_start_marker, block_end_marker, old, new, label in block_replacements:
-        original = mutated[target]
-        block_start = original.find(block_start_marker)
+        current = mutated[target]
+        block_start = current.find(block_start_marker)
         if block_start < 0:
             raise SystemExit(
                 f"negative control failed: unable to find previous-proof Pallas block start in {target}"
             )
-        block_end = original.find(block_end_marker, block_start + len(block_start_marker))
+        block_end = current.find(block_end_marker, block_start + len(block_start_marker))
         if block_end < 0 and target.endswith("KagemushaRecursiveSpendRequestCodecsTest.kt"):
-            block_end = original.find(
+            block_end = current.find(
                 "        for ((archive, expectedMessage) in malformedPreviousOpenArchives) {",
                 block_start + len(block_start_marker),
             )
         if block_end < 0 and target.endswith("KagemushaRecursiveSpendProverTest.java"):
-            block_end = original.find(
+            block_end = current.find(
                 "    for (final Object[] malformed : malformedPreviousOpenArchives) {",
                 block_start + len(block_start_marker),
             )
@@ -46058,31 +51503,39 @@ if mode == "--negative-control-sdk-append-previous-proof-opening-selection":
             raise SystemExit(
                 f"negative control failed: unable to find previous-proof Pallas block end in {target}"
             )
-        block = original[block_start:block_end]
+        block = current[block_start:block_end]
         updated_block = block.replace(old, new, 1)
         if updated_block == block:
             raise SystemExit(
                 f"negative control failed: unable to mutate previous-proof Pallas diagnostic in {target}"
             )
-        mutated[target] = original[:block_start] + updated_block + original[block_end:]
-        expected_labels.append(label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK append previous proof opening selection drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK append previous proof opening selection drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK append previous proof opening selection drift was not detected"
-    )
+        mutated[target] = current[:block_start] + updated_block + current[block_end:]
+        expected_label = label
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append previous proof opening selection drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append previous proof opening selection drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK append previous proof opening selection drift was not detected"
+        )
+    print("negative control rejected SDK append previous proof opening selection drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-append-previous-lineage-record-preflight":
     mutated = dict(texts)
@@ -46275,32 +51728,41 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-preflight":
             marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate append previous lineage record preflight in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_append_previous_lineage_record_preflight_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK append previous lineage record preflight drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK append previous lineage record preflight drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK append previous lineage record preflight drift was not detected"
-    )
+        expected_label = expected_append_previous_lineage_record_preflight_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append previous lineage record preflight drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append previous lineage record preflight drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK append previous lineage record preflight drift was not detected"
+        )
+    print("negative control rejected SDK append previous lineage record preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-append-previous-lineage-record-parse-preflight":
     mutated = dict(texts)
@@ -46374,32 +51836,41 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-parse-prefligh
             marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate append previous lineage record parse preflight in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_append_previous_lineage_record_parse_preflight_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK append previous lineage record parse preflight drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK append previous lineage record parse preflight drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK append previous lineage record parse preflight drift was not detected"
-    )
+        expected_label = expected_append_previous_lineage_record_parse_preflight_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append previous lineage record parse preflight drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append previous lineage record parse preflight drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK append previous lineage record parse preflight drift was not detected"
+        )
+    print("negative control rejected SDK append previous lineage record parse preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-append-previous-lineage-record-selection":
     mutated = dict(texts)
@@ -46508,7 +51979,7 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-selection":
             marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in replacements:
         replace_all = (
             target
@@ -46518,30 +51989,39 @@ if mode == "--negative-control-sdk-append-previous-lineage-record-selection":
             )
             and old == "previousLineageVerifierRecord is only valid for lineage previous bundles"
         )
-        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new) if replace_all else current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate append previous lineage record selection in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_append_previous_lineage_record_selection_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK append previous lineage record selection drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK append previous lineage record selection drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: SDK append previous lineage record selection drift was not detected"
-    )
+        expected_label = expected_append_previous_lineage_record_selection_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK append previous lineage record selection drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK append previous lineage record selection drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK append previous lineage record selection drift was not detected"
+        )
+    print("negative control rejected SDK append previous lineage record selection drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-sdk-readme-availability-surface":
     mutated = dict(texts)
@@ -46805,28 +52285,30 @@ if mode == "--negative-control-cross-sdk-helper-bodies":
             marker = old
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {target}")
         mutated[target] = updated
-        expected_labels.append(expected_cross_sdk_helper_body_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: helper body drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_cross_sdk_helper_body_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "cross-SDK helper body drift",
+                )
             )
-        print("negative control rejected cross-SDK helper body drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: cross-SDK helper body drift was not detected")
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit("negative control failed: cross-SDK helper body drift was not detected")
+    print("negative control rejected cross-SDK helper body drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
     mutated = dict(texts)
@@ -46892,28 +52374,32 @@ if mode == "--negative-control-cross-sdk-preferred-mode-fallback":
             "C# preferred Kagemusha mode fallback policy",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {target}")
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old.splitlines()[0].strip()}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: preferred-mode fallback drift was not detected for "
-                + ", ".join(missing)
+        expected_label = f"{label} missing {old.splitlines()[0].strip()}"
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "cross-SDK preferred-mode fallback drift",
+                )
             )
-        print("negative control rejected cross-SDK preferred-mode fallback drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: cross-SDK preferred-mode fallback drift was not detected")
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: cross-SDK preferred-mode fallback drift was not detected"
+        )
+    print("negative control rejected cross-SDK preferred-mode fallback drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":
     mutated = dict(texts)
@@ -46928,31 +52414,40 @@ if mode == "--negative-control-jvm-offline-note-v2-decoder-placeholder":
             "Android Java Offline Note V2 decoder placeholder removal",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, label in mutations:
-        if stale_placeholder in mutated[target]:
+        current = mutated[target]
+        if stale_placeholder in current:
             raise SystemExit(f"negative control failed: stale decoder placeholder already present in {target}")
-        mutated[target] += stale_placeholder
-        expected_labels.append(
+        mutated[target] = current + stale_placeholder
+        expected_label = (
             f"{label} contains forbidden pattern Offline Note V2 decoding is not supported yet|UnsupportedOperationException"
         )
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: Offline Note V2 decoder placeholder drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM Offline Note V2 decoder placeholder drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM Offline Note V2 decoder placeholder drift was not detected"
-    )
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM Offline Note V2 decoder placeholder drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM Offline Note V2 decoder placeholder drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM Offline Note V2 decoder placeholder drift was not detected"
+        )
+    print("negative control rejected JVM Offline Note V2 decoder placeholder drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":
     mutated = dict(texts)
@@ -46970,30 +52465,39 @@ if mode == "--negative-control-jvm-offline-note-v2-instruction-wrapper":
             "Android Java Offline Note V2 instruction wrapper surface",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM Offline Note V2 instruction wrapper drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected"
-    )
+        expected_label = f"{label} missing {old}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM Offline Note V2 instruction wrapper drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM Offline Note V2 instruction wrapper drift was not detected"
+        )
+    print("negative control rejected JVM Offline Note V2 instruction wrapper drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-offline-note-v2-instruction-decoder":
     mutated = dict(texts)
@@ -47011,30 +52515,39 @@ if mode == "--negative-control-jvm-offline-note-v2-instruction-decoder":
             "Android Java Offline Note V2 instruction decoder surface",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
         mutated[target] = updated
-        expected_labels.append(f"{label} missing {old}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM Offline Note V2 instruction decoder drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected"
-    )
+        expected_label = f"{label} missing {old}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM Offline Note V2 instruction decoder drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM Offline Note V2 instruction decoder drift was not detected"
+        )
+    print("negative control rejected JVM Offline Note V2 instruction decoder drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names":
     mutated = dict(texts)
@@ -47073,30 +52586,39 @@ if mode == "--negative-control-offline-note-v2-canonical-instruction-wire-names"
             marker = old
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
         mutated[target] = updated
-        expected_labels.append(expected_offline_note_v2_canonical_instruction_wire_name_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected Offline Note V2 canonical instruction wire-name drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected"
-    )
+        expected_label = expected_offline_note_v2_canonical_instruction_wire_name_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Offline Note V2 canonical instruction wire-name drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Offline Note V2 canonical instruction wire-name drift was not detected"
+        )
+    print("negative control rejected Offline Note V2 canonical instruction wire-name drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-offline-note-v2-decoder-placeholder":
     mutated = dict(texts)
@@ -47144,31 +52666,40 @@ if mode == "--negative-control-swift-offline-note-v2-instruction-decoder":
             "Swift Offline Note V2 audit instruction decoder API",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
         mutated[target] = updated
         marker = old.replace("(", r"\(").replace(")", r"\)")
-        expected_labels.append(f"{label} missing pattern {marker}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected Swift Offline Note V2 instruction decoder drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected"
-    )
+        expected_label = f"{label} missing pattern {marker}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: Swift Offline Note V2 instruction decoder drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Swift Offline Note V2 instruction decoder drift was not detected"
+        )
+    print("negative control rejected Swift Offline Note V2 instruction decoder drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-swift-offline-proof-platform-exactness":
     mutated = dict(texts)
@@ -47259,29 +52790,39 @@ if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":
         r"matches!\(\s*err,\s*iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE\s*\|\s*"
         r"iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE\s*\)\s*\}"
     )
-    expected_labels = []
+    detected_messages = []
     for target, label in mutations:
         original = read(target)
         mutated = original.replace(old, new, 1)
         if mutated == original:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
         mutated_texts[target] = mutated
-        expected_labels.append(f"{label} missing {classifier_marker}")
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: recursive compact unavailable classifier drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected Rust recursive compact unavailable classifier drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Rust recursive compact unavailable classifier drift was not detected")
+        expected_label = f"{label} missing {classifier_marker}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: recursive compact unavailable classifier drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated_texts[target] = original
+        raise SystemExit(
+            "negative control failed: recursive compact unavailable classifier drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Rust recursive compact unavailable classifier drift was not detected"
+        )
+    print("negative control rejected Rust recursive compact unavailable classifier drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-rust-kagemusha-hop-public-instance-shape":
     mutated_texts = dict(texts)
@@ -47383,27 +52924,39 @@ if mode == "--negative-control-sdk-recursive-compact-unavailable-helper":
             marker = "def is_kagemusha_recursive_compact_unavailable"
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        mutated[target] = mutated[target].replace(old, new, 1)
-        if mutated[target] == texts[target]:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {label}")
-        expected_labels.append(expected_recursive_compact_unavailable_helper_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: SDK recursive compact unavailable helper drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected SDK recursive compact unavailable helper drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: SDK recursive compact unavailable helper drift was not detected")
+        mutated[target] = updated
+        expected_label = expected_recursive_compact_unavailable_helper_label(target, old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: SDK recursive compact unavailable helper drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = current
+        raise SystemExit(
+            "negative control failed: SDK recursive compact unavailable helper drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: SDK recursive compact unavailable helper drift was not detected"
+        )
+    print("negative control rejected SDK recursive compact unavailable helper drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-recursive-compact-verifier-surface":
     mutated = dict(texts)
@@ -47553,14 +53106,10 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
         if label == "Rust recursive compact C package-backed Pallas prover":
             marker = (
                 r"pattern connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
-                r"[\s\S]*prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts"
-                r"\(\s*&record_bundle,\s*&pallas_open_envelopes_archive,\s*&key_artifacts,"
             )
         elif label == "Rust recursive compact JNI package-backed Pallas prover":
             marker = (
                 r"pattern fn\s+java_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
-                r"[\s\S]*prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts"
-                r"\(\s*&record_bundle,\s*pallas_open_envelopes_archive,\s*&key_artifacts,"
             )
         elif target == "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java":
             marker = (
@@ -47577,7 +53126,17 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
             marker = old
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    def replace_occurrence(text, old, new, occurrence):
+        offset = -1
+        search_from = 0
+        for _ in range(occurrence):
+            offset = text.find(old, search_from)
+            if offset < 0:
+                return text
+            search_from = offset + len(old)
+        return text[:offset] + new + text[offset + len(old):]
+
+    detected_messages = []
     for target, old, new, label in mutations:
         replace_all = label in (
             "Rust recursive compact verifier contract",
@@ -47588,28 +53147,39 @@ if mode == "--negative-control-recursive-compact-verifier-surface":
             "Android Java recursive compact wrapper",
             "C# recursive compact wrapper",
         )
-        updated = mutated[target].replace(old, new) if replace_all else mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        current = mutated[target]
+        occurrence = (
+            2
+            if label == "Rust recursive compact JNI package-backed Pallas prover"
+            else 1
+        )
+        updated = (
+            current.replace(old, new)
+            if replace_all
+            else replace_occurrence(current, old, new, occurrence)
+        )
+        if updated == current:
             raise SystemExit(f"negative control failed: unable to mutate {target}")
         mutated[target] = updated
-        expected_labels.append(expected_recursive_compact_verifier_surface_label(target, old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: recursive compact verifier drift was not detected for "
-                + ", ".join(missing)
+        expected_label = expected_recursive_compact_verifier_surface_label(target, old, label)
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    (expected_label,),
+                    "ABI-7 recursive compact verifier surface drift",
+                )
             )
-        print("negative control rejected ABI-7 recursive compact verifier surface drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: ABI-7 recursive compact verifier surface drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: ABI-7 recursive compact verifier surface drift was not detected"
+        )
+    print("negative control rejected ABI-7 recursive compact verifier surface drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-recursive-compact-key-package-arity":
     mutated = dict(texts)
@@ -47697,29 +53267,30 @@ public static class StaleRecursiveCompactKeyPackageArityFixture
             ),
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, addition, labels in stale_overloads:
-        if addition in mutated[target]:
+        current = mutated[target]
+        if addition in current:
             raise SystemExit(f"negative control failed: stale key-package arity fixture already present in {target}")
-        mutated[target] += addition
-        expected_labels.extend(labels)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: recursive compact key-package arity drift was not detected for "
-                + ", ".join(missing)
+        mutated[target] = current + addition
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated,
+                    labels,
+                    "ABI-7 recursive compact key-package arity drift",
+                )
             )
-        print("negative control rejected ABI-7 recursive compact key-package arity drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: ABI-7 recursive compact key-package arity drift was not detected"
-    )
+        finally:
+            mutated[target] = current
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: ABI-7 recursive compact key-package arity drift was not detected"
+        )
+    print("negative control rejected ABI-7 recursive compact key-package arity drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-python-recursive-compact-probe-arity":
     mutated = dict(texts)
@@ -48772,32 +54343,41 @@ if mode == "--negative-control-recursive-spend-compact-projection-surface":
             "Android Java recursive compact wrapper",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated_texts[target].replace(old, new, 1)
-        if updated == mutated_texts[target]:
+        current = mutated_texts[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 f"negative control failed: unable to mutate recursive spend compact projection surface in {target}"
             )
         mutated_texts[target] = updated
-        expected_labels.append(f"{label} missing {old}")
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: recursive spend compact projection surface drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected recursive spend compact projection surface drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: recursive spend compact projection surface drift was not detected"
-    )
+        expected_label = f"{label} missing {old}"
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: recursive spend compact projection surface drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated_texts[target] = current
+        raise SystemExit(
+            "negative control failed: recursive spend compact projection surface drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: recursive spend compact projection surface drift was not detected"
+        )
+    print("negative control rejected recursive spend compact projection surface drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-compact-projection-block-height-validation":
     mutated_texts = dict(texts)
@@ -48873,32 +54453,42 @@ if mode == "--negative-control-js-source-compact-projection-invalid-archives":
             ),
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for old, new, labels in mutations:
-        updated = mutated_texts[target].replace(old, new, 1)
-        if updated == mutated_texts[target]:
+        current = mutated_texts[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 "negative control failed: unable to mutate JavaScript source compact projection invalid archive coverage"
             )
         mutated_texts[target] = updated
-        expected_labels.extend(labels)
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JavaScript source compact projection invalid archive drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JavaScript source compact projection invalid archive drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JavaScript source compact projection invalid archive drift was not detected"
-    )
+        expected_labels = labels
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            missing = [label for label in expected_labels if label not in message]
+            if missing:
+                raise SystemExit(
+                    "negative control failed: JavaScript source compact projection invalid archive drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.extend(first_lines_for_labels(message, expected_labels))
+            continue
+        finally:
+            mutated_texts[target] = current
+        raise SystemExit(
+            "negative control failed: JavaScript source compact projection invalid archive drift was not detected for "
+            + ", ".join(expected_labels)
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JavaScript source compact projection invalid archive drift was not detected"
+        )
+    print("negative control rejected JavaScript source compact projection invalid archive drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-package-dist-compact-projection-block-height-vectors":
     mutated_texts = dict(texts)
@@ -49068,8 +54658,8 @@ if mode == "--negative-control-python-compact-projection-hardening":
             missing = [label for label in expected_labels if label not in message]
             if missing:
                 raise SystemExit(
-                    "negative control failed: Python compact projection hardening drift was not detected for "
-                    + ", ".join(missing)
+                    "negative control failed: Python compact projection hardening drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
                 )
             detected_messages.extend(first_lines_for_labels(message, expected_labels))
             continue
@@ -49079,6 +54669,8 @@ if mode == "--negative-control-python-compact-projection-hardening":
         )
     if len(all_expected_labels) != len(set(all_expected_labels)):
         raise SystemExit("negative control failed: duplicate Python compact projection hardening labels")
+    if not detected_messages:
+        raise SystemExit("negative control failed: Python compact projection hardening drift was not detected")
     print("negative control rejected Python compact projection hardening drift")
     for detected_message in detected_messages:
         print(detected_message)
@@ -49218,38 +54810,44 @@ if mode == "--negative-control-jvm-compact-projection-block-height-vectors":
             ),
         ),
     }
-    expected_labels = []
+    detected_messages = []
     for target, replacements in mutation_cases.items():
-        mutated = mutated_texts[target]
         for old, new, expected_label in replacements:
-            updated = mutated.replace(old, new, 1)
-            if updated == mutated:
+            current = mutated_texts[target]
+            updated = current.replace(old, new, 1)
+            if updated == current:
                 raise SystemExit(
                     "negative control failed: unable to mutate JVM/Android compact projection blockHeight vector "
                     + expected_label
                     + " in "
                     + target
                 )
-            mutated = updated
-            expected_labels.append(expected_label)
-        mutated_texts[target] = mutated
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+            mutated_texts[target] = updated
+            try:
+                run_checks(mutated_texts)
+            except ParityError as error:
+                message = str(error)
+                if expected_label not in message:
+                    raise SystemExit(
+                        "negative control failed: JVM/Android compact projection blockHeight vector drift was rejected "
+                        "for the wrong reason: " + message.splitlines()[0]
+                    )
+                detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+                continue
+            finally:
+                mutated_texts[target] = current
             raise SystemExit(
                 "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected for "
-                + ", ".join(missing)
+                + expected_label
             )
-        print("negative control rejected JVM/Android compact projection blockHeight vector drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected"
-    )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM/Android compact projection blockHeight vector drift was not detected"
+        )
+    print("negative control rejected JVM/Android compact projection blockHeight vector drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-android-compact-projection-archive-preflight":
     mutated_texts = dict(texts)
@@ -49279,10 +54877,11 @@ if mode == "--negative-control-jvm-android-compact-projection-archive-preflight"
             "Android Java compact projection archive preflight test vectors missing verifierRecordArchive must not exceed 67108864 bytes",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, expected_label in mutations:
-        updated = mutated_texts[target].replace(old, new, 1)
-        if updated == mutated_texts[target]:
+        current = mutated_texts[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
             raise SystemExit(
                 "negative control failed: unable to mutate JVM/Android compact projection archive preflight "
                 + expected_label
@@ -49290,24 +54889,31 @@ if mode == "--negative-control-jvm-android-compact-projection-archive-preflight"
                 + target
             )
         mutated_texts[target] = updated
-        expected_labels.append(expected_label)
-    try:
-        run_checks(mutated_texts)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: JVM/Android compact projection archive preflight drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected JVM/Android compact projection archive preflight drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: JVM/Android compact projection archive preflight drift was not detected"
-    )
+        try:
+            run_checks(mutated_texts)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: JVM/Android compact projection archive preflight drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated_texts[target] = current
+        raise SystemExit(
+            "negative control failed: JVM/Android compact projection archive preflight drift was not detected for "
+            + expected_label
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: JVM/Android compact projection archive preflight drift was not detected"
+        )
+    print("negative control rejected JVM/Android compact projection archive preflight drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-jvm-android-compact-projection-native-output-guards":
     mutated_texts = dict(texts)
@@ -50435,6 +56041,616 @@ if mode == "--negative-control-account-alias-resolution-exactness":
         raise SystemExit(0)
     raise SystemExit("negative control failed: account alias resolution exactness drift was not detected")
 
+if mode == "--negative-control-jvm-uaid-portfolio-query-selector-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/UaidPortfolioQuery.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/UaidPortfolioQuery.kt"
+    java_transport_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    java_literal_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'throw new IllegalArgumentException(field + " must not contain surrounding whitespace");',
+            'return trimmed;',
+        )
+        .replace('params.put("asset", asset);', 'params.put("asset", asset.trim());')
+        .replace('params.put("scope", scope);', 'params.put("scope", scope.trim());')
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'assetId?.let { put("asset_id", requireExactNonEmpty(it, "assetId")) }',
+            'assetId?.trim()?.takeIf { it.isNotEmpty() }?.let { put("asset_id", it) }',
+        )
+        .replace(
+            'require(value.trim() == value) { "$field must not contain surrounding whitespace" }',
+            'return value.trim()',
+        )
+    )
+    mutated_texts[java_transport_test] = (
+        mutated_texts[java_transport_test]
+        .replace(
+            "uaidPortfolioQueryRejectsPaddedSelectorsBeforeDispatch",
+            "uaidPortfolioQueryAllowsPaddedSelectors",
+        )
+        .replace(
+            "Padded asset selector must fail before sending an HTTP request",
+            "Padded asset selector may be normalized",
+        )
+        .replace(
+            "Padded scope selector must fail before sending an HTTP request",
+            "Padded scope selector may be normalized",
+        )
+    )
+    mutated_texts[java_literal_test] = (
+        mutated_texts[java_literal_test]
+        .replace('UaidPortfolioQuery.builder().setAsset(" " + asset)', 'UaidPortfolioQuery.builder().setAsset(asset)')
+        .replace('UaidPortfolioQuery.builder().setAsset(asset + " ")', 'UaidPortfolioQuery.builder().setAsset(asset)')
+        .replace('UaidPortfolioQuery.builder().setAsset(asset).setScope(" global")', 'UaidPortfolioQuery.builder().setAsset(asset).setScope("global")')
+    )
+    mutated_texts[kotlin_test] = (
+        mutated_texts[kotlin_test]
+        .replace(
+            "uaidPortfolioQueryRejectsPaddedAssetIdBeforeDispatch",
+            "uaidPortfolioQueryAllowsPaddedAssetId",
+        )
+        .replace(
+            "assetId must not contain surrounding whitespace",
+            "assetId may be normalized",
+        )
+        .replace("assetId must not be blank", "assetId may be omitted")
+        .replace("assertEquals(requestCount, executor.requestCount)", "assertTrue(executor.requestCount >= requestCount)")
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate JVM UAID portfolio query selector exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java UAID portfolio query selector exactness",
+            "Android Java UAID portfolio query asset no-trim dispatch",
+            "Android Java UAID portfolio query scope no-trim dispatch",
+            "Kotlin UAID portfolio query selector exactness",
+            "Kotlin UAID portfolio query selector whitespace rejection",
+            "Android Java UAID portfolio query selector exactness tests",
+            "Android Java UAID portfolio direct selector exactness tests",
+            "Kotlin UAID portfolio query selector exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM UAID portfolio query selector exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM UAID portfolio query selector exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM UAID portfolio query selector exactness drift was not detected")
+
+if mode == "--negative-control-jvm-uaid-path-literal-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/nexus/UaidLiteral.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/nexus/UaidLiteral.kt"
+    java_transport_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            "final String literal = requireExactNonEmpty(value, context);",
+            'final String literal = Objects.requireNonNull(value, context + " must not be null").trim();',
+        )
+        .replace(
+            'if (!hexPortion.trim().equals(hexPortion)) {\n      throw new IllegalArgumentException(context + " must not contain surrounding whitespace");\n    }',
+            "final String normalizedHexPortion = hexPortion.trim();",
+        )
+        .replace("hexPortion.length() != 64", "normalizedHexPortion.length() != 64")
+        .replace("!hexPortion.matches", "!normalizedHexPortion.matches")
+        .replace("hexPortion.charAt(hexPortion.length() - 1)", "normalizedHexPortion.charAt(normalizedHexPortion.length() - 1)")
+        .replace("hexPortion.toLowerCase(Locale.ROOT)", "normalizedHexPortion.toLowerCase(Locale.ROOT)")
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace("val literal = requireExactNonEmpty(value, context)", "val literal = value.trim()")
+        .replace(
+            'require(hexPortion.trim() == hexPortion) { "$context must not contain surrounding whitespace" }',
+            "val normalizedHexPortion = hexPortion.trim()",
+        )
+        .replace("hexPortion.length == 64", "normalizedHexPortion.length == 64")
+        .replace("hexPortion.matches", "normalizedHexPortion.matches")
+        .replace("val lastChar = hexPortion.last()", "val lastChar = normalizedHexPortion.last()")
+        .replace('return "uaid:" + hexPortion.lowercase()', 'return "uaid:" + normalizedHexPortion.lowercase()')
+    )
+    mutated_texts[java_transport_test] = (
+        mutated_texts[java_transport_test]
+        .replace(
+            "uaidPathLiteralRejectsPaddedInputBeforeDispatch",
+            "uaidPathLiteralAllowsPaddedInput",
+        )
+        .replace(
+            "UAID path literal must reject surrounding whitespace before dispatch",
+            "UAID path literal may normalize whitespace",
+        )
+        .replace(
+            "Padded UAID path literal must fail before sending an HTTP request",
+            "Padded UAID path literal may be normalized",
+        )
+    )
+    mutated_texts[kotlin_test] = (
+        mutated_texts[kotlin_test]
+        .replace(
+            "uaidPathLiteralRejectsPaddedInputBeforeDispatch",
+            "uaidPathLiteralAllowsPaddedInput",
+        )
+        .replace(
+            "uaid portfolio must not contain surrounding whitespace",
+            "uaid portfolio may normalize whitespace",
+        )
+        .replace(
+            'for (uaid in listOf(" uaid:$hex", "uaid:$hex ", "uaid: $hex"))',
+            'for (uaid in listOf("uaid:$hex"))',
+        )
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate JVM UAID path literal exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java UAID path literal exactness",
+            "Android Java UAID path hex literal whitespace rejection",
+            "Kotlin UAID path literal exactness",
+            "Kotlin UAID path hex literal whitespace rejection",
+            "Android Java UAID path literal exactness tests",
+            "Kotlin UAID path literal exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM UAID path literal exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM UAID path literal exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM UAID path literal exactness drift was not detected")
+
+if mode == "--negative-control-non-csharp-uaid-path-literal-exactness":
+    mutated_texts = dict(texts)
+    js_targets = (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    )
+    js_exact_block = """if (literal.slice(0, 5).toLowerCase() === "uaid:") {
+    hexPortion = literal.slice(5);
+  } else {
+    hexPortion = literal;
+  }
+  if (hexPortion.trim() !== hexPortion) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain surrounding whitespace`,
+      context,
+    );
+  }"""
+    js_trim_block = """if (trimmed.slice(0, 5).toLowerCase() === "uaid:") {
+    hexPortion = trimmed.slice(5).trim();
+  } else {
+    hexPortion = trimmed;
+  }"""
+    for target in js_targets:
+        updated = (
+            mutated_texts[target]
+            .replace(
+                "const literal = requireExactNonEmptyString(value, context);",
+                "const literal = requireNonEmptyString(value, context);\n  const trimmed = literal.trim();",
+            )
+            .replace(js_exact_block, js_trim_block)
+        )
+        if updated == mutated_texts[target]:
+            raise SystemExit(f"negative control failed: unable to mutate JavaScript UAID path exactness in {target}")
+        mutated_texts[target] = updated
+
+    js_test = "javascript/iroha_js/test/toriiClient.test.js"
+    mutated_texts[js_test] = (
+        mutated_texts[js_test]
+        .replace(
+            "getUaidPortfolio rejects padded UAID path literals before dispatch",
+            "getUaidPortfolio allows padded UAID path literals",
+        )
+        .replace(
+            "fetch should not run for padded UAID path literals",
+            "fetch may run for normalized UAID path literals",
+        )
+        .replace(
+            "getUaidPortfolio\\.uaid must not contain surrounding whitespace",
+            "getUaidPortfolio\\.uaid may normalize whitespace",
+        )
+    )
+    js_dist_test = "javascript/iroha_js/test/package_dist.test.js"
+    mutated_texts[js_dist_test] = (
+        mutated_texts[js_dist_test]
+        .replace(
+            "package dist UAID path helpers reject padded literals before dispatch",
+            "package dist UAID path helpers allow padded literals",
+        )
+        .replace(
+            "fetch must not run for padded UAID path literals",
+            "fetch may run for normalized UAID path literals",
+        )
+        .replace(
+            "getUaidPortfolio\\.uaid must not contain surrounding whitespace",
+            "getUaidPortfolio\\.uaid may normalize whitespace",
+        )
+    )
+    js_script = "ci/check_kagemusha_recursive_spend_js_sdk.sh"
+    text_overrides[js_script] = (
+        read(js_script)
+        .replace(
+            "getUaidPortfolio rejects padded UAID path literals before dispatch",
+            "getUaidPortfolio allows padded UAID path literals",
+        )
+        .replace(
+            "package dist UAID path helpers reject padded literals before dispatch",
+            "package dist UAID path helpers allow padded literals",
+        )
+    )
+
+    python_source = "python/iroha_torii_client/client.py"
+    mutated_texts[python_source] = (
+        mutated_texts[python_source]
+        .replace(
+            "literal = value\n        stripped = literal.strip()",
+            "literal = value.strip()\n        stripped = literal",
+        )
+        .replace(
+            "        if stripped != literal:\n            raise ValueError(f\"{context} must not contain surrounding whitespace\")\n",
+            "",
+        )
+        .replace(
+            "normalized = hex_portion\n        if normalized.strip() != normalized:\n            raise ValueError(f\"{context} must not contain surrounding whitespace\")",
+            "normalized = hex_portion.strip()",
+        )
+    )
+    python_test = "python/iroha_torii_client/tests/test_client.py"
+    mutated_texts[python_test] = (
+        mutated_texts[python_test]
+        .replace(
+            "test_get_uaid_portfolio_rejects_padded_literal_before_dispatch",
+            "test_get_uaid_portfolio_allows_padded_literal",
+        )
+        .replace(
+            "uaid must not contain surrounding whitespace",
+            "uaid may normalize whitespace",
+        )
+    )
+    python_script = "ci/check_kagemusha_recursive_spend_python_sdk.sh"
+    text_overrides[python_script] = read(python_script).replace(
+        "test_get_uaid_portfolio_rejects_padded_literal_before_dispatch",
+        "test_get_uaid_portfolio_allows_padded_literal",
+    )
+
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    mutated_texts[swift_source] = (
+        mutated_texts[swift_source]
+        .replace(
+            'let exact = try requireToriiExactNonEmptyQueryValue(literal, field: "uaid")',
+            "let exact = literal.trimmingCharacters(in: .whitespacesAndNewlines)",
+        )
+        .replace(
+            "rawHex = String(exact.dropFirst(5))",
+            "rawHex = String(exact.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)",
+        )
+        .replace(
+            '        guard rawHex.trimmingCharacters(in: .whitespacesAndNewlines) == rawHex else {\n'
+            '            throw ToriiClientError.invalidPayload("uaid must not contain surrounding whitespace.")\n'
+            "        }\n",
+            "",
+        )
+    )
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    mutated_texts[swift_test] = (
+        mutated_texts[swift_test]
+        .replace(
+            "testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork",
+            "testGetUaidPortfolioAllowsPaddedLiteral",
+        )
+        .replace(
+            "getUaidPortfolio should validate UAID before dispatch",
+            "getUaidPortfolio may normalize UAID before dispatch",
+        )
+        .replace(
+            "uaid must not contain surrounding whitespace",
+            "uaid may normalize whitespace",
+        )
+    )
+    swift_script = "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
+    text_overrides[swift_script] = read(swift_script).replace(
+        "ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork",
+        "ToriiClientTests/testGetUaidPortfolioAllowsPaddedLiteral",
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate non-C# UAID path literal exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/toriiClient.js UAID path literal exactness",
+            "javascript/iroha_js/dist/toriiClient.js UAID path literal exactness",
+            "JavaScript UAID path literal exactness tests",
+            "JavaScript package dist UAID path literal exactness tests",
+            "JavaScript SDK UAID path literal focused selector",
+            "JavaScript SDK package-dist UAID path literal focused selector",
+            "Python UAID path literal exactness",
+            "Python UAID path literal exactness tests",
+            "Kagemusha Python SDK script must run Torii query selector and UAID path literal exactness regressions",
+            "Swift UAID path literal exactness",
+            "Swift UAID path literal exactness tests",
+            "Kagemusha Swift SDK script must run Torii query selector exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: non-C# UAID path literal exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected non-C# UAID path literal exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: non-C# UAID path literal exactness drift was not detected")
+
+if mode == "--negative-control-js-sns-domain-selector-exactness":
+    mutated_texts = dict(texts)
+    js_targets = (
+        "javascript/iroha_js/src/toriiClient.js",
+        "javascript/iroha_js/dist/toriiClient.js",
+    )
+    for target in js_targets:
+        updated = mutated_texts[target].replace(
+            'const normalizedSelector = requireExactNonEmptyString(selector, "selector");',
+            'const normalizedSelector = requireNonEmptyString(selector, "selector").trim();',
+        )
+        if updated == mutated_texts[target]:
+            raise SystemExit(f"negative control failed: unable to mutate JavaScript SNS selector exactness in {target}")
+        mutated_texts[target] = updated
+
+    js_test = "javascript/iroha_js/test/toriiClient.test.js"
+    mutated_texts[js_test] = (
+        mutated_texts[js_test]
+        .replace(
+            "SNS domain route helpers reject padded selectors before dispatch",
+            "SNS domain route helpers allow padded selectors",
+        )
+        .replace(
+            "fetch should not run for padded SNS selectors",
+            "fetch may run for normalized SNS selectors",
+        )
+        .replace(
+            "selector must not contain surrounding whitespace",
+            "selector may normalize surrounding whitespace",
+        )
+    )
+    js_dist_test = "javascript/iroha_js/test/package_dist.test.js"
+    mutated_texts[js_dist_test] = (
+        mutated_texts[js_dist_test]
+        .replace(
+            "package dist SNS domain route helpers reject padded selectors before dispatch",
+            "package dist SNS domain route helpers allow padded selectors",
+        )
+        .replace(
+            "fetch must not run for padded SNS selectors",
+            "fetch may run for normalized SNS selectors",
+        )
+        .replace(
+            "selector must not contain surrounding whitespace",
+            "selector may normalize surrounding whitespace",
+        )
+    )
+    js_script = "ci/check_kagemusha_recursive_spend_js_sdk.sh"
+    text_overrides[js_script] = (
+        read(js_script)
+        .replace(
+            "SNS domain route helpers reject padded selectors before dispatch",
+            "SNS domain route helpers allow padded selectors",
+        )
+        .replace(
+            "package dist SNS domain route helpers reject padded selectors before dispatch",
+            "package dist SNS domain route helpers allow padded selectors",
+        )
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate JavaScript SNS domain selector exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "javascript/iroha_js/src/toriiClient.js SNS domain route selector exactness",
+            "javascript/iroha_js/dist/toriiClient.js SNS domain route selector exactness",
+            "JavaScript SNS domain route selector exactness tests",
+            "JavaScript package dist SNS domain route selector exactness tests",
+            "JavaScript SDK SNS domain selector focused selector",
+            "JavaScript SDK package-dist SNS domain selector focused selector",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JavaScript SNS domain route selector exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JavaScript SNS domain route selector exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JavaScript SNS domain route selector exactness drift was not detected")
+
+if mode == "--negative-control-swift-account-asset-scope-selector-exactness":
+    mutated_texts = dict(texts)
+    swift_source = "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+    swift_exact_scope_block = """if let scope {
+            let exactScope = try requireToriiExactNonEmptyQueryValue(scope, field: "scope")
+            items.append(URLQueryItem(name: "scope", value: exactScope))
+        }"""
+    swift_trimming_scope_block = """if let scope = scope?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !scope.isEmpty {
+            items.append(URLQueryItem(name: "scope", value: scope))
+        }"""
+    swift_source_mutated = mutated_texts[swift_source].replace(
+        swift_exact_scope_block,
+        swift_trimming_scope_block,
+    )
+    if swift_source_mutated == mutated_texts[swift_source]:
+        raise SystemExit("negative control failed: unable to mutate Swift account asset scope exactness")
+    mutated_texts[swift_source] = swift_source_mutated
+
+    swift_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+    swift_test_mutated = (
+        mutated_texts[swift_test]
+        .replace(
+            "testGetAssetsEncodesScopeSelectorFilter",
+            "testGetAssetsNormalizesScopeSelectorFilter",
+        )
+        .replace(
+            "testGetAssetsRejectsPaddedScopeBeforeNetwork",
+            "testGetAssetsAllowsPaddedScopeBeforeNetwork",
+        )
+        .replace(
+            "getAssets should validate scope before dispatch",
+            "getAssets may normalize scope before dispatch",
+        )
+        .replace(
+            "scope must not contain surrounding whitespace",
+            "scope may normalize surrounding whitespace",
+        )
+    )
+    if swift_test_mutated == mutated_texts[swift_test]:
+        raise SystemExit("negative control failed: unable to mutate Swift account asset scope tests")
+    mutated_texts[swift_test] = swift_test_mutated
+
+    swift_script = "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
+    text_overrides[swift_script] = (
+        read(swift_script)
+        .replace(
+            "ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter",
+            "ToriiClientTests/testGetAssetsNormalizesScopeSelectorFilter",
+        )
+        .replace(
+            "ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork",
+            "ToriiClientTests/testGetAssetsAllowsPaddedScopeBeforeNetwork",
+        )
+    )
+
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Swift account asset scope selector exactness",
+            "Swift account asset scope selector exactness tests",
+            "Kagemusha Swift SDK script must run Torii query selector exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: Swift account asset scope selector exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected Swift account asset scope selector exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Swift account asset scope selector exactness drift was not detected")
+
+if mode == "--negative-control-jvm-offline-list-asset-selector-exactness":
+    mutated_texts = dict(texts)
+    java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineListParams.java"
+    kotlin_source = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineListParams.kt"
+    java_literal_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/AccountLiteralHardCutTests.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt"
+
+    mutated_texts[java_source] = (
+        mutated_texts[java_source]
+        .replace(
+            'params.put("asset_id", requireExactNonEmpty(assetId, "assetId"));',
+            'params.put("asset_id", assetId.trim());',
+        )
+        .replace(
+            'throw new IllegalArgumentException(field + " must not contain surrounding whitespace");',
+            'return trimmed;',
+        )
+    )
+    mutated_texts[kotlin_source] = (
+        mutated_texts[kotlin_source]
+        .replace(
+            'assetId?.let { params["asset_id"] = requireExactNonEmpty(it, "assetId") }',
+            'if (!assetId.isNullOrBlank()) params["asset_id"] = assetId.trim()',
+        )
+        .replace(
+            'require(value.trim() == value) { "$field must not contain surrounding whitespace" }',
+            'return value.trim()',
+        )
+    )
+    mutated_texts[java_literal_test] = (
+        mutated_texts[java_literal_test]
+        .replace(
+            "offlineListParamsAcceptsAssetSelectorsAndRejectsMalformedSelectors",
+            "offlineListParamsAllowsPaddedAssetSelectors",
+        )
+        .replace('OfflineListParams.builder().assetId(" " + asset)', 'OfflineListParams.builder().assetId(asset)')
+        .replace('OfflineListParams.builder().assetId(asset + " ")', 'OfflineListParams.builder().assetId(asset)')
+        .replace('OfflineListParams.builder().assetId(" ")', 'OfflineListParams.builder().assetId(asset)')
+    )
+    mutated_texts[kotlin_test] = (
+        mutated_texts[kotlin_test]
+        .replace(
+            "offlineListParamsRejectsPaddedAssetIdBeforeDispatch",
+            "offlineListParamsAllowsPaddedAssetId",
+        )
+        .replace(
+            "assetId must not contain surrounding whitespace",
+            "assetId may be normalized",
+        )
+        .replace("assetId must not be blank", "assetId may be omitted")
+    )
+
+    if mutated_texts == texts:
+        raise SystemExit("negative control failed: unable to mutate JVM offline list asset selector exactness")
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        expected_labels = (
+            "Android Java offline list asset selector exactness",
+            "Android Java offline list asset selector whitespace rejection",
+            "Kotlin offline list asset selector exactness",
+            "Kotlin offline list asset selector whitespace rejection",
+            "Android Java offline list asset selector exactness tests",
+            "Kotlin offline list asset selector exactness tests",
+        )
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: JVM offline list asset selector exactness drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected JVM offline list asset selector exactness drift")
+        for detected_message in first_lines_for_labels(message, expected_labels):
+            print(detected_message)
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JVM offline list asset selector exactness drift was not detected")
+
 if mode == "--negative-control-multisig-resolved-account-exactness":
     mutated_texts = dict(texts)
     java_source = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java"
@@ -50742,39 +56958,123 @@ if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":
     mutated = dict(texts)
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
-    updated = original.replace(
-        "zero-envelope Pallas archive",
-        "one-envelope Pallas archive",
-        1,
+    cases = (
+        (
+            "fn kagemusha_recursive_spend_ffi_rejects_empty_nested_pallas_archives_without_output()",
+            "fn kagemusha_recursive_spend_ffi_accepts_empty_nested_pallas_archives_without_output()",
+            "fn kagemusha_recursive_spend_ffi_rejects_empty_nested_pallas_archives_without_output()",
+            False,
+        ),
+        (
+            "assert_recursive_spend_single_archive_ffi_rejects_empty_nested_pallas",
+            "assert_recursive_spend_single_archive_ffi_allows_empty_nested_pallas",
+            "assert_recursive_spend_single_archive_ffi_rejects_empty_nested_pallas",
+            True,
+        ),
+        (
+            "zero-envelope Pallas archive",
+            "one-envelope Pallas archive",
+            "zero-envelope Pallas archive",
+            True,
+        ),
+        (
+            "encode zero-envelope init request",
+            "encode one-envelope init request",
+            "encode zero-envelope init request",
+            False,
+        ),
+        (
+            '"init zero-envelope",',
+            '"init one-envelope",',
+            '"init zero-envelope",',
+            False,
+        ),
+        (
+            '"transition profile init zero-envelope",',
+            '"transition profile init one-envelope",',
+            '"transition profile init zero-envelope",',
+            False,
+        ),
+        (
+            "encode zero-envelope append request",
+            "encode one-envelope append request",
+            "encode zero-envelope append request",
+            False,
+        ),
+        (
+            '"append zero-envelope",',
+            '"append one-envelope",',
+            '"append zero-envelope",',
+            False,
+        ),
+        (
+            '"transition profile append zero-envelope",',
+            '"transition profile append one-envelope",',
+            '"transition profile append zero-envelope",',
+            False,
+        ),
+        (
+            "zero-envelope nested Pallas archives",
+            "one-envelope nested Pallas archives",
+            "zero-envelope nested Pallas archives",
+            True,
+        ),
+        (
+            "init lineage witness helper must not return output for zero-envelope nested Pallas archives",
+            "init lineage witness helper may return output for zero-envelope nested Pallas archives",
+            "init lineage witness helper must not return output for zero-envelope nested Pallas archives",
+            False,
+        ),
+        (
+            "append lineage witness helper must not return output for zero-envelope nested Pallas archives",
+            "append lineage witness helper may return output for zero-envelope nested Pallas archives",
+            "append lineage witness helper must not return output for zero-envelope nested Pallas archives",
+            False,
+        ),
     )
-    updated = updated.replace(
-        "zero-envelope nested Pallas archives",
-        "one-envelope nested Pallas archives",
-    )
-    if updated == original or "zero-envelope nested Pallas archives" in updated:
-        raise SystemExit("negative control failed: unable to mutate native bridge zero-envelope Pallas guard")
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
-            "Rust C recursive spend nested Pallas guard missing zero-envelope Pallas archive",
-            "Rust C recursive spend nested Pallas guard missing zero-envelope nested Pallas archives",
-        )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+    detected_messages = []
+    for before, after, expected_marker, replace_all in cases:
+        updated = original.replace(before, after) if replace_all else original.replace(before, after, 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: native bridge zero-envelope Pallas guard drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate native bridge zero-envelope Pallas guard: "
+                + before
             )
-        print("negative control rejected native bridge zero-envelope Pallas guard drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: native bridge zero-envelope Pallas guard drift was not detected"
-    )
+        if expected_marker in updated:
+            raise SystemExit(
+                "negative control failed: native bridge zero-envelope Pallas guard mutation left expected marker: "
+                + expected_marker
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected = (
+                "Rust C recursive spend nested Pallas guard missing "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: native bridge zero-envelope Pallas guard drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: native bridge zero-envelope Pallas guard drift was not detected for "
+            + expected_marker
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: native bridge zero-envelope Pallas guard drift was not detected"
+        )
+    print("negative control rejected native bridge zero-envelope Pallas guard drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation":
     mutated = dict(texts)
@@ -50783,89 +57083,138 @@ if mode == "--negative-control-native-bridge-recursive-compact-invalid-proof-iso
     ignored_attr = (
         '    #[ignore = "heavy Kagemusha Halo2 IPA invalid-proof verification; run explicitly with --ignored --test-threads=1"]\n'
     )
-    updated = original.replace(ignored_attr, "", 1)
     default_anchor = (
         "        // Minimum-sized invalid proof bodies enter Halo2 backend verification;\n"
     )
-    updated = updated.replace(
-        default_anchor,
-        "        let _shape_valid_invalid_proof_token = sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle);\n"
-        + default_anchor,
-        1,
-    )
-    if updated == original or ignored_attr in updated:
-        raise SystemExit(
-            "negative control failed: unable to mutate native bridge recursive compact invalid-proof isolation"
-        )
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
+    cases = (
+        (
+            "default backend helper injection",
+            default_anchor,
+            "        let _shape_valid_invalid_proof_token = sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle);\n"
+            + default_anchor,
             "Rust native recursive compact default adversarial test must not enter minimum-sized invalid-proof backend verification",
+            "sample_recursive_compact_shape_valid_invalid_proof_token(&record_bundle)",
+            True,
+        ),
+        (
+            "ignored backend test marker removal",
+            ignored_attr,
+            "",
             "Rust native recursive compact invalid-proof soft-invalid backend test must be ignored",
-        )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: native bridge recursive compact invalid-proof isolation drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected native bridge recursive compact invalid-proof isolation drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: native bridge recursive compact invalid-proof isolation drift was not detected"
+            ignored_attr,
+            False,
+        ),
     )
+    detected_messages = []
+    for case_name, before, after, expected_label, marker, marker_should_remain in cases:
+        updated = original.replace(before, after, 1)
+        if updated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate native bridge recursive compact invalid-proof isolation: "
+                + case_name
+            )
+        marker_present = marker in updated
+        if marker_present != marker_should_remain:
+            raise SystemExit(
+                "negative control failed: native bridge recursive compact invalid-proof isolation mutation did not change marker as expected: "
+                + case_name
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected_label not in message:
+                raise SystemExit(
+                    "negative control failed: native bridge recursive compact invalid-proof isolation drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected_label,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: native bridge recursive compact invalid-proof isolation drift was not detected for "
+            + case_name
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: native bridge recursive compact invalid-proof isolation drift was not detected"
+        )
+    print("negative control rejected native bridge recursive compact invalid-proof isolation drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-bridge-zk1-i10p-parser-exactness":
     mutated = dict(texts)
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
-    updated = original.replace(
-        "zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads",
-        "zk1_i10p_parser_allows_empty_truncated_and_trailing_payloads",
-        1,
+    cases = (
+        (
+            "zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads",
+            "zk1_i10p_parser_allows_empty_truncated_and_trailing_payloads",
+        ),
+        (
+            "I10P payloads with trailing bytes must not be partially decoded",
+            "I10P payloads with trailing bytes may be partially decoded",
+        ),
+        (
+            "I10P payloads with missing scalar bytes must reject",
+            "I10P payloads with missing scalar bytes may truncate",
+        ),
+        ('"zero columns"', '"empty columns"'),
+        ('"zero rows"', '"empty rows"'),
+        ('"too many columns"', '"excess columns"'),
+        ('"too many rows"', '"excess rows"'),
+        (
+            "zk1_read_instance_columns(&payload).is_none()",
+            "zk1_read_instance_columns(&payload).is_some()",
+        ),
     )
-    updated = updated.replace(
-        "I10P payloads with trailing bytes must not be partially decoded",
-        "I10P payloads with trailing bytes may be partially decoded",
-        1,
-    )
-    updated = updated.replace(
-        "zk1_read_instance_columns(&payload).is_none()",
-        "zk1_read_instance_columns(&payload).is_some()",
-        1,
-    )
-    if updated == original:
-        raise SystemExit(
-            "negative control failed: unable to mutate native bridge ZK1 I10P parser exactness"
-        )
-    mutated[target] = updated
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        expected_labels = (
-            "Rust native bridge ZK1 I10P parser exactness tests missing zk1_i10p_parser_rejects_empty_truncated_and_trailing_payloads",
-            "Rust native bridge ZK1 I10P parser exactness tests missing I10P payloads with trailing bytes must not be partially decoded",
-            "Rust native bridge ZK1 I10P parser exactness tests missing zk1_read_instance_columns(&payload).is_none()",
-        )
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+    detected_messages = []
+    for before, after in cases:
+        updated = original.replace(before, after, 1)
+        if updated == original:
             raise SystemExit(
-                "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: unable to mutate native bridge ZK1 I10P parser exactness: "
+                + before
             )
-        print("negative control rejected native bridge ZK1 I10P parser exactness drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"
-    )
+        if before in updated:
+            raise SystemExit(
+                "negative control failed: native bridge ZK1 I10P parser exactness mutation left expected marker: "
+                + before
+            )
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected = (
+                "Rust native bridge ZK1 I10P parser exactness tests missing "
+                + before
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: native bridge ZK1 I10P parser exactness drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: native bridge ZK1 I10P parser exactness drift was not detected"
+        )
+    print("negative control rejected native bridge ZK1 I10P parser exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-kagemusha-abi-probe-bounds":
     mutated = dict(texts)
@@ -50889,28 +57238,42 @@ if mode == "--negative-control-kagemusha-abi-probe-bounds":
             "Python Kagemusha ABI probe bounds",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        original = mutated[target]
+        updated = original.replace(old, new, 1)
+        if updated == original:
             raise SystemExit(f"negative control failed: unable to mutate Kagemusha ABI probe bounds in {target}")
-        mutated[target] = updated
-        expected_labels.append(f"{label} missing {old}")
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
+        if old in updated:
             raise SystemExit(
-                "negative control failed: Kagemusha ABI probe bounds drift was not detected for "
-                + ", ".join(missing)
+                "negative control failed: Kagemusha ABI probe bounds mutation left expected marker: "
+                + target
             )
-        print("negative control rejected Kagemusha ABI probe bounds drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Kagemusha ABI probe bounds drift was not detected")
+        mutated[target] = updated
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            expected = f"{label} missing {old}"
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kagemusha ABI probe bounds drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: Kagemusha ABI probe bounds drift was not detected for "
+            + target
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Kagemusha ABI probe bounds drift was not detected")
+    print("negative control rejected Kagemusha ABI probe bounds drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":
     mutated = dict(texts)
@@ -51041,7 +57404,7 @@ if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":
             marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
         original = mutated[target]
         block_bounds = None
@@ -51073,31 +57436,43 @@ if mode == "--negative-control-js-package-dist-recursive-spend-partial-abi6":
             block = original[block_start:block_end]
             updated_block = block.replace(old, new, 1)
             updated = original[:block_start] + updated_block + original[block_end:]
+            old_count_before = block.count(old)
+            old_count_after = updated_block.count(old)
         else:
             updated = original.replace(old, new, 1)
-        if updated == mutated[target]:
+            old_count_before = original.count(old)
+            old_count_after = updated.count(old)
+        if updated == original or old_count_before - old_count_after != 1:
             raise SystemExit(
                 f"negative control failed: unable to mutate package dist recursive spend partial ABI-6 coverage in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_js_package_dist_recursive_spend_partial_abi6_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: package dist recursive spend partial ABI-6 drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected package dist recursive spend partial ABI-6 drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: package dist recursive spend partial ABI-6 drift was not detected"
-    )
+        expected = expected_js_package_dist_recursive_spend_partial_abi6_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: package dist recursive spend partial ABI-6 drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: package dist recursive spend partial ABI-6 drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: package dist recursive spend partial ABI-6 drift was not detected"
+        )
+    print("negative control rejected package dist recursive spend partial ABI-6 drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-package-dist-compact-projection":
     mutated = dict(texts)
@@ -51136,45 +57511,77 @@ if mode == "--negative-control-js-package-dist-compact-projection":
         ),
     )
     def expected_js_package_dist_compact_projection_label(old, label):
+        if label == "JavaScript package recursive spend compact projection missing-archive fail-closed coverage":
+            marker = '[undefined, "must be a Buffer, string, or ArrayBuffer view"]'
+        else:
+            marker = old.splitlines()[0]
+        return f"{label} missing {marker}"
+
+    detected_messages = []
+    for target, old, new, label in mutations:
+        original = mutated[target]
+        block_bounds = None
         if label in (
             "JavaScript package recursive spend compact projection oversized fail-closed coverage",
             "JavaScript package recursive spend compact projection at-height invalid archive coverage",
             "JavaScript package recursive spend compact projection missing-archive fail-closed coverage",
         ):
-            marker = (
-                'block start test("package dist Kagemusha recursive spend compact projection helpers fail closed '
-                'on invalid archives", () => {'
+            block_bounds = (
+                'test("package dist Kagemusha recursive spend compact projection helpers fail closed on invalid archives", () => {',
+                'test("package dist Kagemusha recursive spend availability rejects coerced ABI versions", () => {',
             )
+        if block_bounds is not None:
+            block_start_marker, block_end_marker = block_bounds
+            block_start = original.find(block_start_marker)
+            if block_start < 0:
+                raise SystemExit(
+                    f"negative control failed: unable to find package dist compact projection block start in {target}"
+                )
+            block_end = original.find(block_end_marker, block_start + len(block_start_marker))
+            if block_end < 0:
+                raise SystemExit(
+                    f"negative control failed: unable to find package dist compact projection block end in {target}"
+                )
+            block = original[block_start:block_end]
+            updated_block = block.replace(old, new, 1)
+            updated = original[:block_start] + updated_block + original[block_end:]
+            old_count_before = block.count(old)
+            old_count_after = updated_block.count(old)
         else:
-            marker = old
-        return f"{label} missing {marker}"
-
-    expected_labels = []
-    for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+            updated = original.replace(old, new, 1)
+            old_count_before = original.count(old)
+            old_count_after = updated.count(old)
+        if updated == original or old_count_before - old_count_after != 1:
             raise SystemExit(
                 f"negative control failed: unable to mutate package dist compact projection coverage in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_js_package_dist_compact_projection_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: package dist compact projection drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected package dist compact projection drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: package dist compact projection drift was not detected"
-    )
+        expected = expected_js_package_dist_compact_projection_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: package dist compact projection drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: package dist compact projection drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: package dist compact projection drift was not detected"
+        )
+    print("negative control rejected package dist compact projection drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-js-package-dist-record-backed-pallas-builders":
     mutated = dict(texts)
@@ -51221,36 +57628,77 @@ if mode == "--negative-control-js-package-dist-record-backed-pallas-builders":
     def expected_js_package_dist_record_backed_pallas_builder_label(old, label):
         if label == "JavaScript package record-backed Kagemusha and Pallas builder oversized fail-closed coverage":
             marker = "const invalidArchives = ["
+        elif label == "JavaScript package record-backed Kagemusha and Pallas builder missing-archive fail-closed coverage":
+            marker = old
         else:
             marker = old.splitlines()[0]
         return f"{label} missing {marker}"
 
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        original = mutated[target]
+        block_bounds = None
+        if label in (
+            "JavaScript package record-backed Kagemusha and Pallas builder fail-closed coverage",
+            "JavaScript package record-backed Kagemusha and Pallas builder oversized fail-closed coverage",
+            "JavaScript package record-backed Kagemusha and Pallas builder missing-archive fail-closed coverage",
+        ):
+            block_bounds = (
+                'test("package dist Kagemusha record-backed and Pallas builders fail closed on invalid archives", () => {',
+                'test("package dist Kagemusha recursive spend helpers propagate native semantic rejections", () => {',
+            )
+        if block_bounds is not None:
+            block_start_marker, block_end_marker = block_bounds
+            block_start = original.find(block_start_marker)
+            if block_start < 0:
+                raise SystemExit(
+                    f"negative control failed: unable to find package dist record-backed/Pallas builder block start in {target}"
+                )
+            block_end = original.find(block_end_marker, block_start + len(block_start_marker))
+            if block_end < 0:
+                raise SystemExit(
+                    f"negative control failed: unable to find package dist record-backed/Pallas builder block end in {target}"
+                )
+            block = original[block_start:block_end]
+            updated_block = block.replace(old, new, 1)
+            updated = original[:block_start] + updated_block + original[block_end:]
+            old_count_before = block.count(old)
+            old_count_after = updated_block.count(old)
+        else:
+            updated = original.replace(old, new, 1)
+            old_count_before = original.count(old)
+            old_count_after = updated.count(old)
+        if updated == original or old_count_before - old_count_after != 1:
             raise SystemExit(
                 f"negative control failed: unable to mutate package dist record-backed/Pallas builder coverage in {target}"
             )
         mutated[target] = updated
-        expected_labels.append(expected_js_package_dist_record_backed_pallas_builder_label(old, label))
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: package dist record-backed/Pallas builder drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected package dist record-backed/Pallas builder drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit(
-        "negative control failed: package dist record-backed/Pallas builder drift was not detected"
-    )
+        expected = expected_js_package_dist_record_backed_pallas_builder_label(old, label)
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: package dist record-backed/Pallas builder drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: package dist record-backed/Pallas builder drift was not detected for "
+            + expected
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: package dist record-backed/Pallas builder drift was not detected"
+        )
+    print("negative control rejected package dist record-backed/Pallas builder drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode == "--negative-control-kagemusha-probe-rejection-shape":
     mutated = dict(texts)
@@ -51274,30 +57722,37 @@ if mode == "--negative-control-kagemusha-probe-rejection-shape":
             "Python recursive compact verifier and Pallas builder surface",
         ),
     )
-    expected_labels = []
+    detected_messages = []
     for target, old, new, label in mutations:
-        updated = mutated[target].replace(old, new, 1)
-        if updated == mutated[target]:
+        original = mutated[target]
+        updated = original.replace(old, new, 1)
+        if updated == original or original.count(old) - updated.count(old) != 1:
             raise SystemExit(f"negative control failed: unable to mutate {target}")
         mutated[target] = updated
-        expected_label = f"{label} missing {old}"
-        if expected_label not in expected_labels:
-            expected_labels.append(expected_label)
-    try:
-        run_checks(mutated)
-    except ParityError as error:
-        message = str(error)
-        missing = [label for label in expected_labels if label not in message]
-        if missing:
-            raise SystemExit(
-                "negative control failed: Kagemusha probe rejection shape drift was not detected for "
-                + ", ".join(missing)
-            )
-        print("negative control rejected Kagemusha probe rejection shape drift")
-        for detected_message in first_lines_for_labels(message, expected_labels):
-            print(detected_message)
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Kagemusha probe rejection shape drift was not detected")
+        expected = f"{label} missing {old}"
+        try:
+            run_checks(mutated)
+        except ParityError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Kagemusha probe rejection shape drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            detected_messages.append(first_lines_for_labels(message, (expected,))[0])
+            continue
+        finally:
+            mutated[target] = original
+        raise SystemExit(
+            "negative control failed: Kagemusha probe rejection shape drift was not detected for "
+            + target
+        )
+    if not detected_messages:
+        raise SystemExit("negative control failed: Kagemusha probe rejection shape drift was not detected")
+    print("negative control rejected Kagemusha probe rejection shape drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
 
 if mode:
     raise SystemExit(f"unknown mode: {mode}")

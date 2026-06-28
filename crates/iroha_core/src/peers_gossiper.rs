@@ -1465,6 +1465,8 @@ mod tests {
             ),
             deferred_send_max_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer:
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -1486,6 +1488,14 @@ mod tests {
             p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_outbound_frame_queue_max_high_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap:
                 iroha_config::parameters::defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec:

@@ -3060,6 +3060,12 @@ impl<'tx> AcceptedTransaction<'tx> {
         self.entrypoint.as_ref()
     }
 
+    /// Consume the accepted transaction and return its wrapped entrypoint.
+    #[must_use]
+    pub(crate) fn into_entrypoint(self) -> TransactionEntrypoint {
+        self.entrypoint.into_owned()
+    }
+
     /// Borrow the wrapped signed transaction when present.
     #[must_use]
     pub fn external(&self) -> Option<&SignedTransaction> {
@@ -7315,6 +7321,19 @@ pub mod tests {
             .into_checked(&view)
             .expect("transaction should not be committed");
         assert_eq!(checked.as_ref().hash(), accepted.as_ref().hash());
+    }
+
+    #[test]
+    fn accepted_transaction_into_entrypoint_consumes_wrapped_entrypoint() {
+        let chain: ChainId = "accepted-into-entrypoint-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "into-entrypoint".into())])
+            .sign(keypair.private_key());
+        let expected = TransactionEntrypoint::External(signed.clone());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+
+        assert_eq!(accepted.into_entrypoint(), expected);
     }
 
     #[test]

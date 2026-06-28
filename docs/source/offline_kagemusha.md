@@ -3,17 +3,21 @@
 Kagemusha is the only active chain implementation for offline payments. Nodes
 expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
 which defaults to `true`; there is no runtime legacy bearer-audit fallback.
-Classic `IssueOfflineNote`, `AuditOfflineNote`, and `RedeemOfflineNote` payloads
-are retained only as historical data-model compatibility fixtures and are not
-registered or dispatched by the node's default instruction surface.
+Mobile artifact archives are served and gated by Core API, so Torii readiness
+keeps the ABI-7 artifact booleans false while still advertising metadata.
+Classic `IssueOfflineNote`, `AuditOfflineNote`, and `RedeemOfflineNote` payloads,
+plus SDK/bridge defund compatibility composites, are retained only as historical
+data-model compatibility fixtures and are not registered or dispatched by the
+node's default instruction surface.
 
 Classic Offline Note hardening notes from earlier drafts are archived with the
 legacy data model. Torii issue/redeem endpoints reject classic payment
 construction, the Norito bridge classic transaction builders fail closed, and
 the core executor does not dispatch classic issue/audit/redeem instructions in
-production. Swift, Kotlin/JVM, and Java Android classic payment submitters also
-fail before signing or sending chain transactions, and their default Torii
-issuer clients reject classic note issue locally before posting to Torii.
+production. Swift, Kotlin/JVM, and Java Android classic payment submitters,
+including defund submitters, also fail before signing or sending chain
+transactions, and their default Torii issuer clients reject classic note issue
+locally before posting to Torii.
 Historical serialization and proof fixtures may still mention those types, but
 production payment admission uses Kagemusha online-to-offline top-ups,
 `KagemushaTransfer`, and `RedeemKagemushaRecursive`.
@@ -2582,6 +2586,9 @@ They also require the recursive proof to carry non-empty public inputs and a
 non-zero 32-byte public-input hash that matches `Hash::new(...)` over the
 compact `KagemushaRecursiveAggregationProofPublicInputs` Norito archive before
 summary metadata is returned.
+Python, Swift, Kotlin/JVM, and Java Android direct bundle-summary construction
+applies the same accumulator summary invariants before wallet code can trust
+manually assembled metadata.
 `normalize...AppendOutput...CircuitId` and `isSupported...AppendOutput...CircuitId`
 helpers let wallet code apply the same missing-or-empty-to-semantic selector
 rule before constructing Norito archives. A Reserved-lineage append output also
@@ -2974,8 +2981,16 @@ invalid for semantic bundles. Non-C# typed redeem request encoders use a
 different semantic-bundle rule: they decode the lineage-witness previous-proof
 summary, require lineage verifier records when semantic witnesses contain prior
 Reserved-lineage proofs, and reject dangling records for init-only or absent
-lineage witnesses. Full record-backed lineage-witness validation remains
-enforced by native/core. Their request-layout regressions decode the emitted
+lineage witnesses. JavaScript source and package-dist compute raw plural
+`lineageVerifierRecords` supplied state before normalizing record refs, so
+semantic bundles with dangling plural record fields fail on field selection
+instead of record archive parsing. The same non-C# plural record paths pin
+request-state ownership: Swift stores value-typed `Data` and arrays, JavaScript
+normalizes to frozen record refs with copied record bytes, Python freezes tuple
+inputs, and Kotlin/JVM plus Java Android copy caller-owned lists into unmodifiable
+request state before encoding. JVM/Android record refs also copy verifier-record archive
+bytes on construction and accessor reads. Full record-backed lineage-witness
+validation remains enforced by native/core. Their request-layout regressions decode the emitted
 archives and pin
 raw embedded record/bundle/proof payloads, Norito `Option` child-length framing,
 and Rust `[u8; N]` fixed-array encoding as per-element compact
@@ -3060,6 +3075,26 @@ normalization, backend, input-encryption, input-parameter, nested
 material reaches wallet code. Account-alias resolution parsers on those same
 non-C# SDKs also reject padded returned `alias`, `account_id`, alternate
 `account_ids`, and `source` fields before wallet code trusts alias bindings.
+Swift, JavaScript/Node, and Python Torii contract/explorer query helpers also
+reject padded selector filters before dispatch, including account, authority,
+asset-definition/id, owned-by, participant, contract-address, contract-alias,
+and asset-id values; JavaScript SNS domain route selectors follow the same
+no-trim rule before route construction. Python, Kotlin/JVM, and Android Java
+UAID portfolio query
+helpers reject padded asset-id, asset, and scope selectors before dispatch, and
+Swift account asset scope filters use the same exact selector rule instead of
+silently trimming caller input. JavaScript package-dist, Python focused-runner,
+Swift focused-runner, and JVM/Android guard coverage mirror the same
+contract/UAID selector exactness.
+JavaScript/Node, Swift, Python, Kotlin/JVM, and Android Java UAID route
+literals also reject whitespace normalization before dispatch: exact raw hex
+and uppercase `UAID:` literals are canonicalized, but padded literals or
+`uaid:` values with padded hex portions fail before a Torii request is
+constructed.
+Kotlin/JVM and Android Java offline transfer-list query parameters use the
+same fail-closed selector rule for optional `asset_id` filters: exact non-empty
+values are preserved, while padded or blank values fail before query
+serialization instead of being trimmed into a different selector.
 JavaScript/Node, Swift, Kotlin/JVM, Java Android, and Python multisig response
 parsers also reject padded, alias-shaped, or otherwise non-canonical returned
 `resolved_multisig_account_id` values before proposal or spec state is trusted

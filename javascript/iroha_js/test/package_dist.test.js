@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 
 import {
   AccountAddress,
+  ToriiClient,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SOL,
@@ -2446,20 +2447,150 @@ test("package dist entrypoint imports and emits halfwidth i105 literals", () => 
   assert.equal(HALFWIDTH_KANA.test(literal), true);
 });
 
-test("package dist offline cash lifecycle rejects malformed ABI gates", () => {
+test("package dist offline cash lifecycle rejects malformed identity, time, issuer key, and ABI gates", () => {
+  const ISSUER_PUBLIC_KEY_BASE64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+  const ISSUER_PUBLIC_KEY_BASE64URL = "__________________________________________8";
+  const SHORT_ISSUER_PUBLIC_KEY_BASE64 = "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqw";
+  const LONG_ISSUER_PUBLIC_KEY_BASE64 = "zc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3N";
+
   assert.equal(
     assertOfflineCashConfigurationSnapshotUsable(
       {
         chainId: "00000042",
         assetDefinitionId: "pkr#sbp",
         offlinePaymentsEnabled: true,
-        issuerPublicKeyBase64: "issuer-key",
+        issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
         nativeBridgeAbiVersion: 7,
+        artifactSetId: "artifact-set",
+        circuitId: "kagemusha-recursive-compact-v1",
+        createdAtMs: 100,
       },
       { nowMs: 999, requiredNativeBridgeAbiVersion: 7 },
     ),
     true,
   );
+  assert.equal(
+    assertOfflineCashConfigurationSnapshotUsable(
+      {
+        chainId: "00000042",
+        assetDefinitionId: "pkr#sbp",
+        offlinePaymentsEnabled: true,
+        issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64URL,
+        nativeBridgeAbiVersion: 7,
+        artifactSetId: "artifact-set",
+        circuitId: "kagemusha-recursive-compact-v1",
+        createdAtMs: 100,
+      },
+      { nowMs: 999, requiredNativeBridgeAbiVersion: 7 },
+    ),
+    true,
+  );
+
+  for (const [fieldName, value] of [
+    ["chainId", ""],
+    ["chainId", " 00000042"],
+    ["assetDefinitionId", "pkr sbp"],
+    ["assetDefinitionId", "pkr#sbp\u2603"],
+    ["artifactSetId", "artifact set"],
+    ["circuitId", "kagemusha-recursive-compact-v1\n"],
+  ]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable(
+          {
+            chainId: "00000042",
+            assetDefinitionId: "pkr#sbp",
+            offlinePaymentsEnabled: true,
+            issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
+            nativeBridgeAbiVersion: 7,
+            artifactSetId: "artifact-set",
+            circuitId: "kagemusha-recursive-compact-v1",
+            createdAtMs: 100,
+            [fieldName]: value,
+          },
+          { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
+        ),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "malformed_snapshot" &&
+        error.message.includes(fieldName),
+    );
+  }
+
+  for (const [fieldName, value] of [
+    ["createdAtMs", undefined],
+    ["createdAtMs", -1],
+    ["createdAtMs", 100.5],
+    ["createdAtMs", Number.MAX_SAFE_INTEGER + 1],
+    ["createdAtMs", true],
+    ["expiresAtMs", -1],
+    ["expiresAtMs", 100.5],
+    ["expiresAtMs", Number.MAX_SAFE_INTEGER + 1],
+    ["expiresAtMs", true],
+    ["expiresAtMs", 100],
+  ]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable(
+          {
+            chainId: "00000042",
+            assetDefinitionId: "pkr#sbp",
+            offlinePaymentsEnabled: true,
+            issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
+            nativeBridgeAbiVersion: 7,
+            createdAtMs: 100,
+            expiresAtMs: 1_000,
+            [fieldName]: value,
+          },
+          { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
+        ),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "malformed_snapshot" &&
+        error.message.includes(fieldName),
+    );
+  }
+
+  for (const nowMs of [-1, 999.5, Number.MAX_SAFE_INTEGER + 1, true]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable(
+          {
+            chainId: "00000042",
+            assetDefinitionId: "pkr#sbp",
+            offlinePaymentsEnabled: true,
+            issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
+            nativeBridgeAbiVersion: 7,
+            createdAtMs: 100,
+          },
+          { nowMs, requiredNativeBridgeAbiVersion: 7 },
+        ),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "malformed_snapshot" &&
+        error.message.includes("nowMs"),
+    );
+  }
+
+  for (const offlinePaymentsEnabled of [false, "false", "true", 1]) {
+    assert.throws(
+      () =>
+        assertOfflineCashConfigurationSnapshotUsable(
+          {
+            chainId: "00000042",
+            assetDefinitionId: "pkr#sbp",
+            offlinePaymentsEnabled,
+            issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
+            nativeBridgeAbiVersion: 7,
+            createdAtMs: 100,
+          },
+          { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
+        ),
+      error =>
+        error instanceof OfflineCashConfigurationSnapshotError &&
+        error.code === "offline_payments_disabled",
+    );
+  }
 
   for (const nativeBridgeAbiVersion of [0, -1, 7.5]) {
     assert.throws(
@@ -2469,8 +2600,9 @@ test("package dist offline cash lifecycle rejects malformed ABI gates", () => {
             chainId: "00000042",
             assetDefinitionId: "pkr#sbp",
             offlinePaymentsEnabled: true,
-            issuerPublicKeyBase64: "issuer-key",
+            issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
             nativeBridgeAbiVersion,
+            createdAtMs: 100,
           },
           { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
         ),
@@ -2488,8 +2620,9 @@ test("package dist offline cash lifecycle rejects malformed ABI gates", () => {
             chainId: "00000042",
             assetDefinitionId: "pkr#sbp",
             offlinePaymentsEnabled: true,
-            issuerPublicKeyBase64: "issuer-key",
+            issuerPublicKeyBase64: ISSUER_PUBLIC_KEY_BASE64,
             nativeBridgeAbiVersion: 7,
+            createdAtMs: 100,
           },
           { nowMs: 200, requiredNativeBridgeAbiVersion },
         ),
@@ -2501,9 +2634,13 @@ test("package dist offline cash lifecycle rejects malformed ABI gates", () => {
 
   for (const issuerPublicKeyBase64 of [
     "",
-    " issuer-key",
-    "issuer-key ",
-    "issuer key",
+    ` ${ISSUER_PUBLIC_KEY_BASE64}`,
+    `${ISSUER_PUBLIC_KEY_BASE64} `,
+    "not base64",
+    "!!!!",
+    `${ISSUER_PUBLIC_KEY_BASE64}=`,
+    SHORT_ISSUER_PUBLIC_KEY_BASE64,
+    LONG_ISSUER_PUBLIC_KEY_BASE64,
     "issuer-key\n",
     "issuer-key\u2603",
   ]) {
@@ -2516,6 +2653,7 @@ test("package dist offline cash lifecycle rejects malformed ABI gates", () => {
             offlinePaymentsEnabled: true,
             issuerPublicKeyBase64,
             nativeBridgeAbiVersion: 7,
+            createdAtMs: 100,
           },
           { nowMs: 200, requiredNativeBridgeAbiVersion: 7 },
         ),
@@ -3841,6 +3979,78 @@ test("package dist Kagemusha transaction helpers reject padded authority before 
     }
   }
   assert.deepEqual(calls, []);
+});
+
+test("package dist Torii contract query helpers reject padded selector filters before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch must not run for padded selector filters");
+    },
+  });
+
+  await assert.rejects(
+    () => client.listContractActivity({ contractAddress: " tairac1router" }),
+    /contractAddress must not contain surrounding whitespace/u,
+  );
+  await assert.rejects(
+    () => client.listContractActivity({ contractAlias: "dlmm_router " }),
+    /contractAlias must not contain surrounding whitespace/u,
+  );
+  await assert.rejects(
+    () => client.listContractEvents({ participant: "alice@sora " }),
+    /participant must not contain surrounding whitespace/u,
+  );
+  await assert.rejects(
+    () => client.listContractEvents({ assetId: " xor#universal" }),
+    /assetId must not contain surrounding whitespace/u,
+  );
+  assert.throws(
+    () => client.streamContractEvents({ contractAlias: " dlmm_router" }),
+    /contractAlias must not contain surrounding whitespace/u,
+  );
+  assert.equal(fetchCalled, false);
+});
+
+test("package dist UAID path helpers reject padded literals before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch must not run for padded UAID path literals");
+    },
+  });
+  const rawHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const canonical = `uaid:${rawHex}`;
+
+  for (const value of [` ${canonical}`, `${canonical} `, `uaid: ${rawHex}`]) {
+    await assert.rejects(
+      () => client.getUaidPortfolio(value),
+      /getUaidPortfolio\.uaid must not contain surrounding whitespace/u,
+    );
+  }
+  assert.equal(fetchCalled, false);
+});
+
+test("package dist SNS domain route helpers reject padded selectors before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch must not run for padded SNS selectors");
+    },
+  });
+
+  await assert.rejects(
+    () => client.getSnsRegistration(" alice.sora"),
+    /selector must not contain surrounding whitespace/u,
+  );
+  await assert.rejects(
+    () => client.freezeSnsRegistration("alice.sora ", {}),
+    /selector must not contain surrounding whitespace/u,
+  );
+  assert.equal(fetchCalled, false);
 });
 
 test("package dist private Kaigi transaction builders reject padded identifiers before native dispatch", () => {
@@ -5921,6 +6131,26 @@ test("package dist Kagemusha recursive spend redeem rejects missing lineage mate
       /required for reserved-lineage bundles/,
     ),
   );
+  assert.throws(
+    () =>
+      encodeKagemushaRecursiveSpendRedeemRequest({
+        bundle: sharedRecursiveSpendAbi7Archive("append_bundle"),
+        recipient: "dist-recipient",
+        publicAmount: "7",
+        redeemProof,
+        lineageVerifierRecords: [
+          {
+            verifierKeyId: "distDanglingRedeemLineageRecords",
+            recordBytes: Buffer.from([0]),
+          },
+        ],
+      }),
+    kagemushaRequestCodecError(
+      "field",
+      "lineageVerifierRecord",
+      /only valid for reserved-lineage bundles or lineage witnesses/,
+    ),
+  );
 });
 
 test("package dist Kagemusha recursive spend redeem rejects invalid change-output relationships before native dispatch", () => {
@@ -6040,6 +6270,51 @@ test("package dist Kagemusha recursive spend bundle decodes canonical accumulato
     "hex:01010101010101010101010101010101",
   );
   assert.ok(initBundle.topupAnchorNullifiers.length >= 2);
+  const originalInitialRoot = Buffer.from(initBundle.initialRoot);
+  const mutatedInitialRoot = initBundle.initialRoot;
+  mutatedInitialRoot[0] ^= 0xff;
+  assert.deepEqual(initBundle.initialRoot, originalInitialRoot);
+  assert.deepEqual(initBundle.initial_root, originalInitialRoot);
+  const originalFinalRoot = Buffer.from(initBundle.finalRoot);
+  const mutatedFinalRoot = initBundle.final_root;
+  mutatedFinalRoot[0] ^= 0xff;
+  assert.deepEqual(initBundle.finalRoot, originalFinalRoot);
+  assert.deepEqual(initBundle.final_root, originalFinalRoot);
+  const originalTopupAnchorNullifiers = initBundle.topupAnchorNullifiers.map((value) =>
+    Buffer.from(value),
+  );
+  const mutatedTopupAnchors = initBundle.topupAnchorNullifiers;
+  mutatedTopupAnchors[0][0] ^= 0xff;
+  mutatedTopupAnchors.length = 0;
+  assert.deepEqual(initBundle.topupAnchorNullifiers, originalTopupAnchorNullifiers);
+  assert.deepEqual(initBundle.topup_anchor_nullifiers, originalTopupAnchorNullifiers);
+  const originalNoteCommitment = Buffer.from(initBundle.currentNote.noteCommitment);
+  const mutatedNoteCommitment = initBundle.currentNote.note_commitment;
+  mutatedNoteCommitment[0] ^= 0xff;
+  assert.deepEqual(initBundle.currentNote.noteCommitment, originalNoteCommitment);
+  assert.deepEqual(initBundle.current_note.note_commitment, originalNoteCommitment);
+  const originalSpendNullifier = Buffer.from(initBundle.currentNote.spendNullifier);
+  const mutatedSpendNullifier = initBundle.current_note.spend_nullifier;
+  mutatedSpendNullifier[0] ^= 0xff;
+  assert.deepEqual(initBundle.currentNote.spendNullifier, originalSpendNullifier);
+  assert.deepEqual(initBundle.current_note.spend_nullifier, originalSpendNullifier);
+  const mutableVerifierRecordBytes = syntheticKagemushaArchive(
+    KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
+    0x68,
+  );
+  const copiedVerifierRecordBytes = Buffer.from(mutableVerifierRecordBytes);
+  const copiedVerifierRecord = buildKagemushaRecursiveSpendVerifierRecordRef({
+    verifierKeyId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    recordBytes: mutableVerifierRecordBytes,
+  });
+  assert.equal(Object.isFrozen(copiedVerifierRecord), true);
+  mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^= 0xff;
+  assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);
+  assert.deepEqual(copiedVerifierRecord.record_bytes, copiedVerifierRecordBytes);
+  const returnedVerifierRecordBytes = copiedVerifierRecord.record_bytes;
+  returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^= 0xff;
+  assert.deepEqual(copiedVerifierRecord.recordBytes, copiedVerifierRecordBytes);
+  assert.deepEqual(copiedVerifierRecord.record_bytes, copiedVerifierRecordBytes);
   const malformedTopupAnchorCases = [
     ["topup anchor empty list", [], "bundle.accumulator.topup_anchor_nullifiers count is out of range"],
     [

@@ -41,6 +41,25 @@ def test_extract_status_snapshot_defaults():
     assert snapshot["txs_approved"] == 11
     assert snapshot["txs_rejected"] == 1
     assert snapshot["queue_size"] == 0
+    assert snapshot["queue_retained_bytes"] == 0
+    assert snapshot["queue_max_retained_bytes"] == 0
+    assert snapshot["queue_saturated"] is False
+
+
+def test_extract_status_snapshot_reads_sumeragi_queue_bytes():
+    payload = {
+        "queue_size": 5,
+        "sumeragi": {
+            "tx_queue_retained_bytes": 1024,
+            "tx_queue_max_retained_bytes": 2048,
+            "tx_queue_saturated": True,
+        },
+    }
+    snapshot = MODULE.extract_status_snapshot(payload)
+    assert snapshot["queue_size"] == 5
+    assert snapshot["queue_retained_bytes"] == 1024
+    assert snapshot["queue_max_retained_bytes"] == 2048
+    assert snapshot["queue_saturated"] is True
 
 
 def test_normalize_torii_url_adds_trailing_slash():
@@ -80,3 +99,8 @@ def test_torii_url_from_status_uses_host():
         MODULE.torii_url_from_status("http://127.0.0.1:8080/status")
         == "http://127.0.0.1:8080/"
     )
+
+
+def test_request_with_accept_sets_header():
+    request = MODULE.request_with_accept("http://127.0.0.1:8080/status", "application/json")
+    assert request.get_header("Accept") == "application/json"

@@ -4608,7 +4608,7 @@ test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
   fixture.dataspaces[1].accounts[0].assets[1].asset_id = FIXTURE_ASSET_ID_C;
   const canonical = fixture.uaid;
   const rawHex = canonical.slice("uaid:".length);
-  const mixed = `UaiD:  ${rawHex.toUpperCase()}  `;
+  const mixed = `UaiD:${rawHex.toUpperCase()}`;
   const fetchImpl = async (url) => {
     capturedUrl = url;
     return createResponse({
@@ -4618,12 +4618,36 @@ test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getUaidPortfolio(` ${mixed} `);
+  const result = await client.getUaidPortfolio(mixed);
   assert.equal(
     capturedUrl,
     `${BASE_URL}/v1/accounts/${encodeURIComponent(canonical)}/portfolio`,
   );
   assert.equal(result.uaid, canonical);
+});
+
+test("getUaidPortfolio rejects padded UAID path literals before dispatch", async () => {
+  let fetchCalled = false;
+  const canonical = toriiFixtures.uaid.portfolio.uaid;
+  const rawHex = canonical.slice("uaid:".length);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch should not run for padded UAID path literals");
+    },
+  });
+
+  for (const value of [
+    ` ${canonical}`,
+    `${canonical} `,
+    `uaid: ${rawHex}`,
+  ]) {
+    await assert.rejects(
+      () => client.getUaidPortfolio(value),
+      /getUaidPortfolio\.uaid must not contain surrounding whitespace/u,
+    );
+  }
+  assert.equal(fetchCalled, false);
 });
 
 test("getUaidPortfolio encodes assetId filters", async () => {
@@ -18238,6 +18262,59 @@ test("listContractEvents encodes generic contract event filters", async () => {
   assert.equal(payload.items[0].block_height, 9);
 });
 
+test("contract query helpers reject padded selector filters before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch must not run for padded selector filters");
+    },
+  });
+
+  const asyncCases = [
+    [
+      "activity contractAddress",
+      () => client.listContractActivity({ contractAddress: " tairac1router" }),
+      /contractAddress must not contain surrounding whitespace/u,
+    ],
+    [
+      "activity contractAlias",
+      () => client.listContractActivity({ contractAlias: "dlmm_router " }),
+      /contractAlias must not contain surrounding whitespace/u,
+    ],
+    [
+      "event contractAddress",
+      () => client.listContractEvents({ contractAddress: "tairac1router " }),
+      /contractAddress must not contain surrounding whitespace/u,
+    ],
+    [
+      "event contractAlias",
+      () => client.listContractEvents({ contractAlias: " dlmm_router" }),
+      /contractAlias must not contain surrounding whitespace/u,
+    ],
+    [
+      "event participant",
+      () => client.listContractEvents({ participant: `${FIXTURE_ALICE_ID} ` }),
+      /participant must not contain surrounding whitespace/u,
+    ],
+    [
+      "event assetId",
+      () => client.listContractEvents({ assetId: " xor#universal" }),
+      /assetId must not contain surrounding whitespace/u,
+    ],
+  ];
+
+  for (const [label, action, pattern] of asyncCases) {
+    await assert.rejects(action, pattern, label);
+  }
+
+  assert.throws(
+    () => client.streamContractEvents({ participant: ` ${FIXTURE_ALICE_ID}` }),
+    /participant must not contain surrounding whitespace/u,
+  );
+  assert.equal(fetchCalled, false);
+});
+
 test("listContractEvents rejects camelCase payload aliases", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
@@ -22514,21 +22591,50 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-test("getOfflineReadiness fetches canonical readiness payload", async () => {
-  let capturedRequest = null;
-  const readiness = {
+function canonicalOfflineReadinessPayload(overrides = {}) {
+  return {
     offline_telemetry: true,
     offline_kagemusha_abi7: true,
     offline_kagemusha_abi7_mode: "recursive_compact_v1",
     offline_kagemusha_abi7_bridge_abi_version: 7,
     offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_abi7_artifacts: true,
+    offline_kagemusha_abi7_artifacts: false,
     offline_kagemusha_recursive_compact_available: true,
     offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
     offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_recursive_compact_artifacts_available: true,
+    offline_kagemusha_recursive_compact_artifacts_available: false,
+    ...overrides,
   };
+}
+
+const OFFLINE_READINESS_ABI7_FIELDS = [
+  "offline_kagemusha_abi7",
+  "offline_kagemusha_abi7_mode",
+  "offline_kagemusha_abi7_bridge_abi_version",
+  "offline_kagemusha_abi7_circuit_id",
+  "offline_kagemusha_abi7_artifacts",
+];
+
+const OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS = [
+  "offline_kagemusha_recursive_compact_available",
+  "offline_kagemusha_recursive_compact_mode",
+  "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+  "offline_kagemusha_recursive_compact_circuit_id",
+  "offline_kagemusha_recursive_compact_artifacts_available",
+];
+
+function omitOfflineReadinessFields(fields) {
+  const payload = canonicalOfflineReadinessPayload();
+  for (const field of fields) {
+    delete payload[field];
+  }
+  return payload;
+}
+
+test("getOfflineReadiness fetches canonical readiness payload", async () => {
+  let capturedRequest = null;
+  const readiness = canonicalOfflineReadinessPayload();
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init = {}) => {
       capturedRequest = { url, init };
@@ -22550,6 +22656,140 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
+
+  for (const aliasOnlyPayload of [
+    omitOfflineReadinessFields(OFFLINE_READINESS_ABI7_FIELDS),
+    omitOfflineReadinessFields(OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS),
+  ]) {
+    const aliasClient = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: aliasOnlyPayload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    assert.deepEqual(await aliasClient.getOfflineReadiness(), readiness);
+  }
+});
+
+test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
+  const cases = [
+    [
+      "offline_kagemusha_abi7",
+      "true",
+      /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+    ],
+    [
+      "offline_kagemusha_abi7_mode",
+      " recursive_compact_v1",
+      /offline readiness response\.offline_kagemusha_abi7_mode must not contain surrounding whitespace/,
+    ],
+    [
+      "offline_kagemusha_abi7_bridge_abi_version",
+      0,
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
+    ],
+    [
+      "offline_kagemusha_abi7_bridge_abi_version",
+      -1,
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
+    ],
+    [
+      "offline_kagemusha_abi7_bridge_abi_version",
+      7.5,
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
+    ],
+    [
+      "offline_kagemusha_abi7_bridge_abi_version",
+      "007",
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string/,
+    ],
+    [
+      "offline_kagemusha_abi7_bridge_abi_version",
+      " 7",
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string/,
+    ],
+    [
+      "offline_kagemusha_abi7_bridge_abi_version",
+      2147483648,
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+      0,
+      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+      "007",
+      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+      "2147483648",
+      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_available",
+      1,
+      /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_circuit_id",
+      "kagemusha-recursive-compact-v1 ",
+      /offline readiness response\.offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace/,
+    ],
+  ];
+
+  for (const [field, value, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: canonicalOfflineReadinessPayload({ [field]: value }),
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getOfflineReadiness(),
+      pattern,
+      `${field}=${String(value)} should be rejected`,
+    );
+  }
+
+  for (const [override, pattern] of [
+    [
+      { offline_kagemusha_recursive_compact_available: false },
+      /offline readiness response\.offline_kagemusha_abi7 must match offline readiness response\.offline_kagemusha_recursive_compact_available/,
+    ],
+    [
+      { offline_kagemusha_recursive_compact_mode: "recursive_compact_v2" },
+      /offline readiness response\.offline_kagemusha_abi7_mode must match offline readiness response\.offline_kagemusha_recursive_compact_mode/,
+    ],
+    [
+      { offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 8 },
+      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must match offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version/,
+    ],
+    [
+      { offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v2" },
+      /offline readiness response\.offline_kagemusha_abi7_circuit_id must match offline readiness response\.offline_kagemusha_recursive_compact_circuit_id/,
+    ],
+    [
+      { offline_kagemusha_recursive_compact_artifacts_available: true },
+      /offline readiness response\.offline_kagemusha_abi7_artifacts must match offline readiness response\.offline_kagemusha_recursive_compact_artifacts_available/,
+    ],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: canonicalOfflineReadinessPayload(override),
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.getOfflineReadiness(), pattern);
+  }
 });
 
 test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
@@ -23661,6 +23901,32 @@ test("SNS read helpers reject unsupported option fields", async () => {
   );
 });
 
+test("SNS domain route helpers reject padded selectors before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch should not run for padded SNS selectors");
+    },
+  });
+  const cases = [
+    ["getSnsRegistration", () => client.getSnsRegistration(" alice.sora")],
+    ["renewSnsRegistration", () => client.renewSnsRegistration("alice.sora ", {})],
+    ["transferSnsRegistration", () => client.transferSnsRegistration(" alice.sora ", {})],
+    ["freezeSnsRegistration", () => client.freezeSnsRegistration("alice.sora ", {})],
+    ["unfreezeSnsRegistration", () => client.unfreezeSnsRegistration(" alice.sora", {})],
+  ];
+
+  for (const [label, action] of cases) {
+    await assert.rejects(
+      action,
+      /selector must not contain surrounding whitespace/u,
+      `${label} should reject padded selectors before dispatch`,
+    );
+  }
+  assert.equal(fetchCalled, false);
+});
+
 test("registerSnsName rejects invalid controller types", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -23713,7 +23979,7 @@ test("freezeSnsRegistration posts normalized payload and parses record", async (
     },
   });
   const result = await client.freezeSnsRegistration(
-    "  alice.sora  ",
+    "alice.sora",
     { reason: "  abuse report ", until_ms: 5000, guardian_ticket: { token: "grant" } },
     { signal: controller.signal },
   );
@@ -23760,7 +24026,7 @@ test("unfreezeSnsRegistration posts governance hook payload", async () => {
       });
     },
   });
-  const result = await client.unfreezeSnsRegistration(" alice.sora ", {
+  const result = await client.unfreezeSnsRegistration("alice.sora", {
     proposal_id: " prop-123 ",
     council_vote_hash: " council-hash ",
     dao_vote_hash: " dao-hash ",

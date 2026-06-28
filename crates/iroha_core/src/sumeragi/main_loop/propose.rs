@@ -296,6 +296,42 @@ fn trim_batch_for_size_cap_with_plans<T, U, V>(
     removed_count
 }
 
+fn drain_aligned_batch<'a, T, U>(
+    tx_batch: &'a mut Vec<T>,
+    routing_plan_batch: &'a mut Vec<U>,
+) -> std::iter::Zip<std::vec::Drain<'a, T>, std::vec::Drain<'a, U>> {
+    assert_eq!(
+        tx_batch.len(),
+        routing_plan_batch.len(),
+        "routing plans must align with transactions"
+    );
+    tx_batch.drain(..).zip(routing_plan_batch.drain(..))
+}
+
+fn reorder_vec_by_indices<T>(vec: &mut Vec<T>, order: &[usize]) {
+    assert_eq!(
+        vec.len(),
+        order.len(),
+        "reorder index set must match vector length"
+    );
+    if vec.len() <= 1 {
+        return;
+    }
+
+    let mut slots = std::mem::take(vec)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    vec.reserve(slots.len());
+    for &idx in order {
+        let value = slots
+            .get_mut(idx)
+            .and_then(Option::take)
+            .expect("reorder index set must be a valid permutation");
+        vec.push(value);
+    }
+}
+
 #[cfg(test)]
 fn canonicalize_parallel_batch_by_key<T, U, K, F>(
     tx_batch: &mut Vec<T>,
@@ -1350,6 +1386,21 @@ impl Actor {
     }
 
     fn drop_stale_pending_block_for_fresh_proposal(
+        &mut self,
+        pending_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> Option<(usize, usize, usize, usize)> {
+        self.drop_stale_pending_block_skipping_known_committed(
+            pending_hash,
+            height,
+            view,
+            false,
+            None,
+        )
+    }
+
+    pub(super) fn drop_pending_block_for_memory_cap(
         &mut self,
         pending_hash: HashOf<BlockHeader>,
         height: u64,
@@ -2849,17 +2900,10 @@ impl Actor {
             let order = interleave_lane_indices_for_slot(&routing_decisions, height, view);
 
             if order.iter().enumerate().any(|(idx, &value)| idx != value) {
-                fn reorder_vec<T: Clone>(vec: &mut Vec<T>, order: &[usize]) {
-                    let original = vec.clone();
-                    vec.clear();
-                    for &idx in order {
-                        vec.push(original[idx].clone());
-                    }
-                }
-                reorder_vec(&mut transactions, &order);
-                reorder_vec(&mut routing_decisions, &order);
-                reorder_vec(&mut routing_plans, &order);
-                reorder_vec(&mut tx_sizes, &order);
+                reorder_vec_by_indices(&mut transactions, &order);
+                reorder_vec_by_indices(&mut routing_decisions, &order);
+                reorder_vec_by_indices(&mut routing_plans, &order);
+                reorder_vec_by_indices(&mut tx_sizes, &order);
             }
         }
 
@@ -3069,12 +3113,6 @@ impl Actor {
             );
         }
 
-        let original_for_requeue: Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> =
-            tx_batch
-                .iter()
-                .cloned()
-                .zip(routing_plan_batch.iter().cloned())
-                .collect();
         let previous_roster_started_at = Instant::now();
         let previous_roster_evidence = prev_block
             .as_deref()
@@ -3132,8 +3170,6 @@ impl Actor {
                 payload_hash,
                 proposal,
                 proposal_hint,
-                transactions_for_plan,
-                tx_sizes_for_plan,
                 block_hash,
                 block_created_frame_len,
             ) = loop {
@@ -3680,8 +3716,6 @@ impl Actor {
                     payload_hash,
                     proposal,
                     proposal_hint,
-                    tx_batch.clone(),
-                    tx_sizes.clone(),
                     block_hash,
                     frame_len,
                 );
@@ -3692,10 +3726,8 @@ impl Actor {
             let base_stale_window = self
                 .quorum_timeout(da_enabled)
                 .max(Duration::from_millis(1));
-            let stale_window = Self::proposal_assembly_stale_window(
-                base_stale_window,
-                transactions_for_plan.len(),
-            );
+            let stale_window =
+                Self::proposal_assembly_stale_window(base_stale_window, tx_batch.len());
             if elapsed >= stale_window {
                 self.subsystems
                     .propose
@@ -3711,7 +3743,7 @@ impl Actor {
                     elapsed_ms = elapsed.as_millis(),
                     base_stale_window_ms = base_stale_window.as_millis(),
                     stale_window_ms = stale_window.as_millis(),
-                    tx_count = transactions_for_plan.len(),
+                    tx_count = tx_batch.len(),
                     block_hash = %block_hash,
                     preflight_elapsed_ms,
                     tx_select_ms,
@@ -3766,9 +3798,9 @@ impl Actor {
                 // their primary DA body transport.
                 self.prepare_rbc_plan(rbc::RbcPlanInputs {
                     signed_block: &signed_block,
-                    transactions: &transactions_for_plan,
+                    transactions: &tx_batch,
                     routing: &routing_batch,
-                    tx_sizes: &tx_sizes_for_plan,
+                    tx_sizes: &tx_sizes,
                     payload: &payload_bytes,
                     payload_hash,
                     height: proposal_height,
@@ -3781,12 +3813,12 @@ impl Actor {
             };
             drop(payload_bytes);
 
-            if let Some(plan) = rbc_plan.as_ref() {
+            if let Some(plan) = rbc_plan.as_mut() {
                 // Non-frontier recovery always uses RBC transport. Frontier proposals keep the
                 // inline fast path only when the exact body fits a consensus frame; multi-chunk
                 // or otherwise oversized BlockCreated bodies use Proposal + RBC.
-                self.install_rbc_session_plan(&plan.primary)?;
-                if let Some(dup) = plan.duplicate.as_ref() {
+                self.install_rbc_session_plan(&mut plan.primary)?;
+                if let Some(dup) = plan.duplicate.as_mut() {
                     self.install_rbc_session_plan(dup)?;
                 }
                 self.publish_rbc_backlog_snapshot();
@@ -3867,7 +3899,7 @@ impl Actor {
 
             self.record_phase_sample(PipelinePhase::Propose, proposal_height, view);
 
-            let tx_count = transactions_for_plan.len();
+            let tx_count = tx_batch.len();
             iroha_logger::info!(
                 height = proposal_height,
                 view,
@@ -3883,7 +3915,7 @@ impl Actor {
 
         if let Err(err) = assembly_result {
             self.queue.release_transaction_guards(&mut tx_guards);
-            for (tx, routing) in original_for_requeue {
+            for (tx, routing) in drain_aligned_batch(&mut tx_batch, &mut routing_plan_batch) {
                 if crate::tx::is_heartbeat_accepted_transaction(&tx) {
                     continue;
                 }
@@ -4407,7 +4439,7 @@ impl Actor {
             (
                 pending.block.clone(),
                 pending.block.hash(),
-                pending.payload_bytes().to_vec(),
+                pending.payload_bytes_cow().into_owned(),
                 pending.payload_hash,
             )
         };
@@ -6985,9 +7017,9 @@ mod tests {
         ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
         cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
         canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
-        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
-        refresh_proposal_routing_from_state, trim_batch_for_size_cap,
-        trim_batch_for_size_cap_with_plans,
+        consensus_queue_backpressure, da_payload_budget, drain_aligned_batch,
+        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
+        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -7400,6 +7432,37 @@ mod tests {
             routing_plan_batch,
             vec![RoutingPlan::single(RoutingDecision::default())],
             "failed refresh must not mutate plan vector"
+        );
+    }
+
+    #[test]
+    fn drain_aligned_batch_moves_pairs_without_backup_clone() {
+        let mut tx_batch = vec![1, 2, 3];
+        let mut routing_plan_batch = vec![11, 12, 13];
+
+        let drained =
+            drain_aligned_batch(&mut tx_batch, &mut routing_plan_batch).collect::<Vec<_>>();
+
+        assert_eq!(drained, vec![(1, 11), (2, 12), (3, 13)]);
+        assert!(tx_batch.is_empty(), "transactions should be moved out");
+        assert!(
+            routing_plan_batch.is_empty(),
+            "routing plans should be moved out"
+        );
+    }
+
+    #[test]
+    fn reorder_vec_by_indices_moves_non_clone_values() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct NonClone(u8);
+
+        let mut values = vec![NonClone(1), NonClone(2), NonClone(3), NonClone(4)];
+
+        reorder_vec_by_indices(&mut values, &[2, 0, 3, 1]);
+
+        assert_eq!(
+            values,
+            vec![NonClone(3), NonClone(1), NonClone(4), NonClone(2)]
         );
     }
 

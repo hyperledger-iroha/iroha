@@ -63,7 +63,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(super) struct RbcSessionPlan {
     pub(super) key: SessionKey,
-    pub(super) session: RbcSession,
+    pub(super) session: Option<RbcSession>,
     pub(super) init: RbcInit,
     pub(super) chunks: Vec<RbcChunk>,
     pub(super) roster: Vec<PeerId>,
@@ -450,6 +450,14 @@ struct EncodedRbcPayload {
     chunk_root: Hash,
 }
 
+#[derive(Clone, Debug)]
+struct EncodedRbcPayloadMetadata {
+    layout: RbcPayloadLayout,
+    total_chunks: u32,
+    digests: Vec<[u8; 32]>,
+    chunk_root: Hash,
+}
+
 pub(super) fn chunk_payload_bytes(payload: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
     let effective = chunk_size.max(1);
     let chunk_total = chunk_count(payload.len(), chunk_size);
@@ -472,6 +480,20 @@ pub(super) fn chunk_count(payload_len: usize, chunk_size: usize) -> usize {
         return 1;
     }
     payload_len.div_ceil(effective)
+}
+
+fn digest_chunk(chunk: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(chunk);
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&digest);
+    arr
+}
+
+fn chunk_root_from_digests(digests: &[[u8; 32]]) -> std::result::Result<Hash, RbcError> {
+    MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.to_vec())
+        .root()
+        .map(Hash::from)
+        .ok_or(RbcError::ChunkRootUnavailable)
 }
 
 fn encode_rbc_payload(
@@ -537,15 +559,9 @@ fn encode_rbc_payload(
 
     let mut digests = Vec::with_capacity(chunk_bytes.len());
     for chunk in &chunk_bytes {
-        let digest = Sha256::digest(chunk);
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&digest);
-        digests.push(arr);
+        digests.push(digest_chunk(chunk));
     }
-    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
-        .root()
-        .map(Hash::from)
-        .ok_or(RbcError::ChunkRootUnavailable)?;
+    let chunk_root = chunk_root_from_digests(&digests)?;
 
     Ok(EncodedRbcPayload {
         layout,
@@ -553,6 +569,133 @@ fn encode_rbc_payload(
         digests,
         chunk_root,
     })
+}
+
+fn encode_rbc_payload_metadata(
+    payload_bytes: &[u8],
+    chunking: RbcChunkingSpec,
+) -> std::result::Result<EncodedRbcPayloadMetadata, RbcError> {
+    let layout = chunking.layout_for_payload(payload_bytes.len())?;
+    let expected_total_chunks = rbc_layout_total_chunks(layout)?;
+    let mut digests =
+        Vec::with_capacity(usize::try_from(expected_total_chunks).unwrap_or(usize::MAX));
+
+    match chunking.encoding {
+        RbcEncoding::Plain => {
+            if payload_bytes.is_empty() {
+                digests.push(digest_chunk(&[]));
+            } else {
+                for chunk in payload_bytes.chunks(chunking.chunk_size_bytes.max(1)) {
+                    digests.push(digest_chunk(chunk));
+                }
+            }
+        }
+        RbcEncoding::Rs16 => {
+            let data_shards = usize::from(chunking.data_shards);
+            let parity_shards = usize::from(chunking.parity_shards);
+            let data_chunk_count = chunk_count(payload_bytes.len(), chunking.chunk_size_bytes);
+            let stripe_count = data_chunk_count.div_ceil(data_shards);
+            let symbol_count = chunking.chunk_size_bytes / 2;
+
+            for stripe_idx in 0..stripe_count {
+                let mut symbols = Vec::with_capacity(data_shards);
+                for data_idx in 0..data_shards {
+                    let payload_idx = stripe_idx
+                        .checked_mul(data_shards)
+                        .and_then(|base| base.checked_add(data_idx))
+                        .ok_or(RbcError::ChunkRootUnavailable)?;
+                    if payload_idx < data_chunk_count {
+                        let start = payload_idx
+                            .checked_mul(chunking.chunk_size_bytes)
+                            .ok_or(RbcError::ChunkRootUnavailable)?;
+                        let end = start
+                            .saturating_add(chunking.chunk_size_bytes)
+                            .min(payload_bytes.len());
+                        let chunk = &payload_bytes[start..end];
+                        digests.push(digest_chunk(chunk));
+                        symbols.push(erasure_rs16::symbols_from_chunk(symbol_count, chunk));
+                    } else {
+                        digests.push(digest_chunk(&[]));
+                        symbols.push(erasure_rs16::symbols_from_chunk(symbol_count, &[]));
+                    }
+                }
+
+                let parity = erasure_rs16::encode_parity(&symbols, parity_shards)
+                    .map_err(|_| RbcError::ChunkRootUnavailable)?;
+                for shard in parity {
+                    let bytes = erasure_rs16::chunk_from_symbols(&shard, chunking.chunk_size_bytes)
+                        .map_err(|_| RbcError::ChunkRootUnavailable)?;
+                    digests.push(digest_chunk(&bytes));
+                }
+            }
+        }
+    }
+
+    let total_chunks = u32::try_from(digests.len()).map_err(|_| RbcError::ChunkCountOverflow {
+        count: digests.len(),
+    })?;
+    if total_chunks != expected_total_chunks {
+        return Err(RbcError::SessionInit(
+            RbcSessionError::LayoutChunkCountMismatch {
+                total_chunks,
+                expected_total_chunks,
+            },
+        ));
+    }
+    if total_chunks > RBC_MAX_TOTAL_CHUNKS {
+        return Err(RbcError::ChunkCountExceedsCap {
+            count: total_chunks,
+            cap: RBC_MAX_TOTAL_CHUNKS,
+        });
+    }
+
+    let chunk_root = chunk_root_from_digests(&digests)?;
+    Ok(EncodedRbcPayloadMetadata {
+        layout,
+        total_chunks,
+        digests,
+        chunk_root,
+    })
+}
+
+pub(super) fn local_payload_satisfies_session_chunk_metadata(
+    session: &RbcSession,
+    payload_bytes: &[u8],
+    payload_hash: Hash,
+    chunk_max_bytes: usize,
+) -> bool {
+    if session.is_invalid() || payload_bytes.is_empty() || Hash::new(payload_bytes) != payload_hash
+    {
+        return false;
+    }
+
+    let chunking = if session.layout().payload_size_known() {
+        RbcChunkingSpec::from_layout(session.layout())
+    } else {
+        RbcChunkingSpec::plain(chunk_max_bytes)
+    };
+    let Ok(metadata) = encode_rbc_payload_metadata(payload_bytes, chunking) else {
+        return false;
+    };
+    if session.layout().payload_size_known() && session.layout() != metadata.layout {
+        return false;
+    }
+    let expected_chunks = session.total_chunks();
+    if expected_chunks != 0 && expected_chunks != metadata.total_chunks {
+        return false;
+    }
+    if let Some(expected) = session.expected_chunk_digests.as_ref()
+        && expected != &metadata.digests
+    {
+        return false;
+    }
+    if let Some(expected_root) = session.expected_chunk_root
+        && expected_root != metadata.chunk_root
+    {
+        return false;
+    }
+
+    true
 }
 
 fn rbc_layout_from_init(init: &RbcInit) -> std::result::Result<RbcPayloadLayout, RbcSessionError> {
@@ -1227,6 +1370,136 @@ mod tests {
     }
 
     #[test]
+    fn encode_rbc_payload_metadata_matches_full_plain_encoder() {
+        let payload = b"plain payload metadata should match full encoder";
+        let chunking = RbcChunkingSpec::plain(7);
+        let full = encode_rbc_payload(payload, chunking).expect("full encode");
+        let metadata = encode_rbc_payload_metadata(payload, chunking).expect("metadata encode");
+
+        assert_eq!(metadata.layout, full.layout);
+        assert_eq!(
+            metadata.total_chunks,
+            u32::try_from(full.chunks.len()).expect("chunk count fits u32")
+        );
+        assert_eq!(metadata.digests, full.digests);
+        assert_eq!(metadata.chunk_root, full.chunk_root);
+    }
+
+    #[test]
+    fn encode_rbc_payload_metadata_matches_full_rs16_encoder() {
+        let payload = b"rs16 metadata has to include data padding and parity chunks";
+        let chunking = RbcChunkingSpec {
+            encoding: RbcEncoding::Rs16,
+            chunk_size_bytes: 6,
+            data_shards: 3,
+            parity_shards: 2,
+        };
+        let full = encode_rbc_payload(payload, chunking).expect("full encode");
+        let metadata = encode_rbc_payload_metadata(payload, chunking).expect("metadata encode");
+
+        assert_eq!(metadata.layout, full.layout);
+        assert_eq!(
+            metadata.total_chunks,
+            u32::try_from(full.chunks.len()).expect("chunk count fits u32")
+        );
+        assert_eq!(metadata.digests, full.digests);
+        assert_eq!(metadata.chunk_root, full.chunk_root);
+    }
+
+    #[test]
+    fn local_payload_satisfies_session_chunk_metadata_accepts_matching_incomplete_session() {
+        let payload = b"chunk metadata local payload";
+        let chunking = RbcChunkingSpec::plain(4);
+        let encoded = encode_rbc_payload(payload, chunking).expect("encode payload");
+        let payload_hash = Hash::new(payload);
+        let session = RbcSession::new_with_layout(
+            encoded.layout,
+            u32::try_from(encoded.chunks.len()).expect("chunk count fits u32"),
+            Some(payload_hash),
+            Some(encoded.chunk_root),
+            Some(encoded.digests),
+            0,
+        )
+        .expect("session");
+
+        assert_eq!(session.received_chunks(), 0);
+        assert!(local_payload_satisfies_session_chunk_metadata(
+            &session,
+            payload,
+            payload_hash,
+            chunking.chunk_size_bytes,
+        ));
+        assert_eq!(
+            session.received_chunks(),
+            0,
+            "metadata probe must not hydrate or mutate the session"
+        );
+    }
+
+    #[test]
+    fn local_payload_satisfies_session_chunk_metadata_accepts_unknown_chunk_count() {
+        let payload = b"payload available before init";
+        let payload_hash = Hash::new(payload);
+        let session = RbcSession::new(0, Some(payload_hash), None, None, 0).expect("session");
+
+        assert!(local_payload_satisfies_session_chunk_metadata(
+            &session,
+            payload,
+            payload_hash,
+            8,
+        ));
+    }
+
+    #[test]
+    fn local_payload_satisfies_session_chunk_metadata_rejects_root_mismatch() {
+        let payload = b"root mismatch payload";
+        let chunking = RbcChunkingSpec::plain(4);
+        let encoded = encode_rbc_payload(payload, chunking).expect("encode payload");
+        let payload_hash = Hash::new(payload);
+        let wrong_root = Hash::prehashed([0xA5; Hash::LENGTH]);
+        let session = RbcSession::new_with_layout(
+            encoded.layout,
+            u32::try_from(encoded.chunks.len()).expect("chunk count fits u32"),
+            Some(payload_hash),
+            Some(wrong_root),
+            None,
+            0,
+        )
+        .expect("session");
+
+        assert!(!local_payload_satisfies_session_chunk_metadata(
+            &session,
+            payload,
+            payload_hash,
+            chunking.chunk_size_bytes,
+        ));
+    }
+
+    #[test]
+    fn local_payload_satisfies_session_chunk_metadata_rejects_payload_hash_mismatch() {
+        let payload = b"hash mismatch payload";
+        let chunking = RbcChunkingSpec::plain(4);
+        let encoded = encode_rbc_payload(payload, chunking).expect("encode payload");
+        let payload_hash = Hash::new(payload);
+        let session = RbcSession::new_with_layout(
+            encoded.layout,
+            u32::try_from(encoded.chunks.len()).expect("chunk count fits u32"),
+            Some(payload_hash),
+            Some(encoded.chunk_root),
+            Some(encoded.digests),
+            0,
+        )
+        .expect("session");
+
+        assert!(!local_payload_satisfies_session_chunk_metadata(
+            &session,
+            payload,
+            Hash::new(b"different payload"),
+            chunking.chunk_size_bytes,
+        ));
+    }
+
+    #[test]
     fn rbc_session_new_rejects_layout_chunk_count_overflow() {
         let layout = RbcPayloadLayout::new(
             RbcEncoding::Plain,
@@ -1407,6 +1680,8 @@ mod tests {
             session_ttl: std::time::Duration::from_secs(1),
             rebroadcast_sessions_per_tick: 1,
             payload_chunks_per_tick: 1,
+            outbound_queue_max_sessions: 1,
+            outbound_queue_max_bytes: 8192,
             inline_block_created_backup:
                 iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
             store_max_sessions: 8,
@@ -1928,7 +2203,7 @@ impl Actor {
 
         let primary_plan = RbcSessionPlan {
             key: primary_key,
-            session,
+            session: Some(session),
             init,
             chunks,
             roster,
@@ -1939,7 +2214,7 @@ impl Actor {
                 None
             } else {
                 let dup_view = view + 1;
-                let dup_session = primary_plan.session.clone();
+                let dup_session = primary_plan.session.as_ref().cloned();
                 let dup_key = Self::session_key(&block_hash, height, dup_view);
                 let dup_roster = self.rbc_roster_for_session(dup_key);
                 if dup_roster.is_empty() {
@@ -2278,7 +2553,7 @@ impl Actor {
         posted
     }
 
-    pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {
+    pub(super) fn install_rbc_session_plan(&mut self, plan: &mut RbcSessionPlan) -> Result<()> {
         let key = plan.key;
         if self.retire_exact_frontier_rbc_runtime(key, "plan_install") {
             debug!(
@@ -2289,12 +2564,18 @@ impl Actor {
             );
             return Ok(());
         }
+        let Some(session) = plan.session.take() else {
+            return Ok(());
+        };
+        self.update_rbc_status_entry(key, &session, false);
+        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Derived);
+        self.persist_rbc_session(key, &session);
         if self
             .subsystems
             .da_rbc
             .rbc
             .sessions
-            .insert(key, plan.session.clone())
+            .insert(key, session)
             .is_some()
         {
             debug!(
@@ -2303,9 +2584,6 @@ impl Actor {
                 "overwriting existing RBC session entry"
             );
         }
-        self.update_rbc_status_entry(key, &plan.session, false);
-        self.record_rbc_session_roster(key, plan.roster.clone(), RbcRosterSource::Derived);
-        self.persist_rbc_session(key, &plan.session);
         Ok(())
     }
 
@@ -2616,48 +2894,7 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash));
         if needs_payload {
-            let mut queued_seed = false;
-            if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                let work = RbcSeedWork {
-                    key,
-                    payload_hash,
-                    payload_bytes: payload_bytes.to_vec(),
-                    chunking: RbcChunkingSpec::from_config(&self.config.rbc),
-                    epoch: self.epoch_for_height(key.1),
-                    started_at: Instant::now(),
-                };
-                match seed_tx.try_send(work) {
-                    Ok(()) => {
-                        self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                            key,
-                            super::RbcSeedIntent {
-                                rebroadcast_missing_init: pending_rbc,
-                                emit_ready: true,
-                            },
-                        );
-                        queued_seed = true;
-                    }
-                    Err(mpsc::TrySendError::Full(_work)) => {
-                        debug!(
-                            ?key,
-                            "RBC seed queue full; hydrating exact-frontier payload inline"
-                        );
-                    }
-                    Err(mpsc::TrySendError::Disconnected(_work)) => {
-                        warn!(
-                            ?key,
-                            "RBC seed worker disconnected; hydrating exact-frontier payload inline"
-                        );
-                        self.subsystems.da_rbc.rbc.seed_tx = None;
-                        self.subsystems.da_rbc.rbc.seed_rx = None;
-                        self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                    }
-                }
-            }
             self.hydrate_rbc_session_from_block(key, payload_bytes, payload_hash, sender)?;
-            if queued_seed {
-                self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
-            }
         }
         self.populate_rbc_session_metadata_from_block(key, block);
 
@@ -2847,15 +3084,16 @@ impl Actor {
             (
                 pending.block.clone(),
                 pending.payload_hash,
-                pending.payload_bytes().to_vec(),
+                pending.payload_bytes_cow().into_owned(),
             )
         };
+        let mut payload_bytes = payload_bytes;
         if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
             let payload_len = payload_bytes.len();
             let work = RbcSeedWork {
                 key,
                 payload_hash,
-                payload_bytes: payload_bytes.clone(),
+                payload_bytes,
                 chunking: RbcChunkingSpec::from_config(&self.config.rbc),
                 epoch: self.epoch_for_height(key.1),
                 started_at: Instant::now(),
@@ -2893,10 +3131,12 @@ impl Actor {
                     }
                     return Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key));
                 }
-                Err(mpsc::TrySendError::Full(_work)) => {
+                Err(mpsc::TrySendError::Full(work)) => {
+                    payload_bytes = work.payload_bytes;
                     debug!(?key, "RBC seed queue full; falling back to sync seeding");
                 }
-                Err(mpsc::TrySendError::Disconnected(_work)) => {
+                Err(mpsc::TrySendError::Disconnected(work)) => {
+                    payload_bytes = work.payload_bytes;
                     warn!(
                         ?key,
                         "RBC seed worker disconnected; falling back to sync seeding"
@@ -4741,8 +4981,8 @@ impl Actor {
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
             if complete_chunk_set
                 && !session
-                    .payload_bytes()
-                    .is_some_and(|payload| Hash::new(&payload) == init.payload_hash)
+                    .payload_hash_from_chunks()
+                    .is_some_and(|payload_hash| payload_hash == init.payload_hash)
             {
                 session.invalid = true;
                 warn!(

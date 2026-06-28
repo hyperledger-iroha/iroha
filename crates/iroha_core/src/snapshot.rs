@@ -1080,7 +1080,7 @@ fn restore_space_directory_manifests_from_kura(
         let block = kura
             .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
             .ok_or(TryReadError::MissingBlock { height })?;
-        for transaction in block.as_ref().transactions_vec() {
+        for transaction in block.as_ref().external_transactions() {
             restored += restore_space_directory_manifests_from_executable(
                 state,
                 transaction.instructions(),

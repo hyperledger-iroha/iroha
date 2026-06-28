@@ -9,10 +9,22 @@ import org.hyperledger.iroha.android.connect.ConnectCrypto;
 import org.hyperledger.iroha.android.connect.ConnectProtocolException;
 import org.hyperledger.iroha.android.multisig.MultisigSpec;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
+import org.hyperledger.iroha.android.offline.OfflineListParams;
 import org.junit.Test;
 
 /** Regression tests for strict encoded-only account/asset literal handling. */
 public final class AccountLiteralHardCutTests {
+
+  public static void main(final String[] args) throws Exception {
+    final AccountLiteralHardCutTests tests = new AccountLiteralHardCutTests();
+    tests.accountBuildersRejectDomainSuffixedLiterals();
+    tests.accountTargetInstructionsRejectDomainSuffixedLiterals();
+    tests.persistCouncilRejectsDomainSuffixedMembers();
+    tests.uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsMalformedSelectors();
+    tests.offlineListParamsAcceptsAssetSelectorsAndRejectsMalformedSelectors();
+    tests.connectApprovePreimageRejectsDomainSuffix();
+    System.out.println("[IrohaAndroid] AccountLiteralHardCutTests passed.");
+  }
 
   @Test
   public void accountBuildersRejectDomainSuffixedLiterals() throws Exception {
@@ -70,6 +82,24 @@ public final class AccountLiteralHardCutTests {
     assert "global".equals(normalizedScope) : "scope must be preserved";
 
     expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("not:an-asset"));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset(" " + asset));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset(asset + " "));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset(asset).setScope(" global"));
+  }
+
+  @Test
+  public void offlineListParamsAcceptsAssetSelectorsAndRejectsMalformedSelectors() {
+    final String asset = "pkr#paynet";
+    final OfflineListParams params = OfflineListParams.builder().assetId(asset).build();
+    assert asset.equals(params.toQueryParameters().get("asset_id"))
+        : "offline list asset selector must be preserved";
+
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().assetId(" " + asset).build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().assetId(asset + " ").build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().assetId(" ").build().toQueryParameters());
   }
 
   @Test

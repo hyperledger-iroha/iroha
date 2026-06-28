@@ -76,12 +76,16 @@ public final class KagemushaCompactPaymentTokenProver {
       return false;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
+    } catch (final RuntimeException error) {
+      return false;
     }
     try {
       return probeSymbol.run();
     } catch (final IllegalArgumentException error) {
       return false;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    } catch (final RuntimeException error) {
       return false;
     }
   }

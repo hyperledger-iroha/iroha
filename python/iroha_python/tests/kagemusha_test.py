@@ -3327,6 +3327,131 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
         == "iroha:kagemusha:v1:recursive-spend-accumulator"
     )
     assert len(init_summary.topup_anchor_nullifiers) >= 2
+    with pytest.raises(FrozenInstanceError):
+        init_summary.initial_root = bytes(32)
+    with pytest.raises(FrozenInstanceError):
+        init_summary.current_note.amount = "8"
+    mutable_note_commitment = bytearray([0x10]) * 32
+    mutable_spend_nullifier = bytearray([0x11]) * 32
+    copied_note = kagemusha.KagemushaRecursiveSpendableNoteDescriptor(
+        note_commitment=mutable_note_commitment,
+        spend_nullifier=mutable_spend_nullifier,
+        amount="9",
+    )
+    mutable_note_commitment[:] = b"\x00" * 32
+    mutable_spend_nullifier[:] = b"\x00" * 32
+    assert copied_note.note_commitment == bytes([0x10]) * 32
+    assert copied_note.spend_nullifier == bytes([0x11]) * 32
+    mutable_initial_root = bytearray([0x31]) * 32
+    mutable_final_root = bytearray([0x32]) * 32
+    mutable_topup_anchor_0 = bytearray([0x01]) * 32
+    mutable_topup_anchor_1 = bytearray([0x02]) * 32
+    mutable_topup_anchors = [mutable_topup_anchor_0, mutable_topup_anchor_1]
+    copied_summary = kagemusha.KagemushaRecursiveSpendBundleSummary(
+        hop_count=1,
+        proof_circuit_id=kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        asset="hex:11111111111111111111111111111111",
+        chain_id="python-recursive-spend-summary-copy",
+        initial_root=mutable_initial_root,
+        final_root=memoryview(mutable_final_root),
+        topup_anchor_nullifiers=mutable_topup_anchors,
+        current_note=copied_note,
+    )
+    mutable_initial_root[:] = b"\x00" * 32
+    mutable_final_root[:] = b"\x00" * 32
+    mutable_topup_anchor_0[:] = b"\xff" * 32
+    mutable_topup_anchors.clear()
+    assert copied_summary.initial_root == bytes([0x31]) * 32
+    assert copied_summary.final_root == bytes([0x32]) * 32
+    assert copied_summary.topup_anchor_nullifiers == (
+        bytes([0x01]) * 32,
+        bytes([0x02]) * 32,
+    )
+    assert isinstance(copied_summary.topup_anchor_nullifiers, tuple)
+    with pytest.raises(ValueError, match="current_note"):
+        kagemusha.KagemushaRecursiveSpendBundleSummary(
+            hop_count=1,
+            proof_circuit_id=kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            asset="hex:11111111111111111111111111111111",
+            chain_id="python-recursive-spend-summary-copy",
+            initial_root=bytes([0x31]) * 32,
+            final_root=bytes([0x32]) * 32,
+            topup_anchor_nullifiers=(bytes([0x01]) * 32,),
+            current_note=object(),  # type: ignore[arg-type]
+        )
+
+    def build_direct_summary(**overrides: object) -> kagemusha.KagemushaRecursiveSpendBundleSummary:
+        kwargs = {
+            "hop_count": 1,
+            "proof_circuit_id": kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            "asset": "hex:11111111111111111111111111111111",
+            "chain_id": "python-recursive-spend-summary-copy",
+            "initial_root": bytes([0x31]) * 32,
+            "final_root": bytes([0x32]) * 32,
+            "topup_anchor_nullifiers": (
+                bytes([0x01]) * 32,
+                bytes([0x02]) * 32,
+            ),
+            "current_note": copied_note,
+        }
+        kwargs.update(overrides)
+        return kagemusha.KagemushaRecursiveSpendBundleSummary(**kwargs)
+
+    canonical_base58_asset = kagemusha._kagemusha_asset_definition_from_bytes(  # noqa: SLF001
+        bytes.fromhex("00112233445546778899aabbccddeeff")
+    )
+    assert build_direct_summary(asset=canonical_base58_asset).asset == canonical_base58_asset
+
+    malformed_direct_summary_cases = (
+        ("direct summary hop count zero", {"hop_count": 0}, "hop_count"),
+        ("direct summary hop count bool", {"hop_count": True}, "hop_count"),
+        ("direct summary empty asset", {"asset": ""}, "asset"),
+        (
+            "direct summary uppercase hex asset",
+            {"asset": "hex:" + "A" * 32},
+            "asset",
+        ),
+        (
+            "direct summary short hex asset",
+            {"asset": "hex:" + "1" * 31},
+            "asset",
+        ),
+        (
+            "direct summary padded Base58 asset",
+            {"asset": f" {canonical_base58_asset}"},
+            "asset",
+        ),
+        (
+            "direct summary unsupported proof circuit",
+            {"proof_circuit_id": "kagemusha-recursive-spend-lineage-badhop-v1"},
+            "proof_circuit_id",
+        ),
+        (
+            "direct summary zero initial root",
+            {"initial_root": bytes(32)},
+            r"bundle\.accumulator\.initial_root",
+        ),
+        (
+            "direct summary equal final root",
+            {"final_root": bytes([0x31]) * 32},
+            r"bundle\.accumulator\.final_root",
+        ),
+        (
+            "direct summary empty top-up anchors",
+            {"topup_anchor_nullifiers": ()},
+            r"bundle\.accumulator\.topup_anchor_nullifiers count is out of range",
+        ),
+        (
+            "direct summary current-note top-up reuse",
+            {"topup_anchor_nullifiers": (copied_note.note_commitment,)},
+            r"bundle\.accumulator\.topup_anchor_nullifiers must not reuse current note material",
+        ),
+    )
+    for label, overrides, expected_match in malformed_direct_summary_cases:
+        with pytest.raises(ValueError, match=expected_match) as error:
+            build_direct_summary(**overrides)
+        assert str(error.value), label
+
     malformed_topup_anchor_cases = (
         (
             "topup anchor empty list",
@@ -4141,6 +4266,34 @@ def test_recursive_kagemusha_typed_request_codecs_round_trip_shared_fixtures() -
             kagemusha.KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME,
         )
     ]
+
+    mutable_lineage_verifier_records = [verifier_record, verifier_record]
+    copied_plural_redeem_request = kagemusha.KagemushaRecursiveSpendRedeemRequest(
+        bundle=_shared_recursive_spend_archive("init_bundle"),
+        recipient=_recursive_spend_recipient(),
+        public_amount="7",
+        redeem_proof=_synthetic_kagemusha_archive(
+            kagemusha.KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
+            0x68,
+        ),
+        lineage_verifier_records=mutable_lineage_verifier_records,  # type: ignore[arg-type]
+    )
+    mutable_lineage_verifier_records.clear()
+    assert copied_plural_redeem_request.lineage_verifier_records == (
+        verifier_record,
+        verifier_record,
+    )
+    assert isinstance(copied_plural_redeem_request.lineage_verifier_records, tuple)
+    with pytest.raises(FrozenInstanceError):
+        copied_plural_redeem_request.lineage_verifier_records = ()  # type: ignore[misc]
+    copied_plural_payload = _kagemusha_archive_payload(
+        kagemusha.encode_kagemusha_recursive_spend_redeem_request(
+            copied_plural_redeem_request
+        ),
+        kagemusha.KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+    )
+    copied_plural_fields = _read_all_fields(copied_plural_payload)
+    assert len(_read_sequence_fields(copied_plural_fields[8])) == 2
 
 
 def test_recursive_kagemusha_redeem_request_rejects_legacy_public_key_layout() -> None:

@@ -681,6 +681,8 @@ mod tests {
                     defaults::network::DEFERRED_SEND_TTL_MS,
                 ),
                 deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+                deferred_send_max_bytes_per_peer:
+                    defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -714,6 +716,14 @@ mod tests {
                 p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(512).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(128).unwrap(),
+                p2p_outbound_frame_queue_max_high_bytes:
+                    defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+                p2p_outbound_frame_queue_max_low_bytes:
+                    defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+                p2p_outbound_frame_queue_max_high_frames:
+                    defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+                p2p_outbound_frame_queue_max_low_frames:
+                    defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
                 p2p_subscriber_queue_cap: NonZeroUsize::new(128).unwrap(),
                 consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
                 consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
@@ -1292,6 +1302,8 @@ mod tests {
                     missing_request_stale_height_margin:
                         iroha_config::parameters::defaults::sumeragi::
                             RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+                    pending_block_cap:
+                        iroha_config::parameters::defaults::sumeragi::RECOVERY_PENDING_BLOCK_CAP,
                     pending_block_sync_cap:
                         iroha_config::parameters::defaults::sumeragi::
                             RECOVERY_PENDING_BLOCK_SYNC_CAP,
@@ -1356,7 +1368,11 @@ mod tests {
                         RBC_REBROADCAST_SESSIONS_PER_TICK,
                     payload_chunks_per_tick:
                         iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
-                inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
+                    outbound_queue_max_sessions: iroha_config::parameters::defaults::sumeragi::
+                        RBC_OUTBOUND_QUEUE_MAX_SESSIONS,
+                    outbound_queue_max_bytes: iroha_config::parameters::defaults::sumeragi::
+                        RBC_OUTBOUND_QUEUE_MAX_BYTES,
+                    inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                     store_max_sessions:
                         iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
                     store_soft_sessions:

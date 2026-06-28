@@ -1,6 +1,6 @@
 //! Proposal- and block-created message handling.
 
-use std::{sync::mpsc, time::Instant};
+use std::time::Instant;
 
 use iroha_logger::prelude::*;
 
@@ -1684,9 +1684,12 @@ impl Actor {
     ) -> Option<super::message::BlockCreated> {
         let header = block.header();
         let owned_payload_bytes;
+        let payload_needs_canonical_check;
         let (payload_bytes, payload_hash) = if let Some((bytes, hash)) = payload_hint {
+            payload_needs_canonical_check = true;
             (bytes, hash)
         } else {
+            payload_needs_canonical_check = false;
             owned_payload_bytes = super::proposals::block_payload_bytes(block);
             let hash = Hash::new(&owned_payload_bytes);
             (owned_payload_bytes.as_slice(), hash)
@@ -1701,7 +1704,9 @@ impl Actor {
             );
             return None;
         }
-        if super::proposals::block_payload_bytes(block) != payload_bytes {
+        if payload_needs_canonical_check
+            && super::proposals::block_payload_bytes(block) != payload_bytes
+        {
             debug!(
                 height = header.height().get(),
                 view = header.view_change_index(),
@@ -1728,7 +1733,7 @@ impl Actor {
             header.view_change_index(),
         );
         let rebuilt_init = match self
-            .rebuild_rbc_init_from_payload_bytes(block, key, payload_bytes, payload_hash)
+            .rebuild_rbc_init_from_canonical_payload_bytes(block, key, payload_bytes, payload_hash)
             .or_else(|| {
                 let roster_hint = roster_hint?;
                 let height = header.height().get();
@@ -2760,7 +2765,12 @@ impl Actor {
                                 let payload_bytes = super::proposals::block_payload_bytes(&block);
                                 (Hash::new(&payload_bytes), payload_bytes)
                             },
-                            |pending| (pending.payload_hash, pending.payload_bytes().to_vec()),
+                            |pending| {
+                                (
+                                    pending.payload_hash,
+                                    pending.payload_bytes_cow().into_owned(),
+                                )
+                            },
                         );
                     self.retain_exact_frontier_rbc_session_for_block_created(
                         session_key,
@@ -2777,7 +2787,12 @@ impl Actor {
                                 let payload_bytes = super::proposals::block_payload_bytes(&block);
                                 (Hash::new(&payload_bytes), payload_bytes)
                             },
-                            |pending| (pending.payload_hash, pending.payload_bytes().to_vec()),
+                            |pending| {
+                                (
+                                    pending.payload_hash,
+                                    pending.payload_bytes_cow().into_owned(),
+                                )
+                            },
                         );
                     let rebroadcast_missing_init = self
                         .subsystems
@@ -2798,7 +2813,6 @@ impl Actor {
                         }
                         seed_inflight = true;
                     }
-                    let mut queued_seed = false;
                     if !seed_inflight
                         && !self
                             .subsystems
@@ -2807,122 +2821,14 @@ impl Actor {
                             .sessions
                             .contains_key(&session_key)
                     {
-                        if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                            let payload_len = payload_bytes.len();
-                            let work = super::rbc::RbcSeedWork {
-                                key: session_key,
-                                payload_hash,
-                                payload_bytes: payload_bytes.clone(),
-                                chunking: super::rbc::RbcChunkingSpec::from_config(
-                                    &self.config.rbc,
-                                ),
-                                epoch: self.epoch_for_height(height),
-                                started_at: Instant::now(),
-                            };
-                            match seed_tx.try_send(work) {
-                                Ok(()) => {
-                                    self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                                        session_key,
-                                        super::RbcSeedIntent {
-                                            rebroadcast_missing_init,
-                                            emit_ready: true,
-                                        },
-                                    );
-                                    match self.insert_seed_rbc_session_from_block(
-                                        session_key,
-                                        &block,
-                                        payload_hash,
-                                        payload_len,
-                                    ) {
-                                        Ok(_) => {
-                                            queued_seed = true;
-                                            seed_inflight = true;
-                                        }
-                                        Err(err) => {
-                                            warn!(
-                                                height,
-                                                view,
-                                                block = %block_hash,
-                                                error = %err,
-                                                "failed to insert seed RBC session after seed enqueue"
-                                            );
-                                            self.subsystems
-                                                .da_rbc
-                                                .rbc
-                                                .seed_inflight
-                                                .remove(&session_key);
-                                        }
-                                    }
-                                }
-                                Err(mpsc::TrySendError::Full(_work)) => {
-                                    debug!(
-                                        ?session_key,
-                                        "RBC seed queue full; seeding synchronously"
-                                    );
-                                }
-                                Err(mpsc::TrySendError::Disconnected(_work)) => {
-                                    warn!(
-                                        ?session_key,
-                                        "RBC seed worker disconnected; seeding synchronously"
-                                    );
-                                    self.subsystems.da_rbc.rbc.seed_tx = None;
-                                    self.subsystems.da_rbc.rbc.seed_rx = None;
-                                    self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                                }
-                            }
-                        }
-                        if !queued_seed {
-                            self.seed_rbc_session_from_payload(
-                                session_key,
-                                &block,
-                                &payload_bytes,
-                                payload_hash,
-                                rebroadcast_missing_init,
-                                true,
-                            )?;
-                        }
-                    }
-                    if queued_seed
-                        && self
-                            .subsystems
-                            .da_rbc
-                            .rbc
-                            .sessions
-                            .get(&session_key)
-                            .is_some_and(|session| {
-                                super::rbc_session_needs_payload(session, payload_hash)
-                            })
-                    {
-                        self.hydrate_rbc_session_from_block(
+                        self.seed_rbc_session_from_payload(
                             session_key,
+                            &block,
                             &payload_bytes,
                             payload_hash,
-                            sender.as_ref(),
+                            rebroadcast_missing_init,
+                            true,
                         )?;
-                        self.subsystems
-                            .da_rbc
-                            .rbc
-                            .seed_inflight
-                            .remove(&session_key);
-                        seed_inflight = false;
-                        self.retry_rbc_progress_after_block_created_hydration(session_key);
-                        debug!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "hydrated RBC session inline after seed queueing for duplicate BlockCreated"
-                        );
-                        if rebroadcast_missing_init
-                            && let Some(session) = self
-                                .subsystems
-                                .da_rbc
-                                .rbc
-                                .sessions
-                                .get(&session_key)
-                                .cloned()
-                        {
-                            self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
-                        }
                     }
                     if !seed_inflight
                         && self
@@ -2935,45 +2841,6 @@ impl Actor {
                                 super::rbc_session_needs_payload(session, payload_hash)
                             })
                     {
-                        if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                            let work = super::rbc::RbcSeedWork {
-                                key: session_key,
-                                payload_hash,
-                                payload_bytes: payload_bytes.clone(),
-                                chunking: super::rbc::RbcChunkingSpec::from_config(
-                                    &self.config.rbc,
-                                ),
-                                epoch: self.epoch_for_height(height),
-                                started_at: Instant::now(),
-                            };
-                            match seed_tx.try_send(work) {
-                                Ok(()) => {
-                                    self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                                        session_key,
-                                        super::RbcSeedIntent {
-                                            rebroadcast_missing_init,
-                                            emit_ready: true,
-                                        },
-                                    );
-                                    queued_seed = true;
-                                }
-                                Err(mpsc::TrySendError::Full(_work)) => {
-                                    debug!(
-                                        ?session_key,
-                                        "RBC seed queue full; hydrating synchronously"
-                                    );
-                                }
-                                Err(mpsc::TrySendError::Disconnected(_work)) => {
-                                    warn!(
-                                        ?session_key,
-                                        "RBC seed worker disconnected; hydrating synchronously"
-                                    );
-                                    self.subsystems.da_rbc.rbc.seed_tx = None;
-                                    self.subsystems.da_rbc.rbc.seed_rx = None;
-                                    self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                                }
-                            }
-                        }
                         self.hydrate_rbc_session_from_block(
                             session_key,
                             &payload_bytes,
@@ -2981,19 +2848,6 @@ impl Actor {
                             sender.as_ref(),
                         )?;
                         self.retry_rbc_progress_after_block_created_hydration(session_key);
-                        if queued_seed {
-                            self.subsystems
-                                .da_rbc
-                                .rbc
-                                .seed_inflight
-                                .remove(&session_key);
-                            debug!(
-                                height,
-                                view,
-                                block = %block_hash,
-                                "hydrated RBC session inline after payload-seed queueing for duplicate BlockCreated"
-                            );
-                        }
                         if rebroadcast_missing_init
                             && let Some(session) = self
                                 .subsystems
@@ -3963,123 +3817,18 @@ impl Actor {
                     debug!(
                         height,
                         view,
-                        "BlockCreated arrived before RBC session initialised; queuing seed work"
+                        "BlockCreated arrived before RBC session initialised; seeding from payload"
                     );
                     let seed_start = Instant::now();
-                    let mut queued_seed = false;
-                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                        let payload_len = payload_bytes.len();
-                        let work = super::rbc::RbcSeedWork {
-                            key: session_key,
-                            payload_hash,
-                            payload_bytes: payload_bytes.clone(),
-                            chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
-                            epoch: self.epoch_for_height(height),
-                            started_at: Instant::now(),
-                        };
-                        match seed_tx.try_send(work) {
-                            Ok(()) => {
-                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                                    session_key,
-                                    super::RbcSeedIntent {
-                                        rebroadcast_missing_init,
-                                        emit_ready: true,
-                                    },
-                                );
-                                match self.insert_seed_rbc_session_from_block(
-                                    session_key,
-                                    &block,
-                                    payload_hash,
-                                    payload_len,
-                                ) {
-                                    Ok(_) => {
-                                        queued_seed = true;
-                                    }
-                                    Err(err) => {
-                                        warn!(
-                                            height,
-                                            view,
-                                            block = %block_hash,
-                                            error = %err,
-                                            "failed to insert seed RBC session after seed enqueue"
-                                        );
-                                        self.subsystems
-                                            .da_rbc
-                                            .rbc
-                                            .seed_inflight
-                                            .remove(&session_key);
-                                    }
-                                }
-                            }
-                            Err(mpsc::TrySendError::Full(_work)) => {
-                                debug!(?session_key, "RBC seed queue full; seeding synchronously");
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_work)) => {
-                                warn!(
-                                    ?session_key,
-                                    "RBC seed worker disconnected; seeding synchronously"
-                                );
-                                self.subsystems.da_rbc.rbc.seed_tx = None;
-                                self.subsystems.da_rbc.rbc.seed_rx = None;
-                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                            }
-                        }
-                    }
-                    if !queued_seed {
-                        self.seed_rbc_session_from_payload(
-                            session_key,
-                            &block,
-                            &payload_bytes,
-                            payload_hash,
-                            rebroadcast_missing_init,
-                            true,
-                        )?;
-                    }
+                    self.seed_rbc_session_from_payload(
+                        session_key,
+                        &block,
+                        &payload_bytes,
+                        payload_hash,
+                        rebroadcast_missing_init,
+                        true,
+                    )?;
                     seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    if queued_seed
-                        && self
-                            .subsystems
-                            .da_rbc
-                            .rbc
-                            .sessions
-                            .get(&session_key)
-                            .is_some_and(|session| {
-                                super::rbc_session_needs_payload(session, payload_hash)
-                            })
-                    {
-                        let hydrate_start = Instant::now();
-                        self.hydrate_rbc_session_from_block(
-                            session_key,
-                            &payload_bytes,
-                            payload_hash,
-                            sender.as_ref(),
-                        )?;
-                        hydrate_ms =
-                            u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        self.subsystems
-                            .da_rbc
-                            .rbc
-                            .seed_inflight
-                            .remove(&session_key);
-                        self.retry_rbc_progress_after_block_created_hydration(session_key);
-                        debug!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "hydrated RBC session inline after seed queueing for BlockCreated"
-                        );
-                        if rebroadcast_missing_init
-                            && let Some(session) = self
-                                .subsystems
-                                .da_rbc
-                                .rbc
-                                .sessions
-                                .get(&session_key)
-                                .cloned()
-                        {
-                            self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
-                        }
-                    }
                 } else if self
                     .subsystems
                     .da_rbc
@@ -4088,46 +3837,6 @@ impl Actor {
                     .get(&session_key)
                     .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash))
                 {
-                    let seed_start = Instant::now();
-                    let mut queued_seed = false;
-                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                        let work = super::rbc::RbcSeedWork {
-                            key: session_key,
-                            payload_hash,
-                            payload_bytes: payload_bytes.clone(),
-                            chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
-                            epoch: self.epoch_for_height(height),
-                            started_at: Instant::now(),
-                        };
-                        match seed_tx.try_send(work) {
-                            Ok(()) => {
-                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                                    session_key,
-                                    super::RbcSeedIntent {
-                                        rebroadcast_missing_init,
-                                        emit_ready: true,
-                                    },
-                                );
-                                queued_seed = true;
-                            }
-                            Err(mpsc::TrySendError::Full(_work)) => {
-                                debug!(
-                                    ?session_key,
-                                    "RBC seed queue full; hydrating synchronously"
-                                );
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_work)) => {
-                                warn!(
-                                    ?session_key,
-                                    "RBC seed worker disconnected; hydrating synchronously"
-                                );
-                                self.subsystems.da_rbc.rbc.seed_tx = None;
-                                self.subsystems.da_rbc.rbc.seed_rx = None;
-                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                            }
-                        }
-                    }
-                    seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     let hydrate_start = Instant::now();
                     self.hydrate_rbc_session_from_block(
                         session_key,
@@ -4139,19 +3848,6 @@ impl Actor {
                     self.retry_rbc_progress_after_block_created_hydration(session_key);
                     hydrate_ms =
                         u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    if queued_seed {
-                        self.subsystems
-                            .da_rbc
-                            .rbc
-                            .seed_inflight
-                            .remove(&session_key);
-                        debug!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            "hydrated RBC session inline after payload-seed queueing for BlockCreated"
-                        );
-                    }
                     if rebroadcast_missing_init
                         && let Some(session) = self
                             .subsystems
@@ -4285,6 +3981,7 @@ impl Actor {
         if da_enabled && !exact_frontier_block_created {
             let _ = self.populate_rbc_session_metadata_from_block(session_key, &block);
         }
+        let mut inserted_pending_block = false;
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
                 if revive_aborted {
@@ -4293,61 +3990,36 @@ impl Actor {
                         .commit_qc_epoch
                         .or(recovery_mode.observed_commit_qc_epoch());
                     let pending = occ.get_mut();
-                    pending.revive_after_abort_with_payload_bytes(
-                        block,
-                        payload_hash,
-                        height,
-                        view,
-                        payload_bytes.clone(),
-                    );
+                    pending.revive_after_abort(block, payload_hash, height, view);
                     if let Some(epoch) = commit_qc_epoch {
                         pending.note_commit_qc_observed(epoch);
                     }
                 } else if stale_payload_only {
                     let pending = occ.get_mut();
                     if pending.is_retired_same_height() {
-                        pending.refresh_retired_payload_with_payload_bytes(
-                            block,
-                            payload_hash,
-                            height,
-                            view,
-                            payload_bytes.clone(),
-                        );
+                        pending.refresh_retired_payload(block, payload_hash, height, view);
                     } else {
-                        pending.replace_block_with_payload_bytes(
-                            block,
-                            payload_hash,
-                            height,
-                            view,
-                            payload_bytes.clone(),
-                        );
+                        pending.replace_block(block, payload_hash, height, view);
                         pending.retire_same_height();
                     }
                 } else {
-                    occ.get_mut().replace_block_with_payload_bytes(
-                        block,
-                        payload_hash,
-                        height,
-                        view,
-                        payload_bytes.clone(),
-                    );
+                    occ.get_mut()
+                        .replace_block(block, payload_hash, height, view);
                 }
             }
             Entry::Vacant(vac) => {
-                let mut pending = PendingBlock::new_with_payload_bytes(
-                    block,
-                    payload_hash,
-                    height,
-                    view,
-                    payload_bytes.clone(),
-                );
+                let mut pending = PendingBlock::new(block, payload_hash, height, view);
                 if stale_payload_only {
                     pending.retire_same_height();
                 } else if let Some(epoch) = recovery_mode.observed_commit_qc_epoch() {
                     pending.note_commit_qc_observed(epoch);
                 }
                 vac.insert(pending);
+                inserted_pending_block = true;
             }
+        }
+        if inserted_pending_block {
+            self.enforce_pending_block_cap(block_hash, "block_created");
         }
         if da_enabled
             && exact_frontier_block_created
@@ -4504,8 +4176,7 @@ impl Actor {
                     } else if session.total_chunks() != 0
                         && session.received_chunks() == session.total_chunks()
                     {
-                        if let Some(reconstructed_payload) = session.payload_bytes() {
-                            let reconstructed_hash = Hash::new(&reconstructed_payload);
+                        if let Some(reconstructed_hash) = session.payload_hash_from_chunks() {
                             if reconstructed_hash == payload_hash {
                                 session.payload_hash = Some(payload_hash);
                             } else {

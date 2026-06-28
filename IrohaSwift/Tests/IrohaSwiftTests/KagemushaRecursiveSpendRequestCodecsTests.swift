@@ -151,6 +151,167 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             "iroha:kagemusha:v1:recursive-spend-accumulator"
         )
         XCTAssertGreaterThanOrEqual(initBundle.topupAnchorNullifiers.count, 2)
+        let originalInitialRoot = initBundle.initialRoot
+        var mutatedInitialRoot = initBundle.initialRoot
+        mutatedInitialRoot[0] ^= 0xff
+        XCTAssertEqual(initBundle.initialRoot, originalInitialRoot)
+        let originalFinalRoot = initBundle.finalRoot
+        var mutatedFinalRoot = initBundle.finalRoot
+        mutatedFinalRoot[0] ^= 0xff
+        XCTAssertEqual(initBundle.finalRoot, originalFinalRoot)
+        let originalTopupAnchorNullifiers = initBundle.topupAnchorNullifiers
+        var mutatedTopupAnchorNullifiers = initBundle.topupAnchorNullifiers
+        mutatedTopupAnchorNullifiers[0][0] ^= 0xff
+        mutatedTopupAnchorNullifiers.removeAll()
+        XCTAssertEqual(initBundle.topupAnchorNullifiers, originalTopupAnchorNullifiers)
+        let originalNoteCommitment = initBundle.currentNote.noteCommitment
+        var mutatedNoteCommitment = initBundle.currentNote.noteCommitment
+        mutatedNoteCommitment[0] ^= 0xff
+        XCTAssertEqual(initBundle.currentNote.noteCommitment, originalNoteCommitment)
+        let originalSpendNullifier = initBundle.currentNote.spendNullifier
+        var mutatedSpendNullifier = initBundle.currentNote.spendNullifier
+        mutatedSpendNullifier[0] ^= 0xff
+        XCTAssertEqual(initBundle.currentNote.spendNullifier, originalSpendNullifier)
+        var mutableNoteCommitment = Data(repeating: 0x10, count: 32)
+        var mutableSpendNullifier = Data(repeating: 0x11, count: 32)
+        let copiedNote = try KagemushaRecursiveSpendableNoteDescriptor(
+            noteCommitment: mutableNoteCommitment,
+            spendNullifier: mutableSpendNullifier,
+            amount: "9"
+        )
+        mutableNoteCommitment[0] = 0
+        mutableSpendNullifier[0] = 0
+        XCTAssertEqual(copiedNote.noteCommitment, Data(repeating: 0x10, count: 32))
+        XCTAssertEqual(copiedNote.spendNullifier, Data(repeating: 0x11, count: 32))
+        var mutableSummaryInitialRoot = Data(repeating: 0x31, count: 32)
+        var mutableSummaryFinalRoot = Data(repeating: 0x32, count: 32)
+        var mutableTopupAnchors = [
+            Data(repeating: 0x01, count: 32),
+            Data(repeating: 0x02, count: 32)
+        ]
+        let copiedSummary = try KagemushaRecursiveSpendBundleSummary(
+            hopCount: 1,
+            proofCircuitId: KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
+            asset: "hex:11111111111111111111111111111111",
+            chainId: "swift-recursive-spend-summary-copy",
+            initialRoot: mutableSummaryInitialRoot,
+            finalRoot: mutableSummaryFinalRoot,
+            topupAnchorNullifiers: mutableTopupAnchors,
+            currentNote: copiedNote
+        )
+        mutableSummaryInitialRoot[0] = 0
+        mutableSummaryFinalRoot[0] = 0
+        mutableTopupAnchors[0][0] = 0xff
+        mutableTopupAnchors.removeAll()
+        XCTAssertEqual(copiedSummary.initialRoot, Data(repeating: 0x31, count: 32))
+        XCTAssertEqual(copiedSummary.finalRoot, Data(repeating: 0x32, count: 32))
+        XCTAssertEqual(
+            copiedSummary.topupAnchorNullifiers,
+            [Data(repeating: 0x01, count: 32), Data(repeating: 0x02, count: 32)]
+        )
+        func buildDirectSummary(
+            hopCount: Int = 1,
+            proofCircuitId: String = KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1,
+            asset: String = "hex:11111111111111111111111111111111",
+            chainId: String = "swift-recursive-spend-summary-copy",
+            initialRoot: Data = Data(repeating: 0x31, count: 32),
+            finalRoot: Data = Data(repeating: 0x32, count: 32),
+            topupAnchorNullifiers: [Data] = [
+                Data(repeating: 0x01, count: 32),
+                Data(repeating: 0x02, count: 32)
+            ]
+        ) throws -> KagemushaRecursiveSpendBundleSummary {
+            try KagemushaRecursiveSpendBundleSummary(
+                hopCount: hopCount,
+                proofCircuitId: proofCircuitId,
+                asset: asset,
+                chainId: chainId,
+                initialRoot: initialRoot,
+                finalRoot: finalRoot,
+                topupAnchorNullifiers: topupAnchorNullifiers,
+                currentNote: copiedNote
+            )
+        }
+        var canonicalSummaryAssetBytes = Data(repeating: 0x11, count: 16)
+        canonicalSummaryAssetBytes[6] = 0x41
+        canonicalSummaryAssetBytes[8] = 0x81
+        let canonicalSummaryAsset = try XCTUnwrap(
+            AssetDefinitionAddress.encode(uuidBytes: canonicalSummaryAssetBytes)
+        )
+        XCTAssertEqual(try buildDirectSummary(asset: canonicalSummaryAsset).asset, canonicalSummaryAsset)
+        let malformedDirectSummaryCases: [
+            (String, KagemushaRecursiveSpendRequestCodecError, () throws -> KagemushaRecursiveSpendBundleSummary)
+        ] = [
+            (
+                "direct summary hop count zero",
+                .invalidArchive("bundle.accumulator.hop_count"),
+                { try buildDirectSummary(hopCount: 0) }
+            ),
+            (
+                "direct summary hop count over limit",
+                .invalidArchive("bundle.accumulator.hop_count"),
+                {
+                    try buildDirectSummary(
+                        hopCount: Int(KagemushaRecursiveSpendProver.recursiveSpendLineageWitnesslessMaxHopsV1) + 1
+                    )
+                }
+            ),
+            (
+                "direct summary unsupported proof circuit",
+                .invalidArchive("bundle.proof_circuit_id"),
+                { try buildDirectSummary(proofCircuitId: "unknown-kagemusha-recursive-spend-circuit") }
+            ),
+            (
+                "direct summary empty asset",
+                .invalidArchive("bundle.accumulator.asset"),
+                { try buildDirectSummary(asset: "") }
+            ),
+            (
+                "direct summary uppercase hex asset",
+                .invalidArchive("bundle.accumulator.asset"),
+                { try buildDirectSummary(asset: "hex:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") }
+            ),
+            (
+                "direct summary short fallback asset",
+                .invalidArchive("bundle.accumulator.asset"),
+                { try buildDirectSummary(asset: "hex:1111111111111111111111111111111") }
+            ),
+            (
+                "direct summary padded Base58 asset",
+                .invalidArchive("bundle.accumulator.asset"),
+                { try buildDirectSummary(asset: " \(canonicalSummaryAsset)") }
+            ),
+            (
+                "direct summary zero initial root",
+                .invalidArchive("bundle.accumulator.initial_root"),
+                { try buildDirectSummary(initialRoot: Data(repeating: 0, count: 32)) }
+            ),
+            (
+                "direct summary equal final root",
+                .invalidArchive("bundle.accumulator.final_root"),
+                { try buildDirectSummary(finalRoot: Data(repeating: 0x31, count: 32)) }
+            ),
+            (
+                "direct summary empty top-up anchors",
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers count is out of range"),
+                { try buildDirectSummary(topupAnchorNullifiers: []) }
+            ),
+            (
+                "direct summary zero top-up anchor",
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must not contain zero values"),
+                { try buildDirectSummary(topupAnchorNullifiers: [Data(repeating: 0, count: 32)]) }
+            ),
+            (
+                "direct summary current-note top-up reuse",
+                .invalidArchive("bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"),
+                { try buildDirectSummary(topupAnchorNullifiers: [copiedNote.noteCommitment]) }
+            )
+        ]
+        for (label, expectedError, build) in malformedDirectSummaryCases {
+            XCTAssertThrowsError(try build()) { error in
+                XCTAssertEqual(error as? KagemushaRecursiveSpendRequestCodecError, expectedError, label)
+            }
+        }
         let malformedTopupAnchorCases: [(String, [Data], KagemushaRecursiveSpendRequestCodecError)] = [
             (
                 "topup anchor empty list",
@@ -733,6 +894,19 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             name: "lineage_witness_append_result"
         )
         let lineageVerifierRecord = try Self.sampleVerifierRecord()
+        var mutableVerifierRecordBytes = Self.syntheticArchive(
+            schema: KagemushaRecursiveSpendRequestCodecs.verifyingKeyRecordWireName
+        )
+        let copiedVerifierRecordBytes = mutableVerifierRecordBytes
+        let copiedVerifierRecord = try KagemushaRecursiveSpendVerifierRecordRef(
+            verifierKeyId: "halo2/ipa:copiedVerifierRecord",
+            recordBytes: mutableVerifierRecordBytes
+        )
+        mutableVerifierRecordBytes[mutableVerifierRecordBytes.index(before: mutableVerifierRecordBytes.endIndex)] ^= 0x7f
+        XCTAssertEqual(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes)
+        var returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes
+        returnedVerifierRecordBytes[returnedVerifierRecordBytes.index(before: returnedVerifierRecordBytes.endIndex)] ^= 0x7f
+        XCTAssertEqual(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes)
         let changeOutput = Data((0..<32).map { UInt8(0x80 + $0) })
         let redeemArchive = try KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(
             KagemushaRecursiveSpendRedeemRequest(
@@ -826,6 +1000,24 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
             ],
             try Self.sequencePayloads(pluralRedeemFields[8])
         )
+
+        var mutableLineageVerifierRecords = [lineageVerifierRecord, lineageVerifierRecord]
+        let copiedPluralRedeemRequest = try KagemushaRecursiveSpendRedeemRequest(
+            bundle: Self.sharedRecursiveSpendArchive(abi: .abi6, name: "init_bundle"),
+            recipient: try Self.sampleRecipient(),
+            publicAmount: "7",
+            redeemProof: redeemProof,
+            lineageVerifierRecords: mutableLineageVerifierRecords
+        )
+        mutableLineageVerifierRecords.removeAll()
+        XCTAssertEqual(copiedPluralRedeemRequest.lineageVerifierRecords.count, 2)
+        XCTAssertEqual(copiedPluralRedeemRequest.lineageVerifierRecords[0], lineageVerifierRecord)
+        XCTAssertEqual(copiedPluralRedeemRequest.lineageVerifierRecords[1], lineageVerifierRecord)
+        let copiedPluralFields = try Self.requestFields(
+            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(copiedPluralRedeemRequest),
+            schema: KagemushaRecursiveSpendRequestCodecs.redeemRequestWireName
+        )
+        XCTAssertEqual(try Self.sequencePayloads(copiedPluralFields[8]).count, 2)
 
         let verifyFields = try Self.requestFields(
             KagemushaRecursiveSpendRequestCodecs.encodeVerifyRequest(

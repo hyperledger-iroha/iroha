@@ -1728,11 +1728,7 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertContains(
             archives,
-            "\"sha256_hex\": \"4fbfbe8b05b86c430a3743b0da68b819afca8c666357ef7b2e171b837f97f415\"",
-        )
-        assertContains(
-            archives,
-            "\"sha256_hex\": \"31cd92a5a2f8894634c531830621604937d4631f5f08b58cba01a45dc26e9eba\"",
+            "\"sha256_hex\": \"5880f5430d4161302c97b4f1f7eeb02f88997459455736ebcffd62cf9bf0f810\"",
         )
 
         assertEquals(
@@ -2037,12 +2033,44 @@ class KagemushaRecursiveSpendProverTest {
                 probeSymbol = { true },
             ),
         )
+        var loadedInvalidRequiredAbi = false
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = { loadedInvalidRequiredAbi = true },
+                nativeBridgeAbiVersionProbe = { 7 },
+                probeSymbol = { true },
+                requiredNativeBridgeAbiVersion = 0,
+            ),
+        )
+        assertFalse(loadedInvalidRequiredAbi)
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = { throw AssertionError("must not load for invalid required ABI") },
+                nativeBridgeAbiVersionProbe = { 7 },
+                probeSymbol = { true },
+                requiredNativeBridgeAbiVersion = -1,
+            ),
+        )
         assertFalse(
             KagemushaRecursiveSpendProver.detectNativeAvailability(
                 loadLibrary = {},
                 nativeBridgeAbiVersionProbe = { 6 },
                 probeSymbol = { true },
                 requiredNativeBridgeAbiVersion = 7,
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { 0 },
+                probeSymbol = { true },
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectNativeAvailability(
+                loadLibrary = {},
+                nativeBridgeAbiVersionProbe = { -1 },
+                probeSymbol = { true },
             ),
         )
         assertFalse(

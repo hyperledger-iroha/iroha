@@ -56,12 +56,26 @@ def parse_metric_value(metrics_text: str, metric: str) -> Optional[float]:
 
 def extract_status_snapshot(payload: dict) -> dict:
     """Extract core counters from a /status JSON payload."""
+    sumeragi = payload.get("sumeragi") or {}
     return {
         "blocks": int(payload.get("blocks", 0) or 0),
         "blocks_non_empty": int(payload.get("blocks_non_empty", 0) or 0),
         "txs_approved": int(payload.get("txs_approved", 0) or 0),
         "txs_rejected": int(payload.get("txs_rejected", 0) or 0),
         "queue_size": int(payload.get("queue_size", 0) or 0),
+        "queue_retained_bytes": int(
+            payload.get("queue_retained_bytes", sumeragi.get("tx_queue_retained_bytes", 0)) or 0
+        ),
+        "queue_max_retained_bytes": int(
+            payload.get(
+                "queue_max_retained_bytes",
+                sumeragi.get("tx_queue_max_retained_bytes", 0),
+            )
+            or 0
+        ),
+        "queue_saturated": bool(
+            payload.get("queue_saturated", sumeragi.get("tx_queue_saturated", False))
+        ),
     }
 
 
@@ -107,6 +121,11 @@ def torii_url_from_status(status_url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         raise ValueError(f"status url must include scheme and host: {status_url}")
     return normalize_torii_url(f"{parsed.scheme}://{parsed.netloc}")
+
+
+def request_with_accept(url: str, accept: str) -> urllib.request.Request:
+    """Build a URL request that asks Torii for a specific response format."""
+    return urllib.request.Request(url, headers={"Accept": accept})
 
 
 def render_client_config(base_text: str, torii_url: str) -> str:
@@ -346,11 +365,13 @@ def main() -> int:
         print(f"Parallel per shard: {shard_parallel}")
 
     def fetch_json(url: str) -> dict:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        request = request_with_accept(url, "application/json")
+        with urllib.request.urlopen(request, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def fetch_text(url: str) -> str:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        request = request_with_accept(url, "text/plain")
+        with urllib.request.urlopen(request, timeout=5) as resp:
             return resp.read().decode("utf-8")
 
     preferred_status_url = status_urls[0]
@@ -522,6 +543,18 @@ def main() -> int:
                     f"{args.queue_hard_limit}; aborting shard."
                 )
                 return False
+            if status["queue_saturated"]:
+                if deadline is not None and time.monotonic() >= deadline:
+                    retained = status["queue_retained_bytes"]
+                    retained_limit = status["queue_max_retained_bytes"]
+                    print(
+                        f"Shard {shard.torii_url}: queue stayed saturated before timeout "
+                        f"(retained_bytes={retained}, max_retained_bytes={retained_limit}); "
+                        "aborting shard."
+                    )
+                    return False
+                time.sleep(args.poll_interval)
+                continue
             if args.queue_soft_limit > 0 and delta > args.queue_soft_limit:
                 if deadline is not None and time.monotonic() >= deadline:
                     print(

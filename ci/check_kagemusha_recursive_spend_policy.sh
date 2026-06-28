@@ -447,9 +447,13 @@ ADVERSARIAL_COVERAGE = {
                 "pub fn validate_against_transition_profile(",
                 "kagemusha_recursive_spend_transition_profile_binds_adversarial_mutations",
                 "validate_kagemusha_unique_input_output_sets",
+                "validate_kagemusha_unique_input_output_sets(\n        hop_index_usize,",
                 "duplicate_initial_input_profile",
+                "Err(KagemushaFoldError::DuplicateInputNullifier { hop_index: 0 })",
                 "overlapping_initial_output_profile",
+                "Err(KagemushaFoldError::InputOutputOverlap { hop_index: 0 })",
                 "duplicate_append_output_profile",
+                "Err(KagemushaFoldError::DuplicateOutputCommitment { hop_index: 1 })",
                 "zero_accumulator_nullifier_digest.nullifier_digest =",
                 "zero_accumulator_output_commitment_digest.output_commitment_digest =",
                 "zero_accumulator_fold_digest.fold_digest =",
@@ -461,7 +465,12 @@ ADVERSARIAL_COVERAGE = {
                 "zero_profile_resulting_public_inputs_hash.resulting_public_inputs_hash =",
                 "fn validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(",
                 "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;",
+                "resulting_accumulator.transition_profile_binding_digest = transition_profile_binding_digest;",
+                "profile.resulting_accumulator_digest =\n        kagemusha_recursive_spend_accumulator_digest(&resulting_accumulator)?;",
+                "profile.resulting_public_inputs_hash =\n        kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&resulting_accumulator)?;",
                 "kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(profile)?",
+                "profile.resulting_accumulator_digest\n        != kagemusha_recursive_spend_accumulator_digest(&expected_accumulator)?",
+                "profile.resulting_public_inputs_hash\n        != kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&expected_accumulator)?",
                 "forged_resulting_accumulator_digest.validate_context()",
                 "forged_resulting_public_inputs_hash.validate_context()",
                 "ZeroProofHash {",
@@ -2229,12 +2238,58 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "python/iroha_python/src/iroha_python/kagemusha.py",
     "python/iroha_python/tests/kagemusha_test.py",
 )
+REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS = (
+    "Cargo.toml",
+    "javascript/iroha_js/scripts/build-native.mjs",
+    "javascript/iroha_js/scripts/copy-native.mjs",
+    "javascript/iroha_js/src/native.js",
+    "javascript/iroha_js/dist/native.js",
+    "python/norito_py/MANIFEST.in",
+    "python/norito_py/pyproject.toml",
+    "python/norito_py/setup.cfg",
+    "python/norito_py/src/norito/__init__.py",
+    "python/norito_py/src/norito/aos.py",
+    "python/norito_py/src/norito/cli.py",
+    "python/norito_py/src/norito/codec.py",
+    "python/norito_py/src/norito/columnar.py",
+    "python/norito_py/src/norito/compression.py",
+    "python/norito_py/src/norito/crc64.py",
+    "python/norito_py/src/norito/errors.py",
+    "python/norito_py/src/norito/header.py",
+    "python/norito_py/src/norito/heuristics.py",
+    "python/norito_py/src/norito/relay_registry.py",
+    "python/norito_py/src/norito/result.py",
+    "python/norito_py/src/norito/schema.py",
+    "python/norito_py/src/norito/streaming.py",
+    "python/norito_py/src/norito/telemetry_analysis.py",
+    "python/norito_py/src/norito/varint.py",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/CRC64.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAdapters.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoAoS.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoCodec.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoColumnar.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoCompression.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoDecoder.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoDump.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoEncoder.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoHeader.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreamingCodec.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/Result.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/SchemaHash.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/TypeAdapter.java",
+    "java/norito_java/src/main/java/org/hyperledger/iroha/norito/Varint.java",
+)
 ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
+    *REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS,
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiOfflineNoteIssuerClient.swift",
     "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
     "crates/iroha_cli/src/main_shared.rs",
     "crates/iroha_core/src/executor.rs",
@@ -2251,6 +2306,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNote.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteWallet.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReadiness.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
@@ -2277,6 +2333,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "javascript/iroha_js/test/transactionBuilder.test.js",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineJsonParser.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNote.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteWallet.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineReadiness.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/ToriiOfflineNoteIssuerClient.kt",
@@ -2402,6 +2459,7 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "must be a canonical base64 string",
         "must use canonical Numeric text",
         "ignored auxiliary field",
+        "legacy Offline Note V2 field",
         "must not contain surrounding whitespace",
         "redeem_request_norito_base64",
         "compact_payment_token_norito_base64",
@@ -2416,6 +2474,12 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
         "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
         "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
+        "fn reject_kagemusha_legacy_redeem_fields(value: &Value) -> Result<(), Error> {\n"
+        "    for field in [\n"
+        '        "redemption",\n'
+        '        "input_nullifiers",\n'
+        '        "sender_key_certificate",\n'
+        '        "recursive_proof",\n',
         "let auxiliary_field_values =",
         "Value::Null, Value::Array(Vec::new())",
         "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
@@ -2487,16 +2551,121 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
 READINESS_SECTION_CONSISTENCY_COVERAGE = {
     "scripts/kagemusha_production_readiness.py": (
         "READINESS_SECTION_LABELS: dict[str, str]",
+        '"top_level": "top-level readiness summary"',
+        "READINESS_JSON_MAX_DEPTH = 32",
+        "def _is_nonempty_trimmed_readiness_string(",
+        "type(value) is str and value != \"\" and value == value.strip()",
+        "def _readiness_blocker_field(",
+        "if type(key) is str and key == field:",
+        '_readiness_blocker_field(item, "code")',
+        '_readiness_blocker_field(item, "message")',
+        "if value is None or type(value) in (str, bool):",
+        "if type(value) is int:",
+        "if type(value) is float:",
+        "if _depth >= READINESS_JSON_MAX_DEPTH:",
+        "if type(value) is list:",
+        "if identity in _seen:",
+        "if type(value) is dict:",
+        "if type(key) is not str:",
+        "type(item) is dict",
+        "if type(item) is not dict:",
+        "if type(section_blockers) is not list:",
+        "if type(raw_blockers) is list:",
+        "if type(section) is not dict:",
+        "def _is_readiness_blocker_entry(",
+        "def _readiness_blocker_entry_has_safe_identity(",
+        "def _readiness_json_safe_value(",
+        "def _normalized_readiness_blocker_entry(",
+        "def _section_extra_field_shape_blockers(",
+        "def _section_blocker_entry_shape_blockers(",
         "def _section_readiness_blockers(",
+        "def _normalized_readiness_section(",
+        "def _normalized_top_level_readiness_blockers(",
+        "blockers: Any,",
+        '{"ok": False, "blockers": blockers}',
+        "def _blocked_summary(",
+        '"kagemusha_readiness_section_shape"',
+        '"kagemusha_readiness_section_ok_shape"',
+        '"kagemusha_readiness_section_json_shape"',
+        '"kagemusha_readiness_section_blocker_shape"',
+        '"kagemusha_readiness_section_blocker_json_shape"',
         '"kagemusha_readiness_section_blockers_shape"',
         '"kagemusha_readiness_section_inconsistent"',
-        "all_blockers.extend(_section_readiness_blockers(section_key, section))",
+        "except (TypeError, ValueError):",
+        "section_key: _normalized_readiness_section(section_key, section)",
+        "_normalized_top_level_readiness_blockers(write_blockers)",
     ),
     "scripts/tests/kagemusha_production_readiness_test.py": (
         "test_build_summary_blocks_inconsistent_section_without_reported_blockers",
+        "test_build_summary_blocks_ready_section_with_reported_blockers",
+        "test_build_summary_blocks_non_object_section",
+        "test_build_summary_blocks_mapping_subclass_section_without_access",
+        "test_build_summary_blocks_non_boolean_section_ok",
         "test_build_summary_blocks_malformed_section_blockers",
+        "test_build_summary_blocks_list_subclass_section_blockers_without_access",
+        "test_build_summary_filters_malformed_section_blocker_entries",
+        "test_build_summary_blocks_mapping_subclass_blocker_without_access",
+        "test_build_summary_normalizes_non_json_section_blocker_extras",
+        "test_build_summary_blocks_colliding_sanitized_section_blocker_extra_fields",
+        "test_build_summary_normalizes_recursive_section_json_values",
+        "test_build_summary_rejects_tuple_section_json_values",
+        "test_build_summary_drops_section_blockers_with_unsafe_identity",
+        "test_build_summary_rejects_blank_or_padded_section_blocker_identity",
+        "test_build_summary_rejects_hostile_string_subclass_blocker_identity",
+        "test_build_summary_normalizes_non_json_section_extra_fields",
+        "test_build_summary_rejects_hostile_non_string_section_key_without_equality",
+        "test_build_summary_rejects_hostile_non_string_blocker_key_without_equality",
+        "test_early_signer_loader_errors_are_normalized_without_leak",
+        "test_blocked_summary_blocks_top_level_blocker_iterable_without_access",
+        "test_write_summary_rejects_non_serializable_json_before_write",
         '"kagemusha_readiness_section_inconsistent"',
+        '"kagemusha_readiness_section_shape"',
+        '"kagemusha_readiness_section_ok_shape"',
+        '"kagemusha_readiness_section_json_shape"',
+        '"kagemusha_readiness_section_blocker_shape"',
+        '"kagemusha_readiness_section_blocker_json_shape"',
         '"kagemusha_readiness_section_blockers_shape"',
+        "section must be a JSON object",
+        "hostile section mapping access must not run",
+        "hostile section mapping iteration must not run",
+        "hostile blocker mapping access must not run",
+        "hostile blocker mapping iteration must not run",
+        "hostile blockers list iteration must not run",
+        "hostile blockers list truthiness must not run",
+        "section field must be strict JSON",
+        "section field key must be a JSON string",
+        "ok must be a JSON boolean",
+        "must be strict JSON",
+        "code must be strict JSON",
+        "message must be strict JSON",
+        "code must be a non-empty trimmed string",
+        "message must be a non-empty trimmed string",
+        "raw blocker",
+        "valid_section_blocker",
+        "valid blocker with unsafe extras",
+        "deep blocker value must not leak",
+        "deep section value must not leak",
+        "tuple blocker value must not leak",
+        "tuple section value must not leak",
+        "unsafe code blocker identity must not leak",
+        "unsafe_message_blocker",
+        "padded code must not survive",
+        "hostile blocker string equality must not run",
+        "hostile blocker string strip must not run",
+        "hostile_code_subclass",
+        "hostile message subclass must not leak",
+        "non-string section key equality must not run",
+        "hostile section key value must not leak",
+        "non-string blocker key equality must not run",
+        "hostile blocker key value must not leak",
+        "token=supersecret signer loader error",
+        "hostile top-level blocker iteration must not run",
+        '"top_level"',
+        "trusted signer could not be parsed",
+        "blocker unsafe field value must not leak",
+        "section unsafe field value must not leak",
+        "reported blockers while marked ready",
+        "--summary-out summary is not strict JSON",
         '"check_abi6_reserved_lineage"',
         '"check_abi7_fail_closed"',
     ),
@@ -2695,6 +2864,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi",
     ),
     (
+        "Torii offline-v2 Kagemusha redeem smoke negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke",
+    ),
+    (
         "active non-C# TODO scan negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo",
     ),
@@ -2705,6 +2878,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "active non-C# TODO content scan inventory negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory",
+    ),
+    (
+        "active non-C# TODO runner-input content scan inventory negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-runner-input-content-scan-inventory",
     ),
     (
         "production-readiness section-consistency negative control",
@@ -5097,6 +5274,16 @@ def discover_active_noncsharp_kagemusha_todo_content_scan_paths():
 def check_active_noncsharp_kagemusha_todo_scan_inventory():
     filename_scanned = set(ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS)
     content_scanned = filename_scanned | set(ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS)
+    runner_input_missing = sorted(
+        required
+        for required in REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS
+        if required not in content_scanned
+    )
+    if runner_input_missing:
+        fail(
+            "active non-C# Kagemusha TODO content scan does not cover runner input path(s): "
+            + ", ".join(runner_input_missing)
+        )
     filename_missing = sorted(
         discovered
         for discovered in discover_active_noncsharp_kagemusha_todo_scan_paths()
@@ -6113,113 +6300,305 @@ if mode == "--negative-control-data-model-zero-prehash-hash-guard":
 if mode == "--negative-control-data-model-transition-profile-current-hop-sets":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        "validate_kagemusha_unique_input_output_sets",
-        "validate_kagemusha_canonical_input_output_sets",
+    cases = (
+        (
+            "validate_kagemusha_unique_input_output_sets",
+            "validate_kagemusha_canonical_input_output_sets",
+        ),
+        (
+            "validate_kagemusha_unique_input_output_sets(\n        hop_index_usize,",
+            "validate_kagemusha_unique_input_output_sets(\n        0usize,",
+        ),
+        ("duplicate_initial_input_profile", "unchecked_initial_input_profile"),
+        (
+            "Err(KagemushaFoldError::DuplicateInputNullifier { hop_index: 0 })",
+            "Err(KagemushaFoldError::DuplicateInputNullifier { hop_index: 1 })",
+        ),
+        ("overlapping_initial_output_profile", "unchecked_initial_output_profile"),
+        (
+            "Err(KagemushaFoldError::InputOutputOverlap { hop_index: 0 })",
+            "Err(KagemushaFoldError::InputOutputOverlap { hop_index: 1 })",
+        ),
+        ("duplicate_append_output_profile", "unchecked_append_output_profile"),
+        (
+            "Err(KagemushaFoldError::DuplicateOutputCommitment { hop_index: 1 })",
+            "Err(KagemushaFoldError::DuplicateOutputCommitment { hop_index: 0 })",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate transition-profile current-hop set coverage")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Reserved-lineage adversarial coverage: "
-            "validate_kagemusha_unique_input_output_sets"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after in cases:
+        mutated = source.replace(before, after)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: transition-profile current-hop set drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate transition-profile current-hop set coverage: "
+                + before
             )
-        print("negative control rejected transition-profile current-hop set drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: transition-profile current-hop set drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Reserved-lineage adversarial coverage: "
+                + before
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: transition-profile current-hop set drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: transition-profile current-hop set drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: transition-profile current-hop set drift was not detected")
+    print("negative control rejected transition-profile current-hop set drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-transition-profile-previous-topup-anchors":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace("topup_anchor_as_append_output", "topup_anchor_as_unchecked_output")
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate transition-profile previous top-up anchor coverage")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Reserved-lineage adversarial coverage: "
-            "topup_anchor_as_append_output"
-        )
-        if expected not in message:
+    cases = (
+        (
+            "pub previous_topup_anchor_nullifiers: Vec<[u8; 32]>",
+            "pub previous_topup_anchor_inputs: Vec<[u8; 32]>",
+        ),
+        (
+            ".map(|previous| previous.topup_anchor_nullifiers.clone())",
+            ".map(|previous| previous.output_commitment_digest.to_vec())",
+        ),
+        (
+            "validate_kagemusha_recursive_spend_topup_anchor_nullifiers_field(",
+            "validate_kagemusha_recursive_spend_unchecked_topup_anchor_nullifiers_field(",
+        ),
+        (
+            ".any(|commitment| self.previous_topup_anchor_nullifiers.contains(commitment))",
+            ".any(|_commitment| false)",
+        ),
+        ("topup_anchor_as_append_output", "topup_anchor_as_unchecked_output"),
+        ("topup_anchor_as_current_nullifier", "topup_anchor_as_unchecked_current_note"),
+    )
+    first_message = None
+    for before, after in cases:
+        mutated = source.replace(before, after)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: transition-profile previous top-up anchor drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate transition-profile previous top-up anchor coverage: "
+                + before
             )
-        print("negative control rejected transition-profile previous top-up anchor drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: transition-profile previous top-up anchor drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Reserved-lineage adversarial coverage: "
+                + before
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: transition-profile previous top-up anchor drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: transition-profile previous top-up anchor drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: transition-profile previous top-up anchor drift was not detected")
+    print("negative control rejected transition-profile previous top-up anchor drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-transition-profile-resulting-accumulator":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;",
-        "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator_unchecked(self)?;",
-        1,
+    cases = (
+        (
+            "fn validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(",
+            "fn validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator_unchecked(",
+        ),
+        (
+            "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;",
+            "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator_unchecked(self)?;",
+        ),
+        (
+            "resulting_accumulator.transition_profile_binding_digest = transition_profile_binding_digest;",
+            "resulting_accumulator.transition_profile_binding_digest = [0u8; Hash::LENGTH];",
+        ),
+        (
+            "profile.resulting_accumulator_digest =\n        kagemusha_recursive_spend_accumulator_digest(&resulting_accumulator)?;",
+            "profile.resulting_accumulator_digest = [0u8; Hash::LENGTH];",
+        ),
+        (
+            "profile.resulting_public_inputs_hash =\n        kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&resulting_accumulator)?;",
+            "profile.resulting_public_inputs_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
+        ),
+        (
+            "kagemusha_recursive_spend_transition_profile_binding_digest_unchecked(profile)?",
+            "[0u8; Hash::LENGTH]",
+        ),
+        (
+            "profile.resulting_accumulator_digest\n        != kagemusha_recursive_spend_accumulator_digest(&expected_accumulator)?",
+            "profile.resulting_accumulator_digest\n        == kagemusha_recursive_spend_accumulator_digest(&expected_accumulator)?",
+        ),
+        (
+            "profile.resulting_public_inputs_hash\n        != kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&expected_accumulator)?",
+            "profile.resulting_public_inputs_hash\n        == kagemusha_recursive_spend_append_boundary_free_public_inputs_hash(&expected_accumulator)?",
+        ),
+        ("forged_resulting_accumulator_digest.validate_context()", "forged_resulting_accumulator_digest.binding_digest()"),
+        ("forged_resulting_public_inputs_hash.validate_context()", "forged_resulting_public_inputs_hash.binding_digest()"),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate transition-profile resulting accumulator coverage")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Reserved-lineage adversarial coverage: "
-            "validate_kagemusha_recursive_spend_transition_profile_resulting_accumulator(self)?;"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after in cases:
+        mutated = source.replace(before, after)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: transition-profile resulting accumulator drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate transition-profile resulting accumulator coverage: "
+                + before
             )
-        print("negative control rejected transition-profile resulting accumulator drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: transition-profile resulting accumulator drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Reserved-lineage adversarial coverage: "
+                + before
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: transition-profile resulting accumulator drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: transition-profile resulting accumulator drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: transition-profile resulting accumulator drift was not detected")
+    print("negative control rejected transition-profile resulting accumulator drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-proof-public-input-circuit-binding":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH] {",
-        "if expected.append_opening_preflight_digest != [0u8; Hash::LENGTH] {",
-        1,
+    cases = (
+        (
+            "if accumulator.append_boundary_digest != [0u8; Hash::LENGTH]",
+            "if accumulator.append_boundary_digest == [0u8; Hash::LENGTH]",
+            "if accumulator.append_boundary_digest != [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if recursive_proof.public_inputs.append_boundary_digest != [0u8; Hash::LENGTH]",
+            "if recursive_proof.public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]",
+            "if recursive_proof.public_inputs.append_boundary_digest != [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH]",
+            "if accumulator.append_opening_preflight_digest == [0u8; Hash::LENGTH]",
+            "if accumulator.append_opening_preflight_digest != [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if recursive_proof\n                .public_inputs\n                .append_opening_preflight_digest",
+            "if accumulator\n                .append_opening_preflight_digest",
+            "if recursive_proof",
+        ),
+        (
+            "let scalar_projection = recursive_proof\n                .public_inputs\n                .recursive_verifier_scalar_projection_digest;",
+            "let scalar_projection = expected\n                .recursive_verifier_scalar_projection_digest;",
+            "let scalar_projection = recursive_proof",
+        ),
+        (
+            "if scalar_projection == [0u8; Hash::LENGTH] {",
+            "if scalar_projection != [0u8; Hash::LENGTH] {",
+            "if scalar_projection == [0u8; Hash::LENGTH]",
+        ),
+        (
+            "expected.recursive_verifier_scalar_projection_digest = scalar_projection;",
+            "let _unchecked_scalar_projection = scalar_projection;",
+            "expected.recursive_verifier_scalar_projection_digest = scalar_projection;",
+        ),
+        (
+            "let append_boundary_digest = recursive_proof.public_inputs.append_boundary_digest;",
+            "let append_boundary_digest = expected.append_boundary_digest;",
+            "let append_boundary_digest = recursive_proof.public_inputs.append_boundary_digest;",
+        ),
+        (
+            "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH] {",
+            "if expected.append_opening_preflight_digest != [0u8; Hash::LENGTH] {",
+            "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if append_boundary_digest != [0u8; Hash::LENGTH] {",
+            "if append_boundary_digest == [0u8; Hash::LENGTH] {",
+            "if append_boundary_digest != [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if expected.append_boundary_digest == [0u8; Hash::LENGTH] {",
+            "if expected.append_boundary_digest != [0u8; Hash::LENGTH] {",
+            "if expected.append_boundary_digest == [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if append_boundary_digest != expected.append_boundary_digest",
+            "if append_boundary_digest == expected.append_boundary_digest",
+            "if append_boundary_digest != expected.append_boundary_digest",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate proof public-input circuit binding")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            "recursive spend proof public-input circuit binding is missing ordered preverification step: "
-            "if expected.append_opening_preflight_digest == [0u8; Hash::LENGTH]"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after, expected_marker in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: proof public-input circuit binding drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate proof public-input circuit binding: "
+                + before
             )
-        print("negative control rejected proof public-input circuit binding drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: proof public-input circuit binding drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                "recursive spend proof public-input circuit binding is missing ordered preverification step: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: proof public-input circuit binding drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: proof public-input circuit binding drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: proof public-input circuit binding drift was not detected")
+    print("negative control rejected proof public-input circuit binding drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-semantic-proof-append-opening":
     target = "crates/iroha_data_model/src/offline/mod.rs"
@@ -6279,57 +6658,172 @@ if mode == "--negative-control-data-model-public-input-one-hop-append-opening":
 if mode == "--negative-control-data-model-generic-proof-scalar-projection":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        "                self.public_inputs\n                    .recursive_verifier_scalar_projection_digest,\n",
-        "                [0u8; Hash::LENGTH],\n",
-        1,
+    cases = (
+        (
+            "                self.public_inputs.recursive_proof_chain_digest,\n",
+            "                [0u8; Hash::LENGTH],\n",
+            "recursive_proof_chain_digest",
+        ),
+        (
+            "                self.public_inputs.transition_profile_binding_digest,\n",
+            "                [0u8; Hash::LENGTH],\n",
+            "transition_profile_binding_digest",
+        ),
+        (
+            "                self.public_inputs.append_boundary_digest,\n",
+            "                [0u8; Hash::LENGTH],\n",
+            "append_boundary_digest",
+        ),
+        (
+            "                self.public_inputs.append_opening_preflight_digest,\n",
+            "                [0u8; Hash::LENGTH],\n",
+            "append_opening_preflight_digest",
+        ),
+        (
+            "                self.public_inputs\n                    .recursive_verifier_scalar_projection_digest,\n",
+            "                [0u8; Hash::LENGTH],\n",
+            "recursive_verifier_scalar_projection_digest",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate generic proof scalar-projection guard")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = "missing Rust generic proof spend-state rejection for recursive_verifier_scalar_projection_digest"
-        if expected not in message:
+    first_message = None
+    for before, after, field in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: generic proof scalar-projection drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate generic proof spend-state guard: "
+                + field
             )
-        print("negative control rejected generic proof scalar-projection drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: generic proof scalar-projection drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = f"missing Rust generic proof spend-state rejection for {field}"
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: generic proof spend-state drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: generic proof spend-state drift was not detected for "
+            + field
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: generic proof spend-state drift was not detected")
+    print("negative control rejected generic proof spend-state drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-spend-proof-artifact-circuit-gates":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        "                && public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]\n",
-        "                && false\n",
-        1,
+    function_start = source.find("fn validate_kagemusha_recursive_spend_proof_public_input_binding(")
+    if function_start < 0:
+        raise SystemExit("negative control failed: unable to locate spend proof artifact circuit gate validator")
+    cases = (
+        (
+            "            public_inputs.recursive_proof_chain_digest,\n",
+            "            public_inputs.transition_profile_binding_digest,\n",
+            "public_inputs.recursive_proof_chain_digest",
+        ),
+        (
+            "            public_inputs.transition_profile_binding_digest,\n",
+            "            public_inputs.recursive_proof_chain_digest,\n",
+            "public_inputs.transition_profile_binding_digest",
+        ),
+        (
+            "        if digest == [0u8; Hash::LENGTH] {\n",
+            "        if digest != [0u8; Hash::LENGTH] {\n",
+            "if digest == [0u8; Hash::LENGTH]",
+        ),
+        (
+            "KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {",
+            "KagemushaRecursiveSpendProofCircuit::Lineage => {",
+            "KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {",
+        ),
+        (
+            "                    \"append_boundary_digest\",\n",
+            "                    \"append_boundary_spend_digest\",\n",
+            "public_inputs.append_boundary_digest",
+        ),
+        (
+            "                    \"append_opening_preflight_digest\",\n",
+            "                    \"append_opening_spend_digest\",\n",
+            '"append_opening_preflight_digest"',
+        ),
+        (
+            "                    \"recursive_verifier_scalar_projection_digest\",\n",
+            "                    \"recursive_verifier_spend_projection_digest\",\n",
+            "public_inputs.recursive_verifier_scalar_projection_digest",
+        ),
+        (
+            "                if digest != [0u8; Hash::LENGTH] {\n",
+            "                if digest == [0u8; Hash::LENGTH] {\n",
+            "if digest != [0u8; Hash::LENGTH]",
+        ),
+        (
+            "KagemushaRecursiveSpendProofCircuit::Lineage => {",
+            "KagemushaRecursiveSpendProofCircuit::SemanticAggregation => {",
+            "KagemushaRecursiveSpendProofCircuit::Lineage => {",
+        ),
+        (
+            "if public_inputs.recursive_verifier_scalar_projection_digest == [0u8; Hash::LENGTH]",
+            "if public_inputs.recursive_verifier_scalar_projection_digest != [0u8; Hash::LENGTH]",
+            "if public_inputs.recursive_verifier_scalar_projection_digest == [0u8; Hash::LENGTH]",
+        ),
+        (
+            "if public_inputs.append_opening_preflight_digest != [0u8; Hash::LENGTH]",
+            "if public_inputs.append_opening_preflight_digest == [0u8; Hash::LENGTH]",
+            "if public_inputs.append_opening_preflight_digest != [0u8; Hash::LENGTH]",
+        ),
+        (
+            "                && public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]\n",
+            "                && false\n",
+            "&& public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate spend proof artifact circuit gate")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            "recursive spend proof artifact circuit gate binding is missing ordered preverification step: "
-            "&& public_inputs.append_boundary_digest == [0u8; Hash::LENGTH]"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after, expected_marker in cases:
+        case_index = source.find(before, function_start)
+        if case_index < 0:
             raise SystemExit(
-                "negative control failed: spend proof artifact circuit gate drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate spend proof artifact circuit gate: "
+                + before
             )
-        print("negative control rejected spend proof artifact circuit gate drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: spend proof artifact circuit gate drift was not detected")
+        mutated = source[:case_index] + after + source[case_index + len(before) :]
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                "recursive spend proof artifact circuit gate binding is missing ordered preverification step: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: spend proof artifact circuit gate drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: spend proof artifact circuit gate drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: spend proof artifact circuit gate drift was not detected")
+    print("negative control rejected spend proof artifact circuit gate drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-previous-proof-opening-bundle-binding":
     target = "crates/iroha_data_model/src/offline/mod.rs"
@@ -6366,84 +6860,259 @@ if mode == "--negative-control-data-model-previous-proof-field-binding":
     function_start = source.find("fn ensure_recursive_spend_previous_proof_matches(")
     if function_start < 0:
         raise SystemExit("negative control failed: unable to locate previous-proof field binding")
-    needle = "    ensure_field!(folded_public_inputs_hash);\n"
-    field_index = source.find(needle, function_start)
-    if field_index < 0:
-        raise SystemExit("negative control failed: unable to mutate previous-proof folded hash binding")
-    mutated = source[:field_index] + source[field_index + len(needle) :]
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected_prefix = "recursive spend previous-proof public-input field binding drifted;"
-        expected_actual = "actual=['domain', 'evidence_digest', 'aggregation_transcript_digest'"
-        if expected_prefix not in message or expected_actual not in message:
+    fields = [
+        "domain",
+        "evidence_digest",
+        "folded_public_inputs_hash",
+        "aggregation_transcript_digest",
+        "verifier_params_fingerprint",
+        "fixed_window_table_schedule_digest",
+        "fixed_window_shared_table_manifest_digest",
+        "fixed_window_table_base_digest",
+        "verifier_witness_batch_digest",
+        "recursive_proof_chain_digest",
+        "transition_profile_binding_digest",
+        "append_opening_preflight_digest",
+        "append_boundary_digest",
+        "recursive_verifier_scalar_projection_digest",
+        "verifier_opening_len",
+        "verifier_witness_count",
+        "hop_count",
+    ]
+    first_message = None
+    for field in fields:
+        needle = f"    ensure_field!({field});\n"
+        field_index = source.find(needle, function_start)
+        if field_index < 0:
             raise SystemExit(
-                "negative control failed: previous-proof field binding drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate previous-proof field binding: "
+                + field
             )
-        print("negative control rejected previous-proof field binding drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: previous-proof field binding drift was not detected")
+        mutated = source[:field_index] + source[field_index + len(needle) :]
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            actual_fields = [candidate for candidate in fields if candidate != field]
+            expected_prefix = "recursive spend previous-proof public-input field binding drifted;"
+            expected_actual = f"actual={actual_fields}"
+            if expected_prefix not in message or expected_actual not in message:
+                raise SystemExit(
+                    "negative control failed: previous-proof field binding drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: previous-proof field binding drift was not detected for "
+            + field
+        )
+    coverage_cases = (
+        (
+            "previous_recursive_proof.public_inputs.$field != expected.$field",
+            "previous_recursive_proof.public_inputs.$field == expected.$field",
+        ),
+        (
+            'field: concat!("previous_recursive_proof.", stringify!($field))',
+            'field: concat!("unchecked_previous_recursive_proof.", stringify!($field))',
+        ),
+        (
+            "previous_recursive_proof.public_inputs_hash != expected.public_inputs_hash()?",
+            "previous_recursive_proof.public_inputs_hash == expected.public_inputs_hash()?",
+        ),
+        (
+            'field: "previous_recursive_proof.public_inputs_hash"',
+            'field: "unchecked_previous_recursive_proof.public_inputs_hash"',
+        ),
+    )
+    for before, after in coverage_cases:
+        case_index = source.find(before, function_start)
+        if case_index < 0:
+            raise SystemExit(
+                "negative control failed: unable to mutate previous-proof field binding coverage: "
+                + before
+            )
+        mutated = source[:case_index] + after + source[case_index + len(before) :]
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                "recursive spend previous-proof public-input field binding is missing coverage: "
+                + before
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: previous-proof field binding coverage drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: previous-proof field binding coverage drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: previous-proof field binding drift was not detected")
+    print("negative control rejected previous-proof field binding drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-previous-proof-stale-hash-fixture":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        '            Hash::new(b"recursive-spend-stale-previous-proof-public-input-hash");',
-        '            Hash::new(b"recursive-spend-previous-proof-public-input-hash");',
+    cases = (
+        (
+            "reserved_output_append_with_stale_previous_proof_payload",
+            "reserved_output_append_with_unchecked_previous_proof_payload",
+            "reserved_output_append_with_stale_previous_proof_payload",
+            True,
+        ),
+        (
+            "spliced previous proof folded public-input hash",
+            "spliced previous proof unchecked folded public-input hash",
+            "spliced previous proof folded public-input hash",
+            False,
+        ),
+        (
+            'field: "previous_recursive_proof.folded_public_inputs_hash"',
+            'field: "unchecked_previous_recursive_proof.folded_public_inputs_hash"',
+            'field: "previous_recursive_proof.folded_public_inputs_hash"',
+            False,
+        ),
+        (
+            'Hash::new(b"recursive-spend-stale-previous-proof-public-input-hash");',
+            'Hash::new(b"recursive-spend-previous-proof-public-input-hash");',
+            "recursive-spend-stale-previous-proof-public-input-hash",
+            False,
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate stale previous-proof hash fixture")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Reserved-lineage adversarial coverage: "
-            "recursive-spend-stale-previous-proof-public-input-hash"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after, expected_marker, replace_all in cases:
+        mutated = source.replace(before, after) if replace_all else source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: stale previous-proof hash fixture drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate stale previous-proof hash fixture: "
+                + before
             )
-        print("negative control rejected stale previous-proof hash fixture drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: stale previous-proof hash fixture drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Reserved-lineage adversarial coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: stale previous-proof hash fixture drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: stale previous-proof hash fixture drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: stale previous-proof hash fixture drift was not detected")
+    print("negative control rejected stale previous-proof hash fixture drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-data-model-recursive-compact-constructor-binding":
     target = "crates/iroha_data_model/src/offline/mod.rs"
     source = read(target)
-    mutated = source.replace(
-        "zero recursive compact aggregation digest must reject token projection",
-        "zero recursive compact aggregation digest may project token",
-        1,
+    cases = (
+        (
+            "zero recursive compact aggregation digest must reject token projection",
+            "zero recursive compact aggregation digest may project token",
+        ),
+        (
+            'unsupported_proof_backend.proof = ProofBox::new("groth16/bn254".to_owned(), vec![0xA5]);',
+            'unsupported_proof_backend.proof = ProofBox::new("halo2/ipa".to_owned(), vec![0xA5]);',
+        ),
+        (
+            "unsupported_verifier_backend.verifier_key_id = VerifyingKeyId::new(",
+            "unchecked_verifier_backend.verifier_key_id = VerifyingKeyId::new(",
+        ),
+        (
+            'backend_mismatch.proof = ProofBox::new("stark/fri".to_owned(), vec![0xA5]);',
+            'backend_mismatch.proof = ProofBox::new("halo2/ipa".to_owned(), vec![0xA5]);',
+        ),
+        (
+            'non_halo2_backend.proof = ProofBox::new("stark/fri".to_owned(), vec![0xA5]);',
+            'non_halo2_backend.proof = ProofBox::new("halo2/ipa".to_owned(), vec![0xA5]);',
+        ),
+        (
+            "empty_proof.proof = ProofBox::new(",
+            "proof_without_bytes.proof = ProofBox::new(",
+        ),
+        (
+            "halo2/ipa:kagemusha-recursive-unsupported",
+            "halo2/ipa:kagemusha-recursive-accepted",
+        ),
+        (
+            "recursive-compact-stale-proof-hash",
+            "recursive-compact-proof-hash",
+        ),
+        (
+            "recursive-compact-spliced-transcript",
+            "recursive-compact-transcript",
+        ),
+        (
+            "hop-count-spliced public-input hash",
+            "hop-count public-input hash",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate recursive compact constructor binding coverage")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Reserved-lineage adversarial coverage: "
-            "zero recursive compact aggregation digest must reject token projection"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: recursive compact constructor binding drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate recursive compact constructor binding coverage: "
+                + before
             )
-        print("negative control rejected recursive compact constructor binding drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: recursive compact constructor binding drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Reserved-lineage adversarial coverage: "
+                + before
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: recursive compact constructor binding drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: recursive compact constructor binding drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: recursive compact constructor binding drift was not detected")
+    print("negative control rejected recursive compact constructor binding drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
@@ -6477,155 +7146,469 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
 if mode == "--negative-control-torii-offline-v2-kagemusha-exact-fields":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
-    mutated = source.replace(
-        "    if encoded != encoded.trim() {\n",
-        "    if false {\n",
-        1,
-    ).replace(
-        "    if raw.trim().is_empty() || raw != raw.trim() {\n",
-        "    if false {\n",
-        1,
-    ).replace(
-        "    if parsed.to_string() != raw {\n",
-        "    if false {\n",
-        1,
+    cases = (
+        (
+            "    if encoded != encoded.trim() {\n",
+            "    if false {\n",
+            "if encoded != encoded.trim() {",
+        ),
+        (
+            "    if raw.trim().is_empty() || raw != raw.trim() {\n",
+            "    if false {\n",
+            "raw.trim().is_empty() || raw != raw.trim()",
+        ),
+        (
+            "    if parsed.to_string() != raw {\n",
+            "    if false {\n",
+            "if parsed.to_string() != raw {",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate Torii offline-v2 Kagemusha exact-field checks")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-            "if encoded != encoded.trim() {"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after, expected_marker in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: Torii offline-v2 Kagemusha exact-field drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha exact-field check: "
+                + before
             )
-        print("negative control rejected Torii offline-v2 Kagemusha exact-field drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Torii offline-v2 Kagemusha exact-field drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha exact-field drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha exact-field drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha exact-field drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha exact-field drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-archive-field-shape":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
-    mutated = source.replace(
-        "Offline Kagemusha redeem_request_norito_base64 must be a canonical base64 string.",
-        "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
-        1,
+    cases = (
+        (
+            "Offline Kagemusha redeem_request_norito_base64 must be a canonical base64 string.",
+            "Offline Kagemusha recursive redemption requires redeem_request_norito_base64.",
+            "must be a canonical base64 string",
+        ),
+        (
+            "Offline Kagemusha redeem_request_norito_base64 must not contain surrounding whitespace.",
+            "Offline Kagemusha redeem_request_norito_base64 may contain surrounding whitespace.",
+            "must not contain surrounding whitespace",
+        ),
+        (
+            "Offline Kagemusha redeem amount must use canonical Numeric text.",
+            "Offline Kagemusha redeem amount may use noncanonical Numeric text.",
+            "must use canonical Numeric text",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate Torii offline-v2 Kagemusha archive-field shape diagnostic")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-            "must be a canonical base64 string"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after, expected_marker in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: Torii offline-v2 Kagemusha archive-field shape drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha archive-field shape diagnostic: "
+                + before
             )
-        print("negative control rejected Torii offline-v2 Kagemusha archive-field shape drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Torii offline-v2 Kagemusha archive-field shape drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha archive-field shape drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha archive-field shape drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha archive-field shape drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha archive-field shape drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-legacy-fields":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
-    mutated = source.replace(
-        "    reject_kagemusha_legacy_redeem_fields(&request.value)?;\n",
-        "",
-        1,
+    legacy_field_block = (
+        "fn reject_kagemusha_legacy_redeem_fields(value: &Value) -> Result<(), Error> {\n"
+        "    for field in [\n"
+        '        "redemption",\n'
+        '        "input_nullifiers",\n'
+        '        "sender_key_certificate",\n'
+        '        "recursive_proof",\n'
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate Torii offline-v2 Kagemusha legacy-field rejection")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-            "reject_kagemusha_legacy_redeem_fields(&request.value)?;"
+    cases = (
+        (
+            "reject_kagemusha_legacy_redeem_fields",
+            "allow_kagemusha_legacy_redeem_fields",
+            "reject_kagemusha_legacy_redeem_fields",
+            True,
+        ),
+        (
+            "    reject_kagemusha_legacy_redeem_fields(&request.value)?;\n",
+            "",
+            "reject_kagemusha_legacy_redeem_fields(&request.value)?;",
+            False,
+        ),
+        (
+            "legacy Offline Note V2 field",
+            "legacy Offline Note V2 payload",
+            "legacy Offline Note V2 field",
+            False,
+        ),
+        (
+            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_ACCEPTED",
+            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+            True,
+        ),
+        (
+            legacy_field_block,
+            legacy_field_block.replace('        "input_nullifiers",\n', ""),
+            legacy_field_block,
+            False,
         )
-        if expected not in message:
+    )
+    first_message = None
+    for before, after, expected_marker, replace_all in cases:
+        mutated = source.replace(before, after) if replace_all else source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: Torii offline-v2 Kagemusha legacy-field drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha legacy-field rejection: "
+                + before
             )
-        print("negative control rejected Torii offline-v2 Kagemusha legacy-field drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Torii offline-v2 Kagemusha legacy-field drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha legacy-field drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha legacy-field drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha legacy-field drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha legacy-field drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-auxiliary-fields":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
-    mutated = source.replace(
-        "    reject_kagemusha_auxiliary_redeem_fields(&request.value)?;\n",
-        "",
-        1,
+    cases = (
+        (
+            "reject_kagemusha_auxiliary_redeem_fields",
+            "allow_kagemusha_auxiliary_redeem_fields",
+            "reject_kagemusha_auxiliary_redeem_fields",
+            True,
+        ),
+        (
+            "    reject_kagemusha_auxiliary_redeem_fields(&request.value)?;\n",
+            "",
+            "reject_kagemusha_auxiliary_redeem_fields(&request.value)?;",
+            False,
+        ),
+        (
+            "ignored auxiliary field",
+            "accepted auxiliary field",
+            "ignored auxiliary field",
+            False,
+        ),
+        (
+            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
+            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_ACCEPTED",
+            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
+            True,
+        ),
+        (
+            "let auxiliary_field_values =",
+            "let unchecked_auxiliary_field_values =",
+            "let auxiliary_field_values =",
+            False,
+        ),
+        (
+            "Value::Null, Value::Array(Vec::new())",
+            "Value::Array(Vec::new())",
+            "Value::Null, Value::Array(Vec::new())",
+            False,
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate Torii offline-v2 Kagemusha auxiliary-field rejection")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-            "reject_kagemusha_auxiliary_redeem_fields(&request.value)?;"
-        )
-        if expected not in message:
+    first_message = None
+    for before, after, expected_marker, replace_all in cases:
+        mutated = source.replace(before, after) if replace_all else source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha auxiliary-field rejection: "
+                + before
             )
-        print("negative control rejected Torii offline-v2 Kagemusha auxiliary-field drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha auxiliary-field drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha auxiliary-field drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
-    target = "crates/iroha_torii/src/openapi.rs"
-    source = read(target)
-    mutated = source.replace(
-        "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
-        "Kagemusha recursive redemption uses an archive field",
-        1,
+    cases = (
+        (
+            "crates/iroha_torii/src/openapi.rs",
+            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
+            "Kagemusha recursive redemption uses an archive field",
+            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
+            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
+            "Production Kagemusha redemption accepts a recursive archive",
+            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
+            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are accepted as optional auxiliary fields",
+            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
+            'assert!(redeem_description.contains("source_note_commitment"));',
+            'assert!(redeem_description.contains("amount"));',
+            'assert!(redeem_description.contains("source_note_commitment"));',
+        ),
+        (
+            "docs/portal/static/openapi/torii.json",
+            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
+            "Kagemusha recursive redemption uses an archive field",
+            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
+        ),
+        (
+            "docs/portal/static/openapi/torii.json",
+            "Optional amount and source_note_commitment echo fields",
+            "Optional amount echo fields",
+            "Optional amount and source_note_commitment echo fields",
+        ),
+        (
+            "docs/portal/static/openapi/versions/current/torii.json",
+            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
+            "Production Kagemusha redemption accepts a recursive archive",
+            "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
+        ),
+        (
+            "docs/portal/static/openapi/versions/current/torii.json",
+            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are accepted as optional auxiliary fields",
+            "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
+        ),
     )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate Torii offline-v2 Kagemusha OpenAPI contract")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
-            f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-            "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64"
-        )
-        if expected not in message:
+    first_message = None
+    for target, before, after, expected_marker in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
             raise SystemExit(
-                "negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha OpenAPI contract: "
+                + target
+                + ": "
+                + before
             )
-        print("negative control rejected Torii offline-v2 Kagemusha OpenAPI drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was not detected")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was not detected for "
+            + target
+            + ": "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha OpenAPI drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
+    target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
+    source = read(target)
+    cases = (
+        (
+            "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
+            "offline_v2_notes_redeem_accepts_unchecked_kagemusha_recursive_redeem_request",
+            "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("redeem_request_norito_base64"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("redeem_request_archive"));',
+            "redeem_request_norito_base64",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("required_kagemusha_redeem_archive_string"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_redeem_archive_string"));',
+            "required_kagemusha_redeem_archive_string",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("optional_kagemusha_echo_string"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("optional_kagemusha_echo_value"));',
+            "optional_kagemusha_echo_string",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_amount_echo"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_amount_value"));',
+            "parse_kagemusha_amount_echo",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_legacy_redeem_fields"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("allow_kagemusha_legacy_redeem_fields"));',
+            "reject_kagemusha_legacy_redeem_fields",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_auxiliary_redeem_fields"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("allow_kagemusha_auxiliary_redeem_fields"));',
+            "reject_kagemusha_auxiliary_redeem_fields",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_CHAIN_ACCEPTED"));',
+            "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_LEGACY_ACCEPTED"));',
+            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+        ),
+        (
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_ACCEPTED"));',
+            "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
+        ),
+        (
+            "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
+            "offline_v2_notes_redeem_accepts_kagemusha_optional_echo_field_shapes",
+            "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
+        ),
+        (
+            "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
+            "offline_v2_notes_redeem_accepts_compact_token_without_recursive_redeem_request",
+            "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
+        ),
+    )
+    first_message = None
+    for before, after, expected_marker in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha redeem smoke coverage: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                + expected_marker
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 Kagemusha redeem smoke drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 Kagemusha redeem smoke drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha redeem smoke drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha redeem smoke drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-active-noncsharp-todo":
     cases = (
@@ -6846,19 +7829,194 @@ if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":
         "negative control failed: active non-C# Kagemusha TODO content scan inventory drift was not detected"
     )
 
+if mode == "--negative-control-active-noncsharp-todo-runner-input-content-scan-inventory":
+    target = "javascript/iroha_js/scripts/build-native.mjs"
+    ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = tuple(
+        path for path in ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS if path != target
+    )
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            "active non-C# Kagemusha TODO content scan does not cover "
+            f"runner input path(s): {target}"
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: active non-C# TODO runner-input content scan inventory drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected active non-C# Kagemusha TODO runner-input content scan inventory drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: active non-C# Kagemusha TODO runner-input content scan inventory drift was not detected"
+    )
+
 if mode == "--negative-control-readiness-section-consistency":
     cases = (
         (
             "scripts/kagemusha_production_readiness.py",
-            "all_blockers.extend(_section_readiness_blockers(section_key, section))",
-            "all_blockers.extend(section_blockers)",
-            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: all_blockers.extend(_section_readiness_blockers(section_key, section))",
+            "section_key: _normalized_readiness_section(section_key, section)",
+            "section_key: dict(section)",
+            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: section_key: _normalized_readiness_section(section_key, section)",
+        ),
+        (
+            "scripts/kagemusha_production_readiness.py",
+            "def _normalized_top_level_readiness_blockers(",
+            "def _unsafe_top_level_readiness_blockers(",
+            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: def _normalized_top_level_readiness_blockers(",
+        ),
+        (
+            "scripts/kagemusha_production_readiness.py",
+            '{"ok": False, "blockers": blockers}',
+            '{"ok": False, "blockers": list(blockers)}',
+            'scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: {"ok": False, "blockers": blockers}',
+        ),
+        (
+            "scripts/kagemusha_production_readiness.py",
+            "_normalized_top_level_readiness_blockers(write_blockers)",
+            "list(write_blockers)",
+            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: _normalized_top_level_readiness_blockers(write_blockers)",
+        ),
+        (
+            "scripts/kagemusha_production_readiness.py",
+            "if type(value) is list:",
+            "if type(value) in (list, tuple):",
+            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: if type(value) is list:",
+        ),
+        (
+            "scripts/kagemusha_production_readiness.py",
+            "if type(key) is str and key == field:",
+            "if key == field:",
+            "scripts/kagemusha_production_readiness.py is missing production-readiness section consistency coverage: if type(key) is str and key == field:",
         ),
         (
             "scripts/tests/kagemusha_production_readiness_test.py",
             "test_build_summary_blocks_malformed_section_blockers",
             "test_build_summary_accepts_malformed_section_blockers",
             "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_malformed_section_blockers",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_list_subclass_section_blockers_without_access",
+            "test_build_summary_accepts_list_subclass_section_blockers_with_access",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_list_subclass_section_blockers_without_access",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_ready_section_with_reported_blockers",
+            "test_build_summary_accepts_ready_section_with_reported_blockers",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_ready_section_with_reported_blockers",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_non_object_section",
+            "test_build_summary_accepts_non_object_section",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_non_object_section",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_mapping_subclass_section_without_access",
+            "test_build_summary_accepts_mapping_subclass_section_with_access",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_mapping_subclass_section_without_access",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_non_boolean_section_ok",
+            "test_build_summary_accepts_non_boolean_section_ok",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_non_boolean_section_ok",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_filters_malformed_section_blocker_entries",
+            "test_build_summary_accepts_malformed_section_blocker_entries",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_filters_malformed_section_blocker_entries",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_mapping_subclass_blocker_without_access",
+            "test_build_summary_accepts_mapping_subclass_blocker_with_access",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_mapping_subclass_blocker_without_access",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_normalizes_non_json_section_blocker_extras",
+            "test_build_summary_accepts_non_json_section_blocker_extras",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_normalizes_non_json_section_blocker_extras",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_blocks_colliding_sanitized_section_blocker_extra_fields",
+            "test_build_summary_accepts_colliding_sanitized_section_blocker_extra_fields",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_blocks_colliding_sanitized_section_blocker_extra_fields",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_normalizes_recursive_section_json_values",
+            "test_build_summary_accepts_recursive_section_json_values",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_normalizes_recursive_section_json_values",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_rejects_tuple_section_json_values",
+            "test_build_summary_accepts_tuple_section_json_values",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_rejects_tuple_section_json_values",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_drops_section_blockers_with_unsafe_identity",
+            "test_build_summary_accepts_section_blockers_with_unsafe_identity",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_drops_section_blockers_with_unsafe_identity",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_rejects_blank_or_padded_section_blocker_identity",
+            "test_build_summary_accepts_blank_or_padded_section_blocker_identity",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_rejects_blank_or_padded_section_blocker_identity",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_rejects_hostile_string_subclass_blocker_identity",
+            "test_build_summary_accepts_hostile_string_subclass_blocker_identity",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_rejects_hostile_string_subclass_blocker_identity",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_normalizes_non_json_section_extra_fields",
+            "test_build_summary_accepts_non_json_section_extra_fields",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_normalizes_non_json_section_extra_fields",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_rejects_hostile_non_string_section_key_without_equality",
+            "test_build_summary_accepts_hostile_non_string_section_key_with_equality",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_rejects_hostile_non_string_section_key_without_equality",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_build_summary_rejects_hostile_non_string_blocker_key_without_equality",
+            "test_build_summary_accepts_hostile_non_string_blocker_key_with_equality",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_build_summary_rejects_hostile_non_string_blocker_key_without_equality",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_early_signer_loader_errors_are_normalized_without_leak",
+            "test_early_signer_loader_errors_are_written_without_normalization",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_early_signer_loader_errors_are_normalized_without_leak",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_blocked_summary_blocks_top_level_blocker_iterable_without_access",
+            "test_blocked_summary_accepts_top_level_blocker_iterable_with_access",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_blocked_summary_blocks_top_level_blocker_iterable_without_access",
+        ),
+        (
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            "test_write_summary_rejects_non_serializable_json_before_write",
+            "test_write_summary_accepts_non_serializable_json_before_write",
+            "scripts/tests/kagemusha_production_readiness_test.py is missing production-readiness section consistency coverage: test_write_summary_rejects_non_serializable_json_before_write",
         ),
     )
     first_message = None

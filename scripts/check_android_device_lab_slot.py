@@ -84,7 +84,10 @@ SUMMARY_ERROR_REDACTION = "<malformed-summary-error>"
 SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 SIGNED_AT_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SECRET_RE = re.compile(
-    r"(authorization:|bearer\s+|private[_-]?key|token=|x-iroha-signature)",
+    r"("
+    r"authorization:|bearer\s+|private[_-]?key|token=|secret=|password=|"
+    r"api[_-]?key=|x-iroha-signature"
+    r")",
     re.IGNORECASE,
 )
 PRIVATE_KEY_PEM_MARKERS = (

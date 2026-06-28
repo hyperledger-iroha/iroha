@@ -1669,6 +1669,213 @@ public final class KagemushaRecursiveSpendProverTest {
             + KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN)
         .equals(malformedDomain.getMessage());
     assert init.topupAnchorNullifiers().size() >= 2;
+    final byte[] originalInitialRoot = init.initialRoot();
+    final byte[] mutatedInitialRoot = init.initialRoot();
+    mutatedInitialRoot[0] ^= (byte) 0xff;
+    assert Arrays.equals(originalInitialRoot, init.initialRoot());
+    final byte[] originalFinalRoot = init.finalRoot();
+    final byte[] mutatedFinalRoot = init.finalRoot();
+    mutatedFinalRoot[0] ^= (byte) 0xff;
+    assert Arrays.equals(originalFinalRoot, init.finalRoot());
+    final List<byte[]> originalTopupAnchorNullifiers = init.topupAnchorNullifiers();
+    final List<byte[]> mutatedTopupAnchorNullifiers = init.topupAnchorNullifiers();
+    mutatedTopupAnchorNullifiers.get(0)[0] ^= (byte) 0xff;
+    boolean topupAnchorListIsImmutable = false;
+    try {
+      mutatedTopupAnchorNullifiers.clear();
+    } catch (final UnsupportedOperationException ex) {
+      topupAnchorListIsImmutable = true;
+    }
+    assert topupAnchorListIsImmutable;
+    assert originalTopupAnchorNullifiers.size() == init.topupAnchorNullifiers().size();
+    for (int i = 0; i < originalTopupAnchorNullifiers.size(); i++) {
+      assert Arrays.equals(
+          originalTopupAnchorNullifiers.get(i), init.topupAnchorNullifiers().get(i));
+    }
+    final byte[] originalNoteCommitment = init.currentNote.noteCommitment();
+    final byte[] mutatedNoteCommitment = init.currentNote.noteCommitment();
+    mutatedNoteCommitment[0] ^= (byte) 0xff;
+    assert Arrays.equals(originalNoteCommitment, init.currentNote.noteCommitment());
+    final byte[] originalSpendNullifier = init.currentNote.spendNullifier();
+    final byte[] mutatedSpendNullifier = init.currentNote.spendNullifier();
+    mutatedSpendNullifier[0] ^= (byte) 0xff;
+    assert Arrays.equals(originalSpendNullifier, init.currentNote.spendNullifier());
+    final byte[] mutableNoteCommitment = repeat((byte) 0x10, 32);
+    final byte[] mutableSpendNullifier = repeat((byte) 0x11, 32);
+    final KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor copiedNote =
+        new KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor(
+            mutableNoteCommitment, mutableSpendNullifier, "9");
+    mutableNoteCommitment[0] = 0;
+    mutableSpendNullifier[0] = 0;
+    assert Arrays.equals(repeat((byte) 0x10, 32), copiedNote.noteCommitment());
+    assert Arrays.equals(repeat((byte) 0x11, 32), copiedNote.spendNullifier());
+    final byte[] mutableSummaryInitialRoot = repeat((byte) 0x31, 32);
+    final byte[] mutableSummaryFinalRoot = repeat((byte) 0x32, 32);
+    final ArrayList<byte[]> mutableTopupAnchors = new ArrayList<>();
+    mutableTopupAnchors.add(repeat((byte) 0x01, 32));
+    mutableTopupAnchors.add(repeat((byte) 0x02, 32));
+    final KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary copiedSummary =
+        new KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary(
+            1,
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            "hex:11111111111111111111111111111111",
+            "java-recursive-spend-summary-copy",
+            mutableSummaryInitialRoot,
+            mutableSummaryFinalRoot,
+            mutableTopupAnchors,
+            copiedNote);
+    mutableSummaryInitialRoot[0] = 0;
+    mutableSummaryFinalRoot[0] = 0;
+    mutableTopupAnchors.get(0)[0] = (byte) 0xff;
+    mutableTopupAnchors.clear();
+    assert Arrays.equals(repeat((byte) 0x31, 32), copiedSummary.initialRoot());
+    assert Arrays.equals(repeat((byte) 0x32, 32), copiedSummary.finalRoot());
+    assert copiedSummary.topupAnchorNullifiers().size() == 2;
+    assert Arrays.equals(repeat((byte) 0x01, 32), copiedSummary.topupAnchorNullifiers().get(0));
+    assert Arrays.equals(repeat((byte) 0x02, 32), copiedSummary.topupAnchorNullifiers().get(1));
+    final List<byte[]> copiedSummaryTopupAnchors = copiedSummary.topupAnchorNullifiers();
+    copiedSummaryTopupAnchors.get(0)[0] = 0x7f;
+    boolean copiedSummaryTopupListIsImmutable = false;
+    try {
+      copiedSummaryTopupAnchors.clear();
+    } catch (final UnsupportedOperationException ex) {
+      copiedSummaryTopupListIsImmutable = true;
+    }
+    assert copiedSummaryTopupListIsImmutable;
+    assert copiedSummary.topupAnchorNullifiers().size() == 2;
+    assert Arrays.equals(repeat((byte) 0x01, 32), copiedSummary.topupAnchorNullifiers().get(0));
+    final List<byte[]> directSummaryTopupAnchors =
+        Arrays.asList(repeat((byte) 0x01, 32), repeat((byte) 0x02, 32));
+    final byte[] canonicalSummaryAssetBytes = repeat((byte) 0x11, 16);
+    canonicalSummaryAssetBytes[6] = 0x41;
+    canonicalSummaryAssetBytes[8] = (byte) 0x81;
+    final String canonicalSummaryAsset =
+        AssetDefinitionIdEncoder.encodeFromBytes(canonicalSummaryAssetBytes);
+    assert canonicalSummaryAsset.equals(
+        spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                canonicalSummaryAsset,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote)
+            .asset);
+    assertThrows(
+        "bundle.accumulator.hop_count",
+        () ->
+            spendBundleSummary(
+                0,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.asset",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                "",
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.asset",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                "hex:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.asset",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                "hex:1111111111111111111111111111111",
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.asset",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                " " + canonicalSummaryAsset,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.hop_count",
+        () ->
+            spendBundleSummary(
+                KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+                    + 1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.proof_circuit_id unsupported recursive proof circuit id",
+        () ->
+            spendBundleSummary(
+                1,
+                "kagemusha-recursive-spend-lineage-badhop-v1",
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.initial_root",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                new byte[32],
+                repeat((byte) 0x32, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.final_root",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x31, 32),
+                directSummaryTopupAnchors,
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.topup_anchor_nullifiers count is out of range",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                Collections.emptyList(),
+                copiedNote));
+    assertThrows(
+        "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material",
+        () ->
+            spendBundleSummary(
+                1,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                repeat((byte) 0x31, 32),
+                repeat((byte) 0x32, 32),
+                Collections.singletonList(copiedNote.noteCommitment()),
+                copiedNote));
     final Object[][] malformedTopupAnchorCases = {
       {
         "topup anchor empty list",
@@ -2161,6 +2368,20 @@ public final class KagemushaRecursiveSpendProverTest {
         sharedRecursiveSpendArchive(FixtureAbi.ABI6, "lineage_witness_append_result");
     final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef lineageVerifierRecord =
         sampleVerifierRecord();
+    final byte[] mutableVerifierRecordBytes =
+        syntheticArchive(KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD);
+    final byte[] copiedVerifierRecordBytes =
+        Arrays.copyOf(mutableVerifierRecordBytes, mutableVerifierRecordBytes.length);
+    final KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef copiedVerifierRecord =
+        new KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef(
+            "halo2/ipa:copiedVerifierRecord", mutableVerifierRecordBytes);
+    mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] =
+        (byte) (mutableVerifierRecordBytes[mutableVerifierRecordBytes.length - 1] ^ 0x7f);
+    assert Arrays.equals(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes());
+    final byte[] returnedVerifierRecordBytes = copiedVerifierRecord.recordBytes();
+    returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] =
+        (byte) (returnedVerifierRecordBytes[returnedVerifierRecordBytes.length - 1] ^ 0x7f);
+    assert Arrays.equals(copiedVerifierRecordBytes, copiedVerifierRecord.recordBytes());
     final byte[] changeOutput = new byte[32];
     for (int index = 0; index < changeOutput.length; index++) {
       changeOutput[index] = (byte) (0x80 + index);
@@ -2241,6 +2462,36 @@ public final class KagemushaRecursiveSpendProverTest {
             lineageVerifierRecord.recordBytes(),
             KagemushaRecursiveSpendRequestCodecs.SCHEMA_VERIFYING_KEY_RECORD),
         sequencePayloads(pluralRedeemFields.get(8)).get(0));
+
+    final List<KagemushaRecursiveSpendRequestCodecs.VerifierRecordRef>
+        mutableLineageVerifierRecords =
+            new ArrayList<>(Arrays.asList(lineageVerifierRecord, lineageVerifierRecord));
+    final KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest copiedPluralRedeemRequest =
+        new KagemushaRecursiveSpendRequestCodecs.RedeemSpendRequest(
+            sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle"),
+            sampleRecipient(),
+            "7",
+            redeemProof,
+            null,
+            null,
+            null,
+            null,
+            mutableLineageVerifierRecords);
+    mutableLineageVerifierRecords.clear();
+    assert copiedPluralRedeemRequest.lineageVerifierRecords.size() == 2;
+    assert copiedPluralRedeemRequest.lineageVerifierRecords.get(0) == lineageVerifierRecord;
+    assert copiedPluralRedeemRequest.lineageVerifierRecords.get(1) == lineageVerifierRecord;
+    try {
+      copiedPluralRedeemRequest.lineageVerifierRecords.clear();
+      throw new AssertionError("expected UnsupportedOperationException");
+    } catch (final UnsupportedOperationException expected) {
+      // Expected.
+    }
+    final List<byte[]> copiedPluralFields =
+        requestFields(
+            KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest(copiedPluralRedeemRequest),
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_REDEEM_REQUEST);
+    assert sequencePayloads(copiedPluralFields.get(8)).size() == 2;
 
     final byte[] verifyBundle = sharedRecursiveSpendArchive(FixtureAbi.ABI6, "init_bundle");
     final List<byte[]> verifyFields =
@@ -3718,8 +3969,23 @@ public final class KagemushaRecursiveSpendProverTest {
         () -> {}, () -> 6, () -> true);
     assert KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 7, () -> true);
+    final boolean[] loadedInvalidRequiredAbi = {false};
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> loadedInvalidRequiredAbi[0] = true, () -> 7, () -> true, 0);
+    assert !loadedInvalidRequiredAbi[0];
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> {
+          throw new AssertionError("must not load for invalid required ABI");
+        },
+        () -> 7,
+        () -> true,
+        -1);
     assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 6, () -> true, 7);
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> {}, () -> 0, () -> true);
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> {}, () -> -1, () -> true);
     assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 5, () -> true);
     assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
@@ -5362,6 +5628,42 @@ public final class KagemushaRecursiveSpendProverTest {
     } catch (final IllegalArgumentException expected) {
       assert message.equals(expected.getMessage());
     }
+  }
+
+  private static KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary spendBundleSummary(
+      final int hopCount,
+      final String proofCircuitId,
+      final byte[] initialRoot,
+      final byte[] finalRoot,
+      final List<byte[]> topupAnchorNullifiers,
+      final KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor currentNote) {
+    return spendBundleSummary(
+        hopCount,
+        proofCircuitId,
+        "hex:11111111111111111111111111111111",
+        initialRoot,
+        finalRoot,
+        topupAnchorNullifiers,
+        currentNote);
+  }
+
+  private static KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary spendBundleSummary(
+      final int hopCount,
+      final String proofCircuitId,
+      final String asset,
+      final byte[] initialRoot,
+      final byte[] finalRoot,
+      final List<byte[]> topupAnchorNullifiers,
+      final KagemushaRecursiveSpendRequestCodecs.SpendableNoteDescriptor currentNote) {
+    return new KagemushaRecursiveSpendRequestCodecs.SpendBundleSummary(
+        hopCount,
+        proofCircuitId,
+        asset,
+        "java-recursive-spend-summary-copy",
+        initialRoot,
+        finalRoot,
+        topupAnchorNullifiers,
+        currentNote);
   }
 
   private static void assertLineageWitnessTrailingFieldRejected(
