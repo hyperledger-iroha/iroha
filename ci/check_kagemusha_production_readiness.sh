@@ -322,8 +322,8 @@ TEXT_REQUIREMENTS = {
         "Remaining compact-token release work is to attach signed device-lab evidence",
         "packaged one-hop and append proving-key artifacts",
         "receiver admission can trust that metadata",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
-        "255-by-1 scalar coverage",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+        "64-by-4 scalar coverage",
         "compact-first SDK selection",
         "production proof-log artifact",
         "ABI-7 recursive compact key evidence",
@@ -502,8 +502,8 @@ TEXT_REQUIREMENTS = {
         "The reserved `kagemusha-recursive-spend-lineage-v1` profile is the enabled",
         "witnessless chain-admission path for constant-size lineage proofs inside the",
         "64-hop cap",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
-        "255-by-1 fixed-window Vesta verifier witness profile",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
+        "64-by-4 fixed-window Vesta verifier witness profile",
         "The routine readiness route still validates the ABI-6 reserved-lineage",
         "recursive spend verifier and redemption surface",
         "SDK preferred-mode selection can choose ABI-7 compact",
@@ -1976,6 +1976,9 @@ TEXT_REQUIREMENTS = {
         "executable in {\"adb\", \"adb.exe\"}",
         "if _is_adb_executable(display_tokens):",
         "display_tokens[index + 1] = ADB_SERIAL_REDACTION",
+        "normalized_tokens = [token.casefold() for token in tokens]",
+        'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+        "tuple(normalized_tokens[index : index + width]) == sequence",
         "errors = _command_disruption_errors(command, f\"ADB getprop {prop}\")",
         "timeout=_timeout_arg(timeout_seconds)",
         "ADB getprop {prop} timed out after {timeout_seconds} seconds",
@@ -2122,6 +2125,9 @@ TEXT_REQUIREMENTS = {
         "return NON_UTF8_OUTPUT_REDACTION",
         "def _safe_adb_command_display(",
         "def _command_disruption_errors(",
+        "normalized_tokens = [token.casefold() for token in tokens]",
+        'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+        "tuple(normalized_tokens[index : index + width]) == sequence",
         "must not manage other running jobs",
         "errors = _command_disruption_errors(command, \"latest raw slot ADB query\")",
         "errors = _command_disruption_errors(command, \"raw slot tar ADB pull\")",
@@ -2432,6 +2438,9 @@ TEXT_REQUIREMENTS = {
         "ADB_DEVICES_NO_VISIBLE_ROWS",
         "redact_tokens",
         "def _command_disruption_errors",
+        "normalized_tokens = [token.casefold() for token in tokens]",
+        'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+        "tuple(normalized_tokens[index : index + width]) == sequence",
         "must not manage other running jobs",
         "errors = _command_disruption_errors(command, label)",
         "capture_device_lab_slot",
@@ -2810,7 +2819,8 @@ TEXT_REQUIREMENTS = {
         "abi7_archive_fixture_missing_archive",
         "KagemushaCommand::RecursiveCompactKeyArtifacts",
         "KagemushaRecursiveCompactKeyArtifactsArgs",
-        "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_archive",
         "kagemusha_recursive_compact_payment_token_vk_record_from_box",
         "validate_release_local_json_file",
         "_validate_release_local_json_file_for_read",
@@ -2895,7 +2905,7 @@ TEXT_REQUIREMENTS = {
         "sha256=(?P<vk_sha256>",
         "MAX_COMPACT_KEY_GENERATOR_LOG_BYTES",
         "EXPECTED_COMPACT_KEY_OPENING_LEN = 4",
-        "EXPECTED_COMPACT_KEY_IPA_K = 8",
+        "EXPECTED_COMPACT_KEY_IPA_K = 12",
         "EXPECTED_COMPACT_KEY_BACKEND = \"halo2/ipa\"",
         "EXPECTED_COMPACT_KEY_CIRCUIT_ID = \"kagemusha-recursive-compact-v1\"",
         "EXPECTED_COMPACT_KEY_RECORD_NAMESPACE = \"offline_kagemusha\"",
@@ -5447,6 +5457,11 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_slot_assembler_rejects_blank_identity_override_without_adb",
         "test_kagemusha_slot_assembler_rejects_disruptive_adb_getprop_before_subprocess",
         "test_android_command_gates_reject_package_state_mutations",
+        "mixed-case kill executable path",
+        "mixed-case adb token",
+        "mixed-case adb sequence",
+        "KiLl-SeRvEr",
+        "FORCE-STOP",
         "test_kagemusha_slot_assembler_adb_getprop_uses_timeout",
         "test_kagemusha_slot_assembler_zero_adb_getprop_timeout_disables_timeout",
         "test_kagemusha_slot_assembler_reports_adb_getprop_timeout",
@@ -6292,6 +6307,11 @@ TEXT_REQUIREMENTS = {
         "test_android_capture_command_gate_rejects_process_management",
         "test_android_slot_command_gate_rejects_process_management",
         "test_android_raw_puller_command_gate_rejects_process_management",
+        "mixed-case kill executable path",
+        "mixed-case adb token",
+        "mixed-case adb sequence",
+        "KiLl-SeRvEr",
+        "FORCE-STOP",
         "summary[\"lineage_proof_evidence\"][\"generated_at_utc\"]",
         "test_localnet_lifecycle_evidence_accepts_valid_four_peer_run",
         "test_localnet_lifecycle_evidence_accepts_hash_uri_scheme",
@@ -7624,8 +7644,8 @@ TEXT_REQUIREMENTS = {
         "KagemushaCommand::LineageRecord",
         "KagemushaRecursiveCompactKeyArtifactsArgs",
         "KagemushaLineageRecordArgs",
-        "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
-        "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_bytes",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
+        "write_halo2_ipa_kagemusha_recursive_compact_payment_token_append_proving_key_archive",
         "KagemushaRecursiveCompactKeyArtifactsV1::new",
         'arg(long, value_name = "PATH", required = true)',
         "--key-artifacts-out and --verifier-keys-out must both be provided for ABI-7 recursive compact production key packages",
@@ -7660,7 +7680,7 @@ TEXT_REQUIREMENTS = {
         "Writing {} Reserved-lineage key package to {}",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         "KagemushaRecursiveCompactUnavailable",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",
@@ -8000,6 +8020,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-physical-device",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-preflight-call",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-non-disruptive-commands",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-command-gate-casefold",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-exactness",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-state-detail",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-capture-adb-diagnostic-state-test",
@@ -10249,12 +10270,12 @@ if mode == "--negative-control-offline-doc-verifier-profile-exactness":
     def mutate_offline_doc_verifier_profile() -> None:
         override_text(
             "docs/source/offline_kagemusha.md",
-            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
+            "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
             "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3",
         )
         override_text(
             "roadmap.md",
-            "255-by-1 scalar coverage",
+            "64-by-4 scalar coverage",
             "85-by-3 scalar coverage",
         )
 
@@ -10987,6 +11008,40 @@ if mode == "--negative-control-android-device-lab-capture-non-disruptive-command
             "errors = _command_disruption_errors(command, label)",
             "errors = []",
         ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-command-gate-casefold":
+    def mutate_android_device_lab_command_gate_casefold() -> None:
+        for target in (
+            "scripts/kagemusha_android_device_lab_capture.py",
+            "scripts/kagemusha_android_device_lab_slot.py",
+            "scripts/kagemusha_pull_android_device_lab_raw_slot.py",
+        ):
+            override_text(
+                target,
+                "normalized_tokens = [token.casefold() for token in tokens]",
+                "normalized_tokens = list(tokens)",
+            )
+            override_text(
+                target,
+                'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1].casefold()',
+                'executable = tokens[0].replace("\\\\", "/").rsplit("/", 1)[-1]',
+            )
+        override_text(
+            "scripts/tests/check_android_device_lab_slot_test.py",
+            '"mixed-case adb token"',
+            '"mixed-case adb token accepted"',
+        )
+        override_text(
+            "scripts/tests/kagemusha_production_readiness_test.py",
+            '"mixed-case adb token"',
+            '"mixed-case adb token accepted"',
+        )
+
+    run_negative_control(
+        "Android device-lab command gate casefold",
+        mutate_android_device_lab_command_gate_casefold,
     )
     raise SystemExit(0)
 
@@ -16351,8 +16406,8 @@ if mode == "--negative-control-compact-key-release-tooling":
         "ABI-7 compact key release tooling",
         lambda: override_text(
             "crates/iroha_cli/src/zk.rs",
-            "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
-            "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled",
+            "write_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_archive",
+            "write_halo2_ipa_kagemusha_recursive_compact_payment_token_disabled",
         ),
     )
     raise SystemExit(0)

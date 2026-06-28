@@ -9,6 +9,11 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         XCTAssertFalse(SorafsOrderbookPayloadKind.runtimeSnapshot.isUserSignedPayload)
         XCTAssertEqual(SorafsPdpPayloadKind.commitment.rawValue, 1)
         XCTAssertEqual(SorafsPdpPayloadKind.proof.rawValue, 3)
+        XCTAssertEqual(SorafsPopPayloadKind.credential.rawValue, 1)
+        XCTAssertEqual(SorafsPopPayloadKind.membershipProof.rawValue, 6)
+        XCTAssertEqual(SorafsPopPayloadKind.issuedCredentialBundle.rawValue, 7)
+        XCTAssertEqual(SorafsHedgingPayloadKind.priceFeed.rawValue, 1)
+        XCTAssertEqual(SorafsHedgingPayloadKind.billingStatement.rawValue, 4)
         XCTAssertEqual(SorafsOrderbookSide.bid.rawValue, 1)
         XCTAssertEqual(SorafsOrderbookTier.archive.rawValue, 3)
         XCTAssertEqual(SorafsOrderbookCancelReason.replaced.rawValue, 4)
@@ -16,8 +21,8 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
 
     func testRejectsBlankLabelBeforeNativeDispatch() {
         XCTAssertThrowsError(
-            try SorafsReferenceValidators.validatePdpPayloadJSON(
-                kind: .proof,
+            try SorafsReferenceValidators.validateHedgingPayloadJSON(
+                kind: .priceFeed,
                 payload: Data(),
                 label: " ",
                 generatedAtUnix: 1

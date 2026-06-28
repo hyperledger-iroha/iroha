@@ -1,0 +1,314 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(torii_sorafs_hedging_xor_usd_reference_price_micro_usd{cluster=~\"$cluster\"}) / 1000000",
+          "legendFormat": "XOR/USD",
+          "refId": "A"
+        }
+      ],
+      "title": "XOR/USD Reference Price",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "max(torii_sorafs_hedging_feed_lag_seconds{cluster=~\"$cluster\",source=~\"$source\"})",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Max Feed Lag",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(torii_sorafs_billing_statement_generation_total{cluster=~\"$cluster\",account_type=~\"$account_type\"}[1h]))",
+          "legendFormat": "statements",
+          "refId": "A"
+        }
+      ],
+      "title": "Statements Generated 1h",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(torii_sorafs_billing_statement_failure_total{cluster=~\"$cluster\",account_type=~\"$account_type\"}[1h]))",
+          "legendFormat": "failures",
+          "refId": "A"
+        }
+      ],
+      "title": "Statement Failures 1h",
+      "type": "stat"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "max by (source) (torii_sorafs_hedging_feed_divergence_bps{cluster=~\"$cluster\",source=~\"$source\"})",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Feed Divergence bps",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "max by (asset) (torii_sorafs_hedging_exposure_drift_bps{cluster=~\"$cluster\"})",
+          "legendFormat": "{{asset}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Exposure Drift bps",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "max(torii_sorafs_billing_statement_ack_backlog{cluster=~\"$cluster\"})",
+          "legendFormat": "ack backlog",
+          "refId": "A"
+        }
+      ],
+      "title": "Statement Acknowledgement Backlog",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "$datasource",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "min by (account_type) (torii_sorafs_billing_escrow_runway_seconds{cluster=~\"$cluster\",account_type=~\"$account_type\"})",
+          "legendFormat": "{{account_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Escrow Runway",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "sorafs",
+    "hedging",
+    "billing"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "label": "Datasource",
+        "name": "datasource",
+        "pluginId": "prometheus",
+        "query": "prometheus",
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "datasource": "$datasource",
+        "includeAll": true,
+        "label": "Cluster",
+        "name": "cluster",
+        "query": "label_values(torii_sorafs_hedging_feed_lag_seconds, cluster)",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "datasource": "$datasource",
+        "includeAll": true,
+        "label": "Feed Source",
+        "name": "source",
+        "query": "label_values(torii_sorafs_hedging_feed_lag_seconds, source)",
+        "refresh": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "datasource": "$datasource",
+        "includeAll": true,
+        "label": "Account Type",
+        "name": "account_type",
+        "query": "label_values(torii_sorafs_billing_statement_generation_total, account_type)",
+        "refresh": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "timezone": "browser",
+  "title": "SoraFS Hedging and Billing",
+  "uid": "sorafs-hedging-billing",
+  "version": 1
+}

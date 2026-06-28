@@ -2536,11 +2536,6 @@ class RbcSample:
 class OfflineReadiness:
     """Offline readiness advertised by Torii."""
 
-    offline_kagemusha_abi7: bool
-    offline_kagemusha_abi7_mode: str
-    offline_kagemusha_abi7_bridge_abi_version: int
-    offline_kagemusha_abi7_circuit_id: str
-    offline_kagemusha_abi7_artifacts: bool
     offline_kagemusha_recursive_compact_available: bool
     offline_kagemusha_recursive_compact_mode: str
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version: int
@@ -2562,14 +2557,66 @@ class OfflineReadiness:
             return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
 
         def required_string(field: str) -> str:
-            return _require_exact_non_empty_string(
-                payload.get(field), f"offline readiness.{field}"
-            )
+            try:
+                return _require_exact_non_empty_string(
+                    payload.get(field), f"offline readiness.{field}"
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(str(exc)) from exc
 
         def required_positive_int(field: str) -> int:
-            return ToriiClient._coerce_positive_int(
-                payload.get(field), context=f"offline readiness.{field}"
-            )
+            value = payload.get(field)
+            context = f"offline readiness.{field}"
+            if isinstance(value, bool):
+                raise RuntimeError(f"{context} must be an integer")
+            if isinstance(value, int):
+                result = value
+            elif isinstance(value, str):
+                if re.fullmatch(r"[1-9][0-9]*", value) is None:
+                    raise RuntimeError(
+                        f"{context} must be an exact positive integer string"
+                    )
+                result = int(value, 10)
+            else:
+                raise RuntimeError(f"{context} must be an integer")
+            if result <= 0:
+                raise RuntimeError(f"{context} must be a positive integer")
+            if result > 2_147_483_647:
+                raise RuntimeError(f"{context} must fit in signed 32-bit range")
+            return result
+
+        removed_abi7_fields = (
+            "offline_kagemusha_abi7",
+            "offline_kagemusha_abi7_mode",
+            "offline_kagemusha_abi7_bridge_abi_version",
+            "offline_kagemusha_abi7_circuit_id",
+            "offline_kagemusha_abi7_artifacts",
+        )
+        for field in removed_abi7_fields:
+            if field in payload:
+                raise RuntimeError(
+                    f"offline readiness.{field} is not supported; "
+                    "use offline_kagemusha_recursive_compact_*"
+                )
+
+        def decode_recursive_compact_family() -> Dict[str, Any]:
+            return {
+                "available": required_bool(
+                    "offline_kagemusha_recursive_compact_available"
+                ),
+                "mode": required_string("offline_kagemusha_recursive_compact_mode"),
+                "bridge_abi_version": required_positive_int(
+                    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
+                ),
+                "circuit_id": required_string(
+                    "offline_kagemusha_recursive_compact_circuit_id"
+                ),
+                "artifacts": required_bool(
+                    "offline_kagemusha_recursive_compact_artifacts_available"
+                ),
+            }
+
+        recursive_compact = decode_recursive_compact_family()
 
         def optional_bool(field: str) -> Optional[bool]:
             if field not in payload:
@@ -2577,32 +2624,15 @@ class OfflineReadiness:
             return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
 
         return cls(
-            offline_kagemusha_abi7=required_bool("offline_kagemusha_abi7"),
-            offline_kagemusha_abi7_mode=required_string("offline_kagemusha_abi7_mode"),
-            offline_kagemusha_abi7_bridge_abi_version=required_positive_int(
-                "offline_kagemusha_abi7_bridge_abi_version"
-            ),
-            offline_kagemusha_abi7_circuit_id=required_string(
-                "offline_kagemusha_abi7_circuit_id"
-            ),
-            offline_kagemusha_abi7_artifacts=required_bool(
-                "offline_kagemusha_abi7_artifacts"
-            ),
-            offline_kagemusha_recursive_compact_available=required_bool(
-                "offline_kagemusha_recursive_compact_available"
-            ),
-            offline_kagemusha_recursive_compact_mode=required_string(
-                "offline_kagemusha_recursive_compact_mode"
-            ),
-            offline_kagemusha_recursive_compact_required_native_bridge_abi_version=required_positive_int(
-                "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
-            ),
-            offline_kagemusha_recursive_compact_circuit_id=required_string(
-                "offline_kagemusha_recursive_compact_circuit_id"
-            ),
-            offline_kagemusha_recursive_compact_artifacts_available=required_bool(
-                "offline_kagemusha_recursive_compact_artifacts_available"
-            ),
+            offline_kagemusha_recursive_compact_available=recursive_compact["available"],
+            offline_kagemusha_recursive_compact_mode=recursive_compact["mode"],
+            offline_kagemusha_recursive_compact_required_native_bridge_abi_version=recursive_compact[
+                "bridge_abi_version"
+            ],
+            offline_kagemusha_recursive_compact_circuit_id=recursive_compact["circuit_id"],
+            offline_kagemusha_recursive_compact_artifacts_available=recursive_compact[
+                "artifacts"
+            ],
             offline_telemetry=required_bool("offline_telemetry"),
             offline_note=optional_bool("offline_note"),
             offline_one_use_keys=optional_bool("offline_one_use_keys"),
@@ -4464,19 +4494,37 @@ class ToriiClient:
     ) -> Mapping[str, Any]:
         """Submit a bridge proof DTO (`POST /v1/bridge/proofs/submit`)."""
 
-        if not isinstance(authority, str) or not authority.strip():
-            raise RuntimeError("bridge proof submit authority must be a non-empty string")
-        payload: Dict[str, Any] = {"authority": authority.strip()}
+        payload: Dict[str, Any] = {
+            "authority": _require_exact_non_empty_string(
+                authority,
+                "bridge proof submit.authority",
+            )
+        }
         if private_key is not None:
             payload["private_key"] = private_key
         if public_key_hex is not None:
-            if not isinstance(public_key_hex, str) or not public_key_hex.strip():
-                raise RuntimeError("bridge proof submit public_key_hex must be a non-empty string")
-            payload["public_key_hex"] = public_key_hex.strip()
+            _require_exact_non_empty_string(
+                public_key_hex,
+                "bridge proof submit.public_key_hex",
+            )
+            self._require_exact_inline_hex_string(
+                public_key_hex,
+                context="bridge proof submit.public_key_hex",
+            )
+            payload["public_key_hex"] = self._normalize_hex_string(
+                public_key_hex,
+                context="bridge proof submit.public_key_hex",
+                expected_length=64,
+            )
         if signature_b64 is not None:
-            if not isinstance(signature_b64, str) or not signature_b64.strip():
-                raise RuntimeError("bridge proof submit signature_b64 must be a non-empty string")
-            payload["signature_b64"] = signature_b64.strip()
+            _require_exact_non_empty_string(
+                signature_b64,
+                "bridge proof submit.signature_b64",
+            )
+            payload["signature_b64"] = self._normalize_required_base64_payload(
+                signature_b64,
+                "bridge proof submit.signature_b64",
+            )
         if burn_bundle is not None:
             payload["burn_bundle"] = burn_bundle
         if message_bundle is not None:
@@ -4541,28 +4589,40 @@ class ToriiClient:
     ) -> Mapping[str, Any]:
         """Submit an inbound bridge message DTO (`POST /v1/bridge/messages`)."""
 
-        if not isinstance(authority, str) or not authority.strip():
-            raise RuntimeError("bridge message submit authority must be a non-empty string")
         if not isinstance(message_bundle, Mapping):
             raise RuntimeError("bridge message submit message_bundle must be a mapping")
         payload: Dict[str, Any] = {
-            "authority": authority.strip(),
+            "authority": _require_exact_non_empty_string(
+                authority,
+                "bridge message submit.authority",
+            ),
             "message_bundle": message_bundle,
         }
         if private_key is not None:
             payload["private_key"] = private_key
         if public_key_hex is not None:
-            if not isinstance(public_key_hex, str) or not public_key_hex.strip():
-                raise RuntimeError(
-                    "bridge message submit public_key_hex must be a non-empty string"
-                )
-            payload["public_key_hex"] = public_key_hex.strip()
+            _require_exact_non_empty_string(
+                public_key_hex,
+                "bridge message submit.public_key_hex",
+            )
+            self._require_exact_inline_hex_string(
+                public_key_hex,
+                context="bridge message submit.public_key_hex",
+            )
+            payload["public_key_hex"] = self._normalize_hex_string(
+                public_key_hex,
+                context="bridge message submit.public_key_hex",
+                expected_length=64,
+            )
         if signature_b64 is not None:
-            if not isinstance(signature_b64, str) or not signature_b64.strip():
-                raise RuntimeError(
-                    "bridge message submit signature_b64 must be a non-empty string"
-                )
-            payload["signature_b64"] = signature_b64.strip()
+            _require_exact_non_empty_string(
+                signature_b64,
+                "bridge message submit.signature_b64",
+            )
+            payload["signature_b64"] = self._normalize_required_base64_payload(
+                signature_b64,
+                "bridge message submit.signature_b64",
+            )
         destination_params = self._normalize_sccp_evm_destination_params(
             network_id_hex=network_id_hex,
             verifier_address_hex=verifier_address_hex,
@@ -5474,7 +5534,7 @@ class ToriiClient:
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
         params: Dict[str, Any] = {}
         if asset_id is not None:
-            params["asset_id"] = self._normalize_optional_string(
+            params["asset_id"] = _require_exact_non_empty_string(
                 asset_id,
                 "uaid portfolio asset_id",
             )
@@ -7956,13 +8016,13 @@ class ToriiClient:
             )
         if has_contract_address:
             return {
-                "contract_address": ToriiClient._require_non_empty_string(
+                "contract_address": _require_exact_non_empty_string(
                     contract_address,
                     f"{context}.contract_address",
                 )
             }
         return {
-            "contract_alias": ToriiClient._require_non_empty_string(
+            "contract_alias": _require_exact_non_empty_string(
                 contract_alias,
                 f"{context}.contract_alias",
             )
@@ -10689,14 +10749,19 @@ class ToriiClient:
     def _normalize_uaid_literal(value: Any, *, context: str) -> str:
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a UAID string")
-        literal = value.strip()
-        if not literal:
+        literal = value
+        stripped = literal.strip()
+        if not stripped:
             raise RuntimeError(f"{context} must be a UAID string")
+        if stripped != literal:
+            raise ValueError(f"{context} must not contain surrounding whitespace")
         if literal.lower().startswith("uaid:"):
             hex_portion = literal[5:]
         else:
             hex_portion = literal
-        normalized = hex_portion.strip()
+        normalized = hex_portion
+        if normalized.strip() != normalized:
+            raise ValueError(f"{context} must not contain surrounding whitespace")
         if len(normalized) != 64:
             raise RuntimeError(f"{context} must contain 64 hex characters")
         try:

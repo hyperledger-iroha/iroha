@@ -693,6 +693,56 @@ def test_unexpected_failure_marker_check_rejects_baseline_modes() -> None:
     ) == ["frontier-fast: Apalache runner case 'frontier-fast' at line 10"]
 
 
+def test_apalache_typecheck_only_mode_errors_accepts_fast_smoke() -> None:
+    module = load_coverage_module()
+    cases = {
+        "fast": module.RunnerCase("fast", "\n    typecheck_only=1\n", 10),
+        "frontier-fast": module.RunnerCase("frontier-fast", "\n", 20),
+    }
+
+    assert (
+        module.apalache_typecheck_only_mode_errors(
+            {"fast", "frontier-fast"},
+            cases,
+        )
+        == []
+    )
+
+
+def test_apalache_typecheck_only_mode_errors_rejects_unlisted_modes() -> None:
+    module = load_coverage_module()
+    cases = {
+        "fast": module.RunnerCase("fast", "\n    typecheck_only=1\n", 10),
+        "frontier-fast": module.RunnerCase(
+            "frontier-fast", "\n    typecheck_only=1\n", 20
+        ),
+    }
+
+    assert module.apalache_typecheck_only_mode_errors(
+        {"fast", "frontier-fast"},
+        cases,
+    ) == [
+        "frontier-fast: Apalache runner case 'frontier-fast' at line 20 "
+        "sets typecheck_only=1 outside APALACHE_TYPECHECK_ONLY_MODES"
+    ]
+
+
+def test_apalache_typecheck_only_mode_errors_rejects_stale_allowlist() -> None:
+    module = load_coverage_module()
+    cases = {
+        "fast": module.RunnerCase("fast", "\n", 10),
+        "frontier-fast": module.RunnerCase("frontier-fast", "\n", 20),
+    }
+
+    assert module.apalache_typecheck_only_mode_errors(
+        {"fast", "frontier-fast"},
+        cases,
+    ) == [
+        "fast: listed in APALACHE_TYPECHECK_ONLY_MODES but Apalache runner "
+        "case 'fast' at line 10 does not set typecheck_only=1"
+    ]
+
+
 def test_mutation_cfg_equivalence_allows_same_and_commit_roots_tlc_cfg() -> None:
     module = load_coverage_module()
     apalache_cases = {

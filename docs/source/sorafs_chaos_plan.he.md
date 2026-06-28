@@ -4,14 +4,9 @@ direction: rtl
 source: docs/source/sorafs_chaos_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 43dfc53b7a951ec0b036a56941335a4fd05657da91c7a3f727e3846b8c647d23
-source_last_modified: "2026-01-03T18:07:58.704822+00:00"
+source_hash: df845444d67f36e55734bd1d1d095fb4bad84badbdd0d5bfa7498ccdc9ef2068
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS Chaos Drill & Incident Playbook Plan
-summary: Outline for SF-7b chaos drills and incident response materials.
 ---
 
 # SoraFS Chaos Drill & Incident Playbook Plan

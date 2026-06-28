@@ -67,6 +67,7 @@ enum ValidationFeeAdmissionError {
     MissingFee {
         required_minor_units: u64,
     },
+    MissingFeeInstructionCoordinate,
     DuplicateFeeInstructions {
         count: usize,
     },
@@ -189,6 +190,12 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 f,
                 "missing validation-fee transfer of {required_minor_units} minor units"
             ),
+            Self::MissingFeeInstructionCoordinate => {
+                write!(
+                    f,
+                    "missing signed validation-fee instruction coordinate metadata"
+                )
+            }
             Self::DuplicateFeeInstructions { count } => {
                 write!(f, "ambiguous validation-fee transfer count {count}")
             }
@@ -556,6 +563,7 @@ fn enforce_policy(
             &transfer_collection.transfers,
             &fee_asset_transfers,
             context_fee_coordinate,
+            !context.explicit_fee_coordinate_allowed,
         )?;
     }
 
@@ -574,9 +582,10 @@ fn enforce_context_policy(
     transfers: &[AssetTransferSummary],
     fee_asset_transfers: &[FeeAssetTransferSummary],
     fee_coordinate: Option<FeeInstructionCoordinate>,
+    allow_implicit_context_fee: bool,
 ) -> Result<bool, ValidationFeeAdmissionError> {
     let mut qualifying_transfer_count = 0usize;
-    let mut implicit_fee_transfers = Vec::new();
+    let mut uncoordinated_fee_candidates = Vec::new();
     let treasury_payout_exemption_enabled = treasury_payout_exemption_enabled(policy);
 
     if let Some(fee_coordinate) = fee_coordinate {
@@ -600,22 +609,17 @@ fn enforce_context_policy(
             if fee_coordinate.matches(transfer) {
                 continue;
             }
-            if &transfer.source_account_id == execution_account_id
-                && &transfer.destination_account_id == treasury
-            {
-                implicit_fee_transfers.push(transfer);
-            } else {
-                qualifying_transfer_count += 1;
-            }
+            qualifying_transfer_count += 1;
         }
 
         if qualifying_transfer_count == 0 {
+            if fee_transfer.amount_minor_units != 0 {
+                return Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 0,
+                    observed_minor_units: fee_transfer.amount_minor_units,
+                });
+            }
             return Ok(false);
-        }
-        if !implicit_fee_transfers.is_empty() {
-            return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
-                count: implicit_fee_transfers.len() + 1,
-            });
         }
 
         let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
@@ -636,33 +640,64 @@ fn enforce_context_policy(
         if &transfer.source_account_id == treasury && treasury_payout_exemption_enabled {
             continue;
         }
-        if &transfer.source_account_id == execution_account_id
+        if allow_implicit_context_fee
+            && &transfer.source_account_id == execution_account_id
             && &transfer.destination_account_id == treasury
         {
-            implicit_fee_transfers.push(transfer);
+            uncoordinated_fee_candidates.push(transfer);
         } else {
             qualifying_transfer_count += 1;
         }
     }
 
     if qualifying_transfer_count == 0 {
-        return Ok(false);
+        if uncoordinated_fee_candidates.is_empty() {
+            return Ok(false);
+        }
+        if uncoordinated_fee_candidates.len() > 1 {
+            return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
+                count: uncoordinated_fee_candidates.len(),
+            });
+        }
+        return Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate);
     }
 
-    let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+    if !allow_implicit_context_fee {
+        let uncoordinated_fee_candidate_count = fee_asset_transfers
+            .iter()
+            .filter(|transfer| transfer.context_index == context_index)
+            .filter(|transfer| {
+                !(&transfer.source_account_id == treasury && treasury_payout_exemption_enabled)
+            })
+            .filter(|transfer| {
+                &transfer.source_account_id == execution_account_id
+                    && &transfer.destination_account_id == treasury
+            })
+            .count();
+        if uncoordinated_fee_candidate_count > 1 {
+            return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
+                count: uncoordinated_fee_candidate_count,
+            });
+        }
+        if uncoordinated_fee_candidate_count == 1 {
+            return Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate);
+        }
+    }
 
-    if implicit_fee_transfers.is_empty() {
+    if uncoordinated_fee_candidates.is_empty() {
+        let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
         return Err(ValidationFeeAdmissionError::MissingFee {
             required_minor_units: required_fee_minor_units,
         });
     }
-    if implicit_fee_transfers.len() > 1 {
+    if uncoordinated_fee_candidates.len() > 1 {
         return Err(ValidationFeeAdmissionError::DuplicateFeeInstructions {
-            count: implicit_fee_transfers.len(),
+            count: uncoordinated_fee_candidates.len(),
         });
     }
 
-    let fee_transfer = &implicit_fee_transfers[0];
+    let required_fee_minor_units = required_fee_minor_units(qualifying_transfer_count, policy)?;
+    let fee_transfer = &uncoordinated_fee_candidates[0];
     if fee_transfer.amount_minor_units != required_fee_minor_units {
         return Err(ValidationFeeAdmissionError::WrongFeeAmount {
             expected_minor_units: required_fee_minor_units,
@@ -970,7 +1005,7 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         isi::{InstructionBox, Transfer, TransferAssetBatchEntry},
-        transaction::TransactionBuilder,
+        transaction::{Executable, TransactionBuilder, executable::ContractInvocation},
         validation_fee::{
             SignedValidationFeePolicyV1, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
             VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
@@ -1137,6 +1172,21 @@ mod tests {
             .sign(key_pair.private_key())
     }
 
+    fn contract_call_tx(authority_seed: u8, metadata: Metadata) -> SignedTransaction {
+        let key_pair = key_pair(authority_seed);
+        let chain: ChainId = "generic-testnet".parse().expect("chain id");
+        TransactionBuilder::new(chain, AccountId::new(key_pair.public_key().clone()))
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "send_transfer".to_owned(),
+                payload: None,
+            }))
+            .with_metadata(metadata)
+            .sign(key_pair.private_key())
+    }
+
     fn metadata_for(policy: &ValidationFeePolicyV1) -> Metadata {
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -1155,6 +1205,15 @@ mod tests {
         instruction_index: usize,
     ) -> Metadata {
         let mut metadata = metadata_for(policy);
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY).expect("metadata key"),
+            Json::new(u64::try_from(instruction_index).expect("instruction index fits u64")),
+        );
+        metadata
+    }
+
+    fn metadata_for_fee_instruction_coordinate(instruction_index: usize) -> Metadata {
+        let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY).expect("metadata key"),
             Json::new(u64::try_from(instruction_index).expect("instruction index fits u64")),
@@ -1314,6 +1373,18 @@ mod tests {
     }
 
     #[test]
+    fn active_policy_rejects_contract_call_executables_fail_closed() {
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let tx = contract_call_tx(1, metadata_for(&policy));
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::UnsupportedExecutable)
+        );
+    }
+
+    #[test]
     fn missing_fee_is_rejected() {
         let user = account(1);
         let recipient = account(2);
@@ -1336,6 +1407,28 @@ mod tests {
             Err(ValidationFeeAdmissionError::MissingFee {
                 required_minor_units: 10
             })
+        );
+    }
+
+    #[test]
+    fn fee_bearing_transaction_requires_signed_fee_instruction_coordinate() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for(&policy),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingFeeInstructionCoordinate)
         );
     }
 
@@ -1433,12 +1526,38 @@ mod tests {
                 transfer(&user, &fee_asset, minor_units(5), &treasury),
                 transfer(&user, &fee_asset, minor_units(5), &treasury),
             ],
-            metadata_for_fee_instruction(&policy, 1),
+            metadata_for(&policy),
         );
 
         assert_eq!(
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::DuplicateFeeInstructions { count: 2 })
+        );
+    }
+
+    #[test]
+    fn signed_fee_coordinate_treats_additional_treasury_transfer_as_qualifying() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 20,
+                observed_minor_units: 10,
+            })
         );
     }
 
@@ -1516,17 +1635,76 @@ mod tests {
     #[test]
     fn fee_transfer_is_not_recursively_charged() {
         let user = account(1);
-        let treasury = account(2);
+        let recipient = account(2);
+        let treasury = account(3);
         let policy = policy(&treasury);
         let fee_asset = policy_fee_asset(&policy);
 
-        let standalone_fee_like_transfer = tx(
+        let exact_fee_tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+        enforce_policy(&exact_fee_tx, &policy).expect("fee instruction is not recursively charged");
+
+        let recursively_charged_tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                transfer(&user, &fee_asset, minor_units(20), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+        assert_eq!(
+            enforce_policy(&recursively_charged_tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 10,
+                observed_minor_units: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn retail_transfer_to_treasury_requires_separate_signed_fee() {
+        let user = account(1);
+        let treasury = account(2);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                transfer(&user, &fee_asset, Numeric::new(1u64, 0), &treasury),
+                transfer(&user, &fee_asset, minor_units(10), &treasury),
+            ],
+            metadata_for_fee_instruction(&policy, 1),
+        );
+
+        enforce_policy(&tx, &policy)
+            .expect("treasury-destination principal requires a separate signed fee instruction");
+    }
+
+    #[test]
+    fn single_treasury_transfer_cannot_be_signed_as_standalone_fee() {
+        let user = account(1);
+        let treasury = account(2);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
             1,
             vec![transfer(&user, &fee_asset, minor_units(10), &treasury)],
-            Metadata::default(),
+            metadata_for_fee_instruction(&policy, 0),
         );
-        enforce_policy(&standalone_fee_like_transfer, &policy)
-            .expect("standalone treasury transfer is not recursively charged");
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 0,
+                observed_minor_units: 10,
+            })
+        );
     }
 
     #[test]
@@ -1633,7 +1811,11 @@ mod tests {
             ]
         };
 
-        let missing_metadata_tx = tx(1, instructions(), Metadata::default());
+        let missing_metadata_tx = tx(
+            1,
+            instructions(),
+            metadata_for_fee_instruction_coordinate(1),
+        );
         assert_eq!(
             enforce_policy(&missing_metadata_tx, &policy),
             Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
@@ -1762,8 +1944,9 @@ mod tests {
         );
         assert_eq!(
             enforce_policy(&top_level_fee, &policy),
-            Err(ValidationFeeAdmissionError::MissingFee {
-                required_minor_units: 10
+            Err(ValidationFeeAdmissionError::WrongFeeAmount {
+                expected_minor_units: 0,
+                observed_minor_units: 10
             })
         );
     }

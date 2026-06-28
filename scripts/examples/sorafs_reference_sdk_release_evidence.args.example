@@ -1,0 +1,10 @@
+# Reviewed SF-11 reference SDK release evidence gate arguments.
+# Point the evidence directory at the reviewed artifact root. Review only
+# payload-free release summaries. Keep release signing keys, bearer tokens, raw
+# archives, and operator secrets in runtime-only locations.
+--evidence-dir /var/tmp/sorafs/reference-sdk-release
+--summary-out /var/tmp/sorafs/reference-sdk-release-summary.json
+--max-evidence-age-secs 1209600
+--min-release-targets 4
+--min-downstream-packages 5
+--max-smoke-duration-secs 1800

@@ -43,7 +43,9 @@ pub mod isi {
     use super::*;
     use crate::{
         alias::authority_can_manage_account_alias,
-        state::{WorldReadOnly as _, account_label_is_pii},
+        state::{
+            WorldReadOnly as _, account_label_is_pii, public_lane_validator_record_matches_key,
+        },
     };
 
     /// Alias grace window after lease expiry (369 hours).
@@ -1430,12 +1432,14 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some(((lane_id, validator), _)) =
-                state_transaction.world.public_lane_validators.iter().find(
-                    |((_, validator), record)| {
-                        validator == &account_id || record.stake_account == account_id
-                    },
-                )
+            if let Some(((lane_id, validator), _)) = state_transaction
+                .world
+                .public_lane_validators
+                .iter()
+                .find(|(key, record)| {
+                    public_lane_validator_record_matches_key(key, record)
+                        && (key.1 == account_id || record.stake_account == account_id)
+                })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -6893,6 +6897,58 @@ mod tests {
             tx.world.accounts.get(&account_id).is_some(),
             "account should remain after rejected unregister"
         );
+    }
+
+    #[test]
+    fn unregister_account_ignores_mismatched_public_lane_validator_row() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let keypair = checked_keypair();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+        tx.world.public_lane_validators.insert(
+            (LaneId::SINGLE, account_id.clone()),
+            iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id: LaneId::new(1),
+                validator: account_id.clone(),
+                peer_id: PeerId::from(account_id.signatory().clone()),
+                stake_account: account_id.clone(),
+                total_stake: Numeric::new(1, 0),
+                self_stake: Numeric::new(1, 0),
+                metadata: Metadata::default(),
+                status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+
+        Unregister::account(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("mismatched validator row must not block account unregister");
+
+        assert!(
+            tx.world.accounts.get(&account_id).is_none(),
+            "account should be unregistered when only malformed validator state references it"
+        );
+        let record = tx
+            .world
+            .public_lane_validators
+            .get(&(LaneId::SINGLE, account_id))
+            .expect("malformed validator row remains as stored");
+        assert_eq!(record.lane_id, LaneId::new(1));
+        assert!(matches!(
+            record.status,
+            iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+        ));
     }
 
     #[test]

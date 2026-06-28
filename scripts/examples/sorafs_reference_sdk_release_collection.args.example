@@ -1,0 +1,19 @@
+# Reviewed SF-11 reference SDK release evidence collection arguments.
+# The runner only verifies existing payload-free JSON artifacts; collect them
+# from the release pipeline and downstream package jobs before running this plan.
+# Run with:
+#   python3 scripts/run_sorafs_reference_sdk_release_evidence.py \
+#     @scripts/examples/sorafs_reference_sdk_release_collection.args.example \
+#     --dry-run
+--out-dir /var/tmp/sorafs/reference-sdk-release
+--release-archive-evidence /var/tmp/sorafs/reference-sdk-release/release-archive.json
+--signed-manifest-evidence /var/tmp/sorafs/reference-sdk-release/signed-manifest.json
+--downstream-bindings-evidence /var/tmp/sorafs/reference-sdk-release/downstream-bindings.json
+--cookbook-smoke-evidence /var/tmp/sorafs/reference-sdk-release/cookbook-smoke.json
+--ffi-header-contract-evidence /var/tmp/sorafs/reference-sdk-release/ffi-header-contract.json
+--governance-approval-evidence /var/tmp/sorafs/reference-sdk-release/governance-approval.json
+--summary-out /var/tmp/sorafs/reference-sdk-release/release-summary.json
+--max-evidence-age-secs 1209600
+--min-release-targets 4
+--min-downstream-packages 5
+--max-smoke-duration-secs 1800

@@ -15822,6 +15822,11 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary blockers[0] contains sensitive name",
         ),
         (
+            "blockers.sensitive_nested_html_entity",
+            ["private&amp;#95;key-route-canary-blocker"],
+            "route canary blockers[0] contains sensitive name",
+        ),
+        (
             "blockers.valid_nonempty",
             ["route canary governance review pending"],
             "route canary blockers must be empty",
@@ -16028,6 +16033,10 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             expected_blocker in blocker
             for blocker in route_canary_item["blockers"]
         ), field
+        blocker_text = "\n".join(route_canary_item["blockers"])
+        assert "secret%2dtoken" not in blocker_text
+        assert "private&#95;key" not in blocker_text
+        assert "private&amp;#95;key" not in blocker_text
 
 
 def test_release_readiness_report_treats_missing_active_route_canary_blockers_as_empty(

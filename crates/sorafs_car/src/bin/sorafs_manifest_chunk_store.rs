@@ -8,7 +8,8 @@ use std::{
 
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{
-    ChunkStore, FilePayload, InMemoryPayload,
+    CarBuildPlan, ChunkStore, DirectoryChunkSinkOutput, FilePayload, InMemoryPayload,
+    PersistedChunkRecord,
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
 use sorafs_manifest::{
@@ -28,6 +29,7 @@ fn run() -> Result<(), String> {
     let mut profile_handle: Option<String> = None;
     let mut json_out: Option<PathBuf> = None;
     let mut por_json_out: Option<PathBuf> = None;
+    let mut chunk_dir_out: Option<PathBuf> = None;
     let mut payload_path: Option<PathBuf> = None;
     let mut list_profiles = false;
     let mut promote_profile: Option<String> = None;
@@ -54,6 +56,8 @@ fn run() -> Result<(), String> {
             json_out = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--por-json-out=") {
             por_json_out = Some(PathBuf::from(rest));
+        } else if let Some(rest) = arg.strip_prefix("--chunk-dir-out=") {
+            chunk_dir_out = Some(PathBuf::from(rest));
         } else if let Some(rest) = arg.strip_prefix("--por-proof=") {
             proof_spec = Some(parse_proof_spec(rest)?);
         } else if let Some(rest) = arg.strip_prefix("--por-proof-out=") {
@@ -87,6 +91,9 @@ fn run() -> Result<(), String> {
         if promote_profile.is_some() {
             return Err("cannot combine --list-profiles with --promote-profile".to_string());
         }
+        if chunk_dir_out.is_some() {
+            return Err("cannot combine --list-profiles with --chunk-dir-out".to_string());
+        }
         let profiles: Vec<Value> = chunker_registry::registry()
             .iter()
             .map(|descriptor| Value::Object(descriptor_to_json(descriptor)))
@@ -108,6 +115,7 @@ fn run() -> Result<(), String> {
             || profile_id.is_some()
             || profile_handle.is_some()
             || por_json_out.is_some()
+            || chunk_dir_out.is_some()
             || proof_spec.is_some()
             || proof_out.is_some()
             || proof_verify.is_some()
@@ -182,7 +190,7 @@ fn run() -> Result<(), String> {
     }
 
     let path = payload_path.ok_or_else(|| {
-        "usage: sorafs_manifest_chunk_store [--profile-id=<id>] [--profile=<namespace.name@semver>] [--json-out=path] [--por-json-out=path] [--promote-profile=<handle>] [--por-proof=chunk:segment:leaf] [--por-proof-out=path] [--por-proof-verify=path] [--por-sample=count] [--por-sample-seed=value] [--por-sample-out=path] <payload>"
+        "usage: sorafs_manifest_chunk_store [--profile-id=<id>] [--profile=<namespace.name@semver>] [--json-out=path] [--chunk-dir-out=dir] [--por-json-out=path] [--promote-profile=<handle>] [--por-proof=chunk:segment:leaf] [--por-proof-out=path] [--por-proof-verify=path] [--por-sample=count] [--por-sample-seed=value] [--por-sample-out=path] <payload>"
             .to_string()
     })?;
 
@@ -209,7 +217,26 @@ fn run() -> Result<(), String> {
         fs::read(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
 
     let mut store = ChunkStore::with_profile(descriptor.profile);
-    store.ingest_bytes(&bytes);
+    let persisted_chunks = if let Some(directory) = chunk_dir_out.as_deref() {
+        preflight_chunk_dir_out(directory)?;
+        let output = if bytes.is_empty() {
+            store.ingest_bytes(&bytes);
+            persist_empty_payload_chunk_dir(directory, &store)?
+        } else {
+            let plan = CarBuildPlan::single_file_with_profile(&bytes, descriptor.profile)
+                .map_err(|err| format!("failed to build chunk plan for persistence: {err}"))?;
+            let mut source = InMemoryPayload::new(&bytes);
+            store
+                .ingest_plan_to_directory(&plan, &mut source, directory)
+                .map_err(|err| {
+                    format!("failed to persist chunks to {}: {err}", directory.display())
+                })?
+        };
+        Some(persisted_chunks_to_value(directory, output))
+    } else {
+        store.ingest_bytes(&bytes);
+        None
+    };
 
     let mut chunk_array = Vec::with_capacity(store.chunks().len());
     for chunk in store.chunks() {
@@ -238,6 +265,9 @@ fn run() -> Result<(), String> {
         Value::Object(descriptor_to_json(descriptor)),
     );
     root.insert("chunks".into(), Value::Array(chunk_array));
+    if let Some(persisted) = persisted_chunks {
+        root.insert("persisted_chunks".into(), persisted);
+    }
 
     let mut file_payload = FilePayload::open(&path).ok();
 
@@ -343,6 +373,97 @@ fn run() -> Result<(), String> {
         print!("{json_bytes}");
     }
     Ok(())
+}
+
+fn preflight_chunk_dir_out(path: &Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err("--chunk-dir-out must not be empty".to_string());
+    }
+    if path == Path::new("-") {
+        return Err("--chunk-dir-out must be a directory path, not stdout".to_string());
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "--chunk-dir-out {} must not be a symlink",
+                    path.display()
+                ));
+            }
+            if !metadata.is_dir() {
+                return Err(format!(
+                    "--chunk-dir-out {} must be a directory when it exists",
+                    path.display()
+                ));
+            }
+            let mut entries = fs::read_dir(path)
+                .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+            if entries
+                .next()
+                .transpose()
+                .map_err(|err| format!("failed to inspect {}: {err}", path.display()))?
+                .is_some()
+            {
+                return Err(format!(
+                    "--chunk-dir-out {} must be empty or absent",
+                    path.display()
+                ));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("failed to inspect {}: {err}", path.display())),
+    }
+    Ok(())
+}
+
+fn persisted_chunks_to_value(directory: &Path, output: DirectoryChunkSinkOutput) -> Value {
+    let mut root = Map::new();
+    root.insert(
+        "directory".into(),
+        Value::from(directory.display().to_string()),
+    );
+    root.insert("total_bytes".into(), Value::from(output.total_bytes));
+    let records = output
+        .records
+        .into_iter()
+        .map(|record| {
+            let mut obj = Map::new();
+            obj.insert("file_name".into(), Value::from(record.file_name));
+            obj.insert("offset".into(), Value::from(record.offset));
+            obj.insert("length".into(), Value::from(record.length));
+            obj.insert("digest_blake3".into(), Value::from(to_hex(&record.digest)));
+            Value::Object(obj)
+        })
+        .collect();
+    root.insert("records".into(), Value::Array(records));
+    Value::Object(root)
+}
+
+fn persist_empty_payload_chunk_dir(
+    directory: &Path,
+    store: &ChunkStore,
+) -> Result<DirectoryChunkSinkOutput, String> {
+    fs::create_dir_all(directory)
+        .map_err(|err| format!("failed to create {}: {err}", directory.display()))?;
+    let chunk = store
+        .chunks()
+        .first()
+        .ok_or_else(|| "empty payload did not produce a logical chunk".to_string())?;
+    let file_name = "chunk_00000.bin".to_string();
+    let path = directory.join(&file_name);
+    let file = fs::File::create(&path)
+        .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
+    file.sync_all()
+        .map_err(|err| format!("failed to sync {}: {err}", path.display()))?;
+    Ok(DirectoryChunkSinkOutput {
+        records: vec![PersistedChunkRecord {
+            file_name,
+            offset: chunk.offset,
+            length: chunk.length,
+            digest: chunk.blake3,
+        }],
+        total_bytes: u64::from(chunk.length),
+    })
 }
 
 fn descriptor_to_json(descriptor: &ChunkerProfileDescriptor) -> Map {
@@ -495,6 +616,44 @@ mod tests {
         assert_eq!(
             map.get("handle").and_then(Value::as_str),
             Some("sorafs.sf1@1.0.0")
+        );
+    }
+
+    #[test]
+    fn preflight_chunk_dir_out_rejects_empty_path() {
+        let error = preflight_chunk_dir_out(Path::new("")).expect_err("empty path rejected");
+        assert!(error.contains("must not be empty"));
+    }
+
+    #[test]
+    fn persisted_chunks_to_value_includes_records() {
+        let value = persisted_chunks_to_value(
+            Path::new("chunks"),
+            DirectoryChunkSinkOutput {
+                records: vec![sorafs_car::PersistedChunkRecord {
+                    file_name: "chunk_00000.bin".to_string(),
+                    offset: 0,
+                    length: 3,
+                    digest: [7u8; 32],
+                }],
+                total_bytes: 3,
+            },
+        );
+        let object = value.as_object().expect("persisted chunks object");
+        assert_eq!(
+            object.get("directory").and_then(Value::as_str),
+            Some("chunks")
+        );
+        assert_eq!(object.get("total_bytes").and_then(Value::as_u64), Some(3));
+        let records = object
+            .get("records")
+            .and_then(Value::as_array)
+            .expect("records array");
+        assert_eq!(records.len(), 1);
+        let record = records[0].as_object().expect("record object");
+        assert_eq!(
+            record.get("file_name").and_then(Value::as_str),
+            Some("chunk_00000.bin")
         );
     }
 

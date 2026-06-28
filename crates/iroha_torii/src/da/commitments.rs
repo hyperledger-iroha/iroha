@@ -7,9 +7,9 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use axum::extract::State;
-use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
+use iroha_config::parameters::actual::Nexus;
 use iroha_core::da::{
-    build_da_commitment_proof, commitment_store::DaCommitmentStore, proof_policy_bundle,
+    active_proof_policy_bundle, build_da_commitment_proof, commitment_store::DaCommitmentStore,
     verify_da_commitment_proof,
 };
 use iroha_data_model::{
@@ -102,8 +102,8 @@ pub async fn handler_list_commitments(
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS)?;
     let store = app.state.da_commitments();
-    let items = list_from_store(&store, &request);
-    let policies = proof_policy_bundle(&nexus.lane_config);
+    let items = list_active_from_store(&store, &request, &nexus);
+    let policies = active_proof_policy_bundle(&nexus);
     Ok(JsonBody(DaCommitmentListResponse {
         policies,
         commitments: items,
@@ -118,11 +118,11 @@ pub async fn handler_prove_commitment(
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_PROVE)?;
     let store = app.state.da_commitments();
-    let proof = build_proof_from_store(&store, &request);
+    let proof = build_active_proof_from_store(&store, &request, &nexus);
     proof.map_or_else(
         || Ok(JsonBody(None)),
         |proof| {
-            let policies = proof_policy_bundle(&nexus.lane_config);
+            let policies = active_proof_policy_bundle(&nexus);
             Ok(JsonBody(Some(DaCommitmentProofResponse {
                 policies,
                 proof,
@@ -140,7 +140,7 @@ pub async fn handler_verify_commitment(
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS_VERIFY)?;
     let response = verify_against_store(
         &app.state.da_commitments(),
-        &nexus.lane_config,
+        &nexus,
         &proof,
         app.state.as_ref(),
     );
@@ -153,7 +153,7 @@ pub async fn handler_list_proof_policies(
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PROOF_POLICIES)?;
-    let policies = proof_policy_bundle(&nexus.lane_config);
+    let policies = active_proof_policy_bundle(&nexus);
     Ok(JsonBody(policies))
 }
 
@@ -163,8 +163,48 @@ pub async fn handler_proof_policy_bundle(
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PROOF_POLICY_SNAPSHOT)?;
-    let bundle = proof_policy_bundle(&nexus.lane_config);
+    let bundle = active_proof_policy_bundle(&nexus);
     Ok(JsonBody(bundle))
+}
+
+fn list_active_from_store(
+    store: &DaCommitmentStore,
+    request: &DaCommitmentProofRequest,
+    nexus: &Nexus,
+) -> Vec<DaCommitmentWithLocation> {
+    let pagination = request.pagination.clone().unwrap_or_default();
+    let limit = pagination
+        .limit
+        .map(NonZeroU64::get)
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or_else(|| store.len());
+    let Ok(offset) = usize::try_from(pagination.offset) else {
+        return Vec::new();
+    };
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    if let Some(target) =
+        find_in_store(store, request).filter(|target| commitment_lane_is_active(nexus, target))
+    {
+        return if offset == 0 {
+            vec![target]
+        } else {
+            Vec::new()
+        };
+    }
+    if request_targets_commitment(request) {
+        return Vec::new();
+    }
+
+    store
+        .all_sorted()
+        .filter(|record| commitment_lane_is_active(nexus, record))
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .collect()
 }
 
 fn list_from_store(
@@ -205,6 +245,10 @@ fn list_from_store(
         .take(limit)
         .map(|(_, record)| record.clone())
         .collect()
+}
+
+fn commitment_lane_is_active(nexus: &Nexus, target: &DaCommitmentWithLocation) -> bool {
+    iroha_core::da::active_lane_proof_policy(nexus, target.commitment.lane_id).is_ok()
 }
 
 fn find_in_store(
@@ -269,9 +313,23 @@ fn build_proof_from_store(
     build_da_commitment_proof(bundle, target.location.block_height, index)
 }
 
+fn build_active_proof_from_store(
+    store: &DaCommitmentStore,
+    request: &DaCommitmentProofRequest,
+    nexus: &Nexus,
+) -> Option<DaCommitmentProof> {
+    let target = find_in_store(store, request)?;
+    if !commitment_lane_is_active(nexus, &target) {
+        return None;
+    }
+    let bundle = store.bundle_at(target.location.block_height)?;
+    let index = usize::try_from(target.location.index_in_bundle).ok()?;
+    build_da_commitment_proof(bundle, target.location.block_height, index)
+}
+
 fn verify_against_store(
     store: &DaCommitmentStore,
-    lane_config: &ConfigLaneConfig,
+    nexus: &Nexus,
     proof: &DaCommitmentProof,
     state: &iroha_core::state::State,
 ) -> DaCommitmentVerifyResponse {
@@ -311,7 +369,13 @@ fn verify_against_store(
     };
 
     let header = block.header();
-    match verify_da_commitment_proof(proof, bundle, &header, lane_config) {
+    if let Err(err) = iroha_core::da::active_lane_proof_policy(nexus, proof.commitment.lane_id) {
+        return DaCommitmentVerifyResponse {
+            valid: false,
+            error: Some(err.to_string()),
+        };
+    }
+    match verify_da_commitment_proof(proof, bundle, &header, &nexus.lane_config) {
         Ok(()) => DaCommitmentVerifyResponse {
             valid: true,
             error: None,
@@ -325,8 +389,9 @@ fn verify_against_store(
 
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
-    use std::{num::NonZeroU32, sync::Arc};
+    use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
 
+    use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder},
@@ -415,16 +480,34 @@ mod tests {
             .expect("enable Nexus lane catalog for tests");
     }
 
+    fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
+        let authoritative_catalog =
+            lane_catalog_with_entries(&[(LaneId::new(0), DaProofScheme::MerkleSha256)]);
+        let stale_geometry_catalog = lane_catalog_with_entries(&[
+            (LaneId::new(0), DaProofScheme::MerkleSha256),
+            (stale_lane, DaProofScheme::MerkleSha256),
+        ]);
+        let mut nexus = app.state.nexus.write();
+        nexus.enabled = true;
+        nexus.lane_catalog = authoritative_catalog;
+        nexus.lane_config = ConfigLaneConfig::from_catalog(&stale_geometry_catalog);
+        assert!(
+            nexus.lane_config.entry(stale_lane).is_some(),
+            "fixture must keep stale runtime geometry for the removed lane"
+        );
+    }
+
     fn app_with_da_commitment_bundle(records: Vec<DaCommitmentRecord>) -> crate::SharedAppState {
         let mut app = mk_app_state_for_tests();
         enable_nexus(&mut app);
 
-        let mut lane_entries: Vec<_> = records
-            .iter()
-            .map(|record| (record.lane_id, record.proof_scheme))
-            .collect();
-        lane_entries.sort_by_key(|(lane_id, _)| lane_id.as_u32());
-        lane_entries.dedup_by_key(|(lane_id, _)| lane_id.as_u32());
+        let mut lane_entries = BTreeMap::from([(LaneId::new(0), DaProofScheme::MerkleSha256)]);
+        lane_entries.extend(
+            records
+                .iter()
+                .map(|record| (record.lane_id, record.proof_scheme)),
+        );
+        let lane_entries = lane_entries.into_iter().collect::<Vec<_>>();
         {
             let app = Arc::get_mut(&mut app).expect("unique app state");
             let state = Arc::get_mut(&mut app.state).expect("unique core state");
@@ -718,7 +801,7 @@ mod tests {
             super::handler_list_commitments(State(app.clone()), NoritoJson(request))
                 .await
                 .expect("handler should succeed");
-        let expected = proof_policy_bundle(&app.state.nexus_snapshot().lane_config);
+        let expected = active_proof_policy_bundle(&app.state.nexus_snapshot());
 
         assert_eq!(expected.version, DaProofPolicyBundle::VERSION_V1);
     }
@@ -759,6 +842,66 @@ mod tests {
         );
         assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
         assert_ne!(bundle.policy_hash, Hash::prehashed([0; 32]));
+    }
+
+    #[tokio::test]
+    async fn proof_policy_handlers_ignore_stale_runtime_lane_geometry() {
+        let app = mk_app_state_for_tests();
+        let stale_lane = LaneId::new(1);
+        install_stale_runtime_lane_geometry(&app, stale_lane);
+
+        let JsonBody(bundle) = super::handler_proof_policy_bundle(State(app.clone()))
+            .await
+            .expect("handler should succeed");
+
+        assert!(
+            bundle
+                .policies
+                .iter()
+                .any(|policy| policy.lane_id == LaneId::new(0)),
+            "default lane policy must remain visible"
+        );
+        assert!(
+            !bundle
+                .policies
+                .iter()
+                .any(|policy| policy.lane_id == stale_lane),
+            "stale runtime-only lane must not appear in active proof policies"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_and_prove_handlers_ignore_stale_runtime_lane_geometry() {
+        let stale_lane = LaneId::new(1);
+        let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
+        let manifest = records[0].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        install_stale_runtime_lane_geometry(&app, stale_lane);
+
+        let JsonBody(list_response) = super::handler_list_commitments(
+            State(app.clone()),
+            NoritoJson(DaCommitmentProofRequest::default()),
+        )
+        .await
+        .expect("list handler should succeed");
+        assert!(
+            list_response.commitments.is_empty(),
+            "stale runtime-only lane commitments must not be listed"
+        );
+
+        let JsonBody(proof_response) = super::handler_prove_commitment(
+            State(app),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        assert!(
+            proof_response.is_none(),
+            "stale runtime-only lane commitments must not produce proofs"
+        );
     }
 
     #[tokio::test]
@@ -968,6 +1111,19 @@ mod tests {
             HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
 
         verify_invalid(app, proof, "DA commitment bundle hash mismatch").await;
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_stale_runtime_lane_geometry() {
+        let stale_lane = LaneId::new(1);
+        let records = vec![sample_record(stale_lane.as_u32(), 1, 1)];
+        let manifest = records[0].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        let proof = prove_for_manifest(app.clone(), manifest).await;
+
+        install_stale_runtime_lane_geometry(&app, stale_lane);
+
+        verify_invalid(app, proof, "configured lane catalog").await;
     }
 
     #[tokio::test]

@@ -283,6 +283,509 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 detail = ADAPTER._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("notary-hidden", detail)
+        hidden = "token=notary-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = ADAPTER._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=notary-ancestor-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._reject_symlinked_existing_ancestors(
+                            ADAPTER.Path("ancestor") / "leaf",
+                            display_label="receipt output",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt output ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=notary-reader-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = ADAPTER.Path(raw_root) / "audit.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._read_regular_file(path, path_label="audit")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect audit", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_input_directory_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=notary-input-dir-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = ADAPTER.Path(raw_root) / "export"
+                path.mkdir()
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._ensure_input_directory(
+                            path,
+                            "export_dir",
+                            display_path=False,
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect export_dir", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_source_path_exists_failures_do_not_echo_detail(self):
+        hidden = "token=notary-source-exists-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_exists = path_type.exists
+        failure_cases = (
+            ("exists_os", OSError(5, hidden)),
+            ("exists_runtime", RuntimeError(hidden)),
+            ("exists_type", TypeError(hidden)),
+            ("exists_value", ValueError(hidden)),
+        )
+
+        def setup_store(root):
+            return root / "store"
+
+        def setup_messages(root):
+            store_dir = root / "store"
+            store_dir.mkdir()
+            return store_dir / ADAPTER.RECORDS_DIR
+
+        def setup_record(root):
+            messages_dir = root / "store" / ADAPTER.RECORDS_DIR
+            messages_dir.mkdir(parents=True)
+            return messages_dir / "record.json"
+
+        def setup_digest_anchor(root):
+            export_dir = root / "export"
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = write_export(export_dir)
+            return digest_anchor
+
+        cases = (
+            (
+                "store_dir",
+                setup_store,
+                lambda root: ADAPTER._verify_persisted_record_sources(
+                    {"records": []},
+                    root / "store",
+                    "anchor",
+                    allow_missing_record_sources=False,
+                ),
+                "cannot inspect anchor.store_dir",
+            ),
+            (
+                "messages_dir",
+                setup_messages,
+                lambda root: ADAPTER._verify_persisted_record_sources(
+                    {"records": []},
+                    root / "store",
+                    "anchor",
+                    allow_missing_record_sources=False,
+                ),
+                f"cannot inspect anchor.store_dir/{ADAPTER.RECORDS_DIR}",
+            ),
+            (
+                "record_path",
+                setup_record,
+                lambda root: ADAPTER._verify_persisted_record_sources(
+                    {"records": [{"filename": "record.json"}]},
+                    root / "store",
+                    "anchor",
+                    allow_missing_record_sources=True,
+                ),
+                "cannot inspect anchor.records[0].source",
+            ),
+            (
+                "digest_anchor",
+                setup_digest_anchor,
+                lambda root: ADAPTER.verify_anchor_file(
+                    root / "export",
+                    root / "export" / ADAPTER.LATEST_ANCHOR_FILE,
+                ),
+                "cannot inspect anchor source digest-addressed peer",
+            ),
+        )
+        for case_name, setup_target, action, expected in cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(case=case_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = ADAPTER.Path(raw_root)
+                        target = setup_target(root)
+
+                        def failing_exists(self, error=failure):
+                            if self == target:
+                                raise error
+                            return original_exists(self)
+
+                        path_type.exists = failing_exists
+                        try:
+                            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                                action(root)
+                        finally:
+                            path_type.exists = original_exists
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_source_path_symlink_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=notary-source-symlink-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_is_symlink = path_type.is_symlink
+        failure_cases = (
+            ("symlink_os", OSError(5, hidden)),
+            ("symlink_runtime", RuntimeError(hidden)),
+            ("symlink_type", TypeError(hidden)),
+            ("symlink_value", ValueError(hidden)),
+        )
+        for failure_name, failure in failure_cases:
+            with self.subTest(failure=failure_name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = ADAPTER.Path(raw_root)
+                    export_dir = root / "export"
+                    export_dir.mkdir()
+                    _index, _anchor, digest_anchor = write_export(export_dir)
+
+                    def failing_is_symlink(self, error=failure):
+                        if self == digest_anchor:
+                            raise error
+                        return original_is_symlink(self)
+
+                    path_type.is_symlink = failing_is_symlink
+                    try:
+                        with self.assertRaises(ADAPTER.AdapterError) as caught:
+                            ADAPTER.verify_anchor_file(
+                                export_dir,
+                                export_dir / ADAPTER.LATEST_ANCHOR_FILE,
+                            )
+                    finally:
+                        path_type.is_symlink = original_is_symlink
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect anchor source digest-addressed peer", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(digest_anchor), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_path_stat_failures_return_false(self):
+        hidden = "token=notary-alias-stat-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_stat = path_type.stat
+        cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for failure in cases:
+            with self.subTest(error=type(failure).__name__):
+
+                def failing_stat(_self, *args, error=failure, **kwargs):
+                    raise error
+
+                path_type.stat = failing_stat
+                try:
+                    self.assertFalse(
+                        ADAPTER._same_existing_path(
+                            ADAPTER.Path("left"),
+                            ADAPTER.Path("right"),
+                        )
+                    )
+                finally:
+                    path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=notary-resolve-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+
+        def setup_export(root):
+            export_dir = root / "export"
+            export_dir.mkdir()
+            write_export(export_dir)
+            return export_dir
+
+        cases = (
+            (
+                "receipt-source-overlap",
+                lambda root: root / "receipts",
+                lambda root: ADAPTER._reject_receipt_dir_source_overlap(
+                    root / "receipts",
+                    root / "export" / ADAPTER.LATEST_ANCHOR_FILE,
+                    "anchor source",
+                ),
+                "cannot resolve receipt_dir",
+                None,
+            ),
+            (
+                "generic-overlap",
+                lambda root: root / "left",
+                lambda root: ADAPTER._reject_path_overlap(
+                    root / "left",
+                    "left path",
+                    root / "right",
+                    "right path",
+                ),
+                "cannot resolve left path",
+                None,
+            ),
+            (
+                "anchor-path",
+                lambda root: root / "export" / ADAPTER.LATEST_ANCHOR_FILE,
+                lambda root: ADAPTER.verify_anchor_file(
+                    root / "export",
+                    root / "export" / ADAPTER.LATEST_ANCHOR_FILE,
+                ),
+                "cannot resolve anchor source",
+                setup_export,
+            ),
+            (
+                "anchors-dir",
+                lambda root: root / "export" / ADAPTER.ANCHOR_DIR,
+                lambda root: ADAPTER.verify_anchor_file(
+                    root / "export",
+                    root / "export" / ADAPTER.LATEST_ANCHOR_FILE,
+                ),
+                "cannot resolve anchor source anchors directory",
+                setup_export,
+            ),
+            (
+                "latest-anchor",
+                lambda root: root / "export" / ADAPTER.LATEST_ANCHOR_FILE,
+                lambda root: ADAPTER.verify_anchor_file(
+                    root / "export",
+                    root / "export" / ADAPTER.ANCHOR_DIR / f"{sample_index()[ADAPTER.INDEX_DIGEST_FIELD]}.notary.json",
+                ),
+                "cannot resolve anchor source latest anchor",
+                setup_export,
+            ),
+        )
+        for case_name, setup_target, action, expected, prepare in cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(case=case_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = ADAPTER.Path(raw_root)
+                        if prepare is not None:
+                            prepare(root)
+                        target = setup_target(root)
+
+                        def failing_resolve(self, *args, error=failure, **kwargs):
+                            if self == target:
+                                raise error
+                            return original_resolve(self, *args, **kwargs)
+
+                        path_type.resolve = failing_resolve
+                        try:
+                            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                                action(root)
+                        finally:
+                            path_type.resolve = original_resolve
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=notary-reader-open-secret"
+        cleanup_hidden = "token=notary-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "audit.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = ADAPTER.os.fdopen
+            original_close = ADAPTER.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            ADAPTER.os.fdopen = failing_fdopen
+            ADAPTER.os.close = failing_close
+            try:
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        path_label="audit",
+                    )
+            finally:
+                ADAPTER.os.fdopen = original_fdopen
+                ADAPTER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open audit for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=notary-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            ADAPTER.os.fdopen = failing_fdopen
+            ADAPTER.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        path_label="audit",
+                    )
+            finally:
+                ADAPTER.os.fdopen = original_fdopen
+                ADAPTER.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open audit for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=notary-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            ADAPTER.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        path_label="audit",
+                    )
+            finally:
+                ADAPTER.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open audit for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -321,6 +824,269 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertIn("must not be a symlink", message)
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
+
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=notary-output-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        original_mkdir = path_type.mkdir
+        leaf_cases = (
+            ("leaf_exists_os", "exists", OSError(5, hidden)),
+            ("leaf_exists_runtime", "exists", RuntimeError(hidden)),
+            ("leaf_lstat_os", "lstat", OSError(5, hidden)),
+            ("leaf_lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in leaf_cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._ensure_output_file_target(
+                            ADAPTER.Path("receipt.json"),
+                            display_label="receipt output",
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt output leaf", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+        parent_cases = (
+            ("parent_lstat_os", OSError(5, hidden)),
+            ("parent_lstat_runtime", RuntimeError(hidden)),
+        )
+        for name, failure in parent_cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._write_text_output(
+                            ADAPTER.Path("receipt.json"),
+                            "{}\n",
+                            display_label="receipt output",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt output parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+        parent_create_cases = (
+            ("parent_mkdir_os", OSError(5, hidden)),
+            ("parent_mkdir_runtime", RuntimeError(hidden)),
+            ("parent_mkdir_type", TypeError(hidden)),
+            ("parent_mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in parent_create_cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(ADAPTER.AdapterError) as caught:
+                            ADAPTER._write_text_output(
+                                ADAPTER.Path(raw_root) / "out" / "receipt.json",
+                                "{}\n",
+                                display_label="receipt output",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create receipt output parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_output_directory_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=notary-output-dir-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden), "cannot inspect receipt directory"),
+            ("exists_runtime", "exists", RuntimeError(hidden), "cannot inspect receipt directory"),
+            ("lstat_os", "lstat", OSError(5, hidden), "cannot inspect receipt directory"),
+            ("lstat_runtime", "lstat", RuntimeError(hidden), "cannot inspect receipt directory"),
+            ("mkdir_os", "mkdir", OSError(5, hidden), "cannot create receipt directory"),
+            ("mkdir_runtime", "mkdir", RuntimeError(hidden), "cannot create receipt directory"),
+            ("post_mkdir_lstat_os", "post_lstat", OSError(5, hidden), "cannot inspect receipt directory"),
+            ("post_mkdir_lstat_runtime", "post_lstat", RuntimeError(hidden), "cannot inspect receipt directory"),
+        )
+        for name, failure_point, failure, expected in cases:
+            with self.subTest(name=name):
+                lstat_calls = {"count": 0}
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return failure_point in {"lstat"}
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(self, error=failure):
+                    lstat_calls["count"] += 1
+                    if failure_point in {"lstat", "post_lstat"}:
+                        if lstat_calls["count"] == 1:
+                            raise FileNotFoundError
+                        raise error
+                    return original_lstat(self)
+
+                def failing_mkdir(self, *args, error=failure, **kwargs):
+                    if failure_point == "mkdir":
+                        raise error
+                    if failure_point == "post_lstat":
+                        return None
+                    return original_mkdir(self, *args, **kwargs)
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                path_type.mkdir = failing_mkdir
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._ensure_output_directory(
+                            ADAPTER.Path("receipts"),
+                            "receipt directory",
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+                    path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=notary-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for receipt output"),
+            ("replace", None, "cannot replace receipt output"),
+            ("fsync_runtime", None, "cannot write temporary output for receipt output"),
+            ("replace_runtime", None, "cannot replace receipt output"),
+            ("fsync", "unlink", "cannot write temporary output for receipt output"),
+            ("fsync", "close", "cannot write temporary output for receipt output"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for receipt output"),
+            ("fsync", "close_runtime", "cannot write temporary output for receipt output"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "notary.receipt.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = ADAPTER.os.fsync
+                original_replace = ADAPTER.os.replace
+                original_unlink = ADAPTER.os.unlink
+                original_close = ADAPTER.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                ADAPTER.os.fsync = failing_fsync
+                ADAPTER.os.replace = failing_replace
+                ADAPTER.os.unlink = failing_unlink
+                ADAPTER.os.close = failing_close
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="receipt output",
+                        )
+                finally:
+                    ADAPTER.os.fsync = original_fsync
+                    ADAPTER.os.replace = original_replace
+                    ADAPTER.os.unlink = original_unlink
+                    ADAPTER.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_persisted_record_sources_require_records_array(self):
         with self.assertRaisesRegex(
@@ -646,6 +1412,53 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--receipt-di", stderr.getvalue())
 
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=audit-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--receipt-dir"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--receipt-dir",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--receipt-dir")],
+                "--receipt-dir requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("audit-argv-secret", stderr)
+
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = ("--unknown-audit\x1bflag", "--unknown-audit\u202eflag")
         for hidden in cases:
@@ -843,6 +1656,157 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn(value, message)
                 self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
+
+    def test_clean_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "notary-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        clean = ADAPTER._require_clean_string(
+            HostileText("business-message"),
+            "record.business_message_id",
+        )
+        self.assertEqual(clean, "business-message")
+        self.assertIs(type(clean), str)
+        endpoints = ADAPTER._required_cli_string_sequence(
+            [HostileText("https://notary.local-bank.bank")],
+            "--endpoint",
+        )
+        self.assertEqual(endpoints, ["https://notary.local-bank.bank"])
+        self.assertIs(type(endpoints[0]), str)
+        present = ADAPTER._reject_unknown_keys(
+            {HostileText("business_message_id"): "business-message"},
+            {"business_message_id"},
+            "record",
+        )
+        self.assertEqual(present, {"business_message_id"})
+        self.assertTrue(all(type(key) is str for key in present))
+        ADAPTER._require_exact_keys(
+            {HostileText("business_message_id"): "business-message"},
+            {"business_message_id"},
+            "record",
+        )
+        derived = ADAPTER._derived_pacs002_code(
+            {
+                "state": "Pending",
+                "hold_reason_code": None,
+                "change_reason_codes": HostileList(["AMND"]),
+                "ledger_tx_queued": False,
+            },
+            "record",
+        )
+        self.assertEqual(derived, "ACTC")
+
+        cases = (
+            (
+                "clean",
+                lambda: ADAPTER._require_clean_string(
+                    HostileText("business\x1bmessage"),
+                    "record.business_message_id",
+                ),
+            ),
+            (
+                "surrogate-scan",
+                lambda: ADAPTER._reject_json_surrogates(
+                    {"metadata": HostileText("ok\ud800")}
+                ),
+            ),
+            (
+                "json-array-list-subclass",
+                lambda: ADAPTER._require_json_array(
+                    HostileList(["ok"]),
+                    "record.history",
+                ),
+            ),
+            (
+                "persisted-context-dict-subclass",
+                lambda: ADAPTER._verify_persisted_context(
+                    HostileDict({"business_message_id": "business-message"}),
+                    "record.context",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: ADAPTER._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: ADAPTER._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: ADAPTER._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "unknown-key",
+                lambda: ADAPTER._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"business_message_id"},
+                    "record",
+                ),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: ADAPTER._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"business_message_id"},
+                    "record",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: ADAPTER._reject_unknown_keys(
+                    HostileDict({"business_message_id": "redacted"}),
+                    {"business_message_id"},
+                    "record",
+                ),
+            ),
+            (
+                "exact-non-string-key",
+                lambda: ADAPTER._require_exact_keys(
+                    {HostileKey(): "redacted"},
+                    {"business_message_id"},
+                    "record",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
 
     def test_overlong_clean_metadata_strings_are_rejected_without_echo(self):
         overlong = "M" * (ADAPTER.MAX_CLEAN_STRING_CHARS + 1)
@@ -2474,8 +3438,15 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 ADAPTER.run(args)
 
     def test_direct_run_scalar_paths_must_be_paths_before_export_loading(self):
+        hidden = "notary-hostile-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         cases = (
             ("export", "export_dir", object(), "export_dir"),
+            ("export pathlike", "export_dir", HostilePathLike(), "export_dir"),
             ("receipt", "receipt_dir", object(), "receipt_dir"),
             ("token", "bearer_token_file", object(), "bearer_token_file"),
         )
@@ -2502,6 +3473,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
                     message = str(caught.exception)
                     self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn(hidden, message)
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
@@ -2597,8 +3569,18 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertNotIn(str(root), message)
 
     def test_direct_run_endpoints_must_be_repeatable_string_list_before_export_loading(self):
+        hidden = "notary-hostile-endpoint-list-secret"
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
         cases = (
             ("bare string", "https://notary.example.invalid", "--endpoint"),
+            ("hostile list", HostileList(["https://notary.example.invalid"]), "--endpoint"),
             ("bad entry", [object()], "--endpoint[0]"),
         )
         for name, endpoint, label in cases:
@@ -2622,13 +3604,14 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         ADAPTER.run(args)
 
                     message = str(caught.exception)
-                    if name == "bare string":
+                    if label == "--endpoint":
                         self.assertIn(
                             f"{label} must be a repeatable string list",
                             message,
                         )
                     else:
                         self.assertIn(f"{label} must be a string", message)
+                    self.assertNotIn(hidden, message)
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
@@ -4059,6 +5042,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
     def test_http_status_code_bounds_are_exact(self):
         cases = (
+            (False, False),
+            (True, False),
             (99, False),
             (100, True),
             (599, True),
@@ -4177,6 +5162,52 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         self.assertEqual(result.error, "invalid HTTP status")
         self.assertNotIn(hidden, result.error)
 
+    def test_remote_status_accessor_failure_returns_failed_receipt_without_echo(self):
+        hidden = "token=notary-status-accessor-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingResponse:
+            @property
+            def status(self):
+                raise RuntimeError(hidden)
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
     def test_malformed_remote_error_status_returns_failed_receipt_without_echo(self):
         hidden = "token=notary-error-status-secret"
         index = sample_index()
@@ -4211,6 +5242,58 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     {},
                     Body(),
                 )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.publish_anchor(
+                anchor,
+                "https://notary.example/anchor",
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
+    def test_remote_error_code_accessor_failure_returns_failed_receipt_without_echo(self):
+        hidden = "token=notary-error-code-accessor-secret"
+        index = sample_index()
+        anchor_payload = sample_anchor(index)
+        anchor = ADAPTER.VerifiedAnchor(
+            path=Path("latest.notary.json"),
+            payload=anchor_payload,
+            raw=json.dumps(anchor_payload).encode("utf-8"),
+            index_sha256=index[ADAPTER.INDEX_DIGEST_FIELD],
+            anchor_sha256=anchor_payload[ADAPTER.ANCHOR_DIGEST_FIELD],
+            record_count=anchor_payload["record_count"],
+            missing_record_sources=False,
+        )
+
+        class FailingCodeHttpError(ADAPTER.urllib.error.HTTPError):
+            def __init__(self):
+                Exception.__init__(self, hidden)
+
+            @property
+            def code(self):
+                raise RuntimeError(hidden)
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise FailingCodeHttpError()
 
         original_opener = ADAPTER.NO_REDIRECT_OPENER
         ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
@@ -4923,6 +6006,38 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+    def test_bounded_response_body_rejects_hostile_bytes_subclasses(self):
+        hidden = "notary-response-body-subclass-secret"
+
+        class HostileBytes(bytes):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytes_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytes_len={hidden}")
+
+        class HostileBytearray(bytearray):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytearray_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytearray_len={hidden}")
+
+        cases = (
+            ("bytes-subclass", HostileBytes(b"accepted")),
+            ("bytearray-subclass", HostileBytearray(b"accepted")),
+        )
+        for name, body in cases:
+            with self.subTest(name=name):
+                try:
+                    result = ADAPTER._bounded_response_body(body, 4)
+                except Exception as error:
+                    self.fail(
+                        "hostile response body method was invoked: "
+                        f"{type(error).__name__}"
+                    )
+                self.assertIsNone(result)
 
     def test_endpoint_success_response_close_failure_preserves_receipt(self):
         hidden = "token=notary-close-secret"

@@ -1786,6 +1786,21 @@ class KagemushaRecursiveSpendBundleSummary:
     current_note: KagemushaRecursiveSpendableNoteDescriptor
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.hop_count, int)
+            or isinstance(self.hop_count, bool)
+            or not (
+                1
+                <= self.hop_count
+                <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+            )
+        ):
+            raise ValueError("hop_count")
+        if not is_supported_kagemusha_recursive_spend_previous_proof_circuit_id(
+            self.proof_circuit_id,
+        ):
+            raise ValueError("proof_circuit_id")
+        _kagemusha_require_recursive_spend_asset_summary(self.asset, "asset")
         _kagemusha_require_portable_id(self.chain_id, "chain_id")
         object.__setattr__(
             self,
@@ -1797,6 +1812,10 @@ class KagemushaRecursiveSpendBundleSummary:
             "final_root",
             _kagemusha_fixed32(self.final_root, "final_root"),
         )
+        _kagemusha_require_recursive_spend_accumulator_roots(
+            self.initial_root,
+            self.final_root,
+        )
         object.__setattr__(
             self,
             "topup_anchor_nullifiers",
@@ -1805,6 +1824,8 @@ class KagemushaRecursiveSpendBundleSummary:
                 for nullifier in self.topup_anchor_nullifiers
             ),
         )
+        if not isinstance(self.current_note, KagemushaRecursiveSpendableNoteDescriptor):
+            raise ValueError("current_note")
         _kagemusha_require_recursive_spend_topup_anchor_nullifiers(
             self.topup_anchor_nullifiers,
             self.current_note,
@@ -2827,9 +2848,7 @@ def _kagemusha_read_spendable_note(
     amount_payload, cursor = _kagemusha_read_norito_field(
         payload, cursor, flags, "bundle.accumulator.current_note.amount"
     )
-    if cursor != len(payload):
-        raise ValueError("Trailing bytes after bundle.accumulator.current_note")
-    return KagemushaRecursiveSpendableNoteDescriptor(
+    note = KagemushaRecursiveSpendableNoteDescriptor(
         note_commitment=_kagemusha_read_fixed_bytes(
             note_payload,
             flags,
@@ -2848,6 +2867,9 @@ def _kagemusha_read_spendable_note(
             "bundle.accumulator.current_note.amount",
         ),
     )
+    if cursor != len(payload):
+        raise ValueError("Trailing bytes after bundle.accumulator.current_note")
+    return note
 
 
 def _kagemusha_read_fixed_bytes(
@@ -3492,12 +3514,47 @@ def _kagemusha_base58_encode(value: bytes) -> str:
     return "".join(reversed(encoded)) or _KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET[0]
 
 
+def _kagemusha_base58_decode(value: str) -> bytes:
+    number = 0
+    for character in value:
+        try:
+            digit = _KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET.index(character)
+        except ValueError as error:
+            raise ValueError("asset") from error
+        number = number * 58 + digit
+    decoded = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
+    leading_zeroes = len(value) - len(value.lstrip(_KAGEMUSHA_ASSET_DEFINITION_BASE58_ALPHABET[0]))
+    return (b"\x00" * leading_zeroes) + decoded
+
+
 def _kagemusha_asset_definition_from_bytes(value: bytes) -> str:
     if not _kagemusha_is_uuid_v4_bytes(value):
         return "hex:" + value.hex()
     body = bytes([_KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION]) + value
     checksum = _kagemusha_blake3_hash_small_input(body)[:4]
     return _kagemusha_base58_encode(body + checksum)
+
+
+def _kagemusha_require_recursive_spend_asset_summary(value: str, field: str) -> None:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(field)
+    if value.startswith("hex:"):
+        payload = value[4:]
+        if len(payload) != 32 or any(character not in "0123456789abcdef" for character in payload):
+            raise ValueError(field)
+        return
+    payload = _kagemusha_base58_decode(value)
+    if len(payload) != 21 or payload[0] != _KAGEMUSHA_ASSET_DEFINITION_ADDRESS_VERSION:
+        raise ValueError(field)
+    asset_bytes = payload[1:17]
+    checksum = payload[17:]
+    if not _kagemusha_is_uuid_v4_bytes(asset_bytes):
+        raise ValueError(field)
+    body = payload[:17]
+    if checksum != _kagemusha_blake3_hash_small_input(body)[:4]:
+        raise ValueError(field)
+    if _kagemusha_base58_encode(payload) != value:
+        raise ValueError(field)
 
 
 def _kagemusha_canonical_u128_decimal(value: str, field: str) -> str:

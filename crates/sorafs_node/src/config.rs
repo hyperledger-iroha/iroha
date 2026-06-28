@@ -21,6 +21,7 @@ pub struct StorageConfig {
     stream_token_signing_key_path: Option<PathBuf>,
     orderbook: OrderbookAdmissionPolicy,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
+    reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
     governance_dag_signing_key_path: Option<PathBuf>,
@@ -106,6 +107,12 @@ impl StorageConfig {
         self.privacy_aggregate_schedule
     }
 
+    /// Optional config-backed reserve lifecycle advancement scheduler.
+    #[must_use]
+    pub fn reserve_lifecycle_schedule(&self) -> Option<ReserveLifecycleScheduleConfig> {
+        self.reserve_lifecycle_schedule
+    }
+
     /// Optional directory used to materialise governance artefacts.
     #[must_use]
     pub fn governance_dir(&self) -> Option<&PathBuf> {
@@ -170,6 +177,7 @@ impl StorageConfig {
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
             privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
+            reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
             governance_dag_signing_key_path: storage.governance_dag_signing_key_path.clone(),
@@ -277,6 +285,16 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Override the optional config-backed reserve lifecycle scheduler.
+    #[must_use]
+    pub fn reserve_lifecycle_schedule(
+        mut self,
+        schedule: Option<ReserveLifecycleScheduleConfig>,
+    ) -> Self {
+        self.inner.reserve_lifecycle_schedule = schedule;
+        self
+    }
+
     /// Override the metering smoothing parameters.
     #[must_use]
     pub fn metering_smoothing(mut self, smoothing: MeteringSmoothingConfig) -> Self {
@@ -366,6 +384,48 @@ impl OrderbookAdmissionPolicy {
 impl From<actual::SorafsOrderbook> for OrderbookAdmissionPolicy {
     fn from(policy: actual::SorafsOrderbook) -> Self {
         Self::new(policy.min_order_gib, policy.price_tick_micro_xor)
+    }
+}
+
+/// Config-backed local reserve lifecycle advancement schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReserveLifecycleScheduleConfig {
+    interval_seconds: u64,
+    initial_delay_seconds: u64,
+}
+
+impl ReserveLifecycleScheduleConfig {
+    /// Construct a reserve lifecycle advancement schedule, clamping zero cadence to one second.
+    #[must_use]
+    pub fn new(interval_seconds: u64, initial_delay_seconds: u64) -> Self {
+        Self {
+            interval_seconds: interval_seconds.max(1),
+            initial_delay_seconds,
+        }
+    }
+
+    /// Interval between lifecycle advancement ticks, in seconds.
+    #[must_use]
+    pub fn interval_seconds(&self) -> u64 {
+        self.interval_seconds
+    }
+
+    /// Delay before the first lifecycle advancement tick, in seconds.
+    #[must_use]
+    pub fn initial_delay_seconds(&self) -> u64 {
+        self.initial_delay_seconds
+    }
+}
+
+trait ReserveLifecycleScheduleConfigExt {
+    fn into_schedule_config(self) -> Option<ReserveLifecycleScheduleConfig>;
+}
+
+impl ReserveLifecycleScheduleConfigExt for actual::SorafsReserveLifecycleSchedule {
+    fn into_schedule_config(self) -> Option<ReserveLifecycleScheduleConfig> {
+        self.enabled.then(|| {
+            ReserveLifecycleScheduleConfig::new(self.interval_seconds, self.initial_delay_seconds)
+        })
     }
 }
 
@@ -878,6 +938,11 @@ mod tests {
             cycle_seconds: 12,
             publish_delay_seconds: 3,
         };
+        actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
+            enabled: true,
+            interval_seconds: 30,
+            initial_delay_seconds: 7,
+        };
 
         let cfg = StorageConfig::from(&actual);
         assert!(cfg.enabled());
@@ -911,6 +976,10 @@ mod tests {
                 publish_delay_seconds: 3,
             })
         );
+        assert_eq!(
+            cfg.reserve_lifecycle_schedule(),
+            Some(ReserveLifecycleScheduleConfig::new(30, 7))
+        );
         let penalty = cfg.penalty();
         let defaults = actual::SorafsPenaltyPolicy::default();
         assert_eq!(penalty.strike_threshold, defaults.strike_threshold);
@@ -932,6 +1001,26 @@ mod tests {
 
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.privacy_aggregate_schedule(), None);
+    }
+
+    #[test]
+    fn reserve_lifecycle_schedule_is_none_when_disabled_and_clamps_zero_interval() {
+        let mut actual = actual::SorafsStorage::default();
+        actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
+            enabled: false,
+            interval_seconds: 0,
+            initial_delay_seconds: 5,
+        };
+
+        let cfg = StorageConfig::from(&actual);
+        assert_eq!(cfg.reserve_lifecycle_schedule(), None);
+
+        actual.reserve_lifecycle.enabled = true;
+        let cfg = StorageConfig::from(&actual);
+        assert_eq!(
+            cfg.reserve_lifecycle_schedule(),
+            Some(ReserveLifecycleScheduleConfig::new(1, 5))
+        );
     }
 
     #[test]

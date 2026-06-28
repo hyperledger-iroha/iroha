@@ -1,0 +1,17 @@
+# Example arguments for the SFM-4b moderation panel rollout evidence gate.
+# Use runtime artifact locations; do not store secrets, raw evidence payloads,
+# private commit/reveal payloads, response bodies, or ledgers.
+--evidence-dir
+artifacts/sorafs/moderation-panel/staged
+--summary-out
+artifacts/sorafs/moderation-panel/staged/rollout-summary.json
+--max-canary-age-secs
+86400
+--max-event-lag-secs
+900
+--max-route-latency-ms
+1500
+--min-panel-size
+7
+--min-peers
+4

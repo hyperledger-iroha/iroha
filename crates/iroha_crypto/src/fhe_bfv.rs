@@ -19981,6 +19981,7 @@ fn validate_no_full_bootstrap_placeholder_release_audit_evidence_digests(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_bfv_full_bootstrap_release_audit_proof_profile_shape_v1(
     profile: &BfvFullBootstrapReleaseAuditProofProfileV1,
 ) -> Result<(), BfvError> {
@@ -22290,6 +22291,58 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
     ]))
 }
 
+/// Decode canonical transcript-derived public opening material bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// not valid Norito public opening material, fail public-opening validation, or
+/// are not the canonical v1 Norito encoding of the decoded material.
+pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1, BfvError> {
+    let label = "BFV full-bootstrap arithmetic trace public opening material bytes";
+    if bytes.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all-zero"
+        )));
+    }
+    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
+    let material =
+        norito::decode_from_bytes::<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1>(bytes)
+            .map_err(|err| {
+                BfvError::InvalidParameters(format!(
+                    "{label} must be Norito-encoded public opening material: {err}"
+                ))
+            })?;
+    validate_bfv_full_bootstrap_arithmetic_trace_public_opening_material_v1(&material)?;
+    let canonical_bytes = norito::to_bytes(&material).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
+    })?;
+    if bytes != canonical_bytes {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use canonical v1 bytes"
+        )));
+    }
+    Ok(material)
+}
+
+/// Hash canonical transcript-derived public opening material bytes.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission fails or material digesting fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let material =
+        decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(bytes)?;
+    bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(&material)
+}
+
 /// Hash typed public opening material after checking it belongs to a trace.
 ///
 /// # Errors
@@ -22303,6 +22356,23 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_tr
         material,
     )?;
     bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(material)
+}
+
+/// Hash canonical public opening material bytes after checking they belong to a trace.
+///
+/// # Errors
+/// Returns [`BfvError`] when byte admission, trace-bound validation, or material
+/// digesting fails.
+pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+    trace_material: &BfvFullBootstrapArithmeticTraceMaterialV1,
+    bytes: &[u8],
+) -> Result<Hash, BfvError> {
+    let material =
+        decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(bytes)?;
+    bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_for_trace_v1(
+        trace_material,
+        &material,
+    )
 }
 
 fn validate_bfv_full_bootstrap_arithmetic_trace_public_padding_row_v1(
@@ -62681,12 +62751,60 @@ mod tests {
         let public_opening_material_bytes =
             norito::to_bytes(&public_opening_material).expect("encode public opening material");
         assert_eq!(
+            decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
+                &public_opening_material_bytes,
+            )
+            .expect("decode canonical public opening material bytes"),
+            public_opening_material,
+            "canonical public opening material bytes must decode to the typed material"
+        );
+        assert_eq!(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
+                &public_opening_material_bytes,
+            )
+            .expect("hash canonical public opening material bytes"),
+            public_opening_material_digest,
+            "canonical public opening material bytes must hash to the typed digest"
+        );
+        assert_eq!(
             public_opening_material_digest,
             Hash::new_from_chunks(&[
                 BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_PUBLIC_OPENING_MATERIAL_DIGEST_DOMAIN,
                 public_opening_material_bytes.as_slice(),
             ]),
             "public opening material digest must hash self-describing typed material"
+        );
+        let compressed_public_opening_material_bytes = norito::to_compressed_bytes(
+            &public_opening_material,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed public opening material");
+        assert_ne!(
+            compressed_public_opening_material_bytes, public_opening_material_bytes,
+            "compressed public opening material must differ from canonical bytes"
+        );
+        let structurally_decoded_public_opening_material:
+            BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1 = norito::decode_from_bytes(
+            &compressed_public_opening_material_bytes,
+        )
+        .expect("compressed public opening material still decodes structurally");
+        assert_eq!(
+            structurally_decoded_public_opening_material, public_opening_material,
+            "compressed public opening material must carry the same typed material"
+        );
+        assert_error_contains(
+            decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
+                &compressed_public_opening_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "public opening material byte admission must reject compressed Norito framing",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_v1(
+                &compressed_public_opening_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "public opening material byte digesting must reject compressed Norito framing",
         );
 
         let mut reordered_indices = opening_indices.clone();
@@ -68881,6 +68999,30 @@ mod tests {
             )
             .expect("hash public opening material directly"),
             "trace-bound public opening material digest must reuse the canonical material digest"
+        );
+        let public_opening_material_bytes =
+            norito::to_bytes(&public_opening_material).expect("encode public opening material");
+        assert_eq!(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+                &trace_material,
+                &public_opening_material_bytes,
+            )
+            .expect("hash trace-bound canonical public opening material bytes"),
+            public_opening_material_digest,
+            "trace-bound public opening byte digesting must match the typed digest"
+        );
+        let compressed_public_opening_material_bytes = norito::to_compressed_bytes(
+            &public_opening_material,
+            Some(norito::CompressionConfig::default()),
+        )
+        .expect("encode compressed public opening material");
+        assert_error_contains(
+            bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_from_bytes_for_trace_v1(
+                &trace_material,
+                &compressed_public_opening_material_bytes,
+            ),
+            "canonical v1 bytes",
+            "trace-bound public opening byte digesting must reject compressed Norito framing",
         );
         let alternate_public_opening_material =
             bfv_full_bootstrap_arithmetic_trace_public_opening_material_from_transcript_v1(

@@ -369,6 +369,252 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 detail = READINESS._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("readiness-hidden", detail)
+        hidden = "token=readiness-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = READINESS._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=readiness-ancestor-secret"
+        path_type = type(READINESS.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(READINESS.ReadinessError) as caught:
+                        READINESS._reject_symlinked_existing_ancestors(
+                            READINESS.Path("ancestor") / "leaf",
+                            display_label="summary_out",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=readiness-reader-inspect-secret"
+        path_type = type(READINESS.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = READINESS.Path(raw_root) / "evidence.json"
+                path.write_text("{}", encoding="utf-8")
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(READINESS.ReadinessError) as caught:
+                        READINESS._read_regular_file(path, display_label="evidence")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect evidence", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_file_stat_failures_return_false(self):
+        hidden = "token=readiness-alias-stat-secret"
+        path_type = type(READINESS.Path("."))
+        original_stat = path_type.stat
+        cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for failure in cases:
+            with self.subTest(error=type(failure).__name__):
+
+                def failing_stat(_self, *args, error=failure, **kwargs):
+                    raise error
+
+                path_type.stat = failing_stat
+                try:
+                    self.assertFalse(
+                        READINESS._same_existing_file(
+                            READINESS.Path("left"),
+                            READINESS.Path("right"),
+                        )
+                    )
+                finally:
+                    path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=readiness-resolve-secret"
+        path_type = type(READINESS.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+        target = READINESS.Path("xsd-summary.json")
+        for name, failure in failure_cases:
+            with self.subTest(name=name):
+
+                def failing_resolve(self, *args, error=failure, **kwargs):
+                    if self == target:
+                        raise error
+                    return original_resolve(self, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+                try:
+                    with self.assertRaises(READINESS.ReadinessError) as caught:
+                        READINESS._reject_duplicate_paths([target], "--xsd-summary")
+                finally:
+                    path_type.resolve = original_resolve
+
+                message = str(caught.exception)
+                self.assertIn("cannot resolve --xsd-summary[0]", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(target), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_regular_file_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=readiness-reader-open-secret"
+        cleanup_hidden = "token=readiness-reader-close-secret"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = root / "readiness.summary.json"
+            path.write_text("{}", encoding="utf-8")
+            original_fdopen = READINESS.os.fdopen
+            original_close = READINESS.os.close
+
+            def failing_fdopen(*_args, **_kwargs):
+                raise OSError(5, hidden)
+
+            def failing_close(fd):
+                original_close(fd)
+                raise OSError(5, cleanup_hidden)
+
+            READINESS.os.fdopen = failing_fdopen
+            READINESS.os.close = failing_close
+            try:
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="readiness-summary",
+                    )
+            finally:
+                READINESS.os.fdopen = original_fdopen
+                READINESS.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open readiness-summary for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            runtime_cleanup_hidden = "token=readiness-reader-close-runtime-secret"
+
+            def failing_runtime_close(fd):
+                original_close(fd)
+                raise RuntimeError(runtime_cleanup_hidden)
+
+            READINESS.os.fdopen = failing_fdopen
+            READINESS.os.close = failing_runtime_close
+            try:
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="readiness-summary",
+                    )
+            finally:
+                READINESS.os.fdopen = original_fdopen
+                READINESS.os.close = original_close
+
+            message = str(caught.exception)
+            self.assertIn("cannot open readiness-summary for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(hidden, message)
+            self.assertNotIn(runtime_cleanup_hidden, message)
+            self.assertNotIn(str(root), message)
+
+            read_hidden = "token=readiness-reader-runtime-secret"
+
+            class FailingReadHandle:
+                def __init__(self, fd):
+                    self.fd = fd
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    original_close(self.fd)
+                    return False
+
+                def read(self, _size):
+                    raise RuntimeError(read_hidden)
+
+            def failing_read_fdopen(fd, *_args, **_kwargs):
+                return FailingReadHandle(fd)
+
+            READINESS.os.fdopen = failing_read_fdopen
+            try:
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    READINESS._read_regular_file(
+                        path,
+                        max_bytes=32,
+                        display_label="readiness-summary",
+                    )
+            finally:
+                READINESS.os.fdopen = original_fdopen
+
+            message = str(caught.exception)
+            self.assertIn("cannot open readiness-summary for reading", message)
+            self.assertIn("I/O error", message)
+            self.assertNotIn(read_hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -529,6 +775,171 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("must not be a symlink", message)
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
+
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=readiness-output-inspect-secret"
+        path_type = type(READINESS.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden)),
+            ("exists_runtime", "exists", RuntimeError(hidden)),
+            ("lstat_os", "lstat", OSError(5, hidden)),
+            ("lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(READINESS.ReadinessError) as caught:
+                        READINESS._ensure_text_output_target(
+                            READINESS.Path("summary.json"),
+                            display_label="summary_out",
+                            create_parent=False,
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_parent_creation_failures_do_not_echo_detail(self):
+        hidden = "token=readiness-output-create-secret"
+        path_type = type(READINESS.Path("."))
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("mkdir_os", OSError(5, hidden)),
+            ("mkdir_runtime", RuntimeError(hidden)),
+            ("mkdir_type", TypeError(hidden)),
+            ("mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(READINESS.ReadinessError) as caught:
+                            READINESS._ensure_text_output_target(
+                                READINESS.Path(raw_root) / "out" / "summary.json",
+                                display_label="summary_out",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create summary_out parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=readiness-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for summary_out"),
+            ("replace", None, "cannot replace summary_out"),
+            ("fsync_runtime", None, "cannot write temporary output for summary_out"),
+            ("replace_runtime", None, "cannot replace summary_out"),
+            ("fsync", "unlink", "cannot write temporary output for summary_out"),
+            ("fsync", "close", "cannot write temporary output for summary_out"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for summary_out"),
+            ("fsync", "close_runtime", "cannot write temporary output for summary_out"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "readiness.summary.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = READINESS.os.fsync
+                original_replace = READINESS.os.replace
+                original_unlink = READINESS.os.unlink
+                original_close = READINESS.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                READINESS.os.fsync = failing_fsync
+                READINESS.os.replace = failing_replace
+                READINESS.os.unlink = failing_unlink
+                READINESS.os.close = failing_close
+                try:
+                    with self.assertRaises(READINESS.ReadinessError) as caught:
+                        READINESS._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="summary_out",
+                        )
+                finally:
+                    READINESS.os.fsync = original_fsync
+                    READINESS.os.replace = original_replace
+                    READINESS.os.unlink = original_unlink
+                    READINESS.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_receipt_metadata_helper_rejects_unsupported_kind_without_echo(self):
         secret_kind = "token=readiness-receipt-kind-secret"
@@ -1073,6 +1484,60 @@ class IsoProductionReadinessTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=readiness-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--summary-out"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--summary-out",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--summary-out")],
+                "--summary-out requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                stdout_buffer = io.StringIO()
+                stderr_buffer = io.StringIO()
+                with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
+                    stderr_buffer
+                ):
+                    rc = READINESS.main(argv)
+                stdout = stdout_buffer.getvalue()
+                stderr = stderr_buffer.getvalue()
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("readiness-argv-secret", stderr)
 
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = (
@@ -1767,6 +2232,384 @@ class IsoProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("privatekey=readiness-compat-leak", message)
         self.assertNotIn("readiness-compat-leak", message)
 
+    def test_archive_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "readiness-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        required = READINESS._require_string(
+            {"path": HostileText("summary")},
+            "path",
+            "summary",
+        )
+        self.assertEqual(required, "summary")
+        self.assertIs(type(required), str)
+        cli_value = READINESS._require_cli_string(
+            HostileText("local-bank"),
+            "--provider",
+        )
+        self.assertEqual(cli_value, "local-bank")
+        self.assertIs(type(cli_value), str)
+        rail_message_id = READINESS._require_nullable_rail_message_id(
+            {"rail_message_id": HostileText("rail-message")},
+            "rail_message_id",
+            "receipt",
+        )
+        self.assertEqual(rail_message_id, "rail-message")
+        self.assertIs(type(rail_message_id), str)
+        self.assertEqual(
+            READINESS._validate_receipt_path(
+                HostileText("receipts/one.receipt.json"),
+                "receipt",
+            ),
+            "receipts/one.receipt.json",
+        )
+        self.assertEqual(
+            READINESS._validate_xml_path(HostileText("fixtures/pacs.xml"), "xml"),
+            "fixtures/pacs.xml",
+        )
+        self.assertEqual(
+            READINESS._validate_notary_anchor_path(
+                HostileText(READINESS.LATEST_ANCHOR_FILE),
+                "anchor",
+                "1" * 64,
+            ),
+            READINESS.LATEST_ANCHOR_FILE,
+        )
+        self.assertEqual(
+            READINESS._validate_compact_summary_path(
+                HostileText("summaries/evidence.json"),
+                "summary",
+            ),
+            "summaries/evidence.json",
+        )
+        self.assertEqual(
+            READINESS._validate_config_path(HostileText("configs/canary.json"), "config"),
+            "configs/canary.json",
+        )
+        self.assertEqual(
+            READINESS._validate_trust_bundle_path(
+                HostileText("trust/bundle.json"),
+                "trust",
+            ),
+            "trust/bundle.json",
+        )
+        self.assertEqual(
+            READINESS._validate_schema_source_path(
+                HostileText("schemas/pacs.008.001.08.xsd"),
+                "schema",
+            ),
+            "schemas/pacs.008.001.08.xsd",
+        )
+        self.assertEqual(
+            READINESS._validate_fixture_summary_path(
+                HostileText("fixtures/pacs.008.001.08.xml"),
+                "fixture",
+            ),
+            "fixtures/pacs.008.001.08.xml",
+        )
+        self.assertEqual(
+            READINESS._validate_reviewed_gap_reason(HostileText("Reviewed"), "reason"),
+            "Reviewed",
+        )
+        self.assertEqual(
+            READINESS._validate_iso_catalogue_url(
+                HostileText("https://www.iso20022.org/iso-20022-message-definitions"),
+                "catalogue_url",
+            ),
+            "https://www.iso20022.org/iso-20022-message-definitions",
+        )
+        self.assertEqual(
+            READINESS._validate_probe_content_type(
+                HostileText("application/xml"),
+                "content_type",
+            ),
+            "application/xml",
+        )
+        blocked_source = xsd_test.blocked_schema_source()
+        marker = sorted(READINESS.XSD_BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS)[0]
+        blocked_source["restriction_markers"] = [HostileText(marker)]
+        blocked = READINESS._verify_blocked_schema_source_summary(
+            blocked_source,
+            "blocked_schema_sources[0]",
+            blockers=[],
+            path=Path("xsd.json"),
+        )
+        self.assertEqual(blocked["restriction_markers"], [marker])
+        self.assertIs(type(blocked["restriction_markers"][0]), str)
+        present = READINESS._reject_unknown_keys(
+            {HostileText("path"): "summary"},
+            {"path"},
+            "summary",
+        )
+        self.assertEqual(present, {"path"})
+        self.assertTrue(all(type(key) is str for key in present))
+        for name, receipt in (
+            ("forbidden-metadata-key", {HostileText("anchor_path"): "anchor.json"}),
+            ("forbidden-metadata-non-string-key", {HostileKey(): "anchor.json"}),
+        ):
+            with self.subTest(name=name):
+                blockers: list[dict[str, object]] = []
+                READINESS._block_forbidden_receipt_metadata(
+                    receipt,
+                    {"anchor_path"},
+                    "receipt[0]",
+                    "rail_gateway",
+                    "evidence.receipt_metadata_invalid",
+                    Path("summary.json"),
+                    blockers,
+                )
+                self.assertEqual(len(blockers), 1)
+                message = str(blockers[0]["message"])
+                self.assertNotIn(hidden, message)
+
+        cases = (
+            (
+                "required",
+                lambda: READINESS._require_string(
+                    {"path": HostileText("summary\x1b")}, "path", "summary"
+                ),
+            ),
+            (
+                "cli",
+                lambda: READINESS._require_cli_string(
+                    HostileText("local-bank\x1b"),
+                    "--provider",
+                ),
+            ),
+            (
+                "nullable-rail-message-id",
+                lambda: READINESS._require_nullable_rail_message_id(
+                    {"rail_message_id": HostileText("rail-message\x1b")},
+                    "rail_message_id",
+                    "receipt",
+                ),
+            ),
+            (
+                "receipt-path",
+                lambda: READINESS._validate_receipt_path(
+                    HostileText("receipts/one.receipt.json\x1b"),
+                    "receipt",
+                ),
+            ),
+            (
+                "schema-source-path",
+                lambda: READINESS._validate_schema_source_path(
+                    HostileText("schemas/pacs.008.001.08.xsd\x1b"),
+                    "schema",
+                ),
+            ),
+            (
+                "fixture-summary-path",
+                lambda: READINESS._validate_fixture_summary_path(
+                    HostileText("fixtures/pacs.008.001.08.xml\x1b"),
+                    "fixture",
+                ),
+            ),
+            (
+                "reviewed-gap-reason",
+                lambda: READINESS._validate_reviewed_gap_reason(
+                    HostileText("Reviewed\x1b"),
+                    "reason",
+                ),
+            ),
+            (
+                "catalogue-url",
+                lambda: READINESS._validate_iso_catalogue_url(
+                    HostileText(
+                        "https://www.iso20022.org/iso-20022-message-definitions\x1b"
+                    ),
+                    "catalogue_url",
+                ),
+            ),
+            (
+                "probe-content-type",
+                lambda: READINESS._validate_probe_content_type(
+                    HostileText("application/xml\x1b"),
+                    "content_type",
+                ),
+            ),
+            (
+                "secret-scan",
+                lambda: READINESS._check_no_secret_material(
+                    {"metadata": HostileText("warning \x1b[31mred")}
+                ),
+            ),
+            (
+                "require-object-dict-subclass",
+                lambda: READINESS._require_object(
+                    HostileDict({"path": "summary"}),
+                    "summary",
+                ),
+            ),
+            (
+                "require-list-subclass",
+                lambda: READINESS._require_list(
+                    HostileList(["summary"]),
+                    "summary.items",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: READINESS._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: READINESS._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: READINESS._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "secret-key",
+                lambda: READINESS._check_no_secret_material(
+                    {HostileText("private_key"): "redacted"}
+                ),
+            ),
+            (
+                "control-key",
+                lambda: READINESS._check_no_secret_material(
+                    {HostileText("metadata\x1b"): "redacted"}
+                ),
+            ),
+            (
+                "unknown-key",
+                lambda: READINESS._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"path"},
+                    "summary",
+                ),
+            ),
+            (
+                "non-string-key",
+                lambda: READINESS._check_no_secret_material({HostileKey(): "redacted"}),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: READINESS._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"path"},
+                    "summary",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: READINESS._reject_unknown_keys(
+                    HostileDict({"path": "redacted"}),
+                    {"path"},
+                    "summary",
+                ),
+            ),
+            (
+                "secret-list-subclass",
+                lambda: READINESS._check_no_secret_material(HostileList(["redacted"])),
+            ),
+            (
+                "secret-dict-subclass",
+                lambda: READINESS._check_no_secret_material(
+                    HostileDict({"metadata": "redacted"})
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(READINESS.ReadinessError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+
+    def test_compact_canary_stage_names_normalize_hostile_str_subclasses(self):
+        hidden = "readiness-stage-name-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            evidence_summary = write_evidence_summary(
+                root / "evidence",
+                direct_receipts=False,
+            )
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            canary = evidence["canary_summaries"][0]
+            canary["stage_names"] = [
+                HostileText("rail"),
+                HostileText("notary"),
+                HostileText("verify"),
+            ]
+            args = argparse.Namespace(
+                max_canary_age_days=36500,
+                provider="local-bank",
+                environment="preprod",
+            )
+            blockers: list[dict[str, object]] = []
+
+            summary = READINESS._verify_canary(
+                canary,
+                "evidence.canary_summaries[0]",
+                evidence_summary,
+                args,
+                blockers,
+            )
+
+            self.assertEqual(summary["stage_names"], ["rail", "notary", "verify"])
+            self.assertTrue(all(type(item) is str for item in summary["stage_names"]))
+            self.assertEqual(blockers, [])
+
+            canary["stage_names"][0] = HostileText("rail\x1b")
+            with self.assertRaises(READINESS.ReadinessError) as caught:
+                READINESS._verify_canary(
+                    canary,
+                    "evidence.canary_summaries[0]",
+                    evidence_summary,
+                    args,
+                    [],
+                )
+            message = str(caught.exception)
+            self.assertIn("stage_names[0] must not contain control characters", message)
+            self.assertNotIn(hidden, message)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+
     def test_context_cli_flags_reject_missing_empty_or_flag_like_values(self):
         cases = (
             ["--provider"],
@@ -1911,6 +2754,35 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(canary_summary["stage_names"], ["rail", "notary", "verify"])
             self.assertEqual(canary_summary["stage_dry_run"], [False, False, False])
+            self.assertEqual(
+                canary_summary["stage_command_modes"],
+                [
+                    {
+                        "name": "rail",
+                        "rail_uses_message": False,
+                        "rail_submitted_message_count": 1,
+                        "notary_uses_all": False,
+                        "notary_endpoint_count": 0,
+                        "notary_published_anchor_count": 0,
+                    },
+                    {
+                        "name": "notary",
+                        "rail_uses_message": False,
+                        "rail_submitted_message_count": 0,
+                        "notary_uses_all": False,
+                        "notary_endpoint_count": 1,
+                        "notary_published_anchor_count": 1,
+                    },
+                    {
+                        "name": "verify",
+                        "rail_uses_message": False,
+                        "rail_submitted_message_count": 0,
+                        "notary_uses_all": False,
+                        "notary_endpoint_count": 0,
+                        "notary_published_anchor_count": 0,
+                    },
+                ],
+            )
             rail_receipt = next(
                 receipt
                 for receipt in canary_summary["receipt_summary"]["receipts"]
@@ -2714,6 +3586,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertNotIn(str(root), error)
 
     def test_direct_run_scalar_paths_must_be_paths_before_input_loading(self):
+        hidden = "readiness-hostile-scalar-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             args = argparse.Namespace(
@@ -2721,7 +3599,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 evidence_summary=[root / "missing-evidence.summary.json"],
                 provider="local-bank",
                 environment="preprod",
-                summary_out=object(),
+                summary_out=HostilePathLike(),
                 max_xsd_age_days=36500,
                 max_evidence_age_days=36500,
                 max_canary_age_days=36500,
@@ -2739,6 +3617,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(stdout.getvalue(), "")
             message = str(caught.exception)
             self.assertIn("summary_out must be a path", message)
+            self.assertNotIn(hidden, message)
             self.assertNotIn("does not exist", message)
             self.assertNotIn(str(root), message)
 
@@ -2824,8 +3703,34 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertNotIn(str(root), message)
 
     def test_direct_run_repeatable_summary_paths_must_be_lists_before_input_loading(self):
+        hidden = "readiness-hostile-summary-list-secret"
+        pathlike_hidden = "readiness-hostile-summary-pathlike-secret"
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={pathlike_hidden}")
+
         cases = (
             ("xsd bare string", "xsd_summary", "xsd.summary.json", "--xsd-summary"),
+            (
+                "xsd hostile list",
+                "xsd_summary",
+                HostileList(["xsd.summary.json"]),
+                "--xsd-summary",
+            ),
+            (
+                "xsd hostile pathlike",
+                "xsd_summary",
+                [HostilePathLike()],
+                "--xsd-summary[0]",
+            ),
             ("xsd bad entry", "xsd_summary", [object()], "--xsd-summary[0]"),
             (
                 "evidence bare string",
@@ -2879,10 +3784,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
                     self.assertEqual(stdout.getvalue(), "")
                     error = str(caught.exception)
-                    if "bare string" in name:
+                    if not label.endswith("[0]"):
                         self.assertIn(f"{label} must be a repeatable path list", error)
                     else:
                         self.assertIn(f"{label} must be a path", error)
+                    self.assertNotIn(hidden, error)
+                    self.assertNotIn(pathlike_hidden, error)
                     self.assertNotIn("does not exist", error)
                     self.assertNotIn(str(root), error)
 
@@ -4053,19 +4960,19 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 "evidence.canary_receipt_source_path_reused",
                 "evidence.canary_receipt_payload_digest_reused",
                 "evidence.canary_receipt_rail_message_id_reused",
+                "evidence.canary_receipt_anchor_path_reused",
+                "evidence.canary_receipt_anchor_digest_reused",
+                "evidence.canary_receipt_index_path_reused",
+                "evidence.canary_receipt_index_digest_reused",
                 "evidence.archive_receipt_source_path_reused",
                 "evidence.archive_receipt_payload_digest_reused",
                 "evidence.archive_receipt_rail_message_id_reused",
+                "evidence.archive_receipt_anchor_path_reused",
+                "evidence.archive_receipt_anchor_digest_reused",
+                "evidence.archive_receipt_index_path_reused",
+                "evidence.archive_receipt_index_digest_reused",
             }
             self.assertTrue(expected <= codes)
-            self.assertNotIn("evidence.canary_receipt_anchor_path_reused", codes)
-            self.assertNotIn("evidence.canary_receipt_anchor_digest_reused", codes)
-            self.assertNotIn("evidence.canary_receipt_index_path_reused", codes)
-            self.assertNotIn("evidence.canary_receipt_index_digest_reused", codes)
-            self.assertNotIn("evidence.archive_receipt_anchor_path_reused", codes)
-            self.assertNotIn("evidence.archive_receipt_anchor_digest_reused", codes)
-            self.assertNotIn("evidence.archive_receipt_index_path_reused", codes)
-            self.assertNotIn("evidence.archive_receipt_index_digest_reused", codes)
             self.assertNotIn("evidence.receipt_path_duplicate", codes)
             self.assertNotIn("evidence.receipt_digest_duplicate", codes)
             self.assertNotIn("evidence.archive_receipt_path_duplicate", codes)
@@ -4675,6 +5582,47 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 stderr,
             )
 
+    def test_pending_xsd_probe_replay_hostile_text_does_not_echo_detail(self):
+        hidden = "readiness-probe-text-secret"
+
+        class StripFailingText(str):
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"token={hidden}")
+
+        class IterFailingText(str):
+            def __iter__(self):
+                raise KeyError(f"client_secret={hidden}")
+
+        cases = (
+            (
+                "content-type-strip",
+                READINESS._validate_probe_content_type,
+                StripFailingText("application/xml"),
+                "pending.probes[0].content_type",
+                "application/xml",
+            ),
+            (
+                "content-type-iter",
+                READINESS._validate_probe_content_type,
+                IterFailingText("application/xml"),
+                "pending.probes[0].content_type",
+                "application/xml",
+            ),
+            (
+                "error-kind",
+                READINESS._validate_probe_error_kind,
+                IterFailingText("NetworkError"),
+                "pending.probes[0].error_kind",
+                "NetworkError",
+            ),
+        )
+        for name, helper, value, label, expected in cases:
+            with self.subTest(name=name):
+                result = helper(value, label)
+                self.assertEqual(result, expected)
+                self.assertIs(type(result), str)
+                self.assertNotIn(hidden, result)
+
     def test_pending_xsd_probe_sample_digest_shape_is_rechecked(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4687,6 +5635,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     encoding="utf-8"
                 )
             )
+            secret_content_type = "application/xml; client_secret=iso-fixture-secret"
 
             cases = (
                 (
@@ -4873,6 +5822,55 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "looks_like_xsd must be false for unexpected probes",
                 ),
                 (
+                    "reachable-with-redirect-status",
+                    lambda body: body["probes"][0].update(
+                        {
+                            "status": "reachable",
+                            "http_status": 302,
+                            "content_type": "application/xml",
+                            "downloaded_bytes": 64,
+                            "sample_sha256": "1" * 64,
+                            "truncated": False,
+                            "looks_like_xsd": True,
+                            "error_kind": None,
+                        }
+                    ),
+                    "http_status must record a 2xx status",
+                ),
+                (
+                    "reachable-with-padded-content-type",
+                    lambda body: body["probes"][0].update(
+                        {
+                            "status": "reachable",
+                            "http_status": 206,
+                            "content_type": " application/xml",
+                            "downloaded_bytes": 64,
+                            "sample_sha256": "1" * 64,
+                            "truncated": False,
+                            "looks_like_xsd": True,
+                            "error_kind": None,
+                        }
+                    ),
+                    "content_type must not have surrounding whitespace",
+                ),
+                (
+                    "reachable-with-secret-content-type",
+                    lambda body: body["probes"][0].update(
+                        {
+                            "status": "reachable",
+                            "http_status": 206,
+                            "content_type": secret_content_type,
+                            "downloaded_bytes": 64,
+                            "sample_sha256": "1" * 64,
+                            "truncated": False,
+                            "looks_like_xsd": True,
+                            "error_kind": None,
+                        }
+                    ),
+                    "content_type contains secret-looking material",
+                    secret_content_type,
+                ),
+                (
                     "reachable-without-xsd-looking-sample",
                     lambda body: body["probes"][0].update(
                         {
@@ -4983,7 +5981,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "looks_like_xsd must be false for failed probes",
                 ),
             )
-            for name, mutate, message in cases:
+            for name, mutate, message, *hidden_values in cases:
                 with self.subTest(name=name):
                     body = json.loads(json.dumps(base_probe))
                     mutate(body)
@@ -5004,6 +6002,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+                    for hidden_value in hidden_values:
+                        self.assertNotIn(hidden_value, stdout)
+                        self.assertNotIn(hidden_value, stderr)
 
     def test_pending_xsd_probe_summary_stale_and_forged_counts_block_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -12329,6 +13330,319 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_compact_stage_command_modes_are_rechecked_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = []
+            missing = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            del missing["canary_summaries"][0]["stage_command_modes"]
+            cases.append((missing, "stage_command_modes must be a JSON array"))
+            non_array = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            non_array["canary_summaries"][0]["stage_command_modes"] = {
+                "rail_uses_message": False,
+            }
+            cases.append((non_array, "stage_command_modes must be a JSON array"))
+            short = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            short["canary_summaries"][0]["stage_command_modes"] = short[
+                "canary_summaries"
+            ][0]["stage_command_modes"][:2]
+            cases.append((short, "stage_command_modes must match stage_names length"))
+            name_mismatch = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            name_mismatch["canary_summaries"][0]["stage_command_modes"][1][
+                "name"
+            ] = "rail"
+            cases.append((name_mismatch, "stage_command_modes[1].name must match"))
+            non_boolean = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            non_boolean["canary_summaries"][0]["stage_command_modes"][0][
+                "rail_uses_message"
+            ] = "false"
+            cases.append(
+                (
+                    non_boolean,
+                    "stage_command_modes[0].rail_uses_message must be a boolean",
+                )
+            )
+            non_rail_submitted_count = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            non_rail_submitted_count["canary_summaries"][0]["stage_command_modes"][1][
+                "rail_submitted_message_count"
+            ] = 1
+            cases.append(
+                (
+                    non_rail_submitted_count,
+                    "stage_command_modes[1].rail_submitted_message_count must be zero",
+                )
+            )
+            rail_zero_submitted_count = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            rail_zero_submitted_count["canary_summaries"][0]["stage_command_modes"][0][
+                "rail_submitted_message_count"
+            ] = 0
+            cases.append(
+                (
+                    rail_zero_submitted_count,
+                    "stage_command_modes[0].rail_submitted_message_count must be positive",
+                )
+            )
+            rail_message_multi_submitted_count = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            rail_message_mode = rail_message_multi_submitted_count["canary_summaries"][
+                0
+            ]["stage_command_modes"][0]
+            rail_message_mode["rail_uses_message"] = True
+            rail_message_mode["rail_submitted_message_count"] = 2
+            cases.append(
+                (
+                    rail_message_multi_submitted_count,
+                    "stage_command_modes[0].rail_submitted_message_count must be one when rail_uses_message=true",
+                )
+            )
+            non_notary_count = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            non_notary_count["canary_summaries"][0]["stage_command_modes"][0][
+                "notary_endpoint_count"
+            ] = 1
+            cases.append(
+                (
+                    non_notary_count,
+                    "stage_command_modes[0].notary_endpoint_count must be zero",
+                )
+            )
+            non_notary_anchor_count = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            non_notary_anchor_count["canary_summaries"][0]["stage_command_modes"][0][
+                "notary_published_anchor_count"
+            ] = 1
+            cases.append(
+                (
+                    non_notary_anchor_count,
+                    "stage_command_modes[0].notary_published_anchor_count must be zero",
+                )
+            )
+            notary_zero_count = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            notary_zero_count["canary_summaries"][0]["stage_command_modes"][1][
+                "notary_endpoint_count"
+            ] = 0
+            cases.append(
+                (
+                    notary_zero_count,
+                    "stage_command_modes[1].notary_endpoint_count must be positive",
+                )
+            )
+            notary_zero_anchor_count = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            notary_zero_anchor_count["canary_summaries"][0]["stage_command_modes"][1][
+                "notary_published_anchor_count"
+            ] = 0
+            cases.append(
+                (
+                    notary_zero_anchor_count,
+                    "stage_command_modes[1].notary_published_anchor_count must be positive",
+                )
+            )
+            notary_multi_anchor_without_all = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            notary_multi_anchor_without_all["canary_summaries"][0][
+                "stage_command_modes"
+            ][1]["notary_published_anchor_count"] = 2
+            cases.append(
+                (
+                    notary_multi_anchor_without_all,
+                    "stage_command_modes[1].notary_published_anchor_count must be one unless notary_uses_all=true",
+                )
+            )
+            for offset, (body, message) in enumerate(cases):
+                with self.subTest(message=message):
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"stage-command-modes-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_compact_stage_command_modes_must_match_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_evidence_summary(
+                root / "evidence",
+                direct_receipts=False,
+            )
+            cases = []
+
+            rail_multi_receipt = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            receipt_summary = rail_multi_receipt["canary_summaries"][0]["receipt_summary"]
+            rail_receipt = next(
+                receipt
+                for receipt in receipt_summary["receipts"]
+                if receipt["receipt_kind"] == "iso-rail-gateway"
+            )
+            extra_rail_receipt = dict(rail_receipt)
+            extra_rail_receipt.update(
+                {
+                    "path": "/ops/iso/rail-receipts/iso-rail-gateway.2.receipt.json",
+                    "receipt_sha256": "a" * 64,
+                    "response_body_sha256": "b" * 64,
+                    "payload_sha256": "c" * 64,
+                    "rail_message_id": "rail-drop-extra",
+                    "source_path": "/ops/iso/rail-inbox/rail-drop-extra.xml",
+                }
+            )
+            receipt_summary["receipts"].append(extra_rail_receipt)
+            receipt_summary["receipts"].sort(
+                key=lambda receipt: (
+                    receipt["receipt_kind"],
+                    receipt["path"],
+                    receipt["receipt_sha256"],
+                )
+            )
+            receipt_summary["verified_receipts"] = len(receipt_summary["receipts"])
+            refresh_digest(receipt_summary)
+            rail_multi_receipt["canary_summaries"][0]["stage_command_modes"][0][
+                "rail_uses_message"
+            ] = True
+            cases.append(
+                (
+                    rail_multi_receipt,
+                    "rail receipt count must be one when stage_command_modes "
+                    "rail_uses_message=true",
+                )
+            )
+
+            rail_submitted_count_mismatch = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            rail_submitted_count_mismatch["canary_summaries"][0][
+                "stage_command_modes"
+            ][0]["rail_submitted_message_count"] = 2
+            cases.append(
+                (
+                    rail_submitted_count_mismatch,
+                    "rail receipt count must match stage_command_modes "
+                    "rail_submitted_message_count",
+                )
+            )
+
+            notary_digest_without_all = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            receipt_summary = notary_digest_without_all["canary_summaries"][0][
+                "receipt_summary"
+            ]
+            notary_receipt = next(
+                receipt
+                for receipt in receipt_summary["receipts"]
+                if receipt["receipt_kind"] == "iso-audit-notary"
+            )
+            hidden_index_digest = notary_receipt["index_sha256"]
+            notary_receipt["anchor_path"] = (
+                f"/ops/iso/notary/anchors/{hidden_index_digest}.notary.json"
+            )
+            refresh_digest(receipt_summary)
+            cases.append(
+                (
+                    notary_digest_without_all,
+                    "records digest-addressed notary anchor but stage_command_modes "
+                    "notary_uses_all=false",
+                    hidden_index_digest,
+                )
+            )
+
+            notary_latest_with_all = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            notary_latest_with_all["canary_summaries"][0]["stage_command_modes"][1][
+                "notary_uses_all"
+            ] = True
+            cases.append(
+                (
+                    notary_latest_with_all,
+                    "records latest notary anchor but stage_command_modes "
+                    "notary_uses_all=true",
+                )
+            )
+
+            notary_endpoint_count_mismatch = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            notary_endpoint_count_mismatch["canary_summaries"][0][
+                "stage_command_modes"
+            ][1]["notary_endpoint_count"] = 2
+            cases.append(
+                (
+                    notary_endpoint_count_mismatch,
+                    "notary receipt count must match stage_command_modes "
+                    "notary_endpoint_count unless notary_uses_all=true",
+                )
+            )
+
+            notary_all_anchor_count_mismatch = json.loads(
+                evidence_summary.read_text(encoding="utf-8")
+            )
+            notary_stage_mode = notary_all_anchor_count_mismatch["canary_summaries"][0][
+                "stage_command_modes"
+            ][1]
+            notary_stage_mode["notary_uses_all"] = True
+            notary_stage_mode["notary_published_anchor_count"] = 2
+            receipt_summary = notary_all_anchor_count_mismatch["canary_summaries"][0][
+                "receipt_summary"
+            ]
+            notary_receipt = next(
+                receipt
+                for receipt in receipt_summary["receipts"]
+                if receipt["receipt_kind"] == "iso-audit-notary"
+            )
+            hidden_index_digest = notary_receipt["index_sha256"]
+            notary_receipt["anchor_path"] = (
+                f"/ops/iso/notary/anchors/{hidden_index_digest}.notary.json"
+            )
+            refresh_digest(receipt_summary)
+            cases.append(
+                (
+                    notary_all_anchor_count_mismatch,
+                    "notary receipt count must match stage_command_modes "
+                    "notary_published_anchor_count and notary_endpoint_count "
+                    "when notary_uses_all=true",
+                    hidden_index_digest,
+                )
+            )
+
+            for offset, (body, message, *hidden_values) in enumerate(cases):
+                with self.subTest(message=message):
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"stage-command-receipts-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                            "--allow-canary-stage-receipts-only",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    self.assertIn(message, _stdout)
+                    for hidden_value in hidden_values:
+                        self.assertNotIn(hidden_value, stderr)
+
     def test_compact_stage_names_are_unique_and_supported(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -12564,6 +13878,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             canary = evidence["canary_summaries"][0]
             canary["stage_names"] = ["rail", "notary"]
             canary["stage_dry_run"] = canary["stage_dry_run"][:2]
+            canary["stage_command_modes"] = canary["stage_command_modes"][:2]
             canary["stage_windows"] = [
                 window for window in canary["stage_windows"] if window["name"] in {"rail", "notary"}
             ]
@@ -12617,6 +13932,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     canary["stage_dry_run"] = [
                         dry_run_by_stage[stage_name] for stage_name in stage_names
                     ]
+                    command_modes_by_stage = {
+                        mode["name"]: mode for mode in canary["stage_command_modes"]
+                    }
+                    canary["stage_command_modes"] = [
+                        command_modes_by_stage[stage_name] for stage_name in stage_names
+                    ]
                     canary["stage_windows"] = [
                         window
                         for window in canary["stage_windows"]
@@ -12643,6 +13964,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = evidence["canary_summaries"][0]
             canary["stage_dry_run"] = [True, False, False]
+            canary["stage_command_modes"][0]["rail_submitted_message_count"] = 0
             canary["receipt_summary"] = receipt_verification_summary()
             evidence["policy"]["allow_dry_run"] = True
             refresh_digest(evidence)
@@ -12669,6 +13991,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = evidence["canary_summaries"][0]
             canary["stage_dry_run"] = [True, False, False]
+            canary["stage_command_modes"][0]["rail_submitted_message_count"] = 0
             canary["receipt_summary"] = receipt_verification_summary(
                 ["iso-audit-notary"],
             )
@@ -16501,6 +17824,165 @@ class IsoProductionReadinessTest(unittest.TestCase):
                             if field in output_receipt:
                                 self.assertEqual(output_receipt[field], "unsupported")
 
+    def test_public_receipt_redaction_rejects_hostile_container_subclasses(self):
+        hidden = "readiness-redaction-container-secret"
+
+        class HostileReceiptSummary(dict):
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError(f"summary_get={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"summary_deepcopy={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"summary_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"summary_items={hidden}")
+
+        class HostileReceiptList(list):
+            def __len__(self):
+                raise RuntimeError(f"receipts_len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"receipts_iter={hidden}")
+
+            def __getitem__(self, _index):
+                raise RuntimeError(f"receipts_getitem={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"receipts_deepcopy={hidden}")
+
+        class HostileReceipt(dict):
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError(f"receipt_get={hidden}")
+
+            def __deepcopy__(self, _memo):
+                raise RuntimeError(f"receipt_deepcopy={hidden}")
+
+            def __contains__(self, _key):
+                raise RuntimeError(f"receipt_contains={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"receipt_getitem={hidden}")
+
+            def __setitem__(self, _key, _value):
+                raise RuntimeError(f"receipt_set={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"receipt_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"receipt_items={hidden}")
+
+        cases = (
+            (
+                "summary",
+                lambda: READINESS._redact_public_receipt_entries(
+                    HostileReceiptSummary({"receipts": []})
+                ),
+                None,
+            ),
+            (
+                "receipts",
+                lambda: READINESS._redact_public_receipt_entries(
+                    {"receipts": HostileReceiptList([{"ok": False}])}
+                ),
+                None,
+            ),
+            (
+                "receipt",
+                lambda: READINESS._redact_public_receipt_entries(
+                    {"receipts": [HostileReceipt({"ok": False})]}
+                ),
+                None,
+            ),
+            (
+                "metadata-helper",
+                lambda: READINESS._receipt_response_metadata_is_publicly_supported(
+                    HostileReceipt({"ok": True, "status_code": 202})
+                ),
+                False,
+            ),
+            (
+                "pending-probe-metadata-helper",
+                lambda: READINESS._pending_xsd_probe_response_metadata_is_publicly_supported(
+                    HostileReceipt(
+                        {
+                            "status": "reachable",
+                            "looks_like_xsd": True,
+                            "http_status": 200,
+                        }
+                    )
+                ),
+                False,
+            ),
+            (
+                "public-xsd-strict",
+                lambda: READINESS._public_xsd_summary(
+                    {"strict": HostileReceipt({"require_fixture_for_schema": False})}
+                )["strict"],
+                "unsupported",
+            ),
+            (
+                "public-xsd-non-finite",
+                lambda: READINESS._public_xsd_summary(
+                    {"strict": {"validate_xml_schema": float("-inf")}}
+                )["strict"]["validate_xml_schema"],
+                "unsupported",
+            ),
+            (
+                "public-pending-probes",
+                lambda: READINESS._public_pending_xsd_probe_summary(
+                    {"ok": True, "probes": HostileReceiptList([{"status": "reachable"}])}
+                )["probes"],
+                "unsupported",
+            ),
+            (
+                "public-evidence-canaries",
+                lambda: READINESS._public_evidence_summary(
+                    {
+                        "canary_summaries": HostileReceiptList([{}]),
+                        "receipt_verification": None,
+                    }
+                )["canary_summaries"],
+                "unsupported",
+            ),
+            (
+                "public-evidence-canary-receipt-summary",
+                lambda: READINESS._public_evidence_summary(
+                    {
+                        "canary_summaries": [
+                            {"receipt_summary": HostileReceiptSummary({"receipts": []})}
+                        ],
+                        "receipt_verification": None,
+                    }
+                )["canary_summaries"][0]["receipt_summary"],
+                "unsupported",
+            ),
+            (
+                "public-evidence-archive-receipt-summary",
+                lambda: READINESS._public_evidence_summary(
+                    {
+                        "canary_summaries": [],
+                        "receipt_verification": HostileReceiptSummary({"receipts": []}),
+                    }
+                )["receipt_verification"],
+                "unsupported",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name):
+                try:
+                    result = action()
+                except Exception as error:
+                    self.fail(
+                        "hostile container method was invoked: "
+                        f"{type(error).__name__}"
+                    )
+                if expected is not None:
+                    self.assertEqual(result, expected)
+
     def test_receipt_entries_must_preserve_kind_metadata(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -16513,6 +17995,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             bad_profile = "unknown_rail"
             bad_rail_message_id = "rail/drop/1"
             bad_source_path = "/ops/iso/xml/drop/pacs.002"
+            bad_notary_path_fragment = "notary-redacted-path"
+            bad_notary_anchor_path = (
+                f"/ops/iso/{bad_notary_path_fragment}/anchors/{'9' * 64}.notary.json"
+            )
+            bad_notary_store_dir = (
+                f"/ops/release/fixtures/iso20022/{bad_notary_path_fragment}/notary-store"
+            )
+            bad_notary_index_path = (
+                f"/ops/release/fixtures/iso20022/{bad_notary_path_fragment}/messages.index.json"
+            )
             cases = (
                 (
                     "canary-missing-notary-anchor",
@@ -16579,6 +18071,36 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     lambda receipt: receipt.__setitem__(
                         "index_path",
                         "/ops/release/fixtures/iso20022/notary/messages.index.json",
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-redacted-notary-anchor-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        bad_notary_anchor_path,
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-redacted-notary-store-dir",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        bad_notary_store_dir,
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-redacted-notary-index-path",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "index_path",
+                        bad_notary_index_path,
                     ),
                     "evidence.receipt_metadata_invalid",
                 ),
@@ -16706,6 +18228,36 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.archive_receipt_metadata_invalid",
                 ),
                 (
+                    "archive-redacted-notary-anchor-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "anchor_path",
+                        bad_notary_anchor_path,
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-redacted-notary-store-dir",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "store_dir",
+                        bad_notary_store_dir,
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-redacted-notary-index-path",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "index_path",
+                        bad_notary_index_path,
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
                     "archive-legacy-message-type",
                     ("receipt_verification",),
                     1,
@@ -16763,6 +18315,22 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     result = json.loads(stdout)
                     codes = {blocker["code"] for blocker in result["blockers"]}
                     self.assertIn(code, codes)
+                    if summary_path == ("receipt_verification",):
+                        output_receipt = result["evidence_summaries"][0][
+                            "receipt_verification"
+                        ]["receipts"][receipt_index]
+                    else:
+                        output_receipt = result["evidence_summaries"][0][
+                            "canary_summaries"
+                        ][0]["receipt_summary"]["receipts"][receipt_index]
+                    if "notary-anchor-path" in name and "missing" not in name:
+                        self.assertEqual(output_receipt["anchor_path"], "unsupported")
+                    if "notary-store-dir" in name and "missing" not in name:
+                        self.assertEqual(output_receipt["store_dir"], "unsupported")
+                    if "notary-index-path" in name and "missing" not in name:
+                        self.assertEqual(output_receipt["index_path"], "unsupported")
+                    if "notary-record-count" in name:
+                        self.assertEqual(output_receipt["record_count"], "unsupported")
                     blocker_text = "\n".join(blocker["message"] for blocker in result["blockers"])
                     self.assertNotIn(hidden, blocker_text)
                     self.assertNotIn(hidden, stderr)
@@ -16785,6 +18353,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertNotIn(bad_source_path, blocker_text)
                     self.assertNotIn(bad_source_path, stderr)
                     self.assertNotIn(bad_source_path, stdout)
+                    self.assertNotIn(bad_notary_path_fragment, blocker_text)
+                    self.assertNotIn(bad_notary_path_fragment, stderr)
+                    self.assertNotIn(bad_notary_path_fragment, stdout)
                     self.assertNotIn("colr.007", blocker_text)
                     self.assertNotIn("colr.007", stderr)
                     self.assertNotIn("colr.007", stdout)

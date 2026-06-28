@@ -96,6 +96,16 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                 );
                 continue;
             }
+            status::push_lane_relay_envelope(envelope.clone());
+            if envelope.qc.is_none() {
+                iroha_logger::debug!(
+                    lane_id = %envelope.lane_id,
+                    dataspace_id = %envelope.dataspace_id,
+                    block_height = envelope.block_height,
+                    "retaining pending lane relay in status without broadcasting until QC is available"
+                );
+                continue;
+            }
             let key = LaneRelayKey::from_envelope(&envelope);
             let proof_status = envelope.proof_status();
             if self.seen.get(&key).is_some_and(|existing| {
@@ -105,7 +115,6 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
                 continue;
             }
             self.seen.insert(key, proof_status);
-            status::push_lane_relay_envelope(envelope.clone());
             self.network.broadcast_relay(envelope);
         }
     }
@@ -122,7 +131,7 @@ mod tests {
     use iroha_data_model::{
         block::{
             BlockHeader,
-            consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+            consensus::{CertPhase, LaneBlockCommitment, LaneSettlementReceipt, Qc, QcAggregate},
         },
         nexus::{DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope},
     };
@@ -194,6 +203,31 @@ mod tests {
         }))
     }
 
+    fn attach_qc(envelope: &mut LaneRelayEnvelope) {
+        envelope.qc = Some(Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: envelope.block_header.hash(),
+            parent_state_root: UntypedHash::prehashed([0x11; UntypedHash::LENGTH]),
+            post_state_root: UntypedHash::prehashed([0x12; UntypedHash::LENGTH]),
+            height: envelope.block_height,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: UntypedHash::prehashed([0x13; UntypedHash::LENGTH]),
+            rechain_seq: 0,
+            mode_tag: envelope.lane_qc_mode_tag("test-mode"),
+            highest_qc: None,
+            validator_set_hash: HashOf::from_untyped_unchecked(UntypedHash::prehashed(
+                [0x14; UntypedHash::LENGTH],
+            )),
+            validator_set_hash_version: 1,
+            validator_set: Vec::new(),
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0111],
+                bls_aggregate_signature: vec![0xAA; 96],
+            },
+        });
+    }
+
     #[test]
     fn broadcaster_deduplicates_verified_envelopes() {
         let _guard = crate::sumeragi::status::lane_relay_test_guard();
@@ -233,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcaster_broadcasts_pending_then_upgrades_verified_relay() {
+    fn broadcaster_records_qcless_pending_relay_without_broadcasting() {
         let _guard = crate::sumeragi::status::lane_relay_test_guard();
         crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
@@ -244,13 +278,36 @@ mod tests {
         missing_proof.fastpq_proof = None;
 
         broadcaster.broadcast(vec![missing_proof]);
+
+        assert!(network.sent().is_empty());
+        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].fastpq_proof.is_none());
+        assert!(snapshot[0].qc.is_none());
+    }
+
+    #[test]
+    fn broadcaster_broadcasts_qc_backed_pending_then_upgrades_verified_relay() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = MockNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+
+        let mut envelope = sample_envelope(3, 5);
+        attach_qc(&mut envelope);
+        let mut missing_proof = envelope.clone();
+        missing_proof.fastpq_proof = None;
+
+        broadcaster.broadcast(vec![missing_proof]);
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].block_height, 3);
         assert!(sent[0].fastpq_proof.is_none());
+        assert!(sent[0].qc.is_some());
         let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
+        assert!(snapshot[0].qc.is_some());
 
         broadcaster.broadcast(vec![envelope]);
         let sent = network.sent();

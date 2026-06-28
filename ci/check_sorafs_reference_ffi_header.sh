@@ -136,6 +136,14 @@ expected_signatures = {
         "sorafs_reference_validate_orderbook_json",
         extra_prefix=[u32("kind")],
     ),
+    "sorafs_reference_validate_pop_json": bytes_label_signature(
+        "sorafs_reference_validate_pop_json",
+        extra_prefix=[u32("kind")],
+    ),
+    "sorafs_reference_validate_hedging_json": bytes_label_signature(
+        "sorafs_reference_validate_hedging_json",
+        extra_prefix=[u32("kind")],
+    ),
     "sorafs_reference_validate_pdp_commitment_json": bytes_label_signature(
         "sorafs_reference_validate_pdp_commitment_json"
     ),

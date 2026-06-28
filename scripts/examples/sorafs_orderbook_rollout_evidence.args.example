@@ -1,0 +1,17 @@
+# Example arguments for the SFM-2 orderbook rollout evidence gate.
+# Use runtime artifact locations; do not store secrets, raw order payloads,
+# receipt payloads, response bodies, signed transactions, or ledgers.
+--evidence-dir
+artifacts/sorafs/orderbook/staged
+--summary-out
+artifacts/sorafs/orderbook/staged/rollout-summary.json
+--max-evidence-age-secs
+604800
+--max-route-latency-ms
+1500
+--max-stream-lag-ms
+2000
+--max-matcher-lag-ms
+1000
+--min-reconciliation-peers
+4

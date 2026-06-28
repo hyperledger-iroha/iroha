@@ -17,23 +17,23 @@ use ed25519_dalek::{Signer, SigningKey};
 use norito::json;
 use sorafs_manifest::{
     AdvertSignature, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, GovernanceLogNodeV1,
-    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, OrderCancelV1, OrderRequestV1,
-    OrderbookValidationPayloadKindV1, ProofStreamTier, ProviderAdvertV1,
-    RepairValidationPayloadKindV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
-    SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1, SignatureAlgorithm,
-    SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
-    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, HedgingValidationPayloadKindV1,
+    OrderCancelV1, OrderRequestV1, OrderbookValidationPayloadKindV1, PopValidationPayloadKindV1,
+    ProofStreamTier, ProviderAdvertV1, RepairValidationPayloadKindV1, ReplicationOrderSignatureV1,
+    ReplicationOrderV1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
+    SignatureAlgorithm, SignedReplicationOrderV1, ValidationContextFieldV1, ValidationInputV1,
+    ValidationOutcomeV1, sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
     sign_settlement_receipt_ed25519_v1, validate_fixture_bundle_payloads,
     validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
-    validate_por_challenge_proof_bytes, validate_potr_receipt_bytes,
-    validate_provider_admission_envelope_bytes, validate_provider_admission_renewal_bytes,
-    validate_provider_admission_revocation_bytes, validate_provider_advert_bytes,
-    validate_repair_payload_bytes, validate_replication_order_bytes,
-    validate_signed_replication_order_bytes,
+    validate_governance_log_node_bytes, validate_hedging_payload_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes, validate_pop_payload_bytes, validate_por_challenge_proof_bytes,
+    validate_potr_receipt_bytes, validate_provider_admission_envelope_bytes,
+    validate_provider_admission_renewal_bytes, validate_provider_admission_revocation_bytes,
+    validate_provider_advert_bytes, validate_repair_payload_bytes,
+    validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
 
 fn main() -> ExitCode {
@@ -62,6 +62,8 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
         "order" => run_order(OrderArgs::parse(&args[1..])?),
         "orderbook" => run_orderbook(OrderbookArgs::parse(&args[1..])?),
         "pdp" => run_pdp(PdpArgs::parse(&args[1..])?),
+        "pop" => run_pop(PopArgs::parse(&args[1..])?),
+        "hedging" | "billing" => run_hedging(HedgingArgs::parse(&args[1..])?),
         "por" => run_por(PorArgs::parse(&args[1..])?),
         "potr" => run_potr(PotrArgs::parse(&args[1..])?),
         "repair" => run_repair(RepairArgs::parse(&args[1..])?),
@@ -69,7 +71,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
         "governance" => run_governance(GovernanceArgs::parse(&args[1..])?),
         "sign" => run_sign(SignArgs::parse(&args[1..])?),
         other => Err(CliError::Config(format!(
-            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, por, potr, repair, bundle, governance, sign"
+            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, billing, por, potr, repair, bundle, governance, sign"
         ))),
     }
 }
@@ -208,6 +210,68 @@ fn run_orderbook(args: OrderbookArgs) -> Result<ExitCode, CliError> {
         .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
     let outcome =
         validate_orderbook_payload_bytes(kind, &bytes, input.display().to_string(), generated_at);
+    if let Some(path) = args.telemetry_out {
+        write_json_outcome(&path, &outcome)?;
+    }
+    print_outcome(&outcome, format)?;
+
+    if outcome.is_ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(2))
+    }
+}
+
+fn run_pop(args: PopArgs) -> Result<ExitCode, CliError> {
+    let input = args.input.ok_or(CliError::Config(
+        "pop requires --input <path> or a payload alias such as --credential <path>".to_owned(),
+    ))?;
+    let kind = args.kind.ok_or(CliError::Config(
+        "pop requires --kind <payload-kind> unless a payload alias such as --credential is used"
+            .to_owned(),
+    ))?;
+    let format = args.format.unwrap_or(OutputFormat::Table);
+    let generated_at = match args.generated_at {
+        Some(generated_at) => generated_at,
+        None => unix_time_now()
+            .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
+    };
+
+    let bytes = fs::read(&input)
+        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let outcome =
+        validate_pop_payload_bytes(kind, &bytes, input.display().to_string(), generated_at);
+    if let Some(path) = args.telemetry_out {
+        write_json_outcome(&path, &outcome)?;
+    }
+    print_outcome(&outcome, format)?;
+
+    if outcome.is_ok() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(2))
+    }
+}
+
+fn run_hedging(args: HedgingArgs) -> Result<ExitCode, CliError> {
+    let input = args.input.ok_or(CliError::Config(
+        "hedging requires --input <path> or a payload alias such as --statement <path>".to_owned(),
+    ))?;
+    let kind = args.kind.ok_or(CliError::Config(
+        "hedging requires --kind <payload-kind> unless a payload alias such as --statement is used"
+            .to_owned(),
+    ))?;
+    let format = args.format.unwrap_or(OutputFormat::Table);
+    let generated_at = match args.generated_at {
+        Some(generated_at) => generated_at,
+        None => unix_time_now()
+            .ok_or_else(|| CliError::Internal("system time is before the UNIX epoch".to_owned()))?,
+    };
+
+    let bytes = fs::read(&input)
+        .map_err(|err| CliError::Io(format!("failed to read {}: {err}", input.display())))?;
+    let outcome =
+        validate_hedging_payload_bytes(kind, &bytes, input.display().to_string(), generated_at);
     if let Some(path) = args.telemetry_out {
         write_json_outcome(&path, &outcome)?;
     }
@@ -1159,6 +1223,209 @@ struct PotrArgs {
 }
 
 #[derive(Debug, Default)]
+struct PopArgs {
+    input: Option<PathBuf>,
+    kind: Option<PopValidationPayloadKindV1>,
+    format: Option<OutputFormat>,
+    telemetry_out: Option<PathBuf>,
+    generated_at: Option<u64>,
+}
+
+impl PopArgs {
+    fn parse(args: &[String]) -> Result<Self, CliError> {
+        let mut parsed = PopArgs::default();
+        let mut index = 0;
+        while index < args.len() {
+            let arg = &args[index];
+            if let Some(value) = arg.strip_prefix("--input=") {
+                parsed.input = Some(PathBuf::from(value));
+            } else if arg == "--input" {
+                index += 1;
+                parsed.input = Some(PathBuf::from(require_value(args, index, "--input")?));
+            } else if let Some(value) = arg.strip_prefix("--kind=") {
+                parsed.kind = Some(parse_pop_kind(value)?);
+            } else if arg == "--kind" {
+                index += 1;
+                parsed.kind = Some(parse_pop_kind(require_value(args, index, "--kind")?)?);
+            } else if let Some(value) = arg.strip_prefix("--credential=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::Credential,
+                    PathBuf::from(value),
+                    "--credential",
+                )?;
+            } else if arg == "--credential" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::Credential,
+                    PathBuf::from(require_value(args, index, "--credential")?),
+                    "--credential",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--root=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::CommitmentRoot,
+                    PathBuf::from(value),
+                    "--root",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--commitment-root=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::CommitmentRoot,
+                    PathBuf::from(value),
+                    "--commitment-root",
+                )?;
+            } else if arg == "--root" || arg == "--commitment-root" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::CommitmentRoot,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--revocations=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::RevocationList,
+                    PathBuf::from(value),
+                    "--revocations",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--revocation-list=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::RevocationList,
+                    PathBuf::from(value),
+                    "--revocation-list",
+                )?;
+            } else if arg == "--revocations" || arg == "--revocation-list" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::RevocationList,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--issued-bundle=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::IssuedCredentialBundle,
+                    PathBuf::from(value),
+                    "--issued-bundle",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--issued-credential-bundle=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::IssuedCredentialBundle,
+                    PathBuf::from(value),
+                    "--issued-credential-bundle",
+                )?;
+            } else if arg == "--issued-bundle" || arg == "--issued-credential-bundle" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::IssuedCredentialBundle,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--enrollment=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::EnrollmentRequest,
+                    PathBuf::from(value),
+                    "--enrollment",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--enrollment-request=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::EnrollmentRequest,
+                    PathBuf::from(value),
+                    "--enrollment-request",
+                )?;
+            } else if arg == "--enrollment" || arg == "--enrollment-request" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::EnrollmentRequest,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--renewal=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::RenewalRequest,
+                    PathBuf::from(value),
+                    "--renewal",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--renewal-request=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::RenewalRequest,
+                    PathBuf::from(value),
+                    "--renewal-request",
+                )?;
+            } else if arg == "--renewal" || arg == "--renewal-request" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::RenewalRequest,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--proof=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::MembershipProof,
+                    PathBuf::from(value),
+                    "--proof",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--membership-proof=") {
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::MembershipProof,
+                    PathBuf::from(value),
+                    "--membership-proof",
+                )?;
+            } else if arg == "--proof" || arg == "--membership-proof" {
+                index += 1;
+                parsed.set_payload(
+                    PopValidationPayloadKindV1::MembershipProof,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--format=") {
+                parsed.format = Some(OutputFormat::parse(value)?);
+            } else if arg == "--format" {
+                index += 1;
+                parsed.format = Some(OutputFormat::parse(require_value(
+                    args, index, "--format",
+                )?)?);
+            } else if let Some(value) = arg.strip_prefix("--telemetry-out=") {
+                parsed.telemetry_out = Some(PathBuf::from(value));
+            } else if arg == "--telemetry-out" {
+                index += 1;
+                parsed.telemetry_out = Some(PathBuf::from(require_value(
+                    args,
+                    index,
+                    "--telemetry-out",
+                )?));
+            } else if let Some(value) = arg.strip_prefix("--generated-at=") {
+                parsed.generated_at = Some(parse_u64_flag(value, "--generated-at")?);
+            } else if arg == "--generated-at" {
+                index += 1;
+                parsed.generated_at = Some(parse_u64_flag(
+                    require_value(args, index, "--generated-at")?,
+                    "--generated-at",
+                )?);
+            } else {
+                return Err(CliError::Config(format!(
+                    "unknown pop option `{arg}`; run `sorafs-validate --help`"
+                )));
+            }
+            index += 1;
+        }
+        Ok(parsed)
+    }
+
+    fn set_payload(
+        &mut self,
+        kind: PopValidationPayloadKindV1,
+        path: PathBuf,
+        flag: &str,
+    ) -> Result<(), CliError> {
+        if self.input.is_some() || self.kind.is_some() {
+            return Err(CliError::Config(format!(
+                "pop accepts one payload input; `{flag}` conflicts with an earlier pop input"
+            )));
+        }
+        self.input = Some(path);
+        self.kind = Some(kind);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
 struct RepairArgs {
     input: Option<PathBuf>,
     kind: Option<RepairValidationPayloadKindV1>,
@@ -1356,6 +1623,173 @@ impl RepairArgs {
         if self.input.is_some() || self.kind.is_some() {
             return Err(CliError::Config(format!(
                 "repair accepts one payload input; `{flag}` conflicts with an earlier repair input"
+            )));
+        }
+        self.input = Some(path);
+        self.kind = Some(kind);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct HedgingArgs {
+    input: Option<PathBuf>,
+    kind: Option<HedgingValidationPayloadKindV1>,
+    format: Option<OutputFormat>,
+    telemetry_out: Option<PathBuf>,
+    generated_at: Option<u64>,
+}
+
+impl HedgingArgs {
+    fn parse(args: &[String]) -> Result<Self, CliError> {
+        let mut parsed = HedgingArgs::default();
+        let mut index = 0;
+        while index < args.len() {
+            let arg = &args[index];
+            if let Some(value) = arg.strip_prefix("--input=") {
+                parsed.input = Some(PathBuf::from(value));
+            } else if arg == "--input" {
+                index += 1;
+                parsed.input = Some(PathBuf::from(require_value(args, index, "--input")?));
+            } else if let Some(value) = arg.strip_prefix("--kind=") {
+                parsed.kind = Some(parse_hedging_kind(value)?);
+            } else if arg == "--kind" {
+                index += 1;
+                parsed.kind = Some(parse_hedging_kind(require_value(args, index, "--kind")?)?);
+            } else if let Some(value) = arg.strip_prefix("--feed=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::PriceFeed,
+                    PathBuf::from(value),
+                    "--feed",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--price-feed=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::PriceFeed,
+                    PathBuf::from(value),
+                    "--price-feed",
+                )?;
+            } else if arg == "--feed" || arg == "--price-feed" {
+                index += 1;
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::PriceFeed,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--decision=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::ReferencePriceDecision,
+                    PathBuf::from(value),
+                    "--decision",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--reference-price=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::ReferencePriceDecision,
+                    PathBuf::from(value),
+                    "--reference-price",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--reference-price-decision=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::ReferencePriceDecision,
+                    PathBuf::from(value),
+                    "--reference-price-decision",
+                )?;
+            } else if arg == "--decision"
+                || arg == "--reference-price"
+                || arg == "--reference-price-decision"
+            {
+                index += 1;
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::ReferencePriceDecision,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--line=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingLineItem,
+                    PathBuf::from(value),
+                    "--line",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--line-item=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingLineItem,
+                    PathBuf::from(value),
+                    "--line-item",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--billing-line=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingLineItem,
+                    PathBuf::from(value),
+                    "--billing-line",
+                )?;
+            } else if arg == "--line" || arg == "--line-item" || arg == "--billing-line" {
+                index += 1;
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingLineItem,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--statement=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingStatement,
+                    PathBuf::from(value),
+                    "--statement",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--billing-statement=") {
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingStatement,
+                    PathBuf::from(value),
+                    "--billing-statement",
+                )?;
+            } else if arg == "--statement" || arg == "--billing-statement" {
+                index += 1;
+                parsed.set_payload(
+                    HedgingValidationPayloadKindV1::BillingStatement,
+                    PathBuf::from(require_value(args, index, arg)?),
+                    arg,
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--format=") {
+                parsed.format = Some(OutputFormat::parse(value)?);
+            } else if arg == "--format" {
+                index += 1;
+                parsed.format = Some(OutputFormat::parse(require_value(
+                    args, index, "--format",
+                )?)?);
+            } else if let Some(value) = arg.strip_prefix("--telemetry-out=") {
+                parsed.telemetry_out = Some(PathBuf::from(value));
+            } else if arg == "--telemetry-out" {
+                index += 1;
+                parsed.telemetry_out = Some(PathBuf::from(require_value(
+                    args,
+                    index,
+                    "--telemetry-out",
+                )?));
+            } else if let Some(value) = arg.strip_prefix("--generated-at=") {
+                parsed.generated_at = Some(parse_u64_flag(value, "--generated-at")?);
+            } else if arg == "--generated-at" {
+                index += 1;
+                parsed.generated_at = Some(parse_u64_flag(
+                    require_value(args, index, "--generated-at")?,
+                    "--generated-at",
+                )?);
+            } else {
+                return Err(CliError::Config(format!(
+                    "unknown hedging option `{arg}`; run `sorafs-validate --help`"
+                )));
+            }
+            index += 1;
+        }
+        Ok(parsed)
+    }
+
+    fn set_payload(
+        &mut self,
+        kind: HedgingValidationPayloadKindV1,
+        path: PathBuf,
+        flag: &str,
+    ) -> Result<(), CliError> {
+        if self.input.is_some() || self.kind.is_some() {
+            return Err(CliError::Config(format!(
+                "hedging accepts one payload input; `{flag}` conflicts with an earlier hedging input"
             )));
         }
         self.input = Some(path);
@@ -2087,6 +2521,52 @@ fn parse_repair_kind(value: &str) -> Result<RepairValidationPayloadKindV1, CliEr
     }
 }
 
+fn parse_pop_kind(value: &str) -> Result<PopValidationPayloadKindV1, CliError> {
+    match value {
+        "credential" | "pop-credential" => Ok(PopValidationPayloadKindV1::Credential),
+        "root" | "commitment-root" | "pop-root" | "pop-commitment-root" => {
+            Ok(PopValidationPayloadKindV1::CommitmentRoot)
+        }
+        "revocations" | "revocation-list" | "pop-revocations" | "pop-revocation-list" => {
+            Ok(PopValidationPayloadKindV1::RevocationList)
+        }
+        "issued-bundle"
+        | "issued-credential-bundle"
+        | "pop-issued-bundle"
+        | "pop-issued-credential-bundle" => Ok(PopValidationPayloadKindV1::IssuedCredentialBundle),
+        "enrollment" | "enrollment-request" | "pop-enrollment-request" => {
+            Ok(PopValidationPayloadKindV1::EnrollmentRequest)
+        }
+        "renewal" | "renewal-request" | "pop-renewal-request" => {
+            Ok(PopValidationPayloadKindV1::RenewalRequest)
+        }
+        "proof" | "membership-proof" | "pop-membership-proof" => {
+            Ok(PopValidationPayloadKindV1::MembershipProof)
+        }
+        other => Err(CliError::Config(format!(
+            "unsupported pop --kind `{other}`; expected credential, commitment-root, revocation-list, issued-credential-bundle, enrollment-request, renewal-request, or membership-proof"
+        ))),
+    }
+}
+
+fn parse_hedging_kind(value: &str) -> Result<HedgingValidationPayloadKindV1, CliError> {
+    match value {
+        "feed" | "price-feed" | "hedging-price-feed" => {
+            Ok(HedgingValidationPayloadKindV1::PriceFeed)
+        }
+        "decision" | "reference-price" | "reference-price-decision" => {
+            Ok(HedgingValidationPayloadKindV1::ReferencePriceDecision)
+        }
+        "line" | "line-item" | "billing-line" | "billing-line-item" => {
+            Ok(HedgingValidationPayloadKindV1::BillingLineItem)
+        }
+        "statement" | "billing-statement" => Ok(HedgingValidationPayloadKindV1::BillingStatement),
+        other => Err(CliError::Config(format!(
+            "unsupported hedging --kind `{other}`; expected price-feed, reference-price-decision, billing-line-item, or billing-statement"
+        ))),
+    }
+}
+
 fn parse_orderbook_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1, CliError> {
     match value {
         "order" | "order-request" | "request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
@@ -2597,6 +3077,10 @@ Usage:
   sorafs-validate orderbook --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate orderbook --order <path> | --cancel <path> | --trade <path> | --channel <path> | --receipt <path> | --snapshot <path>
   sorafs-validate pdp [--commitment <path>] [--challenge <path>] [--proof <path>] [--format table|json|yaml] [--telemetry-out <path>]
+  sorafs-validate pop --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
+  sorafs-validate pop --credential <path> | --root <path> | --revocations <path> | --issued-bundle <path> | --enrollment <path> | --renewal <path> | --proof <path>
+  sorafs-validate hedging --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
+  sorafs-validate hedging --feed <path> | --decision <path> | --line <path> | --statement <path>
   sorafs-validate por --challenge <path> --proof <path> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate potr --receipt <path> [--profile hot|warm|archive|cold] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate repair --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
@@ -3123,6 +3607,155 @@ mod tests {
         assert!(matches!(
             parse_repair_kind("audit-event"),
             Ok(RepairValidationPayloadKindV1::AuditEvent)
+        ));
+    }
+
+    #[test]
+    fn pop_args_parse_reads_kind_input_format_and_generated_at() {
+        let args = [
+            "--kind=credential".to_owned(),
+            "--input=pop-credential.to".to_owned(),
+            "--format=json".to_owned(),
+            "--telemetry-out=out.json".to_owned(),
+            "--generated-at=6".to_owned(),
+        ];
+        let parsed = PopArgs::parse(&args).expect("parse args");
+        assert_eq!(parsed.input, Some(PathBuf::from("pop-credential.to")));
+        assert!(matches!(
+            parsed.kind,
+            Some(PopValidationPayloadKindV1::Credential)
+        ));
+        assert!(matches!(parsed.format, Some(OutputFormat::Json)));
+        assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
+        assert_eq!(parsed.generated_at, Some(6));
+    }
+
+    #[test]
+    fn pop_args_parse_accepts_membership_proof_alias() {
+        let args = ["--membership-proof=pop-proof.to".to_owned()];
+        let parsed = PopArgs::parse(&args).expect("parse args");
+        assert_eq!(parsed.input, Some(PathBuf::from("pop-proof.to")));
+        assert!(matches!(
+            parsed.kind,
+            Some(PopValidationPayloadKindV1::MembershipProof)
+        ));
+    }
+
+    #[test]
+    fn pop_args_parse_accepts_issued_bundle_alias() {
+        let args = ["--issued-bundle=pop-issued-bundle.to".to_owned()];
+        let parsed = PopArgs::parse(&args).expect("parse args");
+        assert_eq!(parsed.input, Some(PathBuf::from("pop-issued-bundle.to")));
+        assert!(matches!(
+            parsed.kind,
+            Some(PopValidationPayloadKindV1::IssuedCredentialBundle)
+        ));
+    }
+
+    #[test]
+    fn pop_args_parse_rejects_multiple_payload_aliases() {
+        let args = [
+            "--credential=pop-credential.to".to_owned(),
+            "--root=pop-root.to".to_owned(),
+        ];
+        assert!(matches!(
+            PopArgs::parse(&args),
+            Err(CliError::Config(message)) if message.contains("pop accepts one payload input")
+        ));
+    }
+
+    #[test]
+    fn parse_pop_kind_accepts_supported_aliases() {
+        assert!(matches!(
+            parse_pop_kind("credential"),
+            Ok(PopValidationPayloadKindV1::Credential)
+        ));
+        assert!(matches!(
+            parse_pop_kind("commitment-root"),
+            Ok(PopValidationPayloadKindV1::CommitmentRoot)
+        ));
+        assert!(matches!(
+            parse_pop_kind("revocation-list"),
+            Ok(PopValidationPayloadKindV1::RevocationList)
+        ));
+        assert!(matches!(
+            parse_pop_kind("issued-credential-bundle"),
+            Ok(PopValidationPayloadKindV1::IssuedCredentialBundle)
+        ));
+        assert!(matches!(
+            parse_pop_kind("enrollment-request"),
+            Ok(PopValidationPayloadKindV1::EnrollmentRequest)
+        ));
+        assert!(matches!(
+            parse_pop_kind("renewal-request"),
+            Ok(PopValidationPayloadKindV1::RenewalRequest)
+        ));
+        assert!(matches!(
+            parse_pop_kind("membership-proof"),
+            Ok(PopValidationPayloadKindV1::MembershipProof)
+        ));
+    }
+
+    #[test]
+    fn hedging_args_parse_reads_kind_input_format_and_generated_at() {
+        let args = [
+            "--kind=billing-statement".to_owned(),
+            "--input=statement.to".to_owned(),
+            "--format=json".to_owned(),
+            "--telemetry-out=out.json".to_owned(),
+            "--generated-at=6".to_owned(),
+        ];
+        let parsed = HedgingArgs::parse(&args).expect("parse args");
+        assert_eq!(parsed.input, Some(PathBuf::from("statement.to")));
+        assert!(matches!(
+            parsed.kind,
+            Some(HedgingValidationPayloadKindV1::BillingStatement)
+        ));
+        assert!(matches!(parsed.format, Some(OutputFormat::Json)));
+        assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
+        assert_eq!(parsed.generated_at, Some(6));
+    }
+
+    #[test]
+    fn hedging_args_parse_accepts_statement_alias() {
+        let args = ["--statement=statement.to".to_owned()];
+        let parsed = HedgingArgs::parse(&args).expect("parse args");
+        assert_eq!(parsed.input, Some(PathBuf::from("statement.to")));
+        assert!(matches!(
+            parsed.kind,
+            Some(HedgingValidationPayloadKindV1::BillingStatement)
+        ));
+    }
+
+    #[test]
+    fn hedging_args_parse_rejects_multiple_payload_aliases() {
+        let args = [
+            "--feed=feed.to".to_owned(),
+            "--statement=statement.to".to_owned(),
+        ];
+        assert!(matches!(
+            HedgingArgs::parse(&args),
+            Err(CliError::Config(message)) if message.contains("hedging accepts one payload input")
+        ));
+    }
+
+    #[test]
+    fn parse_hedging_kind_accepts_supported_aliases() {
+        assert!(matches!(
+            parse_hedging_kind("price-feed"),
+            Ok(HedgingValidationPayloadKindV1::PriceFeed)
+        ));
+        assert!(matches!(
+            parse_hedging_kind("reference-price-decision"),
+            Ok(HedgingValidationPayloadKindV1::ReferencePriceDecision)
+        ));
+        assert!(matches!(
+            parse_hedging_kind("billing-line-item"),
+            Ok(HedgingValidationPayloadKindV1::BillingLineItem)
+        ));
+        assert!(matches!(
+            parse_hedging_kind("billing-statement"),
+            Ok(HedgingValidationPayloadKindV1::BillingStatement)
         ));
     }
 

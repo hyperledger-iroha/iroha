@@ -89,12 +89,16 @@ final class OfflineCashLifecycleTests: XCTestCase {
         }
     }
 
-    func testOfflineCashConfigurationSnapshotRequiresCachedIssuerKeyForOfflineExchange() throws {
+    func testOfflineCashConfigurationSnapshotRequiresCachedIdentityTimeAndIssuerKeyForOfflineExchange() throws {
+        let issuerPublicKeyBase64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        let issuerPublicKeyBase64URL = "__________________________________________8"
+        let shortIssuerPublicKeyBase64 = "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqw"
+        let longIssuerPublicKeyBase64 = "zc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3N"
         let snapshot = OfflineCashConfigurationSnapshot(
             chainId: "00000042",
             assetDefinitionId: "pkr#sbp",
             offlinePaymentsEnabled: true,
-            issuerPublicKeyBase64: "issuer-public-key",
+            issuerPublicKeyBase64: issuerPublicKeyBase64,
             nativeBridgeAbiVersion: 7,
             artifactSetId: "artifact-set",
             circuitId: "kagemusha-recursive-compact-v1",
@@ -105,6 +109,101 @@ final class OfflineCashLifecycleTests: XCTestCase {
         XCTAssertNoThrow(
             try snapshot.requireUsableForOfflineExchange(nowMs: 999, requiredNativeBridgeAbiVersion: 7)
         )
+        XCTAssertNoThrow(
+            try OfflineCashConfigurationSnapshot(
+                chainId: "00000042",
+                assetDefinitionId: "pkr#sbp",
+                offlinePaymentsEnabled: true,
+                issuerPublicKeyBase64: issuerPublicKeyBase64URL,
+                nativeBridgeAbiVersion: 7,
+                artifactSetId: "artifact-set",
+                circuitId: "kagemusha-recursive-compact-v1",
+                createdAtMs: 100,
+                expiresAtMs: 1_000
+            ).requireUsableForOfflineExchange(nowMs: 999, requiredNativeBridgeAbiVersion: 7)
+        )
+
+        let malformedSnapshots = [
+            (
+                "chainId",
+                OfflineCashConfigurationSnapshot(
+                    chainId: "",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    createdAtMs: 100
+                )
+            ),
+            (
+                "chainId",
+                OfflineCashConfigurationSnapshot(
+                    chainId: "00000042\n",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    createdAtMs: 100
+                )
+            ),
+            (
+                "assetDefinitionId",
+                OfflineCashConfigurationSnapshot(
+                    chainId: "00000042",
+                    assetDefinitionId: "pkr sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    createdAtMs: 100
+                )
+            ),
+            (
+                "artifactSetId",
+                OfflineCashConfigurationSnapshot(
+                    chainId: "00000042",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    artifactSetId: "artifact set",
+                    createdAtMs: 100
+                )
+            ),
+            (
+                "circuitId",
+                OfflineCashConfigurationSnapshot(
+                    chainId: "00000042",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    circuitId: "kagemusha-recursive-compact-v1\n",
+                    createdAtMs: 100
+                )
+            ),
+            (
+                "expiresAtMs",
+                OfflineCashConfigurationSnapshot(
+                    chainId: "00000042",
+                    assetDefinitionId: "pkr#sbp",
+                    offlinePaymentsEnabled: true,
+                    issuerPublicKeyBase64: issuerPublicKeyBase64,
+                    nativeBridgeAbiVersion: 7,
+                    createdAtMs: 100,
+                    expiresAtMs: 100
+                )
+            )
+        ]
+        for (field, malformedSnapshot) in malformedSnapshots {
+            XCTAssertThrowsError(
+                try malformedSnapshot.requireUsableForOfflineExchange(
+                    nowMs: 200,
+                    requiredNativeBridgeAbiVersion: 7
+                )
+            ) { error in
+                XCTAssertEqual(error as? OfflineCashConfigurationSnapshotError, .malformedSnapshot(field: field))
+            }
+        }
 
         let missingKey = OfflineCashConfigurationSnapshot(
             chainId: "00000042",
@@ -122,11 +221,15 @@ final class OfflineCashLifecycleTests: XCTestCase {
 
         for issuerPublicKeyBase64 in [
             "",
-            " issuer-public-key",
-            "issuer-public-key ",
-            "issuer public key",
-            "issuer-public-key\n",
-            "issuer-public-key\u{2603}"
+            " \(issuerPublicKeyBase64)",
+            "\(issuerPublicKeyBase64) ",
+            "not base64",
+            "!!!!",
+            "\(issuerPublicKeyBase64)=",
+            shortIssuerPublicKeyBase64,
+            longIssuerPublicKeyBase64,
+            "issuer-key\n",
+            "issuer-key\u{2603}"
         ] {
             XCTAssertThrowsError(
                 try OfflineCashConfigurationSnapshot(
@@ -156,7 +259,7 @@ final class OfflineCashLifecycleTests: XCTestCase {
                 chainId: "00000042",
                 assetDefinitionId: "pkr#sbp",
                 offlinePaymentsEnabled: false,
-                issuerPublicKeyBase64: "issuer-public-key",
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
                 nativeBridgeAbiVersion: 7,
                 createdAtMs: 100
             ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
@@ -169,7 +272,7 @@ final class OfflineCashLifecycleTests: XCTestCase {
                 chainId: "00000042",
                 assetDefinitionId: "pkr#sbp",
                 offlinePaymentsEnabled: true,
-                issuerPublicKeyBase64: "issuer-public-key",
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
                 nativeBridgeAbiVersion: 6,
                 createdAtMs: 100
             ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
@@ -177,6 +280,31 @@ final class OfflineCashLifecycleTests: XCTestCase {
             XCTAssertEqual(
                 error as? OfflineCashConfigurationSnapshotError,
                 .unsupportedNativeBridgeAbi(required: 7, actual: 6)
+            )
+        }
+
+        XCTAssertThrowsError(
+            try OfflineCashConfigurationSnapshot(
+                chainId: "00000042",
+                assetDefinitionId: "pkr#sbp",
+                offlinePaymentsEnabled: true,
+                issuerPublicKeyBase64: issuerPublicKeyBase64,
+                nativeBridgeAbiVersion: 0,
+                createdAtMs: 100
+            ).requireUsableForOfflineExchange(nowMs: 200, requiredNativeBridgeAbiVersion: 7)
+        ) { error in
+            XCTAssertEqual(
+                error as? OfflineCashConfigurationSnapshotError,
+                .malformedSnapshot(field: "nativeBridgeAbiVersion")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try snapshot.requireUsableForOfflineExchange(nowMs: 999, requiredNativeBridgeAbiVersion: 0)
+        ) { error in
+            XCTAssertEqual(
+                error as? OfflineCashConfigurationSnapshotError,
+                .malformedSnapshot(field: "requiredNativeBridgeAbiVersion")
             )
         }
     }

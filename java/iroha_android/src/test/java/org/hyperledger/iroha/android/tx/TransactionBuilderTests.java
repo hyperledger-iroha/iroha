@@ -56,6 +56,8 @@ public final class TransactionBuilderTests {
   private TransactionBuilderTests() {}
 
   private static final byte[] DUMMY_CERT = new byte[] {0x01};
+  private static final String ISSUER_PUBLIC_KEY_BASE64 =
+      "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
   public static void main(final String[] args) throws Exception {
     encodeAndSignWithExplicitSigner();
@@ -401,23 +403,31 @@ public final class TransactionBuilderTests {
         : "Unsupported NFC must be hidden from app-facing transport choices";
 
     final OfflineCashLifecycle.ConfigurationSnapshot snapshot =
-        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L);
+        new OfflineCashLifecycle.ConfigurationSnapshot(
+            "00000042",
+            "pkr#sbp",
+            true,
+            ISSUER_PUBLIC_KEY_BASE64,
+            7,
+            "artifact-set",
+            "kagemusha-v1",
+            100L,
+            1_000L);
     snapshot.requireUsableForOfflineExchange(999L, 7);
-    assert snapshot.chainId() == null : "Legacy snapshot constructor must preserve null chain id";
-    assert snapshot.assetDefinitionId() == null
-        : "Legacy snapshot constructor must preserve null asset definition id";
-    assert snapshot.artifactSetId() == null
-        : "Legacy snapshot constructor must preserve null artifact set id";
-    assert snapshot.circuitId() == null : "Legacy snapshot constructor must preserve null circuit id";
-    assert snapshot.createdAtMs() == 0L
-        : "Legacy snapshot constructor must default created_at_ms";
+    assert "00000042".equals(snapshot.chainId()) : "Snapshot must expose chain id";
+    assert "pkr#sbp".equals(snapshot.assetDefinitionId())
+        : "Snapshot must expose asset definition id";
+    assert "artifact-set".equals(snapshot.artifactSetId())
+        : "Snapshot must expose artifact set id";
+    assert "kagemusha-v1".equals(snapshot.circuitId()) : "Snapshot must expose circuit id";
+    assert snapshot.createdAtMs() == 100L : "Snapshot must expose creation time";
 
     final OfflineCashLifecycle.ConfigurationSnapshot identifiedSnapshot =
         new OfflineCashLifecycle.ConfigurationSnapshot(
             "00000042",
             "pkr#sbp",
             true,
-            "issuer-key",
+            ISSUER_PUBLIC_KEY_BASE64,
             7,
             "artifact-set",
             "kagemusha-v1",
@@ -429,7 +439,7 @@ public final class TransactionBuilderTests {
         : "Snapshot must expose asset definition id";
     assert identifiedSnapshot.offlinePaymentsEnabled()
         : "Snapshot must expose offline payments flag";
-    assert "issuer-key".equals(identifiedSnapshot.issuerPublicKeyBase64())
+    assert ISSUER_PUBLIC_KEY_BASE64.equals(identifiedSnapshot.issuerPublicKeyBase64())
         : "Snapshot must expose issuer public key";
     assert Integer.valueOf(7).equals(identifiedSnapshot.nativeBridgeAbiVersion())
         : "Snapshot must expose native bridge ABI version";
@@ -445,19 +455,46 @@ public final class TransactionBuilderTests {
         () ->
             new OfflineCashLifecycle.ConfigurationSnapshot(true, " ", 7, null)
                 .requireUsableForOfflineExchange(200L, 7),
-        "cached issuer key must be required before offline exchange");
+        "legacy snapshot constructor must fail closed without identity fields");
     assertSnapshotRejected(
-        new OfflineCashLifecycle.ConfigurationSnapshot(false, "issuer-key", 7, null),
+        new OfflineCashLifecycle.ConfigurationSnapshot(
+            "00000042",
+            "pkr#sbp",
+            false,
+            ISSUER_PUBLIC_KEY_BASE64,
+            7,
+            "artifact-set",
+            "kagemusha-v1",
+            100L,
+            null),
         200L,
         7,
         "offline_payments_disabled");
     assertSnapshotRejected(
-        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 6, null),
+        new OfflineCashLifecycle.ConfigurationSnapshot(
+            "00000042",
+            "pkr#sbp",
+            true,
+            ISSUER_PUBLIC_KEY_BASE64,
+            6,
+            "artifact-set",
+            "kagemusha-v1",
+            100L,
+            null),
         200L,
         7,
         "unsupported_native_bridge_abi");
     assertSnapshotRejected(
-        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L),
+        new OfflineCashLifecycle.ConfigurationSnapshot(
+            "00000042",
+            "pkr#sbp",
+            true,
+            ISSUER_PUBLIC_KEY_BASE64,
+            7,
+            "artifact-set",
+            "kagemusha-v1",
+            100L,
+            1_000L),
         1_000L,
         7,
         "expired");

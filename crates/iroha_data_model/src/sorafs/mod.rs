@@ -71,8 +71,9 @@ pub mod prelude {
             PricingScheduleRecord, ProviderCreditRecord, TierRate,
         },
         reserve::{
-            ClassRentRate, ReserveDuration, ReserveLedgerProjection, ReservePolicyError,
-            ReservePolicyV1, ReserveQuote, ReserveTier, ReserveTierConfig,
+            ClassRentRate, ReserveDuration, ReserveLedgerProjection, ReserveLifecycleProjection,
+            ReserveLifecycleStage, ReservePolicyError, ReservePolicyV1, ReserveQuote, ReserveTier,
+            ReserveTierConfig,
         },
         transparency::{
             MODERATION_LEDGER_BLOCK_VERSION_V1, MODERATION_LEDGER_ENTRY_VERSION_V1,

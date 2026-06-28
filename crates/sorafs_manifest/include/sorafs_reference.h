@@ -32,6 +32,19 @@ extern "C" {
 #define SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT 5
 #define SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT 6
 
+#define SORAFS_REFERENCE_POP_KIND_CREDENTIAL 1
+#define SORAFS_REFERENCE_POP_KIND_COMMITMENT_ROOT 2
+#define SORAFS_REFERENCE_POP_KIND_REVOCATION_LIST 3
+#define SORAFS_REFERENCE_POP_KIND_ENROLLMENT_REQUEST 4
+#define SORAFS_REFERENCE_POP_KIND_RENEWAL_REQUEST 5
+#define SORAFS_REFERENCE_POP_KIND_MEMBERSHIP_PROOF 6
+#define SORAFS_REFERENCE_POP_KIND_ISSUED_CREDENTIAL_BUNDLE 7
+
+#define SORAFS_REFERENCE_HEDGING_KIND_PRICE_FEED 1
+#define SORAFS_REFERENCE_HEDGING_KIND_REFERENCE_PRICE_DECISION 2
+#define SORAFS_REFERENCE_HEDGING_KIND_BILLING_LINE_ITEM 3
+#define SORAFS_REFERENCE_HEDGING_KIND_BILLING_STATEMENT 4
+
 #define SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADVERT 1
 #define SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADMISSION_ENVELOPE 2
 #define SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER 3
@@ -107,6 +120,14 @@ sorafs_reference_validate_signed_replication_order_json(
     size_t label_len, uint64_t generated_at);
 
 SorafsReferenceFfiBuffer sorafs_reference_validate_orderbook_json(
+    uint32_t kind, const uint8_t *bytes_ptr, size_t bytes_len,
+    const uint8_t *label_ptr, size_t label_len, uint64_t generated_at);
+
+SorafsReferenceFfiBuffer sorafs_reference_validate_pop_json(
+    uint32_t kind, const uint8_t *bytes_ptr, size_t bytes_len,
+    const uint8_t *label_ptr, size_t label_len, uint64_t generated_at);
+
+SorafsReferenceFfiBuffer sorafs_reference_validate_hedging_json(
     uint32_t kind, const uint8_t *bytes_ptr, size_t bytes_len,
     const uint8_t *label_ptr, size_t label_len, uint64_t generated_at);
 

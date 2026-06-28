@@ -1,5 +1,10 @@
 # NoritoBridge XCFramework Artifacts
 
+Current source ABI: 12 (`connect_norito_sorafs_reference_validate_hedging_json`
+added for SoraFS hedging and billing reference validation). Regenerate and
+republish bridge artifacts before cutting an SDK release that depends on the
+hedging selector surface.
+
 - `NoritoBridge.xcframework.zip`
   - SHA-256: 9bdd96f97f2eccc9e901c0500bd8f2b046c600080ebbe1213a4febba13c44efd
 - `NoritoBridge-xcframework.tar.gz`

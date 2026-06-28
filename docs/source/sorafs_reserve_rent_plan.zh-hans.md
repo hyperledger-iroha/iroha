@@ -4,14 +4,9 @@ direction: ltr
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 22eb4a0ba14cb8e962c7fd5fe50393f2683b066afab4a04778c2596b97296902
-source_last_modified: "2026-01-22T16:26:46.592997+00:00"
-translation_last_reviewed: 2026-02-07
-title: Reserve+Rent & Lifecycle Policy
-summary: SFM-6 implementation status for reserve underwriting payloads, quote/ledger helpers, dashboard digest wiring, and remaining reserve-service rollout.
----
-
----
+source_hash: 04184b558958fdc24b754cd6b01706d54034cec84c19d023398f81db72a4d1ac
+source_last_modified: "2026-06-25T18:08:03+00:00"
+translation_last_reviewed: 2026-06-25
 title: Reserve+Rent & Lifecycle Policy
 summary: SFM-6 implementation status for reserve underwriting payloads, quote/ledger helpers, dashboard digest wiring, and remaining reserve-service rollout.
 ---
@@ -20,21 +15,26 @@ summary: SFM-6 implementation status for reserve underwriting payloads, quote/le
 
 ## Status
 SFM-6 is partially implemented in this workspace. The shared data model ships
-`ReservePolicyV1`, `ReserveQuote`, and `ReserveLedgerProjection` in
+`ReservePolicyV1`, `ReserveQuote`, `ReserveLedgerProjection`,
+`ReserveLifecycleStage`, and `ReserveLifecycleProjection` in
 `crates/iroha_data_model/src/sorafs/reserve.rs`; the CLI exposes deterministic
-`iroha app sorafs reserve quote` and `iroha app sorafs reserve ledger` helpers;
-`cargo xtask sorafs-reserve-matrix` emits quote matrices; and
+`iroha app sorafs reserve quote`, `iroha app sorafs reserve ledger`, and
+`iroha app sorafs reserve lifecycle` helpers; `cargo xtask
+sorafs-reserve-matrix` emits quote matrices; and
 `scripts/telemetry/reserve_ledger_digest.py` feeds the reserve economics
-dashboards and Alertmanager rules.
+dashboards and Alertmanager rules. `scripts/check_sorafs_reserve_rent_rollout_evidence.py`
+now provides the fail-closed rollout evidence gate for staged SFM-6 promotion
+packets, and `scripts/run_sorafs_reserve_rent_rollout_evidence.py` provides the
+matching reviewed evidence collection planner/runner.
 
 The production reserve/rent control plane is still outstanding. There is no
 reserve daemon, no Torii REST surface for reserve lifecycle management, no
-automatic credit-line drawdown/accrual engine, and no shipped CLI for provider
-status, top-ups, withdrawals, appeals, or policy updates.
+authenticated runtime credit-line drawdown/accrual engine, and no shipped CLI
+for provider status, top-ups, withdrawals, appeals, or policy updates.
 
 ## Goals & Scope
 - Track the implemented financial policy for provider reserves and recurring rent.
-- Keep quote/ledger automation, dashboard inputs, and governance evidence aligned with the shared `ReservePolicyV1` schema.
+- Keep quote/ledger/lifecycle automation, dashboard inputs, and governance evidence aligned with the shared `ReservePolicyV1` schema.
 - Identify the remaining service work required for lifecycle stages, reserve movements, appeals, credit lines, and governance policy changes.
 
 ## Policy Model
@@ -47,12 +47,14 @@ status, top-ups, withdrawals, appeals, or policy updates.
 - Duration factors: monthly 1.0, quarterly 0.9, annual 0.75.
 - Underwriting ratios default: Tier A 2.0, Tier B 3.0, Tier C 4.5.
 - Credit line caps are encoded in the tier policy: Tier A 2x monthly rent, Tier B 1x, Tier C manual approval.
-- APR parameters are encoded per tier (3%, 6%, none), but runtime accrual and credit draws are not implemented yet.
-- Target lifecycle stages remain:
+- APR parameters are encoded per tier (3%, 6%, none). The local lifecycle projection applies capped automatic credit draws for eligible tiers, prorates APR after the configured grace window, and marks manual-approval tiers as requiring operator action instead of inventing an automatic cap.
+- Implemented local lifecycle stages:
+  - Stage `Active`: provider reserve is current.
   - Stage `Warning`: restrict new manifests.
   - `Grace`: auto-draw credit line.
   - `Delinquent`: penalty APR plus governance notification.
-  - `Default`: disable adverts, initiate slashing from reserve and then credit line.
+  - `Default`: disable adverts and flag the account for target runtime slashing from reserve and then credit line.
+- `ReserveQuote::lifecycle_projection(days_past_due, grace_period_days, default_after_days)` rejects invalid grace/default windows, computes credit draw and remaining credit availability, reports credit shortfall and accrued interest, and enters `Default` when rent cannot be covered or the default threshold is exceeded.
 - Manual appeals and policy-update payloads are target service work, not currently shipped data-model types.
 
 ## APIs & Services
@@ -60,6 +62,7 @@ status, top-ups, withdrawals, appeals, or policy updates.
   - `ReservePolicyV1` stores storage-class rates, duration factors, tier underwriting ratios, credit caps, APR values, and the top-up threshold.
   - `ReserveQuote` stores the deterministic quote result for a storage class, tier, duration, capacity, and reserve balance.
   - `ReserveLedgerProjection` derives `rent_due`, reserve shortfall, top-up shortfall, and underwriting/top-up booleans from a quote.
+  - `ReserveLifecycleProjection` derives lifecycle stage, credit draw, credit shortfall, accrued interest, total remaining due, and service restriction flags from a quote and explicit lifecycle windows.
 - Implemented CLI commands:
   - `iroha app sorafs reserve quote --storage-class <hot|warm|cold> --tier <tier-a|tier-b|tier-c> --duration <monthly|quarterly|annual> --gib <capacity>` computes deterministic rent/reserve breakdowns (monthly rent, reserve requirement, top-up threshold, credit line cap) using the embedded policy or JSON/Norito overrides. Quotes are emitted as JSON and can be persisted via `--quote-out`. The CLI reuses the shared `ReservePolicyV1` schema so economics dashboards and SDKs can reference the same Norito payloads without reimplementing the formulas. The JSON payload includes a `ledger_projection` object with:
     - `rent_due` — XOR due for the billing period after applying reserve offsets.
@@ -67,13 +70,14 @@ status, top-ups, withdrawals, appeals, or policy updates.
     - `top_up_shortfall` — amount needed to clear the top-up alert threshold.
     - `meets_underwriting` / `needs_top_up_alert` — booleans used by dashboards and admission ISIs to trigger policy transitions.
   - `iroha app sorafs reserve ledger --quote <path> --provider-account <id> --treasury-account <id> --reserve-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` converts a saved quote into the concrete XOR transfers required for rent settlement and reserve top-ups. The helper reads the `ledger_projection` block, echoes the micro-XOR totals, and emits an `instructions` array containing Norito-encoded `Transfer` ISIs that can be piped into automation or stored alongside governance evidence.
+  - `iroha app sorafs reserve lifecycle --quote <path> --days-past-due <days> --grace-days <days> --default-after-days <days>` converts a saved quote into a deterministic lifecycle snapshot. The JSON output includes the stage label, rent/reserve/top-up amounts, automatic credit draw, remaining credit availability, credit shortfall, accrued interest, remaining due after credit, and booleans for manifest restriction, advert disablement, governance notification, and manual credit approval.
 - Target service/API work:
-  - Add a reserve lifecycle service that computes provider summaries, manages reserve movements, applies credit-line policy, and emits lifecycle events.
+  - Add a reserve lifecycle service that persists provider summaries, manages authenticated reserve movements, applies the shared credit-line projection to live account state, and emits lifecycle events.
   - Add authenticated Torii endpoints for provider summary, top-up, withdraw, appeal, lifecycle policy, and event history.
   - Add operator CLI commands for status, top-up, withdraw, appeal, and policy/config inspection once those service routes exist.
 
 ## Integration Points
-- **Billing**: implemented quote/ledger helpers produce deterministic rent and reserve transfer plans for offline settlement automation.
+- **Billing**: implemented quote/ledger/lifecycle helpers produce deterministic rent, reserve transfer, and lifecycle/credit snapshots for offline settlement automation.
 - **Telemetry**: ledger digest output feeds the reserve economics dashboard, capacity dashboard, and reserve Alertmanager rules.
 - **Governance evidence**: quote, ledger, Markdown digest, Prometheus textfile, and matrix artifacts can be attached to economics reports.
 - **Reputation, orderbook, compliance, and automatic lifecycle policy**: still target integrations because the runtime reserve lifecycle service is not shipped.
@@ -91,7 +95,7 @@ status, top-ups, withdrawals, appeals, or policy updates.
   - `dashboards/grafana/sorafs_reserve_economics.json`
   - reserve panels mirrored in `dashboards/grafana/sorafs_capacity_health.json`
 - Implemented alerts in `dashboards/alerts/sorafs_capacity_rules.yml` cover ledger top-up requirements, underwriting breaches, missing transfer feeds, and rent/top-up transfer drift.
-- Provider balance, lifecycle-stage, credit-usage, default, appeal-backlog, and service-rate-limit metrics are target work for the reserve lifecycle service.
+- Provider balance, live lifecycle-stage, runtime credit-usage, default, appeal-backlog, and service-rate-limit metrics are target work for the reserve lifecycle service.
 
 ## Security & Governance
 - Current helpers are local/offline tooling. They render deterministic JSON/Norito-backed artifacts and transfer instructions, but they do not submit authenticated reserve movements on their own.
@@ -101,17 +105,70 @@ status, top-ups, withdrawals, appeals, or policy updates.
 ## Testing & Rollout
 - Implemented test coverage:
   - `crates/iroha_data_model/src/sorafs/reserve.rs` covers deterministic rent/reserve calculation and ledger projection behavior.
-  - `crates/iroha_cli/tests/cli_smoke.rs` covers reserve quote JSON output and reserve ledger transfer instruction emission.
+  - `crates/iroha_data_model/src/sorafs/reserve.rs` covers lifecycle projection warnings, grace credit draws, post-grace interest accrual, uncovered-rent defaulting, and invalid lifecycle windows.
+  - `crates/iroha_cli/tests/cli_smoke.rs` covers reserve quote JSON output, reserve ledger transfer instruction emission, and reserve lifecycle credit-draw projection output.
   - `xtask/src/sorafs.rs` covers the reserve matrix report, including ledger projection output.
   - Alert rule tests under `dashboards/alerts/tests/` cover the reserve ledger alert paths.
+  - `scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py` covers
+    complete staged evidence, response-file arguments, missing signed routes,
+    stale ledger digests, payload leakage, missing metrics, unsigned/wrong-account
+    probes, missing policy/matrix ledger bindings, mismatched ledger tuples,
+    ledger-bound subset gates without anchors, failed provider bakes, explicit
+    unknown schemas, ignored unknown directory artifacts in subset mode, invalid
+    recognized optional artifacts in subset mode, and unknown required evidence
+    kinds.
+  - `scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py` covers the
+    collection planner's complete dry-run command plan, response-file parsing,
+    split-token response files, missing required evidence, missing file checks,
+    subset gates, and unknown required evidence kinds.
 - Remaining rollout work:
   1. Implement the reserve lifecycle service and signed Torii routes.
   2. Add provider status, top-up, withdrawal, appeal, and policy/config CLI commands.
   3. Wire lifecycle events into governance logs and downstream reputation/compliance/orderbook policy.
-  4. Add integration tests for live reserve movement, credit-line drawdown, appeal decisions, and service telemetry.
-  5. Run a staged provider bake before production rollout and attach the ledger digest/report bundle to governance evidence.
+  4. Add integration tests for live reserve movement, runtime credit-line mutation/accrual, appeal decisions, and service telemetry.
+  5. Run a staged provider bake before production rollout and attach payload-free
+     signed-route, ledger digest, movement, credit-line, appeal, metrics, provider
+     bake, and governance evidence bound to the same policy/matrix/ledger tuple
+     and passing the SFM-6 rollout gate.
 
 ## Automation & Dashboards
+
+### Rollout Evidence Gate
+
+Use the rollout gate after the reserve lifecycle service, signed route canaries,
+reserve movement probes, credit-line accrual checks, appeal policy probes,
+metrics, provider bake, and governance packet have produced reviewed,
+payload-free JSON evidence:
+
+```bash
+python3 scripts/check_sorafs_reserve_rent_rollout_evidence.py \
+  @scripts/examples/sorafs_reserve_rent_rollout_evidence.args.example
+```
+
+For staged collections with reviewed evidence paths, prefer the planner so the
+verifier command and summary path are reproducible:
+
+```bash
+python3 scripts/run_sorafs_reserve_rent_rollout_evidence.py \
+  @scripts/examples/sorafs_reserve_rent_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.reserve.*` SFM-6 rollout schemas for policy
+configuration, quote matrix, ledger digest, lifecycle service, signed routes,
+reserve movements, credit-line accrual, appeal policy, metrics/alerts, provider
+bake, and governance approval. It reports `ready` only when every required kind
+is present, every recognized artifact is valid, raw ledgers/quotes/transfers,
+signed transactions, response bodies, and secrets are absent, ledger/provider
+bake timestamps are fresh, lifecycle lag and signed-route latency remain under
+the configured thresholds, the quote matrix binds to a valid policy
+`policy_digest_hex`, the ledger binds to that policy/matrix tuple, and
+lifecycle, route, movement, credit-line, appeal, metrics, provider-bake, and
+governance artifacts all carry the same payload-free
+`policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple. The
+governance packet must also be bound to `iroha_config`. Tuple binding failures
+are recorded on the offending artifact before required-kind validity is
+computed, so the JSON summary matches the fail-closed rollout decision.
 
 ### Quote Matrix Generator
 
@@ -224,5 +281,5 @@ projection, and the new alerts fire as soon as a digest omits the required rent
 or reserve top-up transfers.
 
 ## Rollout Status
-- Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger CLI helpers, matrix generation, ledger digest conversion, dashboards, alert rules, and focused tests for those local paths.
-- Remaining: reserve lifecycle service, signed Torii routes, runtime reserve movement/authentication, lifecycle-stage automation, appeal/policy-update payloads, credit-line accrual/drawdown logic, and live provider bake evidence.
+- Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger/lifecycle CLI helpers, local lifecycle/credit projection, matrix generation, ledger digest conversion, dashboards, alert rules, fail-closed rollout evidence gate, collection planner, operator argfile templates, and focused tests for those local paths.
+- Remaining: reserve lifecycle service, signed Torii routes, runtime reserve movement/authentication, persisted lifecycle-stage automation, appeal/policy-update payloads, live credit-line mutation/accrual, and staged provider bake evidence that passes the rollout gate.

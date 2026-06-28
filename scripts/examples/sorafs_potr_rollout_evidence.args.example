@@ -1,0 +1,12 @@
+# Reviewed SF-14 PoTR rollout evidence gate arguments.
+# Point the evidence directory at the reviewed artifact root. Review only
+# payload-free rollout summaries. Keep receipt payloads, bearer tokens, signing
+# keys, raw proof material, and operator secrets in runtime-only locations.
+--evidence-dir /var/tmp/sorafs/potr-rollout
+--summary-out /var/tmp/sorafs/potr-rollout-summary.json
+--max-evidence-age-secs 604800
+--max-route-latency-ms 1500
+--max-hot-latency-ms 90000
+--max-warm-latency-ms 300000
+--min-providers 3
+--min-receipts 6

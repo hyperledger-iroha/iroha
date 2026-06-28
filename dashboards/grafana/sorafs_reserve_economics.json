@@ -47,6 +47,32 @@
           "text": "All",
           "value": ""
         }
+      },
+      {
+        "name": "reserve_provider",
+        "label": "Reserve Provider",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_sorafs_reserve_credit_draw_micro_xor, provider_id)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      },
+      {
+        "name": "reserve_route",
+        "label": "Reserve Route",
+        "type": "query",
+        "datasource": "$datasource",
+        "query": "label_values(torii_sorafs_reserve_service_requests_total, route)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
       }
     ]
   },
@@ -309,6 +335,169 @@
         "overrides": []
       },
       "description": "Ratio of reserve top-up transfers to the projected top-up shortfall. Equals 1 when the reserve digest is fully funded or no top-up is required."
+    },
+    {
+      "type": "timeseries",
+      "title": "Runtime Lifecycle Stages",
+      "id": 9,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
+      "targets": [
+        {
+          "expr": "sum by (stage) (torii_sorafs_reserve_lifecycle_stage_providers)",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Current provider count by local reserve lifecycle stage."
+    },
+    {
+      "type": "timeseries",
+      "title": "Runtime Credit Exposure (XOR)",
+      "id": 10,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
+      "targets": [
+        {
+          "expr": "sum by (provider_id) (torii_sorafs_reserve_credit_draw_micro_xor{provider_id=~\"$reserve_provider\"}) / 1e6",
+          "legendFormat": "{{provider_id}} draw",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (provider_id) (torii_sorafs_reserve_credit_shortfall_micro_xor{provider_id=~\"$reserve_provider\"}) / 1e6",
+          "legendFormat": "{{provider_id}} shortfall",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (provider_id) (torii_sorafs_reserve_accrued_interest_micro_xor{provider_id=~\"$reserve_provider\"}) / 1e6",
+          "legendFormat": "{{provider_id}} interest",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "axisLabel": "XOR"
+          }
+        },
+        "overrides": []
+      },
+      "description": "Local reserve credit draw, uncovered shortfall, and accrued interest derived from accepted lifecycle updates."
+    },
+    {
+      "type": "stat",
+      "title": "Defaults and Open Appeals",
+      "id": 11,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 38},
+      "targets": [
+        {
+          "expr": "torii_sorafs_reserve_defaulted_providers",
+          "legendFormat": "defaulted providers",
+          "refId": "A"
+        },
+        {
+          "expr": "torii_sorafs_reserve_appeal_backlog",
+          "legendFormat": "open appeals",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "orange", "value": 1},
+              {"color": "red", "value": 10}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Open reserve defaults and appeal backlog from the local signed reserve runtime."
+    },
+    {
+      "type": "timeseries",
+      "title": "Movement Custody and Chain Reconciliation",
+      "id": 12,
+      "datasource": "$datasource",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 38},
+      "targets": [
+        {
+          "expr": "sum by (status) (torii_sorafs_reserve_custody_movements)",
+          "legendFormat": "{{status}} custody",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (status) (torii_sorafs_reserve_chain_reconciled_movements)",
+          "legendFormat": "{{status}} reconciled",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Local movement custody status counts and terminal chain-reconciled movement counts."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Service Requests / 5m",
+      "id": 13,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 44},
+      "targets": [
+        {
+          "expr": "sum by (route, result) (increase(torii_sorafs_reserve_service_requests_total{route=~\"$reserve_route\"}[5m]))",
+          "legendFormat": "{{route}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Signed reserve service request outcomes over five-minute windows."
+    },
+    {
+      "type": "timeseries",
+      "title": "Reserve Rate Limits / 5m",
+      "id": 14,
+      "datasource": "$datasource",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 44},
+      "targets": [
+        {
+          "expr": "sum by (route, reason) (increase(torii_sorafs_reserve_service_rate_limit_total{route=~\"$reserve_route\"}[5m]))",
+          "legendFormat": "{{route}} {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "description": "Reserve service rate-limit events by route and reason."
     }
   ]
 }

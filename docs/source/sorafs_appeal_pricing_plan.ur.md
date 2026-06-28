@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2d21426a144d9c1bf189920341c501a55cfe6918a1aa25143830aa5f0b7250eb
-source_last_modified: 2026-06-24T07:58:22.808631Z
-translation_last_reviewed: 2026-01-30
+source_hash: a198824eb738079cea112c31d42f259d98ce0ed631fd39a90ea461efafde5a3a
+source_last_modified: "2026-06-25T17:34:55+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 # Moderation Appeal Pricing Engine
@@ -44,6 +44,16 @@ asset-lock records returned to the lock opener, destination, or release
 authority.
 The repository also ships a Grafana/Prometheus appeal-finance dashboard and
 alert pack over those Governance DAG publication metrics for rollout monitoring.
+`scripts/check_sorafs_appeal_finance_rollout_evidence.py` now provides the
+fail-closed SFM-4b2 rollout evidence gate for deployed appeal finance promotion
+packets, including cross-artifact `config_digest_hex` binding from quote,
+deposit, settlement, submitter, worker, Governance DAG, dashboard,
+reconciliation, and governance approval evidence back to a valid pricing-config
+artifact in the same bundle. Config-digest mismatches are recorded on the
+offending artifact in the JSON summary before required-kind validity is
+reported, and
+`scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
+reviewed evidence collection planner/runner.
 The repo still does not ship a standalone pricing daemon. Deposit custody uses
 the returned native `OpenAssetLock` instruction, which the authenticated payer
 must sign and submit through the normal transaction path, then external
@@ -403,14 +413,52 @@ Use `--config=-` when automation streams the governance manifest over stdin.
 Archive the JSON output next to the appeal evidence bundle so later audits can
 replay the exact parameters used for the quote or payout.
 
+## Rollout Evidence Gate
+
+Use the rollout gate after the deployed pricing/config routes, quote/settle/
+disburse routes, native deposit lifecycle routes, settlement execution,
+configured-signer submitter, moderation-derived worker, Governance DAG
+publication path, hosted public dashboard, multi-peer ledger reconciliation, and
+governance packet have produced reviewed, payload-free JSON evidence:
+
+```sh
+python3 scripts/check_sorafs_appeal_finance_rollout_evidence.py \
+  @scripts/examples/sorafs_appeal_finance_rollout_evidence.args.example
+```
+
+For staged collections with reviewed evidence paths, prefer the planner so the
+verifier command and summary path are reproducible:
+
+```sh
+python3 scripts/run_sorafs_appeal_finance_rollout_evidence.py \
+  @scripts/examples/sorafs_appeal_finance_rollout_collection.args.example \
+  --dry-run
+```
+
+The checker recognizes `sorafs.appeal_finance.*` SFM-4b2 rollout schemas for
+pricing config, quote APIs, deposit lifecycle, settlement execution, settlement
+submitter, moderation worker, Governance DAG publication, dashboard metrics,
+multi-peer reconciliation, and governance approval. It reports `ready` only when
+every required kind is present, every recognized artifact is valid, raw
+instructions, signed transactions, response bodies, private signer material,
+raw reports/rollups/receipts, and raw ledgers are absent, route latency and
+settlement lag stay under configured thresholds, hosted dashboard evidence is
+fresh, quote/deposit/settlement/submitter/worker/Governance DAG/dashboard/
+reconciliation/governance artifacts carry a `config_digest_hex` matching a
+valid pricing-config artifact in the same bundle, config-bound mismatches are
+attached to the offending artifact in the emitted summary, the multi-peer
+reconciliation run covers at least four peers, and the governance approval is
+bound to `iroha_config`.
+
 ## Remaining Production Gates
 
-- Wire the checked-in receipt-aware appeal-finance dashboard and alert pack to
-  hosted live/public observability once the public Governance DAG and ledger
-  reconciliation paths exist.
-- Add end-to-end tests that cover quote creation, deposit posting, decision
-  ingestion, settlement submission, disbursement, and treasury reconciliation
-  against a multi-peer runtime ledger.
+- Capture hosted live/public dashboard and alert evidence that passes the SFM-4b2
+  rollout gate once the public Governance DAG and ledger reconciliation paths
+  are deployed.
+- Capture end-to-end evidence that covers quote creation, deposit posting,
+  decision ingestion, settlement submission, disbursement, and treasury
+  reconciliation against a multi-peer runtime ledger with at least four peers,
+  then attach it to the gate summary.
 
 ## Validation
 
@@ -424,3 +472,8 @@ CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-appeal-dashboard-li
 
 Run broader SoraFS CLI tests when changing command arguments, manifest parsing,
 or JSON/table output.
+
+The rollout evidence scripts have focused Python coverage in:
+
+- `scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
+- `scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py`

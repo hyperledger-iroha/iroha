@@ -855,6 +855,113 @@ fn sorafs_reserve_ledger_emits_instructions() {
 }
 
 #[test]
+fn sorafs_reserve_lifecycle_projects_credit_draw() {
+    use torii_mock_support::TempDir;
+
+    let temp_dir = TempDir::new("sorafs_reserve_lifecycle").expect("temp dir");
+    let quote_path = temp_dir.path().join("reserve_quote.json");
+    let quote_arg = quote_path.to_str().expect("utf8 path");
+
+    let quote_status = command()
+        .args([
+            "app",
+            "sorafs",
+            "reserve",
+            "quote",
+            "--storage-class",
+            "hot",
+            "--tier",
+            "tier-a",
+            "--duration",
+            "monthly",
+            "--gib",
+            "10",
+            "--quote-out",
+            quote_arg,
+        ])
+        .status()
+        .expect("execute sorafs reserve quote");
+    assert!(quote_status.success(), "reserve quote command failed");
+
+    let output = command()
+        .args([
+            "app",
+            "sorafs",
+            "reserve",
+            "lifecycle",
+            "--quote",
+            quote_arg,
+            "--days-past-due",
+            "3",
+        ])
+        .output()
+        .expect("execute sorafs reserve lifecycle");
+    assert!(
+        output.status.success(),
+        "reserve lifecycle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lifecycle: Value =
+        norito::json::from_str(stdout.trim()).expect("reserve lifecycle output should be JSON");
+    assert_eq!(
+        lifecycle.get("stage").and_then(Value::as_str),
+        Some("grace")
+    );
+    assert_eq!(
+        lifecycle
+            .get("credit_draw_micro_xor")
+            .map(micro_xor_from_value)
+            .expect("credit draw present"),
+        120_000_000
+    );
+    assert_eq!(
+        lifecycle
+            .get("credit_shortfall_micro_xor")
+            .map(micro_xor_from_value)
+            .expect("credit shortfall present"),
+        0
+    );
+    assert_eq!(
+        lifecycle.get("disable_adverts").and_then(Value::as_bool),
+        Some(false)
+    );
+}
+
+#[test]
+fn sorafs_reserve_help_lists_movement_commands() {
+    let output = command()
+        .args(["app", "sorafs", "reserve", "--help"])
+        .output()
+        .expect("execute sorafs reserve help");
+    assert!(
+        output.status.success(),
+        "reserve help failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "top-up",
+        "withdraw",
+        "movements",
+        "status",
+        "custody",
+        "credit-lines",
+        "credit-status",
+        "appeal-submit",
+        "appeals",
+        "appeal-decide",
+        "policy-update",
+        "policy",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "reserve help did not include `{expected}`:\n{stdout}"
+        );
+    }
+}
+
+#[test]
 fn da_get_help_is_accessible() {
     expect_subcommand_help(
         &["app", "da", "get", "--help"],

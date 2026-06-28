@@ -4,14 +4,9 @@ direction: ltr
 source: docs/source/sorafs_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 19d08e44826c576ee6e9882d67b951c19fb3176350e7561dc4a3e449de392847
-source_last_modified: "2025-12-29T18:16:36.176534+00:00"
+source_hash: e251ff6fe06e13dd96b63291b85257651fefd8afdb995da8465742a0d86d1c64
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
-title: SoraFS Pricing Model & Credit Policy Status
-summary: Implemented SF-8a pricing tiers, collateral, settlement, and egress accounting status.
----
-
----
 title: SoraFS Pricing Model & Credit Policy Status
 summary: Implemented SF-8a pricing tiers, collateral, settlement, and egress accounting status.
 ---

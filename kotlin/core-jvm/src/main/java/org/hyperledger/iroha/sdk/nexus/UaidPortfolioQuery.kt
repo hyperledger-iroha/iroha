@@ -5,6 +5,14 @@ class UaidPortfolioQuery(
     val assetId: String? = null,
 ) {
     fun toQueryParameters(): Map<String, String> = buildMap {
-        assetId?.trim()?.takeIf { it.isNotEmpty() }?.let { put("asset_id", it) }
+        assetId?.let { put("asset_id", requireExactNonEmpty(it, "assetId")) }
+    }
+
+    private companion object {
+        fun requireExactNonEmpty(value: String, field: String): String {
+            require(value.isNotEmpty()) { "$field must not be blank" }
+            require(value.trim() == value) { "$field must not contain surrounding whitespace" }
+            return value
+        }
     }
 }

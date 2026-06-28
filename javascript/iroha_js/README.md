@@ -3219,8 +3219,7 @@ Kagemusha readiness fields and payment flows for offline payments.
 
 ```js
 const readiness = await torii.getOfflineReadiness();
-console.log("Kagemusha ready", readiness.offline_kagemusha_abi7);
-console.log("recursive compact ready", readiness.offline_kagemusha_recursive_compact_available);
+console.log("Kagemusha ready", readiness.offline_kagemusha_recursive_compact_available);
 ```
 
 for await (const assetDef of torii.iterateAssetDefinitions({

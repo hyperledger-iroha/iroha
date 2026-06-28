@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 950eabe9c931403991143e8966961f6b710fcf802193bf52f34c6b37780f33d3
-source_last_modified: "2026-06-25T04:56:56.769083+00:00"
+source_hash: b38c7412f3d48f9c093cb4dd79df4d3a0752792e988e5e85f637e53fc134deec
+source_last_modified: "2026-06-25T17:14:40+00:00"
 translation_last_reviewed: 2026-06-25
 ---
 
@@ -33,6 +33,8 @@ local commit/reveal execution CLI automation,
 local supervised commit/reveal executor job bundle generation,
 local commit/reveal executor canary evidence tooling,
 local payload-free operator workflow canary evidence tooling,
+local AI pre-screening rollout evidence gate tooling,
+local AI pre-screening rollout evidence collection planning,
 standalone persistent model-registry service foundation, deterministic local
 runner CLI output, HTTP service mode, unary gRPC service mode, supervised
 bundle generation, HTTP canary evidence, deterministic local committee
@@ -41,7 +43,21 @@ supervised committee bundle generation, committee canary evidence,
 gateway-policy, honey-audit, and observability foundations.
 It does not yet ship captured deployed juror notification transport service
 rollout evidence, captured deployed commit/reveal executor job rollout
-evidence, or end-to-end release workflow as runnable services.
+evidence, or end-to-end release workflow as runnable services. The
+`scripts/run_sorafs_ai_prescreen_rollout_evidence.py` planner composes the
+existing canary commands, and
+`scripts/check_sorafs_ai_prescreen_rollout_evidence.py` fails closed until the
+deployed runner, committee, operator workflow, juror notification transport,
+commit/reveal executor, moderation transparency source entries, Governance DAG
+binding, and full workflow artifacts are captured. The gate also requires
+committee evidence to match a valid runner's manifest id, runner hash, and
+subject digest, and requires operator workflow, notification transport,
+commit/reveal executor, transparency publication, and Governance DAG evidence
+to carry the same `workflow_digest_hex` as the end-to-end workflow artifact, so
+promotion packets cannot mix screening, operator, executor, transparency, or
+governance records from different deployed moderation runs. Runner-bound and
+workflow-bound mismatches mark the offending artifact invalid in the summary
+instead of only blocking the top-level promotion status.
 
 Implemented locally:
 
@@ -299,7 +315,9 @@ Not shipped locally:
 
 - Captured deployed juror notification transport service rollout evidence and
   deployed commit/reveal executor job rollout evidence.
-- End-to-end ingest -> quarantine -> appeal -> transparency workflow services.
+- End-to-end ingest -> quarantine -> appeal -> transparency workflow services
+  and the corresponding live evidence bundle required by
+  `scripts/check_sorafs_ai_prescreen_rollout_evidence.py`.
 
 ## Target Architecture
 
@@ -678,6 +696,12 @@ live governance-evidence rollout and production quarantine workflow.
 
 ## Remaining Production Gates
 
+- Collect a payload-free live evidence bundle with
+  `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` and require it to pass
+  `scripts/check_sorafs_ai_prescreen_rollout_evidence.py`, covering runner,
+  committee, operator workflow, juror notification transport, commit/reveal
+  executor, moderation transparency source entries, Governance DAG binding,
+  and end-to-end workflow artifacts.
 - Promote local screening/quarantine evidence into the production runner and
   committee workflow with live governance evidence.
 - Capture live operator workflow evidence from deployed `operator-canary` runs
@@ -797,6 +821,15 @@ Completed local foundations:
   health/status, browser UI, operator-panel, bridge-plan, juror-plan,
   juror-notifications, and commit-reveal-status routes without archiving
   payload bytes.
+- Provide `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` as a
+  payload-free promotion gate over deployed runner, committee, operator
+  workflow, juror notification transport, commit/reveal executor, moderation
+  transparency source-entry, Governance DAG, and end-to-end workflow evidence;
+  cross-artifact runner/workflow binding failures are reflected on the
+  offending artifacts in the emitted summary.
+- Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
+  collection planner/runner that composes existing runner, committee, operator,
+  notification, executor, and transparency canaries before invoking the gate.
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.
@@ -809,7 +842,8 @@ Completed local foundations:
 
 Remaining rollout work is captured deployed juror notification transport
 service rollout evidence, captured deployed commit/reveal executor job rollout
-evidence, and live evidence, not the local
+evidence, and a live bundle that passes the AI pre-screening rollout evidence
+gate, not the local
 manifest/corpus validators, deterministic local runner CLI output,
 locked-manifest local HTTP runner service mode, supervised HTTP runner bundle
 generation, production unary gRPC runner service, HTTP runner canary rollout
@@ -832,5 +866,6 @@ automation, local juror notification transport canary evidence tooling, local
 payload-free commit/reveal coordination status, local commit/reveal executor
 CLI automation, local supervised commit/reveal executor job bundle generation,
 local commit/reveal executor canary evidence tooling, local operator workflow
-canary evidence tooling, documented operator role-provisioning runbook, GAR
-policy plumbing, bounded denylist catalog readback, or observability fixtures.
+canary evidence tooling, local AI pre-screening rollout evidence gate and
+collection planner, documented operator role-provisioning runbook, GAR policy
+plumbing, bounded denylist catalog readback, or observability fixtures.

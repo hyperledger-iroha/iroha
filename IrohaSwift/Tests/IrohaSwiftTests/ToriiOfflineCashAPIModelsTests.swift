@@ -78,6 +78,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let keyCertificateBindings = try XCTUnwrap(json["key_certificate_bindings"] as? [[String: Any]])
         XCTAssertEqual(keyCertificateBindings.count, 1)
         XCTAssertEqual(keyCertificateBindings.first?["attestation_key_id"] as? String, "attest-key")
+        XCTAssertEqual(keyCertificateBindings.first?["assertion_public_key"] as? String, "assertion-public-key")
         XCTAssertEqual((json["lineage_state"] as? [String: Any])?["lineage_id"] as? String, "lineage-1")
         XCTAssertNil(json["operationId"])
         let proof = try XCTUnwrap(json["device_proof"] as? [String: Any])
@@ -223,6 +224,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             attestationKeyId: "attest-key",
             deviceId: "device-1",
             offlinePublicKey: "offline-public-key",
+            assertionPublicKey: "assertion-public-key",
             attestationReportBase64: "report"
         )
     }

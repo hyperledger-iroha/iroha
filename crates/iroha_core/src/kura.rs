@@ -2026,13 +2026,46 @@ impl Kura {
         Ok(())
     }
 
+    /// Validate lane storage topology changes that can fail without mutating Kura state.
+    ///
+    /// This catches deterministic path-shape conflicts before callers reconcile
+    /// other lane-scoped storage backends.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if an existing file or directory would make lane
+    /// storage provisioning, retirement, or relabeling fail.
+    pub fn preflight_lane_segments(
+        &self,
+        added: &[&LaneConfigEntry],
+        retired: &[&LaneConfigEntry],
+        relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
+    ) -> Result<()> {
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+
+        for entry in added {
+            self.preflight_prepare_lane_storage(entry)?;
+        }
+        for entry in retired {
+            self.preflight_retire_lane_storage(entry)?;
+        }
+        for (previous, current) in relabelled {
+            self.preflight_relabel_lane_storage(previous, current)?;
+        }
+
+        Ok(())
+    }
+
     /// Rename lane storage directories when lane aliases change.
     ///
     /// The migrations slice pairs the previous and current lane entries; each
     /// pair triggers a best-effort `std::fs::rename` so block data continues to
     /// live under the new alias without re-syncing from peers. Missing or
     /// conflicting directories are logged and skipped so existing data is not
-    /// destroyed.
+    /// destroyed. Callers that bind the result to catalog state must call
+    /// [`Self::preflight_lane_segments`] first so occupied targets abort before
+    /// higher-level state changes are committed.
     /// Move per-lane block directories when a lane's configuration alias changes.
     ///
     /// Each tuple in `migrations` pairs the previous configuration entry with the
@@ -2202,8 +2235,19 @@ impl Kura {
 
     fn prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
-        let mut block_store = BlockStore::new(&blocks_dir);
-        block_store.create_files_if_they_do_not_exist()?;
+        let active = {
+            let active_dir = self.active_blocks_dir.lock();
+            blocks_dir == *active_dir
+        };
+        if active {
+            let _write_guard = self.block_store_write_lock.lock();
+            self.block_store
+                .lock()
+                .create_files_if_they_do_not_exist()?;
+        } else {
+            let mut block_store = BlockStore::new(&blocks_dir);
+            block_store.create_files_if_they_do_not_exist()?;
+        }
 
         let merge_path = entry.merge_log_path(&self.store_root);
         if let Some(parent) = merge_path.parent() {
@@ -2222,6 +2266,111 @@ impl Kura {
             merge = %merge_path.display(),
             "lane storage provisioned"
         );
+        Ok(())
+    }
+
+    fn preflight_prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+        let blocks_dir = entry.blocks_dir(&self.store_root);
+        Self::preflight_dir_path(&blocks_dir)?;
+        for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
+            Self::preflight_file_path(&blocks_dir.join(name))?;
+        }
+
+        let merge_path = entry.merge_log_path(&self.store_root);
+        if let Some(parent) = merge_path.parent() {
+            Self::preflight_dir_path(parent)?;
+        }
+        Self::preflight_file_path(&merge_path)?;
+        Ok(())
+    }
+
+    fn preflight_retire_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+        let blocks_dir = entry.blocks_dir(&self.store_root);
+        if blocks_dir == *self.active_blocks_dir.lock() {
+            return Ok(());
+        }
+        let merge_path = entry.merge_log_path(&self.store_root);
+        if merge_path == *self.active_merge_path.lock() {
+            return Ok(());
+        }
+
+        let retired_root = self.store_root.join("retired");
+        Self::preflight_dir_path(&retired_root.join("blocks"))?;
+        Self::preflight_dir_path(&retired_root.join("merge_ledger"))?;
+        Ok(())
+    }
+
+    fn preflight_relabel_lane_storage(
+        &self,
+        previous: &LaneConfigEntry,
+        current: &LaneConfigEntry,
+    ) -> Result<()> {
+        if previous.kura_segment == current.kura_segment {
+            return Ok(());
+        }
+
+        let old_dir = previous.blocks_dir(&self.store_root);
+        if !old_dir.exists() {
+            self.preflight_prepare_lane_storage(current)?;
+            return Ok(());
+        }
+
+        let new_dir = current.blocks_dir(&self.store_root);
+        if let Some(parent) = new_dir.parent() {
+            Self::preflight_dir_path(parent)?;
+        }
+        if new_dir.exists() {
+            return Err(Error::MkDir(
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "lane storage relabel target already exists",
+                ),
+                new_dir,
+            ));
+        }
+        self.preflight_relabel_merge_log(previous, current)
+    }
+
+    fn preflight_relabel_merge_log(
+        &self,
+        previous: &LaneConfigEntry,
+        current: &LaneConfigEntry,
+    ) -> Result<()> {
+        let old_path = previous.merge_log_path(&self.store_root);
+        let new_path = current.merge_log_path(&self.store_root);
+        if old_path == new_path {
+            return Ok(());
+        }
+        if let Some(parent) = new_path.parent() {
+            Self::preflight_dir_path(parent)?;
+        }
+        if !old_path.exists() {
+            Self::preflight_file_path(&new_path)?;
+            return Ok(());
+        }
+        if new_path.exists() {
+            Self::preflight_dir_path(&self.store_root.join("retired").join("merge_ledger"))?;
+        }
+        Ok(())
+    }
+
+    fn preflight_dir_path(path: &Path) -> Result<()> {
+        if path.exists() && !path.is_dir() {
+            return Err(Error::MkDir(
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "expected directory path"),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn preflight_file_path(path: &Path) -> Result<()> {
+        if path.exists() && !path.is_file() {
+            return Err(Error::IO(
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "expected file path"),
+                path.to_path_buf(),
+            ));
+        }
         Ok(())
     }
 
@@ -2427,18 +2576,34 @@ impl Kura {
 
     fn init_hash_only_hard_fork_mode(
         block_store: &mut BlockStore,
-        block_index_count: usize,
+        mut block_index_count: usize,
         hard_fork_hash_only_block_count: usize,
     ) -> Result<ChainValidation, Error> {
-        let block_hashes_count: usize = block_store
+        let mut block_hashes_count: usize = block_store
             .read_hashes_count()?
             .try_into()
             .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
-        if block_hashes_count != block_index_count {
-            return Err(Error::HardForkSnapshotBootstrapHashHeightMismatch {
-                index_count: block_index_count,
-                hashes_count: block_hashes_count,
-            });
+        let mut repaired_height_mismatch = false;
+        if block_hashes_count > block_index_count {
+            warn!(
+                hashes_count = block_hashes_count,
+                index_count = block_index_count,
+                "hard-fork snapshot bootstrap: hashes journal exceeds durable index; truncating hashes to durable height"
+            );
+            block_store.truncate_hashes_to_count(block_index_count as u64)?;
+            block_store.truncate_data_to_index(block_index_count as u64)?;
+            block_hashes_count = block_index_count;
+            repaired_height_mismatch = true;
+        } else if block_hashes_count < block_index_count {
+            warn!(
+                hashes_count = block_hashes_count,
+                index_count = block_index_count,
+                "hard-fork snapshot bootstrap: durable index exceeds hashes journal; truncating index and data to hashes height"
+            );
+            block_store.write_index_count(block_hashes_count as u64)?;
+            block_store.truncate_data_to_index(block_hashes_count as u64)?;
+            block_index_count = block_hashes_count;
+            repaired_height_mismatch = true;
         }
 
         let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
@@ -2449,7 +2614,7 @@ impl Kura {
             );
             return Ok(ChainValidation {
                 hashes: expected_hashes,
-                truncated: false,
+                truncated: repaired_height_mismatch,
                 hash_mismatch: false,
                 hard_fork_hash_only_block_count: block_index_count,
             });
@@ -2469,6 +2634,7 @@ impl Kura {
         if validation.truncated || validation.hash_mismatch {
             block_store.overwrite_block_hashes(&validation.hashes)?;
         }
+        validation.truncated |= repaired_height_mismatch;
         info!(
             legacy_blocks = validation.hard_fork_hash_only_block_count,
             validated_blocks = validation
@@ -2573,6 +2739,25 @@ impl Kura {
                 continue;
             }
 
+            if block.length == 0
+                && block.is_evicted()
+                && expected_hashes.is_some()
+                && idx >= hash_only_prefix
+            {
+                let expected = expected_hashes
+                    .and_then(|hashes| hashes.get(idx))
+                    .copied()
+                    .ok_or(Error::HashesFileHeightMismatch)?;
+                debug!(
+                    block_index = idx,
+                    height,
+                    block = %expected,
+                    "preserving hard-fork hash-only block metadata from hashes file"
+                );
+                prev_block_hash = Some(expected);
+                block_hashes.push(expected);
+                continue;
+            }
             if block.length == 0 {
                 truncated = Some(true);
                 error!(
@@ -3044,6 +3229,14 @@ impl Kura {
                 return Some(Arc::clone(block_arc));
             }
 
+            if self.is_hard_fork_hash_only_block(idx) {
+                debug!(
+                    block_index = idx,
+                    "hard-fork snapshot bootstrap: hash-only block body is unavailable"
+                );
+                return None;
+            }
+
             let expected_hash = data[idx].0;
             let should_cache = idx + self.blocks_in_memory.get() >= data.len();
             (idx, expected_hash, should_cache, data.len())
@@ -3058,10 +3251,18 @@ impl Kura {
                     return None;
                 }
             };
-            let BlockIndex { start, length } = index;
             let is_evicted = index.is_evicted();
+            let BlockIndex { start, length } = index;
 
             if length == 0 {
+                if is_evicted && self.is_hard_fork_hash_only_block(block_index) {
+                    debug!(
+                        block_index,
+                        height = block_index.saturating_add(1),
+                        "hard-fork snapshot bootstrap: hash-only block body is unavailable"
+                    );
+                    return None;
+                }
                 error!(block_index, "Encountered zero-length block entry");
                 return None;
             }
@@ -4936,6 +5137,176 @@ impl Kura {
             .lock()
             .get(height.get().saturating_sub(1))
             .map(|(hash, _)| *hash)
+    }
+
+    /// Extend Kura with audited hash-only legacy block entries from a hard-fork snapshot.
+    ///
+    /// This is only active when `IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP` is set. It lets a node
+    /// resume from a verified state snapshot whose committed height is ahead of the local
+    /// durable block bodies by persisting evicted-body index entries plus canonical hashes.
+    ///
+    /// # Errors
+    /// Returns an error if the existing Kura prefix conflicts with the snapshot hash journal
+    /// or if the block-store metadata cannot be extended durably.
+    pub fn hard_fork_extend_hash_only_from_snapshot(
+        &self,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+    ) -> Result<()> {
+        if !hard_fork_snapshot_bootstrap_enabled() || snapshot_hashes.is_empty() {
+            return Ok(());
+        }
+
+        self.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(snapshot_hashes, None)
+            .map(|_| ())
+    }
+
+    pub(crate) fn hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
+        &self,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+        configured_legacy_count: Option<usize>,
+    ) -> Result<usize> {
+        let current = self.blocks_count();
+        let legacy_count = configured_legacy_count
+            .unwrap_or_else(|| hard_fork_snapshot_bootstrap_legacy_block_count(current));
+        self.extend_hash_only_prefix_from_snapshot_with_legacy_count(
+            snapshot_hashes,
+            Some(legacy_count),
+        )
+    }
+
+    /// Extend Kura's canonical hash chain using an audited hard-fork snapshot.
+    ///
+    /// The snapshot payload is the source of truth for hashes above the durable block body log.
+    /// Missing bodies are persisted as hash-only placeholders so the next committed block can
+    /// append at the snapshot height without replaying legacy blocks.
+    pub fn extend_hash_only_prefix_from_snapshot(
+        &self,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+    ) -> Result<usize> {
+        self.extend_hash_only_prefix_from_snapshot_with_legacy_count(snapshot_hashes, None)
+    }
+
+    fn extend_hash_only_prefix_from_snapshot_with_legacy_count(
+        &self,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+        configured_legacy_count: Option<usize>,
+    ) -> Result<usize> {
+        if snapshot_hashes.is_empty() {
+            return Ok(0);
+        }
+
+        let mut block_data = self.block_data.lock();
+        let current = block_data.len();
+        let target = snapshot_hashes.len();
+        let shared = current.min(target);
+        let legacy_count = configured_legacy_count.map(|count| count.min(shared));
+
+        let mut rewrite_from = current;
+        for (idx, (existing, _)) in block_data.iter().enumerate().take(shared) {
+            let actual = snapshot_hashes[idx];
+            if *existing == actual {
+                continue;
+            }
+            let Some(legacy_count) = legacy_count else {
+                return Err(Error::BlockHeightConflict {
+                    height: u64::try_from(idx.saturating_add(1))?,
+                    expected: *existing,
+                    actual,
+                });
+            };
+            if idx < legacy_count {
+                return Err(Error::BlockHeightConflict {
+                    height: u64::try_from(idx.saturating_add(1))?,
+                    expected: *existing,
+                    actual,
+                });
+            }
+            rewrite_from = idx;
+            warn!(
+                height = idx.saturating_add(1),
+                legacy_height = legacy_count,
+                "hard-fork snapshot bootstrap: replacing divergent Kura suffix with hash-only snapshot entry"
+            );
+            break;
+        }
+
+        if target <= current && rewrite_from == current {
+            if legacy_count.is_some() {
+                let previous = self.hard_fork_hash_only_block_count.load(Ordering::Relaxed);
+                if previous < target {
+                    self.hard_fork_hash_only_block_count
+                        .store(target, Ordering::Relaxed);
+                    info!(
+                        previous_hash_only_block_count = previous,
+                        snapshot_height = target,
+                        "hard-fork snapshot bootstrap: activated existing Kura hash-only snapshot entries"
+                    );
+                }
+            }
+            return Ok(0);
+        }
+        rewrite_from = rewrite_from.min(shared);
+
+        let _write_guard = self.block_store_write_lock.lock();
+        let mut block_store = self.block_store.lock();
+        let start = u64::try_from(rewrite_from)?;
+        let target_u64 = u64::try_from(target)?;
+
+        let hashes_file = block_store.ensure_hashes_file()?;
+        hashes_file.try_io(|file| {
+            file.set_len(target_u64.saturating_mul(SIZE_OF_BLOCK_HASH))?;
+            file.seek(SeekFrom::Start(start.saturating_mul(SIZE_OF_BLOCK_HASH)))?;
+            for hash in &snapshot_hashes[rewrite_from..] {
+                file.write_all(hash.as_ref())?;
+            }
+            file.flush()
+        })?;
+
+        let index_file = block_store.ensure_index_file()?;
+        index_file.try_io(|file| {
+            file.set_len(target_u64.saturating_mul(BlockIndex::SIZE))?;
+            file.seek(SeekFrom::Start(start.saturating_mul(BlockIndex::SIZE)))?;
+            let entry = BlockIndex {
+                start: EVICTED_BLOCK_START,
+                length: 0,
+            }
+            .encode();
+            for _ in rewrite_from..target {
+                file.write_all(&entry)?;
+            }
+            file.flush()
+        })?;
+
+        block_store.publish_commit_marker(target_u64)?;
+        drop(block_store);
+
+        block_data.truncate(rewrite_from);
+        block_data.extend(
+            snapshot_hashes[rewrite_from..]
+                .iter()
+                .copied()
+                .map(|hash| (hash, None)),
+        );
+        let rebuilt_height_index = Self::build_block_height_index(&block_data);
+        let rebuilt_transaction_index = Self::build_transaction_entrypoint_index(&block_data);
+        let mut block_height_index = self.block_height_index.lock();
+        *block_height_index = rebuilt_height_index;
+        drop(block_height_index);
+        let mut transaction_entrypoint_index = self.transaction_entrypoint_index.lock();
+        *transaction_entrypoint_index = rebuilt_transaction_index;
+        drop(transaction_entrypoint_index);
+
+        self.hard_fork_hash_only_block_count
+            .store(target, Ordering::Relaxed);
+        self.publish_durable_budget_snapshot(target, 0);
+        let added = target.saturating_sub(current);
+        info!(
+            previous_height = current,
+            rewrite_from_height = rewrite_from.saturating_add(1),
+            snapshot_height = target,
+            "hard-fork snapshot bootstrap: extended Kura with hash-only snapshot entries"
+        );
+        Ok(added)
     }
 }
 
@@ -7789,7 +8160,20 @@ impl BlockStore {
         Ok(aligned / SIZE_OF_BLOCK_HASH)
     }
 
-    fn data_backed_count(&mut self, mut candidate: u64, hashes_count: u64) -> Result<u64> {
+    fn data_backed_count(
+        &mut self,
+        mut candidate: u64,
+        hashes_count: u64,
+        allow_hash_only_tail: bool,
+    ) -> Result<u64> {
+        if candidate > hashes_count {
+            warn!(
+                index_count = candidate,
+                hashes_count,
+                "block store index exceeds hash journal; capping durable count to hashes height"
+            );
+            candidate = hashes_count;
+        }
         if candidate == 0 {
             return Ok(0);
         }
@@ -7802,6 +8186,9 @@ impl BlockStore {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
                     if index.is_evicted() {
+                        if allow_hash_only_tail && index.length == 0 && candidate <= hashes_count {
+                            break;
+                        }
                         if index.length == 0
                             || index.length > STRICT_INIT_MAX_BLOCK_BYTES
                             || candidate > hashes_count
@@ -7867,7 +8254,11 @@ impl BlockStore {
             aligned / BlockIndex::SIZE
         };
         let hashes_count = self.align_hashes_len()?;
-        let data_backed_count = self.data_backed_count(logical_count, hashes_count)?;
+        let data_backed_count = self.data_backed_count(
+            logical_count,
+            hashes_count,
+            hard_fork_snapshot_bootstrap_enabled(),
+        )?;
         if matches!(self.fsync.mode, FsyncMode::Off) {
             self.write_commit_marker(data_backed_count)?;
             self.truncate_hashes_to_count(data_backed_count)?;
@@ -7963,6 +8354,18 @@ impl BlockStore {
         self.commit_marker_count = count;
         self.commit_marker_pending = None;
         Ok(())
+    }
+
+    fn publish_commit_marker(&mut self, count: u64) -> Result<()> {
+        self.commit_marker_pending = Some(count);
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            self.write_commit_marker(count)?;
+            self.commit_marker_count = count;
+            self.commit_marker_pending = None;
+            return Ok(());
+        }
+        self.mark_fsync_pending();
+        self.flush_pending_fsync(true)
     }
 
     fn sync_target(
@@ -8978,6 +9381,7 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
+        block::BlockHeader,
         consensus::Qc,
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
@@ -15640,6 +16044,152 @@ mod tests {
     }
 
     #[test]
+    fn hard_fork_data_backed_count_preserves_hash_only_tail() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = new_block_store(&temp_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+        let tail = blocks.next();
+        store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
+        store.write_block_hash(1, tail.as_ref().hash()).unwrap();
+
+        assert_eq!(
+            store.data_backed_count(2, 2, false).unwrap(),
+            1,
+            "ordinary init must still treat a zero-length evicted tail as not data-backed"
+        );
+        assert_eq!(
+            store.data_backed_count(2, 2, true).unwrap(),
+            2,
+            "hard-fork snapshot bootstrap keeps hash-only tail metadata durable"
+        );
+    }
+
+    #[test]
+    fn hard_fork_init_preserves_snapshot_hash_only_tail_on_restart() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = new_block_store(&temp_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+
+        let mut blocks = DummyBlocks::new();
+        let first = blocks.next();
+        store.append_block_to_chain(&first).unwrap();
+        let snapshot_tail_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x73; Hash::LENGTH]));
+        store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
+        store.write_block_hash(1, snapshot_tail_hash).unwrap();
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1).unwrap();
+
+        assert!(!validation.truncated);
+        assert_eq!(validation.hashes.len(), 2);
+        assert_eq!(validation.hashes[1], snapshot_tail_hash);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 1);
+        assert_eq!(store.read_index_count().unwrap(), 2);
+        assert_eq!(store.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn hard_fork_extend_hash_only_rewrites_divergent_snapshot_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 3);
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, BlockCount(block_count)) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        assert_eq!(block_count, 3);
+
+        let first_hash = kura
+            .block_hash_at_height(nonzero!(1_usize))
+            .expect("first hash exists");
+        let snapshot_hash_2 =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
+        let snapshot_hash_3 =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x43; Hash::LENGTH]));
+        let snapshot_hash_4 =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
+        let snapshot_hashes = vec![
+            first_hash,
+            snapshot_hash_2,
+            snapshot_hash_3,
+            snapshot_hash_4,
+        ];
+
+        kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(&snapshot_hashes, Some(1))
+            .expect("rewrite divergent suffix");
+
+        assert_eq!(kura.blocks_count(), 4);
+        assert_eq!(
+            kura.block_hash_at_height(nonzero!(1_usize)),
+            Some(first_hash),
+            "configured legacy prefix must be preserved"
+        );
+        assert_eq!(
+            kura.block_hash_at_height(nonzero!(2_usize)),
+            Some(snapshot_hash_2),
+            "post-boundary Kura hash must be replaced by snapshot hash"
+        );
+        assert!(
+            kura.get_block(nonzero!(2_usize)).is_none(),
+            "rewritten suffix is hash-only and has no trusted block body"
+        );
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(4_usize)),
+            Some(snapshot_hash_4),
+            "extended snapshot hash must be durable"
+        );
+
+        let mut store = kura.block_store.lock();
+        let rewritten_index = store.read_block_index(1).expect("read rewritten index");
+        assert_eq!(rewritten_index.start, EVICTED_BLOCK_START);
+        assert_eq!(rewritten_index.length, 0);
+    }
+
+    #[test]
+    fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, BlockCount(block_count)) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        assert_eq!(block_count, 2);
+
+        let first_hash = kura
+            .block_hash_at_height(nonzero!(1_usize))
+            .expect("first hash exists");
+        let second_hash = kura
+            .block_hash_at_height(nonzero!(2_usize))
+            .expect("second hash exists");
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .write_block_index(1, EVICTED_BLOCK_START, 0)
+                .expect("make matching tail hash-only");
+        }
+        {
+            let mut block_data = kura.block_data.lock();
+            block_data[1].1 = None;
+        }
+
+        kura.hard_fork_extend_hash_only_from_snapshot_with_legacy_count(
+            &[first_hash, second_hash],
+            Some(1),
+        )
+        .expect("matching snapshot hash journal should activate hash-only window");
+
+        assert_eq!(
+            kura.hard_fork_hash_only_block_count.load(Ordering::Relaxed),
+            2,
+            "matching snapshot suffix must still be classified as hash-only"
+        );
+        assert!(
+            kura.get_block(nonzero!(2_usize)).is_none(),
+            "matching hash-only suffix has no trusted block body"
+        );
+    }
+
+    #[test]
     fn hard_fork_init_prunes_corrupt_tail_after_bootstrap_height() {
         let temp_dir = TempDir::new().unwrap();
         populate_store(&temp_dir, 4);
@@ -15655,6 +16205,130 @@ mod tests {
         assert_eq!(validation.hard_fork_hash_only_block_count, 2);
         assert_eq!(store.read_index_count().unwrap(), 3);
         assert_eq!(store.read_hashes_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut store = new_block_store(&temp_dir);
+        let snapshot_tail_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8a; 32]));
+
+        store.write_block_hash(2, snapshot_tail_hash).unwrap();
+        store.write_block_index(2, EVICTED_BLOCK_START, 0).unwrap();
+
+        assert_eq!(store.read_index_count().unwrap(), 3);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+        assert_eq!(
+            store.data_backed_count(3, 3, false).unwrap(),
+            2,
+            "normal recovery should prune hash-only placeholder tails"
+        );
+        assert_eq!(
+            store.data_backed_count(3, 3, true).unwrap(),
+            3,
+            "hard-fork bootstrap should preserve audited hash-only placeholder tails"
+        );
+    }
+
+    #[test]
+    fn extend_hash_only_prefix_publishes_marker_when_fsync_off() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Off;
+        let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+        assert_eq!(count, 2);
+
+        let mut snapshot_hashes = vec![
+            kura.get_block_hash(nonzero!(1_usize)).unwrap(),
+            kura.get_block_hash(nonzero!(2_usize)).unwrap(),
+        ];
+        let snapshot_tail_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9b; 32]));
+        snapshot_hashes.push(snapshot_tail_hash);
+
+        assert_eq!(
+            kura.extend_hash_only_prefix_from_snapshot(&snapshot_hashes)
+                .unwrap(),
+            1
+        );
+        assert_eq!(kura.blocks_count(), 3);
+        assert!(kura.get_block(nonzero!(3_usize)).is_none());
+
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        assert_eq!(reopened.read_index_count().unwrap(), 3);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 3);
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 3);
+        let marker = reopened
+            .read_commit_marker()
+            .unwrap()
+            .expect("commit marker");
+        assert_eq!(marker.count, 3);
+        assert_eq!(
+            reopened.read_block_index(2).unwrap(),
+            (EVICTED_BLOCK_START, 0)
+        );
+    }
+
+    #[test]
+    fn hard_fork_init_repairs_index_tail_beyond_hash_journal() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+        let mut store = new_block_store(&temp_dir);
+        let retained_data_len = store.data_end_for_index_prefix(3).unwrap();
+
+        store.truncate_hashes_to_count(3).unwrap();
+        assert_eq!(store.read_index_count().unwrap(), 4);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+        assert!(store.data_file_len().unwrap() > retained_data_len);
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2).unwrap();
+
+        assert!(validation.truncated);
+        assert_eq!(validation.hashes.len(), 3);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 2);
+        assert_eq!(store.read_index_count().unwrap(), 3);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+        assert_eq!(store.data_file_len().unwrap(), retained_data_len);
+    }
+
+    #[test]
+    fn hard_fork_init_truncates_hash_tail_beyond_index() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 3);
+        let mut store = new_block_store(&temp_dir);
+
+        store.write_index_count(2).unwrap();
+        assert_eq!(store.read_index_count().unwrap(), 2);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1).unwrap();
+
+        assert!(validation.truncated);
+        assert_eq!(validation.hashes.len(), 2);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 1);
+        assert_eq!(store.read_index_count().unwrap(), 2);
+        assert_eq!(store.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+        let mut store = new_block_store(&temp_dir);
+
+        store.truncate_hashes_to_count(3).unwrap();
+        store.write_commit_marker(4).unwrap();
+
+        let mut reopened = new_block_store(&temp_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 3);
+        assert_eq!(reopened.read_index_count().unwrap(), 3);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 3);
     }
 
     #[test]

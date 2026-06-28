@@ -174,6 +174,378 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 detail = ADAPTER._safe_os_error_detail(OSError(5, value))
                 self.assertEqual(detail, "I/O error")
                 self.assertNotIn("rail-hidden", detail)
+        hidden = "token=rail-strerror-accessor-secret"
+
+        class HostileOSError(OSError):
+            @property
+            def strerror(self):
+                raise RuntimeError(hidden)
+
+        detail = ADAPTER._safe_os_error_detail(HostileOSError())
+        self.assertEqual(detail, "I/O error")
+        self.assertNotIn(hidden, detail)
+
+    def test_symlink_ancestor_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=rail-ancestor-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("os_error", OSError(5, hidden)),
+            ("runtime", RuntimeError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._reject_symlinked_existing_ancestors(
+                            ADAPTER.Path("ancestor") / "leaf",
+                            display_label="receipt output",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt output ancestors", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_helpers_lstat_failures_do_not_echo_detail(self):
+        hidden = "token=rail-reader-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_lstat = path_type.lstat
+        helper_cases = (
+            (
+                "_read_regular_file",
+                lambda path: ADAPTER._read_regular_file(path, path_label="sidecar"),
+                "cannot inspect sidecar",
+            ),
+            (
+                "_bounded_read",
+                lambda path: ADAPTER._bounded_read(path, 32, path_label="payload"),
+                "cannot inspect payload",
+            ),
+        )
+        failure_cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for helper_name, action, expected in helper_cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(helper=helper_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        path = ADAPTER.Path(raw_root) / "message.xml"
+                        path.write_text("<Document/>", encoding="utf-8")
+
+                        def failing_lstat(self, error=failure):
+                            if self == path:
+                                raise error
+                            return original_lstat(self)
+
+                        path_type.lstat = failing_lstat
+                        try:
+                            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                                action(path)
+                        finally:
+                            path_type.lstat = original_lstat
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(path), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_input_directory_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=rail-input-dir-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_lstat = path_type.lstat
+        cases = (
+            ("lstat_os", OSError(5, hidden)),
+            ("lstat_runtime", RuntimeError(hidden)),
+            ("lstat_type", TypeError(hidden)),
+            ("lstat_value", ValueError(hidden)),
+        )
+        for name, failure in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                path = ADAPTER.Path(raw_root) / "inbox"
+                path.mkdir()
+
+                def failing_lstat(self, error=failure):
+                    if self == path:
+                        raise error
+                    return original_lstat(self)
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._ensure_input_directory(path, "inbox_dir")
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect inbox_dir", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(str(path), message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_same_existing_path_stat_failures_return_false(self):
+        hidden = "token=rail-alias-stat-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_stat = path_type.stat
+        cases = (
+            OSError(5, hidden),
+            RuntimeError(hidden),
+            TypeError(hidden),
+            ValueError(hidden),
+        )
+        for failure in cases:
+            with self.subTest(error=type(failure).__name__):
+
+                def failing_stat(_self, *args, error=failure, **kwargs):
+                    raise error
+
+                path_type.stat = failing_stat
+                try:
+                    self.assertFalse(
+                        ADAPTER._same_existing_path(
+                            ADAPTER.Path("left"),
+                            ADAPTER.Path("right"),
+                        )
+                    )
+                finally:
+                    path_type.stat = original_stat
+
+    def test_path_resolve_failures_do_not_echo_detail(self):
+        hidden = "token=rail-resolve-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_resolve = path_type.resolve
+        failure_cases = (
+            ("resolve_os", OSError(5, hidden)),
+            ("resolve_runtime", RuntimeError(hidden)),
+            ("resolve_type", TypeError(hidden)),
+            ("resolve_value", ValueError(hidden)),
+        )
+
+        cases = (
+            (
+                "receipt-input-overlap",
+                lambda root: root / "receipts",
+                lambda root: ADAPTER._reject_receipt_dir_input_path_overlap(
+                    root / "receipts",
+                    root / "inbox" / "message.xml",
+                    "message",
+                ),
+                "cannot resolve receipt_dir",
+            ),
+            (
+                "generic-overlap",
+                lambda root: root / "left",
+                lambda root: ADAPTER._reject_path_overlap(
+                    root / "left",
+                    "left path",
+                    root / "right",
+                    "right path",
+                ),
+                "cannot resolve left path",
+            ),
+            (
+                "message-inbox-root",
+                lambda root: root / "inbox",
+                lambda root: ADAPTER.resolve_message_paths(
+                    root / "inbox",
+                    "message.xml",
+                ),
+                "cannot resolve inbox_dir",
+            ),
+            (
+                "message-parent",
+                lambda root: root / "inbox" / "nested",
+                lambda root: ADAPTER.resolve_message_paths(
+                    root / "inbox",
+                    "nested/message.xml",
+                ),
+                "cannot resolve --message parent",
+            ),
+            (
+                "message-receipt-dir",
+                lambda root: root / "receipts",
+                lambda root: ADAPTER._reject_message_receipt_dir_overlap(
+                    [root / "inbox" / "message.xml"],
+                    root / "receipts",
+                ),
+                "cannot resolve receipt_dir",
+            ),
+            (
+                "message-source",
+                lambda root: root / "inbox" / "message.xml",
+                lambda root: ADAPTER._reject_message_receipt_dir_overlap(
+                    [root / "inbox" / "message.xml"],
+                    root / "receipts",
+                ),
+                "cannot resolve message[0]",
+            ),
+        )
+        for case_name, setup_target, action, expected in cases:
+            for failure_name, failure in failure_cases:
+                with self.subTest(case=case_name, failure=failure_name):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = ADAPTER.Path(raw_root)
+                        inbox = root / "inbox"
+                        inbox.mkdir()
+                        target = setup_target(root)
+
+                        def failing_resolve(self, *args, error=failure, **kwargs):
+                            if self == target:
+                                raise error
+                            return original_resolve(self, *args, **kwargs)
+
+                        path_type.resolve = failing_resolve
+                        try:
+                            with self.assertRaises(ADAPTER.AdapterError) as caught:
+                                action(root)
+                        finally:
+                            path_type.resolve = original_resolve
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertIn("I/O error", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn(str(target), message)
+                    if isinstance(failure, OSError):
+                        self.assertIs(caught.exception.__cause__, failure)
+                    else:
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_read_helpers_fdopen_and_close_failures_do_not_echo_os_detail(self):
+        hidden = "token=rail-reader-open-secret"
+        cleanup_hidden = "token=rail-reader-close-secret"
+        cases = (
+            (
+                "_read_regular_file",
+                lambda path: ADAPTER._read_regular_file(
+                    path,
+                    max_bytes=32,
+                    path_label="sidecar",
+                ),
+                "cannot open sidecar for reading",
+            ),
+            (
+                "_bounded_read",
+                lambda path: ADAPTER._bounded_read(
+                    path,
+                    32,
+                    path_label="payload",
+                ),
+                "cannot open payload for reading",
+            ),
+        )
+        for name, action, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                path = root / "message.xml"
+                path.write_text("<Document/>", encoding="utf-8")
+                original_fdopen = ADAPTER.os.fdopen
+                original_close = ADAPTER.os.close
+
+                def failing_fdopen(*_args, **_kwargs):
+                    raise OSError(5, hidden)
+
+                def failing_close(fd):
+                    original_close(fd)
+                    raise OSError(5, cleanup_hidden)
+
+                ADAPTER.os.fdopen = failing_fdopen
+                ADAPTER.os.close = failing_close
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        action(path)
+                finally:
+                    ADAPTER.os.fdopen = original_fdopen
+                    ADAPTER.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
+
+                runtime_cleanup_hidden = f"token=rail-reader-close-runtime-secret-{name}"
+
+                def failing_runtime_close(fd):
+                    original_close(fd)
+                    raise RuntimeError(runtime_cleanup_hidden)
+
+                ADAPTER.os.fdopen = failing_fdopen
+                ADAPTER.os.close = failing_runtime_close
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        action(path)
+                finally:
+                    ADAPTER.os.fdopen = original_fdopen
+                    ADAPTER.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(runtime_cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
+
+                read_hidden = f"token=rail-reader-runtime-secret-{name}"
+
+                class FailingReadHandle:
+                    def __init__(self, fd):
+                        self.fd = fd
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, exc_type, exc, tb):
+                        original_close(self.fd)
+                        return False
+
+                    def read(self, _size):
+                        raise RuntimeError(read_hidden)
+
+                def failing_read_fdopen(fd, *_args, **_kwargs):
+                    return FailingReadHandle(fd)
+
+                ADAPTER.os.fdopen = failing_read_fdopen
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        action(path)
+                finally:
+                    ADAPTER.os.fdopen = original_fdopen
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(read_hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
 
     def test_canonical_json_bytes_rejects_non_finite_numbers(self):
         for value in (float("nan"), float("inf"), float("-inf")):
@@ -213,6 +585,122 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn(str(link), message)
             self.assertNotIn(hidden, message)
 
+    def test_text_output_target_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=rail-output-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        original_mkdir = path_type.mkdir
+        leaf_cases = (
+            ("leaf_exists_os", "exists", OSError(5, hidden)),
+            ("leaf_exists_runtime", "exists", RuntimeError(hidden)),
+            ("leaf_lstat_os", "lstat", OSError(5, hidden)),
+            ("leaf_lstat_runtime", "lstat", RuntimeError(hidden)),
+        )
+        for name, failure_point, failure in leaf_cases:
+            with self.subTest(name=name):
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return True
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._ensure_output_file_target(
+                            ADAPTER.Path("receipt.json"),
+                            display_label="receipt output",
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt output leaf", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+        parent_cases = (
+            ("parent_lstat_os", OSError(5, hidden)),
+            ("parent_lstat_runtime", RuntimeError(hidden)),
+        )
+        for name, failure in parent_cases:
+            with self.subTest(name=name):
+
+                def failing_lstat(_self, error=failure):
+                    raise error
+
+                path_type.lstat = failing_lstat
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._write_text_output(
+                            ADAPTER.Path("receipt.json"),
+                            "{}\n",
+                            display_label="receipt output",
+                        )
+                finally:
+                    path_type.lstat = original_lstat
+
+                message = str(caught.exception)
+                self.assertIn("cannot inspect receipt output parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+        parent_create_cases = (
+            ("parent_mkdir_os", OSError(5, hidden)),
+            ("parent_mkdir_runtime", RuntimeError(hidden)),
+            ("parent_mkdir_type", TypeError(hidden)),
+            ("parent_mkdir_value", ValueError(hidden)),
+        )
+        for name, failure in parent_create_cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+
+                    def failing_mkdir(_self, *args, error=failure, **kwargs):
+                        raise error
+
+                    path_type.mkdir = failing_mkdir
+                    try:
+                        with self.assertRaises(ADAPTER.AdapterError) as caught:
+                            ADAPTER._write_text_output(
+                                ADAPTER.Path(raw_root) / "out" / "receipt.json",
+                                "{}\n",
+                                display_label="receipt output",
+                            )
+                    finally:
+                        path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn("cannot create receipt output parent", message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
     def test_text_output_hardlinked_leaf_diagnostic_does_not_echo_path(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -233,6 +721,153 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertIn("must not be hard-linked", message)
             self.assertNotIn(str(output), message)
             self.assertNotIn(hidden, message)
+
+    def test_output_directory_inspection_failures_do_not_echo_detail(self):
+        hidden = "token=rail-output-dir-inspect-secret"
+        path_type = type(ADAPTER.Path("."))
+        original_exists = path_type.exists
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+        original_mkdir = path_type.mkdir
+        cases = (
+            ("exists_os", "exists", OSError(5, hidden), "cannot inspect receipt directory"),
+            ("exists_runtime", "exists", RuntimeError(hidden), "cannot inspect receipt directory"),
+            ("lstat_os", "lstat", OSError(5, hidden), "cannot inspect receipt directory"),
+            ("lstat_runtime", "lstat", RuntimeError(hidden), "cannot inspect receipt directory"),
+            ("mkdir_os", "mkdir", OSError(5, hidden), "cannot create receipt directory"),
+            ("mkdir_runtime", "mkdir", RuntimeError(hidden), "cannot create receipt directory"),
+            ("post_mkdir_lstat_os", "post_lstat", OSError(5, hidden), "cannot inspect receipt directory"),
+            ("post_mkdir_lstat_runtime", "post_lstat", RuntimeError(hidden), "cannot inspect receipt directory"),
+        )
+        for name, failure_point, failure, expected in cases:
+            with self.subTest(name=name):
+                lstat_calls = {"count": 0}
+
+                def failing_exists(_self, error=failure):
+                    if failure_point == "exists":
+                        raise error
+                    return failure_point in {"lstat"}
+
+                def false_is_symlink(_self):
+                    return False
+
+                def failing_lstat(self, error=failure):
+                    lstat_calls["count"] += 1
+                    if failure_point in {"lstat", "post_lstat"}:
+                        if lstat_calls["count"] == 1:
+                            raise FileNotFoundError
+                        raise error
+                    return original_lstat(self)
+
+                def failing_mkdir(self, *args, error=failure, **kwargs):
+                    if failure_point == "mkdir":
+                        raise error
+                    if failure_point == "post_lstat":
+                        return None
+                    return original_mkdir(self, *args, **kwargs)
+
+                path_type.exists = failing_exists
+                path_type.is_symlink = false_is_symlink
+                path_type.lstat = failing_lstat
+                path_type.mkdir = failing_mkdir
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._ensure_output_directory(
+                            ADAPTER.Path("receipts"),
+                            "receipt directory",
+                        )
+                finally:
+                    path_type.exists = original_exists
+                    path_type.is_symlink = original_is_symlink
+                    path_type.lstat = original_lstat
+                    path_type.mkdir = original_mkdir
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                if isinstance(failure, OSError):
+                    self.assertIs(caught.exception.__cause__, failure)
+                else:
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_text_output_write_and_replace_failures_do_not_echo_os_detail(self):
+        hidden = "token=rail-output-write-secret"
+        cases = (
+            ("fsync", None, "cannot write temporary output for receipt output"),
+            ("replace", None, "cannot replace receipt output"),
+            ("fsync_runtime", None, "cannot write temporary output for receipt output"),
+            ("replace_runtime", None, "cannot replace receipt output"),
+            ("fsync", "unlink", "cannot write temporary output for receipt output"),
+            ("fsync", "close", "cannot write temporary output for receipt output"),
+            ("fsync", "unlink_runtime", "cannot write temporary output for receipt output"),
+            ("fsync", "close_runtime", "cannot write temporary output for receipt output"),
+        )
+        for failure, cleanup_failure, expected in cases:
+            with self.subTest(
+                failure=failure,
+                cleanup_failure=cleanup_failure,
+            ), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                output = root / "rail.receipt.json"
+                cleanup_hidden = f"{hidden}-cleanup"
+                original_fsync = ADAPTER.os.fsync
+                original_replace = ADAPTER.os.replace
+                original_unlink = ADAPTER.os.unlink
+                original_close = ADAPTER.os.close
+
+                def failing_fsync(fd):
+                    if failure == "fsync":
+                        raise OSError(5, hidden)
+                    if failure == "fsync_runtime":
+                        raise RuntimeError(hidden)
+                    return original_fsync(fd)
+
+                def failing_replace(*args, **kwargs):
+                    if failure == "replace":
+                        raise OSError(5, hidden)
+                    if failure == "replace_runtime":
+                        raise RuntimeError(hidden)
+                    return original_replace(*args, **kwargs)
+
+                def failing_unlink(*args, **kwargs):
+                    if cleanup_failure == "unlink":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "unlink_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_unlink(*args, **kwargs)
+
+                def failing_close(fd):
+                    if cleanup_failure == "close":
+                        raise OSError(5, cleanup_hidden)
+                    if cleanup_failure == "close_runtime":
+                        raise RuntimeError(cleanup_hidden)
+                    return original_close(fd)
+
+                ADAPTER.os.fsync = failing_fsync
+                ADAPTER.os.replace = failing_replace
+                ADAPTER.os.unlink = failing_unlink
+                ADAPTER.os.close = failing_close
+                try:
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER._write_text_output(
+                            output,
+                            "{}\n",
+                            display_label="receipt output",
+                        )
+                finally:
+                    ADAPTER.os.fsync = original_fsync
+                    ADAPTER.os.replace = original_replace
+                    ADAPTER.os.unlink = original_unlink
+                    ADAPTER.os.close = original_close
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertIn("I/O error", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn(cleanup_hidden, message)
+                self.assertNotIn(str(root), message)
 
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
@@ -417,6 +1052,53 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--receipt-di", stderr.getvalue())
 
+    def test_direct_main_argv_inputs_are_normalized_before_preflight(self):
+        hidden = "token=rail-argv-secret"
+
+        class HostileArgv(list):
+            def __len__(self):
+                raise RuntimeError(f"len={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"iter={hidden}")
+
+            def __getitem__(self, _key):
+                raise RuntimeError(f"item={hidden}")
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"str={hidden}")
+
+            def startswith(self, _prefix, *_args):
+                raise RuntimeError(f"startswith={hidden}")
+
+            def strip(self, *_args):
+                raise RuntimeError(f"strip={hidden}")
+
+        cases = (
+            (
+                "container",
+                HostileArgv(["--receipt-dir"]),
+                "argv must be a plain argument list",
+            ),
+            ("tuple", ("--receipt-dir",), "argv must be a plain argument list"),
+            ("non-string", [object()], "argv[0] must be a string"),
+            (
+                "hostile-string",
+                [HostileText("--receipt-dir")],
+                "--receipt-dir requires a path value",
+            ),
+        )
+        for name, argv, expected in cases:
+            with self.subTest(name=name):
+                rc, stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("rail-argv-secret", stderr)
+
     def test_raw_cli_control_characters_are_rejected_without_echo(self):
         cases = ("--unknown-rail\x1bflag", "--unknown-rail\u202eflag")
         for hidden in cases:
@@ -489,6 +1171,207 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("\x1b", message)
                 self.assertNotIn("\u202e", message)
                 self.assertNotIn(hidden, message)
+
+    def test_sidecar_string_helpers_normalize_hostile_str_subclasses_without_echo(self):
+        hidden = "rail-hostile-string-secret"
+
+        class HostileText(str):
+            def __str__(self):
+                raise RuntimeError(f"token={hidden}")
+
+            def strip(self, *_args, **_kwargs):
+                raise RuntimeError(f"client_secret={hidden}")
+
+            def __iter__(self):
+                raise KeyError(f"private_key={hidden}")
+
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError(f"key={hidden}")
+
+        class HostileList(list):
+            def __len__(self):
+                raise RuntimeError(f"list={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"list_iter={hidden}")
+
+        class HostileDict(dict):
+            def __len__(self):
+                raise RuntimeError(f"dict={hidden}")
+
+            def __iter__(self):
+                raise RuntimeError(f"dict_iter={hidden}")
+
+            def items(self):
+                raise RuntimeError(f"dict_items={hidden}")
+
+        required = ADAPTER._required_cli_string(
+            HostileText("message.xml"),
+            "--message",
+        )
+        self.assertEqual(required, "message.xml")
+        self.assertIs(type(required), str)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xml_path = root / "message.xml"
+            xml_path.write_bytes(SAMPLE_XML)
+            sidecar = {
+                "message_type": HostileText("pacs.008"),
+                "payload_sha256": ADAPTER.sha256_hex(SAMPLE_XML),
+                "profile": HostileText("swift-cbpr-plus"),
+                "rail_message_id": HostileText("rail-message-001"),
+            }
+            original_load_json = ADAPTER._load_json
+
+            def patched_load_json(*_args, **_kwargs):
+                return sidecar
+
+            ADAPTER._load_json = patched_load_json
+            try:
+                message = ADAPTER.verify_message_file(
+                    xml_path,
+                    max_payload_bytes=len(SAMPLE_XML) + 1,
+                    allow_default_profile=False,
+                    allow_legacy_colr007=False,
+                )
+            finally:
+                ADAPTER._load_json = original_load_json
+
+            self.assertEqual(message.message_type, "pacs.008")
+            self.assertIs(type(message.message_type), str)
+            self.assertEqual(message.profile, "swift-cbpr-plus")
+            self.assertIs(type(message.profile), str)
+            self.assertEqual(message.rail_message_id, "rail-message-001")
+            self.assertIs(type(message.rail_message_id), str)
+
+        def verify_hostile_sidecar_shape():
+            with tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                xml_path = root / "message.xml"
+                xml_path.write_bytes(SAMPLE_XML)
+                original_load_json = ADAPTER._load_json
+
+                def patched_load_json(*_args, **_kwargs):
+                    return HostileDict(
+                        {
+                            "message_type": "pacs.008",
+                            "payload_sha256": ADAPTER.sha256_hex(SAMPLE_XML),
+                        }
+                    )
+
+                ADAPTER._load_json = patched_load_json
+                try:
+                    ADAPTER.verify_message_file(
+                        xml_path,
+                        max_payload_bytes=len(SAMPLE_XML) + 1,
+                        allow_default_profile=True,
+                        allow_legacy_colr007=False,
+                    )
+                finally:
+                    ADAPTER._load_json = original_load_json
+
+        present = ADAPTER._reject_unknown_keys(
+            {HostileText("message_type"): "pacs.008"},
+            {"message_type"},
+            "sidecar",
+        )
+        self.assertEqual(present, {"message_type"})
+        self.assertTrue(all(type(key) is str for key in present))
+
+        cases = (
+            (
+                "secret-scan",
+                lambda: ADAPTER._check_no_secret_material(
+                    {"metadata": HostileText("warning \x1b[31mred")},
+                    "sidecar",
+                ),
+            ),
+            (
+                "surrogate-string",
+                lambda: ADAPTER._reject_json_surrogates(HostileText("ok\ud800")),
+            ),
+            (
+                "surrogate-list-subclass",
+                lambda: ADAPTER._reject_json_surrogates(HostileList(["ok"])),
+            ),
+            (
+                "surrogate-dict-subclass",
+                lambda: ADAPTER._reject_json_surrogates(HostileDict({"metadata": "ok"})),
+            ),
+            (
+                "loaded-sidecar-dict-subclass",
+                verify_hostile_sidecar_shape,
+            ),
+            (
+                "secret-key",
+                lambda: ADAPTER._check_no_secret_material(
+                    {HostileText("private_key"): "redacted"},
+                    "sidecar",
+                ),
+            ),
+            (
+                "control-key",
+                lambda: ADAPTER._check_no_secret_material(
+                    {HostileText("metadata\x1b"): "redacted"},
+                    "sidecar",
+                ),
+            ),
+            (
+                "unknown-key",
+                lambda: ADAPTER._reject_unknown_keys(
+                    {HostileText("unknown\x1b"): "redacted"},
+                    {"message_type"},
+                    "sidecar",
+                ),
+            ),
+            (
+                "non-string-key",
+                lambda: ADAPTER._check_no_secret_material(
+                    {HostileKey(): "redacted"},
+                    "sidecar",
+                ),
+            ),
+            (
+                "unknown-non-string-key",
+                lambda: ADAPTER._reject_unknown_keys(
+                    {HostileKey(): "redacted"},
+                    {"message_type"},
+                    "sidecar",
+                ),
+            ),
+            (
+                "unknown-dict-subclass",
+                lambda: ADAPTER._reject_unknown_keys(
+                    HostileDict({"message_type": "redacted"}),
+                    {"message_type"},
+                    "sidecar",
+                ),
+            ),
+            (
+                "secret-list-subclass",
+                lambda: ADAPTER._check_no_secret_material(
+                    HostileList(["redacted"]),
+                    "sidecar",
+                ),
+            ),
+            (
+                "secret-dict-subclass",
+                lambda: ADAPTER._check_no_secret_material(
+                    HostileDict({"metadata": "redacted"}),
+                    "sidecar",
+                ),
+            ),
+        )
+        for name, call in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    call()
+                message = str(caught.exception)
+                self.assertNotIn(hidden, message)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
 
     def test_recursive_json_array_scans_are_count_bounded_without_echo(self):
         items = [None] * (ADAPTER.MAX_JSON_LIST_ITEMS + 1)
@@ -1975,8 +2858,15 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 ADAPTER.run(args)
 
     def test_direct_run_scalar_paths_must_be_paths_before_inbox_loading(self):
+        hidden = "rail-hostile-pathlike-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={hidden}")
+
         cases = (
             ("inbox", "inbox_dir", object(), "inbox_dir"),
+            ("inbox pathlike", "inbox_dir", HostilePathLike(), "inbox_dir"),
             ("receipt", "receipt_dir", object(), "receipt_dir"),
             ("token", "bearer_token_file", object(), "bearer_token_file"),
         )
@@ -2005,6 +2895,56 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
                     message = str(caught.exception)
                     self.assertIn(f"{label} must be a path", message)
+                    self.assertNotIn(hidden, message)
+                    self.assertNotIn("does not exist", message)
+                    self.assertNotIn(str(root), message)
+
+    def test_direct_run_message_must_be_safe_path_before_inbox_loading(self):
+        pathlike_hidden = "rail-hostile-message-pathlike-secret"
+        list_hidden = "rail-hostile-message-list-secret"
+
+        class HostilePathLike:
+            def __fspath__(self):
+                raise RuntimeError(f"fspath={pathlike_hidden}")
+
+        class HostileList(list):
+            def __iter__(self):
+                raise RuntimeError(f"iter={list_hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"len={list_hidden}")
+
+        cases = (
+            ("pathlike", HostilePathLike(), "message must be a path"),
+            ("list subclass", HostileList(["rail-status.xml"]), "message must be a path"),
+            ("bytes", b"rail-status.xml", "message must be a path"),
+        )
+        for name, value, expected in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    args = argparse.Namespace(
+                        inbox_dir=root / "missing-inbox",
+                        message=value,
+                        torii_base_url="https://torii.example.invalid",
+                        receipt_dir=root / "receipts",
+                        bearer_token_file=None,
+                        timeout_secs=1.0,
+                        response_limit_bytes=1024,
+                        max_payload_bytes=1024,
+                        allow_insecure_http=False,
+                        allow_default_profile=False,
+                        allow_legacy_colr007=False,
+                        dry_run=True,
+                    )
+
+                    with self.assertRaises(ADAPTER.AdapterError) as caught:
+                        ADAPTER.run(args)
+
+                    message = str(caught.exception)
+                    self.assertIn(expected, message)
+                    self.assertNotIn(pathlike_hidden, message)
+                    self.assertNotIn(list_hidden, message)
                     self.assertNotIn("does not exist", message)
                     self.assertNotIn(str(root), message)
 
@@ -3545,6 +4485,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
     def test_http_status_code_bounds_are_exact(self):
         cases = (
+            (False, False),
+            (True, False),
             (99, False),
             (100, True),
             (599, True),
@@ -3653,6 +4595,50 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         self.assertEqual(result.error, "invalid HTTP status")
         self.assertNotIn(hidden, result.error)
 
+    def test_torii_status_accessor_failure_returns_failed_receipt_without_echo(self):
+        hidden = "token=rail-status-accessor-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingResponse:
+            @property
+            def status(self):
+                raise RuntimeError(hidden)
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                return FailingResponse()
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
     def test_malformed_torii_error_status_returns_failed_receipt_without_echo(self):
         hidden = "token=rail-error-status-secret"
         message = ADAPTER.GatewayMessage(
@@ -3685,6 +4671,56 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     {},
                     Body(),
                 )
+
+        original_opener = ADAPTER.NO_REDIRECT_OPENER
+        ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
+        try:
+            result = ADAPTER.submit_message(
+                "https://torii.example",
+                message,
+                timeout_secs=1.0,
+                response_limit_bytes=128,
+                bearer_token=None,
+            )
+        finally:
+            ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.status_code)
+        self.assertIsNone(result.response_body_sha256)
+        self.assertIsNone(result.response_body_preview)
+        self.assertEqual(result.error, "invalid HTTP status")
+        self.assertNotIn(hidden, result.error)
+
+    def test_torii_error_code_accessor_failure_returns_failed_receipt_without_echo(self):
+        hidden = "token=rail-error-code-accessor-secret"
+        message = ADAPTER.GatewayMessage(
+            xml_path=Path("rail.xml"),
+            sidecar_path=Path("rail.xml.json"),
+            payload=SAMPLE_XML,
+            payload_sha256=ADAPTER.sha256_hex(SAMPLE_XML),
+            message_type="pacs.002",
+            profile=None,
+            rail_message_id=None,
+        )
+
+        class FailingCodeHttpError(ADAPTER.urllib.error.HTTPError):
+            def __init__(self):
+                Exception.__init__(self, hidden)
+
+            @property
+            def code(self):
+                raise RuntimeError(hidden)
+
+            def read(self, _limit):
+                raise AssertionError("body must not be read after invalid status")
+
+            def close(self):
+                return None
+
+        class FailingOpener:
+            def open(self, *_args, **_kwargs):
+                raise FailingCodeHttpError()
 
         original_opener = ADAPTER.NO_REDIRECT_OPENER
         ADAPTER.NO_REDIRECT_OPENER = FailingOpener()
@@ -4348,6 +5384,38 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 )
         finally:
             ADAPTER.NO_REDIRECT_OPENER = original_opener
+
+    def test_bounded_response_body_rejects_hostile_bytes_subclasses(self):
+        hidden = "rail-response-body-subclass-secret"
+
+        class HostileBytes(bytes):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytes_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytes_len={hidden}")
+
+        class HostileBytearray(bytearray):
+            def __getitem__(self, _key):
+                raise RuntimeError(f"bytearray_getitem={hidden}")
+
+            def __len__(self):
+                raise RuntimeError(f"bytearray_len={hidden}")
+
+        cases = (
+            ("bytes-subclass", HostileBytes(b"accepted")),
+            ("bytearray-subclass", HostileBytearray(b"accepted")),
+        )
+        for name, body in cases:
+            with self.subTest(name=name):
+                try:
+                    result = ADAPTER._bounded_response_body(body, 4)
+                except Exception as error:
+                    self.fail(
+                        "hostile response body method was invoked: "
+                        f"{type(error).__name__}"
+                    )
+                self.assertIsNone(result)
 
     def test_torii_success_response_close_failure_preserves_receipt(self):
         hidden = "token=rail-close-secret"

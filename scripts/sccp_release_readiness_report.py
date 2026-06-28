@@ -6922,9 +6922,14 @@ def _native_evm_validation_blockers(value: Any, label: str) -> list[str]:
 
 
 def _decoded_public_blocker_text(value: str) -> str:
-    decoded = html_unescape(value)
-    for _ in range(3):
-        next_decoded = unquote(decoded)
+    decoded = value
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        for _percent_pass in range(3):
+            next_percent_decoded = unquote(next_decoded)
+            if next_percent_decoded == next_decoded:
+                break
+            next_decoded = next_percent_decoded
         if next_decoded == decoded:
             break
         decoded = next_decoded

@@ -1096,7 +1096,11 @@ def _source_adapter_gate_hash_key_for_domain_chain(
 ) -> str | None:
     verifier = _verify_module()
     key = verifier._source_adapter_gate_hash_key_for_domain_chain(domain, chain)
-    return str(key) if key is not None else None
+    if key is None:
+        return None
+    if not isinstance(key, str):
+        raise TypeError("source adapter gate hash key must be a string")
+    return key
 
 
 def _source_adapter_gate_hash_key_for_domain_chain_or_errors(
@@ -1107,7 +1111,10 @@ def _source_adapter_gate_hash_key_for_domain_chain_or_errors(
     """Return source-gate hash-key role or a bounded public blocker."""
 
     try:
-        return _source_adapter_gate_hash_key_for_domain_chain(domain, chain), []
+        key = _source_adapter_gate_hash_key_for_domain_chain(domain, chain)
+        if key is not None and not isinstance(key, str):
+            raise TypeError("source adapter gate hash key must be a string")
+        return key, []
     except (SystemExit, RuntimeError, TypeError, ValueError):
         return None, [f"{label} source adapter gate hash-key validation failed"]
 
@@ -2671,9 +2678,14 @@ def _submission_surface_sdk_helpers_text_error(value: Any, label: str) -> str | 
 
 
 def _decoded_public_blocker_text(value: str) -> str:
-    decoded = html_unescape(value)
-    for _ in range(3):
-        next_decoded = unquote(decoded)
+    decoded = value
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        for _percent_pass in range(3):
+            next_percent_decoded = unquote(next_decoded)
+            if next_percent_decoded == next_decoded:
+                break
+            next_decoded = next_percent_decoded
         if next_decoded == decoded:
             break
         decoded = next_decoded

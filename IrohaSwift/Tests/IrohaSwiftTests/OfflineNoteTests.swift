@@ -4344,6 +4344,93 @@ final class OfflineNoteTests: XCTestCase {
         )
     }
 
+    func testOfflineNoteWalletRejectsAuditWhenRecursiveVerifierFails() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        let senderStore = InMemoryOfflineNoteStore()
+        try senderStore.upsert(try Self.sourceWalletNote(fixture, certificate: senderCertificate))
+        let senderWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: senderStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: RejectingProofVerifier(rejectAudit: true),
+            certificateVerifier: try Self.fixtureOwnerCertificateVerifier(fixture),
+            ownerCertificateSigner: StaticOwnerCertificateSigner(certificate: senderCertificate),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.tokenNonceHex),
+                try Self.hex(derivation.changeNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { fixture.paymentToken.createdAtMs }
+        )
+        let recipientWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: fixture.paymentToken.recipientAccountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientCertificate),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.fixtureOwnerCertificateVerifier(fixture),
+            ownerCertificateSigner: StaticOwnerCertificateSigner(certificate: recipientCertificate),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_200 }
+        )
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+
+        XCTAssertThrowsError(try senderWallet.pay(receiveRequest)) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletError, .proofVerificationFailed)
+        }
+        XCTAssertEqual(
+            try senderStore.findNote(noteCommitment: try Self.hex(derivation.sourceNoteCommitment))?.state,
+            .spendable
+        )
+        XCTAssertEqual(try senderStore.listNotes().count, 1)
+    }
+
+    func testOfflineNoteWalletRejectsRedeemWhenRecursiveVerifierFails() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let store = InMemoryOfflineNoteStore()
+        let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        try store.upsert(note)
+        let submitter = RecordingTransactionSubmitter()
+        let wallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: fixture.chainVectors.issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: store,
+            transactionSubmitter: submitter,
+            proofProvider: BindingProofProvider(),
+            proofVerifier: RejectingProofVerifier(rejectRedeem: true),
+            certificateVerifier: try Self.fixtureOwnerCertificateVerifier(fixture),
+            ownerCertificateSigner: StaticOwnerCertificateSigner(certificate: senderCertificate),
+            randomSource: QueueRandomSource(values: []),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_300 }
+        )
+
+        do {
+            _ = try await wallet.redeem(note)
+            XCTFail("expected redeem proof verification failure")
+        } catch {
+            XCTAssertEqual(error as? OfflineNoteWalletError, .proofVerificationFailed)
+        }
+        XCTAssertTrue(submitter.defunds.isEmpty)
+        XCTAssertEqual(try store.findNote(noteCommitment: note.noteCommitment)?.state, .spendable)
+    }
+
     func testOfflineNoteWalletSyncReconcilesPendingSpendChangeAndRedeemStates() async throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
@@ -7109,6 +7196,30 @@ final class OfflineNoteTests: XCTestCase {
 
         func verifyRedeem(_ redemption: OfflineNoteRedeem) throws -> Bool {
             try redemption.recursiveProof.publicInputsHash == redemption.publicInputsHash()
+        }
+    }
+
+    private struct RejectingProofVerifier: OfflineNoteProofVerifier {
+        let rejectAudit: Bool
+        let rejectRedeem: Bool
+
+        init(rejectAudit: Bool = false, rejectRedeem: Bool = false) {
+            self.rejectAudit = rejectAudit
+            self.rejectRedeem = rejectRedeem
+        }
+
+        func verifyAudit(_ audit: OfflineNoteAuditBundle) throws -> Bool {
+            if rejectAudit {
+                return false
+            }
+            return try BindingProofVerifier().verifyAudit(audit)
+        }
+
+        func verifyRedeem(_ redemption: OfflineNoteRedeem) throws -> Bool {
+            if rejectRedeem {
+                return false
+            }
+            return try BindingProofVerifier().verifyRedeem(redemption)
         }
     }
 

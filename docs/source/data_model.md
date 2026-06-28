@@ -138,7 +138,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 - `SignedBlock` (versioned) encapsulates:
   - `signatures: BTreeSet<BlockSignature>` (from validators),
   - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
+  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, and `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
 - Utilities: `presigned`, fallible `set_transaction_results(...)` and `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
 - Legacy payload transaction caches decoded from wire entrypoints must be hydrated explicitly with `BlockPayload::hydrate_legacy_transaction_cache_from_entrypoints()`.
 - Merkle roots: transaction entrypoints and results are committed via Merkle trees; result Merkle root is placed into the block header.

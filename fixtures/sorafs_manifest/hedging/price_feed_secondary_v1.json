@@ -1,0 +1,11 @@
+{
+  "evidence_digest_hex": "fe241bccd335fb594ab50451b9bcec8a389b9585dcb039e82d9b3e93bbb9b2e8",
+  "feed_id": "xor-usd-secondary",
+  "norito_bytes_hex": "4e5254300000f7608ce7453eec1ddbf48e9960ce8abd006200000000000000a0a8520fca16be1e0201011211786f722d7573642d7365636f6e6461727911106d61726b65742d7365636f6e6461727908122b5d650000000008d0471f000000000002a00f20fe241bccd335fb594ab50451b9bcec8a389b9585dcb039e82d9b3e93bbb9b2e80401000000",
+  "observed_at_unix": 1700604690,
+  "source": "market-secondary",
+  "status": "degraded",
+  "version": 1,
+  "weight_bps": 4000,
+  "xor_usd_micros": 2050000
+}

@@ -1,0 +1,35 @@
+# Example:
+#   python3 scripts/run_sorafs_hedging_rollout_evidence.py \
+#     @scripts/examples/sorafs_hedging_rollout_collection.args.example \
+#     --dry-run
+
+--out-dir
+dist/sorafs-hedging-rollout-evidence
+--now-unix
+1800005000
+--max-feed-lag-secs
+900
+--max-cycle-age-secs
+3888000
+--max-divergence-bps
+500
+--min-billing-cycles
+2
+--feed-collector-evidence
+/runtime/sorafs/hedging/feed-collector-canary.json
+--reference-price-evidence
+/runtime/sorafs/hedging/reference-price-canary.json
+--billing-cycle-evidence
+/runtime/sorafs/billing/staged-cycle-a.json
+--billing-cycle-evidence
+/runtime/sorafs/billing/staged-cycle-b.json
+--statement-publication-evidence
+/runtime/sorafs/billing/statement-publication-canary.json
+--reconciliation-evidence
+/runtime/sorafs/billing/reconciliation-canary.json
+--metrics-alerts-evidence
+/runtime/sorafs/hedging/metrics-alerts-canary.json
+--native-bridge-release-evidence
+/runtime/sorafs/hedging/native-bridge-release.json
+--governance-approval-evidence
+/runtime/sorafs/hedging/governance-approval.json

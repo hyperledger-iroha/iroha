@@ -1,0 +1,31 @@
+# Example arguments for the SFM-3 reputation rollout evidence gate.
+# Use runtime artifact locations; do not store bearer tokens, signing keys,
+# raw snapshots, proof bytes, response bodies, or operator secrets.
+--evidence-dir
+artifacts/sorafs/reputation/staged
+--evidence
+publish=artifacts/sorafs/reputation/staged/publish.json
+--evidence
+latest=artifacts/sorafs/reputation/staged/latest.json
+--evidence
+provider=artifacts/sorafs/reputation/staged/provider-provider-a.json
+--evidence
+verify=artifacts/sorafs/reputation/staged/verify-provider-a.json
+--evidence
+events=artifacts/sorafs/reputation/staged/events.json
+--evidence
+metrics=artifacts/sorafs/reputation/staged/reputation-metrics-canary.json
+--evidence
+transport=artifacts/sorafs/reputation/staged/reputation-transport-canary.json
+--evidence
+consumption=artifacts/sorafs/reputation/staged/reputation-consumption-canary.json
+--require-provider
+provider-a
+--now-unix
+1800100000
+--max-snapshot-age-secs
+604800
+--max-ingest-lag-secs
+900
+--summary-out
+artifacts/sorafs/reputation/staged/rollout-summary.json

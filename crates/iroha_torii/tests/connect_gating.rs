@@ -123,7 +123,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
             debug_packet_loss_inbound_percent: 0,
             debug_packet_loss_outbound_percent: 0,
-trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             soranet_handshake: A::SoranetHandshake {
                 descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
                 client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -148,6 +148,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             ),
             deferred_send_max_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer:
+                iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -170,6 +172,14 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
+            p2p_outbound_frame_queue_max_high_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap: nonzero!(128usize),
             consensus_ingress_rate_per_sec:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
@@ -652,6 +662,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 missing_request_stale_height_margin:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_MISSING_REQUEST_STALE_HEIGHT_MARGIN,
+                pending_block_cap:
+                    iroha_config::parameters::defaults::sumeragi::RECOVERY_PENDING_BLOCK_CAP,
                 pending_block_sync_cap:
                     iroha_config::parameters::defaults::sumeragi::
                         RECOVERY_PENDING_BLOCK_SYNC_CAP,
@@ -716,6 +728,10 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
                 payload_chunks_per_tick:
                     iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
+                outbound_queue_max_sessions:
+                    iroha_config::parameters::defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_SESSIONS,
+                outbound_queue_max_bytes:
+                    iroha_config::parameters::defaults::sumeragi::RBC_OUTBOUND_QUEUE_MAX_BYTES,
                 inline_block_created_backup: iroha_config::parameters::defaults::sumeragi::RBC_INLINE_BLOCK_CREATED_BACKUP,
                 store_max_sessions:
                     iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
@@ -728,6 +744,12 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 ),
                 disk_store_max_bytes:
                     iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
+            },
+            native_amx: A::SumeragiNativeAmx {
+                session_cache_max:
+                    iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_CACHE_MAX,
+                session_body_bucket_max:
+                    iroha_config::parameters::defaults::sumeragi::NATIVE_AMX_SESSION_BODY_BUCKET_MAX,
             },
             finality: A::SumeragiFinality {
                 proof_policy: iroha_config::parameters::actual::ProofPolicy::Off,

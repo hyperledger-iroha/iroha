@@ -331,7 +331,15 @@ impl SignedBlock {
             .as_ref()
             .map_or_else(Vec::new, |result| result.trigger_completions.clone());
         let result_merkle: MerkleTree<TransactionResult> = result_hashes.collect();
-        let transaction_results = results.into_iter().map(TransactionResult::from).collect();
+        let transaction_results: Vec<_> =
+            results.into_iter().map(TransactionResult::from).collect();
+        let committed_fragment_count = u64::try_from(
+            transaction_results
+                .iter()
+                .filter(|result| result.as_ref().is_ok())
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
         self.payload.header.result_merkle_root = result_merkle.root();
         let axt_policy_snapshot =
             axt_policy_snapshot.map(crate::nexus::AxtPolicySnapshot::with_computed_version);
@@ -341,6 +349,7 @@ impl SignedBlock {
             merkle,
             result_merkle,
             transaction_results,
+            committed_fragment_count,
             fastpq_transcripts,
             axt_envelopes,
             trigger_completions,
@@ -357,6 +366,21 @@ impl SignedBlock {
     ) {
         if let Some(result) = self.result.as_mut() {
             result.trigger_completions = trigger_completions;
+        }
+    }
+
+    /// Number of successful execution fragments recorded with this block result.
+    #[inline]
+    pub fn committed_fragment_count(&self) -> Option<u64> {
+        self.result
+            .as_ref()
+            .map(|result| result.committed_fragment_count)
+    }
+
+    /// Set the number of successful execution fragments recorded with this block result.
+    pub fn set_committed_fragment_count(&mut self, count: u64) {
+        if let Some(result) = self.result.as_mut() {
+            result.committed_fragment_count = count;
         }
     }
 
@@ -698,6 +722,7 @@ impl SignedBlock {
             merkle: entry_merkle,
             result_merkle,
             transaction_results: Vec::new(),
+            committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
             trigger_completions: Vec::new(),
@@ -1848,6 +1873,7 @@ mod tests {
             transaction_results: vec![crate::transaction::signed::TransactionResult::from(
                 result_inner,
             )],
+            committed_fragment_count: 1,
             fastpq_transcripts: std::collections::BTreeMap::new(),
             axt_envelopes: Vec::new(),
             trigger_completions: Vec::new(),
@@ -2806,6 +2832,41 @@ mod tests {
             .expect("empty block has no external hash prefix to validate");
 
         assert_eq!(block.fastpq_transcripts(), &transcripts);
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn set_transaction_results_records_committed_fragment_count() {
+        use std::num::NonZeroU64;
+
+        use crate::transaction::TransactionResultInner;
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let keypair = checked_random_keypair();
+        let signature = checked_block_signature(0, &keypair, &header);
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+
+        block
+            .set_transaction_results_with_transcripts(
+                Vec::new(),
+                &[],
+                vec![
+                    TransactionResultInner::Ok(crate::trigger::DataTriggerSequence::default()),
+                    TransactionResultInner::Err(
+                        crate::transaction::error::TransactionRejectionReason::Validation(
+                            crate::ValidationFail::NotPermitted("fixture".to_owned()),
+                        ),
+                    ),
+                ],
+                BTreeMap::new(),
+                Vec::new(),
+                None,
+            )
+            .expect("empty block has no external hash prefix to validate");
+
+        assert_eq!(block.committed_fragment_count(), Some(1));
+        block.set_committed_fragment_count(3);
+        assert_eq!(block.committed_fragment_count(), Some(3));
     }
 
     #[cfg(feature = "transparent_api")]

@@ -1869,9 +1869,12 @@ impl Actor {
                 let vote_count = qc
                     .as_ref()
                     .map_or(0, |qc| qc_voting_signer_count(qc, roster_len));
-                let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
                 let (requeued, failures, _duplicate_failures, _gossip_hashes) =
-                    requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
+                    requeue_block_transactions(
+                        self.queue.as_ref(),
+                        self.state.as_ref(),
+                        pending.block.external_entrypoints_cloned(),
+                    );
                 if relay_backpressure {
                     debug!(
                         height = key.1,
@@ -2581,8 +2584,11 @@ impl Actor {
             if !effective_has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
                 // already retried with availability evidence and need to unblock proposal assembly.
-                let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
-                requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs)
+                requeue_block_transactions(
+                    self.queue.as_ref(),
+                    self.state.as_ref(),
+                    pending.block.external_entrypoints_cloned(),
+                )
             } else {
                 (0, 0, 0, Vec::new())
             };
@@ -3347,18 +3353,24 @@ impl Actor {
         let selected_target_set: std::collections::BTreeSet<_> = targets.iter().cloned().collect();
         let full_fanout_target_set: std::collections::BTreeSet<_> =
             all_non_local_targets.iter().cloned().collect();
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
         let selected_reaches_stake_quorum =
-            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                 self.state.view().world(),
                 topology_peers,
                 &selected_target_set,
+                active_lane_ids.as_ref(),
             )
             .unwrap_or(false);
         let full_fanout_reaches_stake_quorum =
-            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
                 self.state.view().world(),
                 topology_peers,
                 &full_fanout_target_set,
+                active_lane_ids.as_ref(),
             )
             .unwrap_or(false);
         if near_commit_quorum && !all_non_local_targets.is_empty() {
@@ -3411,18 +3423,26 @@ impl Actor {
         selected_targets: &[PeerId],
     ) {
         let selected: std::collections::BTreeSet<_> = selected_targets.iter().cloned().collect();
-        let selected_bps = crate::sumeragi::stake_snapshot::stake_coverage_bps_for_world(
-            self.state.view().world(),
-            topology_peers,
-            &selected,
-        )
-        .unwrap_or(0);
-        let reached = crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world(
-            self.state.view().world(),
-            topology_peers,
-            &selected,
-        )
-        .unwrap_or(false);
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus
+            .enabled
+            .then(|| crate::state::nexus_active_lane_ids(&nexus));
+        let selected_bps =
+            crate::sumeragi::stake_snapshot::stake_coverage_bps_for_world_with_active_lanes(
+                self.state.view().world(),
+                topology_peers,
+                &selected,
+                active_lane_ids.as_ref(),
+            )
+            .unwrap_or(0);
+        let reached =
+            crate::sumeragi::stake_snapshot::stake_quorum_reached_for_world_with_active_lanes(
+                self.state.view().world(),
+                topology_peers,
+                &selected,
+                active_lane_ids.as_ref(),
+            )
+            .unwrap_or(false);
         super::status::record_npos_repair_coverage(
             height,
             view,

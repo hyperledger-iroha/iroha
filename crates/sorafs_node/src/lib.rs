@@ -19,6 +19,7 @@ pub mod por;
 pub mod potr;
 mod reconciliation;
 pub mod repair;
+mod reserve;
 pub mod scheduler;
 pub mod store;
 pub mod telemetry;
@@ -42,13 +43,25 @@ pub use moderation::{
     ModerationScreeningVerdict, ModerationVoteCounts, local_moderation_panel_roster_hash,
 };
 pub use orderbook::{
-    OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
-    OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
+    OrderbookBuyerSettlementLedgerEntry, OrderbookCancelOutcome, OrderbookEvent,
+    OrderbookEventKind, OrderbookProviderSettlementLedgerEntry, OrderbookReceiptOutcome,
+    OrderbookRuntimeError, OrderbookSettlementLedger, OrderbookSnapshot, OrderbookSubmitOutcome,
     local_orderbook_provider_id_for_owner_account,
 };
 pub use por::{
     ManifestVrfBundle, PlannedChallenge, PorChallengePlannerError, PorRandomness, PorTracker,
     PorTrackerError, PorVerdictStats, build_por_challenge_for_manifest,
+};
+pub use reserve::{
+    ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord, ReserveAppealRequest,
+    ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
+    ReserveCreditLineSnapshot, ReserveLifecycleEvent, ReserveLifecyclePolicyOutcome,
+    ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot, ReserveLifecyclePolicyUpdate,
+    ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot, ReserveLifecycleUpdate,
+    ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate, ReserveMovementKind,
+    ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
+    ReserveMovementRuntimeError, ReserveMovementSnapshot, ReserveProviderBalance,
+    ReserveProviderCreditLineState, ReserveProviderLifecycleSummary,
 };
 
 /// Outcome returned when recording a PoR verdict.
@@ -170,10 +183,12 @@ const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     env, fs,
-    io::{self, ErrorKind, Read},
+    io::{self, ErrorKind, Read, Write},
     path::{Component, Path, PathBuf},
     sync::{
         Arc, RwLock,
@@ -198,6 +213,7 @@ use iroha_data_model::{
             AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
             SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
         },
+        reserve::ReserveLifecycleStage,
         transparency::{
             ModerationLedgerCyclePublicationV1, ModerationLedgerEntryV1,
             ModerationLedgerMetadataV1, ModerationPrivacyAggregateV1, ProofTokenIssuanceV1,
@@ -215,14 +231,17 @@ pub use repair::{
     RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot,
     RepairWatchdogReport, RepairWorkerReport,
 };
+use reserve::ReserveLifecycleRuntime;
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
     AppealFinanceReconciliationSummaryV1, ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
-    OrderTierV1, OrderbookRuntimeSnapshotV1, ReconciliationValidationError,
-    ReputationSnapshotEventV1, ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementReceiptV1,
-    SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
-    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    OrderTierV1, OrderbookRuntimeSnapshotV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReconciliationValidationError,
+    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+    ReputationSnapshotEventV1, ReputationSnapshotV1, ReputationWeightsV1,
+    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+    SettlementChannelStatusV1, SettlementReceiptV1, SoraFsAppealFinanceAccountFlowV1,
+    SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
@@ -236,6 +255,7 @@ use sorafs_manifest::{
         RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
         SorafsAuditHeaderV1,
     },
+    score_provider_reputation,
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -246,7 +266,9 @@ pub use transparency::{
     TransparencySourceEntryAdapterError, appeal_finance_report_source_entry,
     appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
     moderation_ballot_governance_event_source_entry, proof_token_issuance_from_base64,
-    proof_token_issuance_from_frame,
+    proof_token_issuance_from_frame, reserve_appeal_source_entry,
+    reserve_lifecycle_event_source_entry, reserve_lifecycle_policy_source_entry,
+    reserve_movement_source_entry,
 };
 
 use crate::{
@@ -332,6 +354,46 @@ fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
     }
 }
 
+fn reserve_lifecycle_stage_metric_label(stage: ReserveLifecycleStage) -> &'static str {
+    match stage {
+        ReserveLifecycleStage::Active => "active",
+        ReserveLifecycleStage::Warning => "warning",
+        ReserveLifecycleStage::Grace => "grace",
+        ReserveLifecycleStage::Delinquent => "delinquent",
+        ReserveLifecycleStage::Default => "default",
+    }
+}
+
+fn reserve_lifecycle_stage_to_reputation(stage: ReserveLifecycleStage) -> ReputationReserveStageV1 {
+    match stage {
+        ReserveLifecycleStage::Active => ReputationReserveStageV1::Active,
+        ReserveLifecycleStage::Warning => ReputationReserveStageV1::Warning,
+        ReserveLifecycleStage::Grace => ReputationReserveStageV1::Grace,
+        ReserveLifecycleStage::Delinquent => ReputationReserveStageV1::Delinquent,
+        ReserveLifecycleStage::Default => ReputationReserveStageV1::Default,
+    }
+}
+
+const fn reserve_reputation_baseline_metrics() -> ReputationProviderMetricsV1 {
+    ReputationProviderMetricsV1 {
+        version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        por_success_bps: 10_000,
+        pdp_success_bps: 10_000,
+        potr_success_bps: 10_000,
+        latency_health_bps: 10_000,
+        dispute_rate_bps: 0,
+        token_violation_rate_bps: 0,
+        repair_breach_rate_bps: 0,
+    }
+}
+
+fn reserve_movement_kind_metric_label(kind: ReserveMovementKind) -> &'static str {
+    match kind {
+        ReserveMovementKind::TopUp => "top_up",
+        ReserveMovementKind::Withdrawal => "withdrawal",
+    }
+}
+
 fn validate_orderbook_admission_policy(
     policy: OrderbookAdmissionPolicy,
     order: &OrderRequestV1,
@@ -347,6 +409,30 @@ fn validate_orderbook_admission_policy(
         return Err(OrderbookRuntimeError::OrderPriceTickMismatch {
             price_micro_xor,
             tick_micro_xor: policy.price_tick_micro_xor(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_orderbook_reserve_lifecycle_admission(
+    reserve_lifecycle: &RwLock<ReserveLifecycleRuntime>,
+    order: &OrderRequestV1,
+) -> Result<(), OrderbookRuntimeError> {
+    if order.side != OrderSideV1::Ask {
+        return Ok(());
+    }
+    let provider_id = local_orderbook_provider_id_for_owner_account(&order.owner_account);
+    let Some(summary) = reserve_lifecycle
+        .read()
+        .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
+        .provider_summary(provider_id)
+    else {
+        return Ok(());
+    };
+    if summary.lifecycle.disable_adverts {
+        return Err(OrderbookRuntimeError::ReserveLifecycleAdvertDisabled {
+            provider_id_hex: hex::encode(provider_id),
+            stage: reserve_lifecycle_stage_metric_label(summary.lifecycle.stage).to_owned(),
         });
     }
     Ok(())
@@ -393,6 +479,44 @@ fn write_local_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+fn write_local_private_checkpoint_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let counter = LOCAL_RUNTIME_SNAPSHOT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = local_checkpoint_tmp_path(path, std::process::id(), counter);
+    write_local_private_file(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, path)?;
+    set_local_private_file_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_local_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.flush()
+}
+
+#[cfg(not(unix))]
+fn write_local_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    fs::write(path, bytes)
+}
+
+#[cfg(unix)]
+fn set_local_private_file_permissions(path: &Path) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn set_local_private_file_permissions(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 fn local_checkpoint_tmp_path(path: &Path, pid: u32, counter: u64) -> PathBuf {
     let suffix = format!("{LOCAL_RUNTIME_SNAPSHOT_TMP_EXT}-{pid}-{counter}");
     let candidate = path.with_added_extension(&suffix);
@@ -405,6 +529,8 @@ fn local_checkpoint_tmp_path(path: &Path, pid: u32, counter: u64) -> PathBuf {
 const REPAIR_EVENT_CHANNEL_CAPACITY: usize = 128;
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
 const ORDERBOOK_EVENT_CHANNEL_CAPACITY: usize = 128;
+const RESERVE_LIFECYCLE_EVENT_CHANNEL_CAPACITY: usize = 128;
+const RESERVE_MOVEMENT_EVENT_CHANNEL_CAPACITY: usize = 128;
 const MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY: usize = 128;
 const ORDERBOOK_METRIC_CLUSTER_LOCAL: &str = "local";
 
@@ -1113,6 +1239,9 @@ pub struct NodeHandle {
     orderbook_checkpoint_path: Option<PathBuf>,
     orderbook_events: Arc<RwLock<Vec<OrderbookEvent>>>,
     orderbook_event_sender: broadcast::Sender<OrderbookEvent>,
+    reserve_lifecycle: Arc<RwLock<ReserveLifecycleRuntime>>,
+    reserve_lifecycle_event_sender: broadcast::Sender<ReserveLifecycleEvent>,
+    reserve_movement_event_sender: broadcast::Sender<ReserveMovementRecord>,
     moderation_model_registry_checkpoint_path: Option<PathBuf>,
     moderation_model_registry: Arc<RwLock<ModerationModelRegistry>>,
     moderation_screening_checkpoint_path: Option<PathBuf>,
@@ -1251,6 +1380,10 @@ impl NodeHandle {
         let (repair_event_sender, _) = broadcast::channel(REPAIR_EVENT_CHANNEL_CAPACITY);
         let (reputation_event_sender, _) = broadcast::channel(REPUTATION_EVENT_CHANNEL_CAPACITY);
         let (orderbook_event_sender, _) = broadcast::channel(ORDERBOOK_EVENT_CHANNEL_CAPACITY);
+        let (reserve_lifecycle_event_sender, _) =
+            broadcast::channel(RESERVE_LIFECYCLE_EVENT_CHANNEL_CAPACITY);
+        let (reserve_movement_event_sender, _) =
+            broadcast::channel(RESERVE_MOVEMENT_EVENT_CHANNEL_CAPACITY);
         let (moderation_event_sender, _) =
             broadcast::channel(MODERATION_BALLOT_EVENT_CHANNEL_CAPACITY);
 
@@ -1284,6 +1417,9 @@ impl NodeHandle {
             orderbook_checkpoint_path,
             orderbook_events: Arc::new(RwLock::new(Vec::new())),
             orderbook_event_sender,
+            reserve_lifecycle: Arc::new(RwLock::new(ReserveLifecycleRuntime::default())),
+            reserve_lifecycle_event_sender,
+            reserve_movement_event_sender,
             moderation_model_registry_checkpoint_path,
             moderation_model_registry: Arc::new(RwLock::new(ModerationModelRegistry::default())),
             moderation_screening_checkpoint_path,
@@ -1507,6 +1643,92 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("reputation snapshot cache poisoned"))?;
         *guard = Some(snapshot);
         Ok(())
+    }
+
+    /// Publish a reputation snapshot with local reserve lifecycle stages applied.
+    ///
+    /// Providers already present in the latest reputation snapshot keep their
+    /// raw metrics and previous score for deterministic smoothing. Providers
+    /// that only exist in local reserve state are added with neutral proof
+    /// metrics so the reserve-stage penalty is still visible downstream.
+    pub fn publish_reserve_adjusted_reputation_snapshot(
+        &self,
+        snapshot_id: [u8; 16],
+        generated_at_unix: u64,
+        weights: ReputationWeightsV1,
+    ) -> Result<ReputationSnapshotV1, GovernancePublishError> {
+        let reserve_snapshot = self.reserve_lifecycle_snapshot(generated_at_unix);
+        if reserve_snapshot.providers.is_empty() {
+            return Err(GovernancePublishError::other(
+                "reserve-adjusted reputation snapshot requires local reserve provider state",
+            ));
+        }
+
+        let previous_snapshot = self.latest_reputation_snapshot();
+        let previous_by_provider = previous_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .providers
+                    .iter()
+                    .map(|provider| (provider.provider_id.clone(), provider.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let previous_snapshot_id = previous_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.snapshot_id);
+
+        let mut providers = previous_snapshot
+            .as_ref()
+            .map_or_else(Vec::new, |snapshot| snapshot.providers.clone());
+        let mut provider_positions = providers
+            .iter()
+            .enumerate()
+            .map(|(index, provider)| (provider.provider_id.clone(), index))
+            .collect::<HashMap<_, _>>();
+
+        for summary in reserve_snapshot.providers {
+            let provider_id = hex::encode(summary.provider_id);
+            let previous = previous_by_provider.get(&provider_id);
+            let input = ReputationProviderInputV1 {
+                version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
+                provider_id: provider_id.clone(),
+                metrics: previous.map_or_else(reserve_reputation_baseline_metrics, |provider| {
+                    provider.raw_metrics
+                }),
+                reserve_stage: reserve_lifecycle_stage_to_reputation(summary.lifecycle.stage),
+                previous_score_bps: previous.map(|provider| provider.score_bps),
+                active_dispute: false,
+                slashing_event: false,
+            };
+            let scored = score_provider_reputation(&input, &weights).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "score reserve-adjusted reputation provider `{provider_id}`: {err}"
+                ))
+            })?;
+            if let Some(position) = provider_positions.get(&provider_id).copied() {
+                providers[position] = scored;
+            } else {
+                provider_positions.insert(provider_id, providers.len());
+                providers.push(scored);
+            }
+        }
+
+        let snapshot = ReputationSnapshotV1::from_providers(
+            snapshot_id,
+            generated_at_unix,
+            weights,
+            providers,
+            previous_snapshot_id,
+        )
+        .map_err(|err| {
+            GovernancePublishError::other(format!(
+                "build reserve-adjusted reputation snapshot: {err}"
+            ))
+        })?;
+        self.publish_reputation_snapshot(snapshot.clone())?;
+        Ok(snapshot)
     }
 
     /// Publish a typed SoraFS appeal finance report to the governance pipeline.
@@ -2270,6 +2492,486 @@ impl NodeHandle {
         self.orderbook_event_sender.subscribe()
     }
 
+    /// Record a local reserve lifecycle service update for one provider.
+    ///
+    /// The update is projected using the shared SFM-6 reserve quote logic, then
+    /// stored as the provider's latest summary and appended to the local event
+    /// history. This local service surface does not submit reserve movements to
+    /// chain custody; signed Torii routes remain the production integration
+    /// layer.
+    pub fn record_reserve_lifecycle_update(
+        &self,
+        update: ReserveLifecycleUpdate,
+    ) -> Result<ReserveLifecycleEvent, ReserveLifecycleRuntimeError> {
+        let event = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveLifecycleRuntimeError::StateLockPoisoned)?
+            .record_update(update)?;
+        let _ = self.reserve_lifecycle_event_sender.send(event.clone());
+        self.record_transparency_source_entry_lossy(
+            transparency::reserve_lifecycle_event_source_entry(&event),
+            "reserve_lifecycle_event",
+            &hex::encode(event.provider_id),
+        );
+        global_or_default().record_sorafs_reserve_service_request("lifecycle_update", "accepted");
+        self.refresh_reserve_runtime_metrics();
+        Ok(event)
+    }
+
+    /// Return one provider's latest reserve lifecycle summary.
+    #[must_use]
+    pub fn reserve_provider_lifecycle_summary(
+        &self,
+        provider_id: [u8; 32],
+    ) -> Option<ReserveProviderLifecycleSummary> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.provider_summary(provider_id))
+    }
+
+    /// Return a point-in-time snapshot of the local reserve lifecycle runtime.
+    #[must_use]
+    pub fn reserve_lifecycle_snapshot(&self, generated_at_unix: u64) -> ReserveLifecycleSnapshot {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| ReserveLifecycleSnapshot {
+                generated_at_unix,
+                ..ReserveLifecycleSnapshot::default()
+            },
+            |runtime| runtime.snapshot(generated_at_unix),
+        )
+    }
+
+    /// Return one provider's latest local reserve credit-line state.
+    #[must_use]
+    pub fn reserve_provider_credit_line(
+        &self,
+        provider_id: [u8; 32],
+    ) -> Option<ReserveProviderCreditLineState> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.provider_credit_line(provider_id))
+    }
+
+    /// Return a point-in-time snapshot of local reserve credit-line state.
+    #[must_use]
+    pub fn reserve_credit_line_snapshot(
+        &self,
+        generated_at_unix: u64,
+    ) -> ReserveCreditLineSnapshot {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| ReserveCreditLineSnapshot {
+                generated_at_unix,
+                ..ReserveCreditLineSnapshot::default()
+            },
+            |runtime| runtime.credit_line_snapshot(generated_at_unix),
+        )
+    }
+
+    /// Advance retained reserve lifecycle summaries to an explicit service timestamp.
+    pub fn advance_reserve_lifecycle(
+        &self,
+        observed_at_unix: u64,
+    ) -> Result<Vec<ReserveLifecycleEvent>, ReserveLifecycleRuntimeError> {
+        let events = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveLifecycleRuntimeError::StateLockPoisoned)?
+            .advance_lifecycle_to(observed_at_unix)?;
+        for event in &events {
+            let _ = self.reserve_lifecycle_event_sender.send(event.clone());
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_lifecycle_event_source_entry(event),
+                "reserve_lifecycle_time_advance",
+                &hex::encode(event.provider_id),
+            );
+        }
+        let outcome = if events.is_empty() {
+            "noop"
+        } else {
+            "advanced"
+        };
+        global_or_default().record_sorafs_reserve_service_request("lifecycle_advance", outcome);
+        if !events.is_empty() {
+            self.refresh_reserve_runtime_metrics();
+        }
+        Ok(events)
+    }
+
+    /// Return local reserve lifecycle events after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn reserve_lifecycle_events_since(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> Vec<ReserveLifecycleEvent> {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| Vec::new(),
+            |runtime| runtime.events_since(since_sequence, limit),
+        )
+    }
+
+    /// Return the latest local reserve lifecycle event sequence accepted by this node.
+    #[must_use]
+    pub fn latest_reserve_lifecycle_event_sequence(&self) -> Option<u64> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.latest_event_sequence())
+    }
+
+    /// Subscribe to live local reserve lifecycle events.
+    #[must_use]
+    pub fn subscribe_reserve_lifecycle_events(&self) -> broadcast::Receiver<ReserveLifecycleEvent> {
+        self.reserve_lifecycle_event_sender.subscribe()
+    }
+
+    /// Record a local reserve custody movement for one provider.
+    ///
+    /// The local movement ledger tracks provider reserve balances and
+    /// idempotent top-up/withdrawal records. It does not submit the movement to
+    /// chain custody; callers must still submit the corresponding signed
+    /// transaction through the production client path.
+    pub fn record_reserve_movement(
+        &self,
+        request: ReserveMovementRequest,
+    ) -> Result<ReserveMovementOutcome, ReserveMovementRuntimeError> {
+        let outcome = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveMovementRuntimeError::StateLockPoisoned)?
+            .record_movement(request)?;
+        if !outcome.duplicate {
+            let _ = self
+                .reserve_movement_event_sender
+                .send(outcome.record.clone());
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_movement_source_entry(&outcome.record),
+                "reserve_movement",
+                &hex::encode(outcome.record.movement_id),
+            );
+            global_or_default().record_sorafs_reserve_service_request(
+                reserve_movement_kind_metric_label(outcome.record.kind),
+                "accepted",
+            );
+            self.refresh_reserve_runtime_metrics();
+        } else {
+            global_or_default().record_sorafs_reserve_service_request(
+                reserve_movement_kind_metric_label(outcome.record.kind),
+                "duplicate",
+            );
+        }
+        Ok(outcome)
+    }
+
+    /// Return one locally recorded reserve movement by movement id.
+    #[must_use]
+    pub fn reserve_movement(&self, movement_id: [u8; 32]) -> Option<ReserveMovementRecord> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.movement(movement_id))
+    }
+
+    /// Attach local chain custody evidence to a recorded reserve movement.
+    pub fn record_reserve_movement_custody_update(
+        &self,
+        update: ReserveMovementCustodyUpdate,
+    ) -> Result<ReserveMovementRecord, ReserveMovementRuntimeError> {
+        let movement_id = update.movement_id;
+        let mut runtime = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveMovementRuntimeError::StateLockPoisoned)?;
+        let previous = runtime.movement(movement_id);
+        let record = runtime.record_movement_custody_update(update)?;
+        let changed = previous.as_ref() != Some(&record);
+        drop(runtime);
+        if changed {
+            let _ = self.reserve_movement_event_sender.send(record.clone());
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_movement_source_entry(&record),
+                "reserve_movement_custody_update",
+                &hex::encode(record.movement_id),
+            );
+            global_or_default()
+                .record_sorafs_reserve_service_request("movement_custody_update", "updated");
+            self.refresh_reserve_runtime_metrics();
+        } else {
+            global_or_default()
+                .record_sorafs_reserve_service_request("movement_custody_update", "replay");
+        }
+        Ok(record)
+    }
+
+    /// Return one provider's locally recorded reserve balance.
+    #[must_use]
+    pub fn reserve_provider_balance(
+        &self,
+        provider_id: [u8; 32],
+    ) -> Option<ReserveProviderBalance> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.provider_balance(provider_id))
+    }
+
+    /// Return a point-in-time snapshot of the local reserve movement ledger.
+    #[must_use]
+    pub fn reserve_movement_snapshot(&self, generated_at_unix: u64) -> ReserveMovementSnapshot {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| ReserveMovementSnapshot {
+                generated_at_unix,
+                ..ReserveMovementSnapshot::default()
+            },
+            |runtime| runtime.movement_snapshot(generated_at_unix),
+        )
+    }
+
+    /// Return local reserve movements after `since_sequence`, capped by `limit`.
+    #[must_use]
+    pub fn reserve_movements_since(
+        &self,
+        since_sequence: Option<u64>,
+        limit: usize,
+    ) -> Vec<ReserveMovementRecord> {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| Vec::new(),
+            |runtime| runtime.movements_since(since_sequence, limit),
+        )
+    }
+
+    /// Return the latest local reserve movement sequence accepted by this node.
+    #[must_use]
+    pub fn latest_reserve_movement_sequence(&self) -> Option<u64> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.latest_movement_sequence())
+    }
+
+    /// Subscribe to live local reserve movement records.
+    #[must_use]
+    pub fn subscribe_reserve_movement_events(&self) -> broadcast::Receiver<ReserveMovementRecord> {
+        self.reserve_movement_event_sender.subscribe()
+    }
+
+    /// Record a local reserve appeal submitted by a provider.
+    ///
+    /// Appeals are local authenticated service records used for rollout and
+    /// governance handoff. Accepted decisions with a requested stage are applied
+    /// to local lifecycle state by the decision path.
+    pub fn record_reserve_appeal(
+        &self,
+        request: ReserveAppealRequest,
+    ) -> Result<ReserveAppealOutcome, ReserveAppealRuntimeError> {
+        let outcome = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveAppealRuntimeError::StateLockPoisoned)?
+            .record_appeal(request)?;
+        if !outcome.duplicate {
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_appeal_source_entry(&outcome.record),
+                "reserve_appeal",
+                &hex::encode(outcome.record.appeal_id),
+            );
+            global_or_default().record_sorafs_reserve_service_request("appeal", "accepted");
+            self.refresh_reserve_runtime_metrics();
+        } else {
+            global_or_default().record_sorafs_reserve_service_request("appeal", "duplicate");
+        }
+        Ok(outcome)
+    }
+
+    /// Return one locally recorded reserve appeal by appeal id.
+    #[must_use]
+    pub fn reserve_appeal(&self, appeal_id: [u8; 32]) -> Option<ReserveAppealRecord> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.appeal(appeal_id))
+    }
+
+    /// Record a local reserve appeal decision.
+    pub fn record_reserve_appeal_decision(
+        &self,
+        decision: ReserveAppealDecision,
+    ) -> Result<ReserveAppealRecord, ReserveAppealRuntimeError> {
+        let appeal_id = decision.appeal_id;
+        let mut runtime = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveAppealRuntimeError::StateLockPoisoned)?;
+        let previous = runtime.appeal(appeal_id);
+        let outcome = runtime.record_appeal_decision(decision)?;
+        let record = outcome.record;
+        let lifecycle_event = outcome.lifecycle_event;
+        let changed = !outcome.duplicate && previous.as_ref() != Some(&record);
+        drop(runtime);
+        if changed {
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_appeal_source_entry(&record),
+                "reserve_appeal_decision",
+                &hex::encode(record.appeal_id),
+            );
+            global_or_default().record_sorafs_reserve_service_request("appeal_decision", "updated");
+        } else {
+            global_or_default().record_sorafs_reserve_service_request("appeal_decision", "replay");
+        }
+        if let Some(event) = lifecycle_event {
+            let _ = self.reserve_lifecycle_event_sender.send(event.clone());
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_lifecycle_event_source_entry(&event),
+                "reserve_lifecycle_appeal_override",
+                &hex::encode(event.provider_id),
+            );
+        }
+        if changed {
+            self.refresh_reserve_runtime_metrics();
+        }
+        Ok(record)
+    }
+
+    /// Return a point-in-time snapshot of local reserve appeals.
+    #[must_use]
+    pub fn reserve_appeal_snapshot(&self, generated_at_unix: u64) -> ReserveAppealSnapshot {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| ReserveAppealSnapshot {
+                generated_at_unix,
+                ..ReserveAppealSnapshot::default()
+            },
+            |runtime| runtime.appeal_snapshot(generated_at_unix),
+        )
+    }
+
+    /// Record a local reserve lifecycle policy-window update.
+    ///
+    /// The update is stored for service readback and governance handoff. When
+    /// the policy is already effective, current provider summaries whose
+    /// retained lifecycle observation falls under that policy are reprojected
+    /// through new lifecycle events instead of rewriting previous events.
+    pub fn record_reserve_lifecycle_policy_update(
+        &self,
+        update: ReserveLifecyclePolicyUpdate,
+    ) -> Result<ReserveLifecyclePolicyOutcome, ReserveAppealRuntimeError> {
+        let outcome = self
+            .reserve_lifecycle
+            .write()
+            .map_err(|_| ReserveAppealRuntimeError::StateLockPoisoned)?
+            .record_lifecycle_policy_update(update)?;
+        if !outcome.duplicate {
+            self.record_transparency_source_entry_lossy(
+                transparency::reserve_lifecycle_policy_source_entry(&outcome.record),
+                "reserve_lifecycle_policy",
+                &hex::encode(outcome.record.policy_id),
+            );
+            for event in &outcome.reprojected_events {
+                let _ = self.reserve_lifecycle_event_sender.send(event.clone());
+                self.record_transparency_source_entry_lossy(
+                    transparency::reserve_lifecycle_event_source_entry(event),
+                    "reserve_lifecycle_policy_reprojection",
+                    &hex::encode(event.provider_id),
+                );
+            }
+            global_or_default()
+                .record_sorafs_reserve_service_request("lifecycle_policy", "accepted");
+            if !outcome.reprojected_events.is_empty() {
+                self.refresh_reserve_runtime_metrics();
+            }
+        } else {
+            global_or_default()
+                .record_sorafs_reserve_service_request("lifecycle_policy", "duplicate");
+        }
+        Ok(outcome)
+    }
+
+    /// Return the latest local reserve lifecycle policy update by sequence.
+    #[must_use]
+    pub fn latest_reserve_lifecycle_policy(&self) -> Option<ReserveLifecyclePolicyRecord> {
+        self.reserve_lifecycle
+            .read()
+            .ok()
+            .and_then(|runtime| runtime.latest_lifecycle_policy())
+    }
+
+    /// Return a point-in-time snapshot of local reserve lifecycle policy records.
+    #[must_use]
+    pub fn reserve_lifecycle_policy_snapshot(
+        &self,
+        generated_at_unix: u64,
+    ) -> ReserveLifecyclePolicySnapshot {
+        self.reserve_lifecycle.read().map_or_else(
+            |_| ReserveLifecyclePolicySnapshot {
+                generated_at_unix,
+                ..ReserveLifecyclePolicySnapshot::default()
+            },
+            |runtime| runtime.lifecycle_policy_snapshot(generated_at_unix),
+        )
+    }
+
+    fn refresh_reserve_runtime_metrics(&self) {
+        let Ok(runtime) = self.reserve_lifecycle.read() else {
+            return;
+        };
+        let lifecycle = runtime.snapshot(0);
+        let credit_lines = runtime.credit_line_snapshot(0);
+        let appeals = runtime.appeal_snapshot(0);
+        let movements = runtime.movement_snapshot(0);
+        drop(runtime);
+
+        let mut stage_counts = BTreeMap::<String, u64>::new();
+        for provider in &lifecycle.providers {
+            let label = reserve_lifecycle_stage_metric_label(provider.lifecycle.stage).to_string();
+            *stage_counts.entry(label).or_default() += 1;
+        }
+        let defaulted_providers = stage_counts.get("default").copied().unwrap_or(0);
+        let stage_counts = stage_counts.into_iter().collect::<Vec<_>>();
+
+        let credit_lines = credit_lines
+            .credit_lines
+            .iter()
+            .map(|state| {
+                (
+                    hex::encode(state.provider_id),
+                    state.credit_draw.as_micro(),
+                    state.credit_shortfall.as_micro(),
+                    state.accrued_interest.as_micro(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let open_appeals = appeals
+            .appeals
+            .iter()
+            .filter(|appeal| appeal.status == ReserveAppealStatus::Open)
+            .count() as u64;
+
+        let mut custody_counts = BTreeMap::<String, u64>::new();
+        let mut chain_reconciled_counts = BTreeMap::<String, u64>::new();
+        for movement in &movements.movements {
+            let label = movement.custody_status.label().to_string();
+            *custody_counts.entry(label.clone()).or_default() += 1;
+            if matches!(
+                movement.custody_status,
+                ReserveMovementCustodyStatus::Confirmed | ReserveMovementCustodyStatus::Rejected
+            ) {
+                *chain_reconciled_counts.entry(label).or_default() += 1;
+            }
+        }
+
+        global_or_default().record_sorafs_reserve_runtime_metrics(
+            &stage_counts,
+            &credit_lines,
+            defaulted_providers,
+            open_appeals,
+            &custody_counts.into_iter().collect::<Vec<_>>(),
+            &chain_reconciled_counts.into_iter().collect::<Vec<_>>(),
+        );
+    }
+
     /// Admit a governance-signed moderation reproducibility manifest into the local registry.
     ///
     /// The manifest is validated with the canonical data-model validator before
@@ -2830,6 +3532,9 @@ impl NodeHandle {
         let outcome =
             validate_orderbook_admission_policy(self.config.orderbook_admission_policy(), &order)
                 .and_then(|()| {
+                    validate_orderbook_reserve_lifecycle_admission(&self.reserve_lifecycle, &order)
+                })
+                .and_then(|()| {
                     self.orderbook
                         .write()
                         .map_err(|_| OrderbookRuntimeError::StateLockPoisoned)?
@@ -2868,7 +3573,8 @@ impl NodeHandle {
                     OrderbookRuntimeError::DuplicateOrderId { .. } => "duplicate",
                     OrderbookRuntimeError::Validation(_)
                     | OrderbookRuntimeError::OrderBelowMinimum { .. }
-                    | OrderbookRuntimeError::OrderPriceTickMismatch { .. } => "rejected",
+                    | OrderbookRuntimeError::OrderPriceTickMismatch { .. }
+                    | OrderbookRuntimeError::ReserveLifecycleAdvertDisabled { .. } => "rejected",
                     OrderbookRuntimeError::SequenceOverflow
                     | OrderbookRuntimeError::MissingMatchedOrder
                     | OrderbookRuntimeError::InvalidMatchedSides
@@ -2966,6 +3672,7 @@ impl NodeHandle {
                 trades: Vec::new(),
                 settlement_channels: Vec::new(),
                 settlement_receipts: Vec::new(),
+                settlement_ledger: OrderbookSettlementLedger::default(),
                 expired_order_ids: Vec::new(),
             },
             |orderbook| orderbook.snapshot(generated_at_unix),
@@ -5679,7 +6386,7 @@ fn create_moderation_quarantine_object_key(
             path: path.display().to_string(),
             message: format!("failed to generate local sealing key: {err}"),
         })?;
-    write_local_checkpoint_atomic(path, &key).map_err(|err| {
+    write_local_private_checkpoint_atomic(path, &key).map_err(|err| {
         ModerationQuarantineObjectError::Io {
             path: path.display().to_string(),
             message: err.to_string(),
@@ -5746,6 +6453,8 @@ fn orderbook_provider_escrow_runways(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{
         str::FromStr,
         sync::{
@@ -5777,6 +6486,7 @@ mod tests {
                 SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
             },
             pin_registry::StorageClass,
+            reserve::{ReserveDuration, ReserveLifecycleStage, ReservePolicyV1, ReserveTier},
         },
     };
     use iroha_telemetry::metrics::global_or_default;
@@ -5788,8 +6498,8 @@ mod tests {
         ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1,
         OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1, PinPolicy,
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-        ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
+        ReputationDegradationFlagV1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+        ReputationReserveStageV1, ReputationWeightsV1, SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
         SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
         SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelV1, SettlementReceiptV1,
@@ -5832,6 +6542,132 @@ mod tests {
             .data_dir(temp_dir.path().join("storage"))
             .build();
         (cfg, temp_dir)
+    }
+
+    fn reserve_lifecycle_update(
+        provider_byte: u8,
+        days_past_due: u16,
+        reserve_balance: XorAmount,
+        observed_at_unix: u64,
+    ) -> ReserveLifecycleUpdate {
+        reserve_lifecycle_update_for_provider(
+            [provider_byte; 32],
+            vec![provider_byte; 4],
+            days_past_due,
+            reserve_balance,
+            observed_at_unix,
+        )
+    }
+
+    fn reserve_lifecycle_update_for_provider(
+        provider_id: [u8; 32],
+        provider_account: Vec<u8>,
+        days_past_due: u16,
+        reserve_balance: XorAmount,
+        observed_at_unix: u64,
+    ) -> ReserveLifecycleUpdate {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                reserve_balance,
+            )
+            .expect("reserve quote");
+        ReserveLifecycleUpdate {
+            provider_id,
+            provider_account,
+            quote,
+            days_past_due,
+            grace_period_days: 7,
+            default_after_days: 30,
+            observed_at_unix,
+        }
+    }
+
+    fn reserve_movement_request(
+        movement_byte: u8,
+        provider_byte: u8,
+        kind: ReserveMovementKind,
+        amount: XorAmount,
+    ) -> ReserveMovementRequest {
+        ReserveMovementRequest {
+            movement_id: [movement_byte; 32],
+            provider_id: [provider_byte; 32],
+            provider_account: vec![provider_byte; 4],
+            reserve_account: b"reserve-account".to_vec(),
+            asset_definition_id: b"xor#sora".to_vec(),
+            kind,
+            amount,
+            idempotency_key: format!("movement-{movement_byte}"),
+            observed_at_unix: 1_800_000_000 + u64::from(movement_byte),
+        }
+    }
+
+    fn reserve_movement_custody_update(
+        movement_byte: u8,
+        status: ReserveMovementCustodyStatus,
+        tx_byte: u8,
+    ) -> ReserveMovementCustodyUpdate {
+        ReserveMovementCustodyUpdate {
+            movement_id: [movement_byte; 32],
+            status,
+            tx_hash_hex: hex::encode([tx_byte; 32]),
+            observed_at_unix: 1_900_000_000 + u64::from(tx_byte),
+        }
+    }
+
+    fn reserve_appeal_request(appeal_byte: u8, provider_byte: u8) -> ReserveAppealRequest {
+        reserve_appeal_request_for_provider(
+            appeal_byte,
+            [provider_byte; 32],
+            vec![provider_byte; 4],
+        )
+    }
+
+    fn reserve_appeal_request_for_provider(
+        appeal_byte: u8,
+        provider_id: [u8; 32],
+        provider_account: Vec<u8>,
+    ) -> ReserveAppealRequest {
+        ReserveAppealRequest {
+            appeal_id: [appeal_byte; 32],
+            provider_id,
+            provider_account,
+            requested_stage: Some(ReserveLifecycleStage::Grace),
+            reason: format!("appeal reason {appeal_byte}"),
+            evidence_digest_hex: Some(hex::encode([0xA0 | appeal_byte; 32])),
+            idempotency_key: format!("appeal-{appeal_byte}"),
+            observed_at_unix: 2_100_000_000 + u64::from(appeal_byte),
+        }
+    }
+
+    fn reserve_appeal_decision(
+        appeal_byte: u8,
+        status: ReserveAppealStatus,
+    ) -> ReserveAppealDecision {
+        ReserveAppealDecision {
+            appeal_id: [appeal_byte; 32],
+            status,
+            decision_account: b"reserve-authority".to_vec(),
+            rationale: format!("appeal decision {appeal_byte}"),
+            decided_at_unix: 2_200_000_000 + u64::from(appeal_byte),
+        }
+    }
+
+    fn reserve_lifecycle_policy_update(policy_byte: u8) -> ReserveLifecyclePolicyUpdate {
+        ReserveLifecyclePolicyUpdate {
+            policy_id: [policy_byte; 32],
+            authority_account: b"reserve-authority".to_vec(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            effective_at_unix: 2_300_000_000 + u64::from(policy_byte),
+            reason: format!("policy update {policy_byte}"),
+            idempotency_key: format!("policy-{policy_byte}"),
+            observed_at_unix: 2_400_000_000 + u64::from(policy_byte),
+        }
     }
 
     fn moderation_repro_manifest_fixture(
@@ -6633,6 +7469,17 @@ mod tests {
         assert_eq!(record.payload_len, payload.len() as u64);
         assert_eq!(record.notes.as_deref(), Some("sealed locally"));
 
+        #[cfg(unix)]
+        {
+            let key_path = moderation_quarantine_object_key_path(cfg.data_dir());
+            let mode = fs::metadata(&key_path)
+                .expect("read local seal key metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
         let envelope_bytes = fs::read(&envelope_path).expect("read encrypted envelope");
@@ -7084,7 +7931,7 @@ mod tests {
     fn node_handle_orderbook_matches_crossing_orders_and_records_snapshot() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
-        let now = 1_800_000_000;
+        let now = 1_800_000_000_u64;
 
         let before = global_or_default()
             .torii_sorafs_orderbook_orders_total
@@ -7181,6 +8028,85 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_orderbook_rejects_ask_when_reserve_lifecycle_disables_adverts() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000_u64;
+        let provider_account = b"provider".to_vec();
+        let provider_id = local_orderbook_provider_id_for_owner_account(&provider_account);
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update_for_provider(
+                provider_id,
+                provider_account.clone(),
+                31,
+                XorAmount::zero(),
+                now.saturating_sub(1),
+            ))
+            .expect("record defaulted reserve lifecycle");
+
+        let err = handle
+            .submit_orderbook_order(
+                orderbook_order(63, OrderSideV1::Ask, 1_500_000, &provider_account),
+                now,
+            )
+            .expect_err("defaulted provider ask should be rejected");
+
+        assert_eq!(
+            err,
+            OrderbookRuntimeError::ReserveLifecycleAdvertDisabled {
+                provider_id_hex: hex::encode(provider_id),
+                stage: "default".to_owned(),
+            }
+        );
+        assert!(handle.orderbook_snapshot(now).open_orders.is_empty());
+    }
+
+    #[test]
+    fn node_handle_orderbook_accepts_ask_after_reserve_appeal_reenables_adverts() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let now = 1_800_000_000_u64;
+        let provider_account = b"provider".to_vec();
+        let provider_id = local_orderbook_provider_id_for_owner_account(&provider_account);
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update_for_provider(
+                provider_id,
+                provider_account.clone(),
+                31,
+                XorAmount::zero(),
+                now.saturating_sub(1),
+            ))
+            .expect("record defaulted reserve lifecycle");
+        handle
+            .record_reserve_appeal(reserve_appeal_request_for_provider(
+                0x49,
+                provider_id,
+                provider_account.clone(),
+            ))
+            .expect("record reserve appeal");
+        handle
+            .record_reserve_appeal_decision(reserve_appeal_decision(
+                0x49,
+                ReserveAppealStatus::Accepted,
+            ))
+            .expect("accept reserve appeal");
+
+        let outcome = handle
+            .submit_orderbook_order(
+                orderbook_order(64, OrderSideV1::Ask, 1_500_000, &provider_account),
+                now,
+            )
+            .expect("appeal override should restore ask admission");
+
+        assert_eq!(outcome.open_order_count, 1);
+        let summary = handle
+            .reserve_provider_lifecycle_summary(provider_id)
+            .expect("reserve summary");
+        assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Grace);
+        assert!(!summary.lifecycle.disable_adverts);
+    }
+
+    #[test]
     fn node_handle_orderbook_cancels_owner_order_only() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
@@ -7225,12 +8151,26 @@ mod tests {
 
         assert_eq!(outcome.updated_channel.remaining_bytes, 0);
         assert_eq!(outcome.open_settlement_channel_count, 0);
+        let snapshot = handle.orderbook_snapshot(now.saturating_add(10));
+        assert_eq!(snapshot.settlement_receipts.len(), 1);
         assert_eq!(
-            handle
-                .orderbook_snapshot(now.saturating_add(10))
-                .settlement_receipts
-                .len(),
-            1
+            snapshot.settlement_ledger.total_buyer_debited_micro_xor,
+            channel.xor_locked.as_micro()
+        );
+        assert_eq!(snapshot.settlement_ledger.total_fee_retained_micro_xor, 10);
+        assert_eq!(
+            snapshot.settlement_ledger.total_remaining_locked_micro_xor,
+            0
+        );
+        assert_eq!(snapshot.settlement_ledger.buyers.len(), 1);
+        assert_eq!(
+            snapshot.settlement_ledger.buyers[0].buyer_account,
+            b"buyer".to_vec()
+        );
+        assert_eq!(snapshot.settlement_ledger.providers.len(), 1);
+        assert_eq!(
+            snapshot.settlement_ledger.providers[0].provider_id,
+            channel.provider_id
         );
         assert_eq!(
             global_or_default()
@@ -7358,6 +8298,10 @@ mod tests {
             source_snapshot.settlement_receipts
         );
         assert_eq!(
+            restored_snapshot.settlement_ledger,
+            source_snapshot.settlement_ledger
+        );
+        assert_eq!(
             restored_snapshot.expired_order_ids,
             source_snapshot.expired_order_ids
         );
@@ -7424,6 +8368,10 @@ mod tests {
         assert_eq!(
             restored_snapshot.settlement_receipts,
             source_snapshot.settlement_receipts
+        );
+        assert_eq!(
+            restored_snapshot.settlement_ledger,
+            source_snapshot.settlement_ledger
         );
         assert_eq!(
             restored_snapshot.expired_order_ids,
@@ -8160,6 +9108,121 @@ mod tests {
         assert_eq!(live_event.sequence, 1);
         assert_eq!(live_event.snapshot_id, snapshot.snapshot_id);
         assert!(handle.reputation_events_since(Some(1), 10).is_empty());
+    }
+
+    #[test]
+    fn publish_reserve_adjusted_reputation_snapshot_penalizes_defaulted_provider() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x71,
+                31,
+                XorAmount::zero(),
+                1_800_000_150,
+            ))
+            .expect("record defaulted reserve provider");
+
+        let snapshot = handle
+            .publish_reserve_adjusted_reputation_snapshot(
+                [0x71; 16],
+                1_800_000_250,
+                ReputationWeightsV1::default(),
+            )
+            .expect("publish reserve-adjusted reputation snapshot");
+
+        let provider_id = hex::encode([0x71; 32]);
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id == provider_id)
+            .expect("reserve provider reputation");
+        assert!(
+            provider
+                .degradation_flags
+                .contains(&ReputationDegradationFlagV1::ReserveDefault)
+        );
+        assert!(
+            provider.score_bps <= 2_000,
+            "default reserve stage must materially lower reputation"
+        );
+        assert_eq!(
+            handle
+                .latest_reputation_snapshot()
+                .expect("latest reputation snapshot")
+                .snapshot_id,
+            snapshot.snapshot_id
+        );
+    }
+
+    #[test]
+    fn publish_reserve_adjusted_reputation_snapshot_uses_accepted_appeal_override() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let provider_id = [0x72; 32];
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x72,
+                31,
+                XorAmount::zero(),
+                1_800_000_150,
+            ))
+            .expect("record defaulted reserve provider");
+        let default_snapshot = handle
+            .publish_reserve_adjusted_reputation_snapshot(
+                [0x72; 16],
+                1_800_000_250,
+                ReputationWeightsV1::default(),
+            )
+            .expect("publish default reserve reputation snapshot");
+        let provider_id_hex = hex::encode(provider_id);
+        let default_provider = default_snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id == provider_id_hex)
+            .expect("default reserve provider reputation");
+        assert!(
+            default_provider
+                .degradation_flags
+                .contains(&ReputationDegradationFlagV1::ReserveDefault)
+        );
+
+        handle
+            .record_reserve_appeal(reserve_appeal_request(0x73, 0x72))
+            .expect("record reserve appeal");
+        handle
+            .record_reserve_appeal_decision(reserve_appeal_decision(
+                0x73,
+                ReserveAppealStatus::Accepted,
+            ))
+            .expect("accept reserve appeal");
+        let adjusted_snapshot = handle
+            .publish_reserve_adjusted_reputation_snapshot(
+                [0x73; 16],
+                2_300_000_000,
+                ReputationWeightsV1::default(),
+            )
+            .expect("publish appeal-adjusted reserve reputation snapshot");
+        let adjusted_provider = adjusted_snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id == provider_id_hex)
+            .expect("appeal-adjusted reserve provider reputation");
+
+        assert!(
+            adjusted_provider
+                .degradation_flags
+                .contains(&ReputationDegradationFlagV1::ReserveGrace)
+        );
+        assert!(
+            !adjusted_provider
+                .degradation_flags
+                .contains(&ReputationDegradationFlagV1::ReserveDefault)
+        );
+        assert_eq!(
+            adjusted_snapshot.previous_snapshot_id,
+            Some(default_snapshot.snapshot_id)
+        );
     }
 
     #[test]
@@ -10656,6 +11719,499 @@ mod tests {
             manager.heartbeat_interval_secs(),
             repair_cfg.heartbeat_interval_secs()
         );
+    }
+
+    #[test]
+    fn node_handle_records_reserve_lifecycle_summary_and_events() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut live_events = handle.subscribe_reserve_lifecycle_events();
+
+        let first = handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x31,
+                0,
+                XorAmount::zero(),
+                1_800_000_100,
+            ))
+            .expect("record warning");
+        assert_eq!(first.sequence, 0);
+        assert_eq!(first.previous_stage, None);
+        assert_eq!(first.current_stage, ReserveLifecycleStage::Warning);
+
+        let second = handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x31,
+                3,
+                XorAmount::zero(),
+                1_800_000_200,
+            ))
+            .expect("record grace");
+        assert_eq!(second.sequence, 1);
+        assert_eq!(second.previous_stage, Some(ReserveLifecycleStage::Warning));
+        assert_eq!(second.current_stage, ReserveLifecycleStage::Grace);
+        assert_eq!(handle.latest_reserve_lifecycle_event_sequence(), Some(1));
+
+        let summary = handle
+            .reserve_provider_lifecycle_summary([0x31; 32])
+            .expect("summary");
+        assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Grace);
+        assert_eq!(summary.ledger.rent_due.as_micro(), 120_000_000);
+        assert_eq!(summary.updated_at_unix, 1_800_000_200);
+
+        let replay = handle.reserve_lifecycle_events_since(Some(0), 10);
+        assert_eq!(replay, vec![second.clone()]);
+        assert_eq!(live_events.try_recv().expect("first live event"), first);
+        assert_eq!(live_events.try_recv().expect("second live event"), second);
+    }
+
+    #[test]
+    fn node_handle_advances_reserve_lifecycle_by_time() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut live_events = handle.subscribe_reserve_lifecycle_events();
+        let initial = handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x32,
+                29,
+                XorAmount::zero(),
+                1_800_000_100,
+            ))
+            .expect("record lifecycle");
+        assert_eq!(initial.current_stage, ReserveLifecycleStage::Delinquent);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
+
+        let advanced = handle
+            .advance_reserve_lifecycle(1_800_000_100 + 2 * 86_400)
+            .expect("advance lifecycle");
+
+        assert_eq!(advanced.len(), 1);
+        assert_eq!(advanced[0].sequence, 1);
+        assert_eq!(advanced[0].current_stage, ReserveLifecycleStage::Default);
+        assert_eq!(advanced[0].lifecycle.days_past_due, 31);
+        assert_eq!(handle.latest_reserve_lifecycle_event_sequence(), Some(1));
+        let summary = handle
+            .reserve_provider_lifecycle_summary([0x32; 32])
+            .expect("summary");
+        assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Default);
+        let credit_line = handle
+            .reserve_provider_credit_line([0x32; 32])
+            .expect("credit line");
+        assert_eq!(credit_line.stage, ReserveLifecycleStage::Default);
+        assert_eq!(credit_line.lifecycle_event_sequence, 1);
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 2);
+        assert_eq!(live_events.try_recv().expect("initial live event"), initial);
+        assert_eq!(
+            live_events.try_recv().expect("advanced live event"),
+            advanced[0]
+        );
+
+        let noop = handle
+            .advance_reserve_lifecycle(1_800_000_100 + 2 * 86_400 + 1)
+            .expect("noop advance");
+        assert!(noop.is_empty());
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 2);
+    }
+
+    #[test]
+    fn node_handle_reserve_lifecycle_snapshot_sorts_providers() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x42,
+                0,
+                XorAmount::zero(),
+                1_800_000_100,
+            ))
+            .expect("record provider b");
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x11,
+                0,
+                XorAmount::zero(),
+                1_800_000_101,
+            ))
+            .expect("record provider a");
+
+        let snapshot = handle.reserve_lifecycle_snapshot(1_800_000_200);
+        assert_eq!(snapshot.generated_at_unix, 1_800_000_200);
+        assert_eq!(snapshot.next_sequence, 2);
+        assert_eq!(snapshot.providers.len(), 2);
+        assert_eq!(snapshot.providers[0].provider_id, [0x11; 32]);
+        assert_eq!(snapshot.providers[1].provider_id, [0x42; 32]);
+        assert_eq!(snapshot.events.len(), 2);
+        assert!(handle.reserve_lifecycle_events_since(None, 0).is_empty());
+    }
+
+    #[test]
+    fn node_handle_records_reserve_credit_line_state() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x43,
+                10,
+                XorAmount::zero(),
+                1_800_000_150,
+            ))
+            .expect("record delinquent provider");
+
+        let credit_line = handle
+            .reserve_provider_credit_line([0x43; 32])
+            .expect("credit-line state");
+        assert_eq!(credit_line.stage, ReserveLifecycleStage::Delinquent);
+        assert_eq!(credit_line.credit_draw.as_micro(), 120_000_000);
+        assert_eq!(credit_line.accrued_interest.as_micro(), 29_589);
+        assert_eq!(credit_line.lifecycle_event_sequence, 0);
+        let snapshot = handle.reserve_credit_line_snapshot(1_800_000_250);
+        assert_eq!(snapshot.generated_at_unix, 1_800_000_250);
+        assert_eq!(snapshot.credit_lines, vec![credit_line]);
+    }
+
+    #[test]
+    fn node_handle_applies_accepted_reserve_appeal_decision_to_lifecycle_state() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut live_events = handle.subscribe_reserve_lifecycle_events();
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x44,
+                31,
+                XorAmount::zero(),
+                1_800_000_150,
+            ))
+            .expect("record defaulted provider");
+        handle
+            .record_reserve_appeal(reserve_appeal_request(0x47, 0x44))
+            .expect("record reserve appeal");
+
+        let decided = handle
+            .record_reserve_appeal_decision(reserve_appeal_decision(
+                0x47,
+                ReserveAppealStatus::Accepted,
+            ))
+            .expect("accept reserve appeal");
+        assert_eq!(decided.status, ReserveAppealStatus::Accepted);
+
+        let initial = live_events.try_recv().expect("initial lifecycle event");
+        assert_eq!(initial.current_stage, ReserveLifecycleStage::Default);
+        let override_event = live_events
+            .try_recv()
+            .expect("appeal lifecycle override event");
+        assert_eq!(
+            override_event.previous_stage,
+            Some(ReserveLifecycleStage::Default)
+        );
+        assert_eq!(override_event.current_stage, ReserveLifecycleStage::Grace);
+        assert_eq!(override_event.applied_appeal_id, Some([0x47; 32]));
+
+        let summary = handle
+            .reserve_provider_lifecycle_summary([0x44; 32])
+            .expect("provider summary");
+        assert_eq!(summary.lifecycle.stage, ReserveLifecycleStage::Grace);
+        assert_eq!(summary.applied_appeal_id, Some([0x47; 32]));
+        assert!(!summary.lifecycle.disable_adverts);
+
+        let credit_line = handle
+            .reserve_provider_credit_line([0x44; 32])
+            .expect("credit-line state");
+        assert_eq!(credit_line.stage, ReserveLifecycleStage::Grace);
+        assert_eq!(credit_line.applied_appeal_id, Some([0x47; 32]));
+    }
+
+    #[test]
+    fn node_handle_records_reserve_appeals_and_decisions() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+
+        let appeal = handle
+            .record_reserve_appeal(reserve_appeal_request(0x48, 0x33))
+            .expect("record reserve appeal");
+        assert!(!appeal.duplicate);
+        assert_eq!(appeal.record.sequence, 0);
+        assert_eq!(appeal.record.status, ReserveAppealStatus::Open);
+
+        let duplicate = handle
+            .record_reserve_appeal(reserve_appeal_request(0x48, 0x33))
+            .expect("replay reserve appeal");
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.record, appeal.record);
+
+        let decided = handle
+            .record_reserve_appeal_decision(reserve_appeal_decision(
+                0x48,
+                ReserveAppealStatus::Accepted,
+            ))
+            .expect("decide reserve appeal");
+        assert_eq!(decided.status, ReserveAppealStatus::Accepted);
+        assert_eq!(handle.reserve_appeal([0x48; 32]), Some(decided.clone()));
+
+        let snapshot = handle.reserve_appeal_snapshot(2_500_000_000);
+        assert_eq!(snapshot.generated_at_unix, 2_500_000_000);
+        assert_eq!(snapshot.next_sequence, 1);
+        assert_eq!(snapshot.appeals, vec![decided]);
+    }
+
+    #[test]
+    fn node_handle_records_reserve_lifecycle_policy_updates() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+
+        let first = handle
+            .record_reserve_lifecycle_policy_update(reserve_lifecycle_policy_update(0x49))
+            .expect("record lifecycle policy update");
+        assert!(!first.duplicate);
+        assert_eq!(first.record.sequence, 0);
+        assert_eq!(first.record.grace_period_days, 7);
+        assert_eq!(first.record.default_after_days, 30);
+
+        let duplicate = handle
+            .record_reserve_lifecycle_policy_update(reserve_lifecycle_policy_update(0x49))
+            .expect("replay lifecycle policy update");
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.record, first.record);
+
+        let second = handle
+            .record_reserve_lifecycle_policy_update(ReserveLifecyclePolicyUpdate {
+                grace_period_days: 10,
+                default_after_days: 45,
+                ..reserve_lifecycle_policy_update(0x4A)
+            })
+            .expect("record second lifecycle policy update");
+        assert_eq!(
+            handle.latest_reserve_lifecycle_policy(),
+            Some(second.record.clone())
+        );
+
+        let snapshot = handle.reserve_lifecycle_policy_snapshot(2_600_000_000);
+        assert_eq!(snapshot.generated_at_unix, 2_600_000_000);
+        assert_eq!(snapshot.next_sequence, 2);
+        assert_eq!(snapshot.latest, Some(second.record));
+        assert_eq!(snapshot.policies.len(), 2);
+    }
+
+    #[test]
+    fn node_handle_records_reserve_governance_source_entries() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+
+        handle
+            .record_reserve_lifecycle_update(reserve_lifecycle_update(
+                0x61,
+                3,
+                XorAmount::zero(),
+                1_800_000_100,
+            ))
+            .expect("record lifecycle");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
+
+        let movement = reserve_movement_request(
+            0x62,
+            0x61,
+            ReserveMovementKind::TopUp,
+            XorAmount::from_micro(100),
+        );
+        handle
+            .record_reserve_movement(movement.clone())
+            .expect("record movement");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 2);
+        handle
+            .record_reserve_movement(movement)
+            .expect("replay movement");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 2);
+
+        let custody =
+            reserve_movement_custody_update(0x62, ReserveMovementCustodyStatus::Submitted, 0x63);
+        handle
+            .record_reserve_movement_custody_update(custody.clone())
+            .expect("record custody");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 3);
+        handle
+            .record_reserve_movement_custody_update(custody)
+            .expect("replay custody");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 3);
+
+        let appeal = reserve_appeal_request(0x64, 0x61);
+        handle
+            .record_reserve_appeal(appeal.clone())
+            .expect("record appeal");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 4);
+        handle.record_reserve_appeal(appeal).expect("replay appeal");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 4);
+
+        let decision = reserve_appeal_decision(0x64, ReserveAppealStatus::Accepted);
+        handle
+            .record_reserve_appeal_decision(decision.clone())
+            .expect("record appeal decision");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 6);
+        handle
+            .record_reserve_appeal_decision(decision)
+            .expect("replay appeal decision");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 6);
+
+        let policy = reserve_lifecycle_policy_update(0x65);
+        handle
+            .record_reserve_lifecycle_policy_update(policy.clone())
+            .expect("record lifecycle policy");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 7);
+        handle
+            .record_reserve_lifecycle_policy_update(policy)
+            .expect("replay lifecycle policy");
+        assert_eq!(handle.transparency_ledger_source_entry_count(), 7);
+    }
+
+    #[test]
+    fn node_handle_records_reserve_movements_and_balances() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut live_events = handle.subscribe_reserve_movement_events();
+
+        let top_up = handle
+            .record_reserve_movement(reserve_movement_request(
+                0x51,
+                0x31,
+                ReserveMovementKind::TopUp,
+                XorAmount::from_micro(100),
+            ))
+            .expect("record top-up");
+        assert!(!top_up.duplicate);
+        assert_eq!(top_up.record.sequence, 0);
+        assert_eq!(top_up.record.balance_after.as_micro(), 100);
+        assert!(top_up.record.confirmed_balance_after.is_zero());
+
+        let duplicate = handle
+            .record_reserve_movement(reserve_movement_request(
+                0x51,
+                0x31,
+                ReserveMovementKind::TopUp,
+                XorAmount::from_micro(100),
+            ))
+            .expect("record duplicate");
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.record, top_up.record);
+
+        let withdrawal = handle
+            .record_reserve_movement(reserve_movement_request(
+                0x52,
+                0x31,
+                ReserveMovementKind::Withdrawal,
+                XorAmount::from_micro(40),
+            ))
+            .expect("record withdrawal");
+        assert_eq!(withdrawal.record.sequence, 1);
+        assert_eq!(withdrawal.record.balance_after.as_micro(), 60);
+        assert!(withdrawal.record.confirmed_balance_after.is_zero());
+        assert_eq!(handle.latest_reserve_movement_sequence(), Some(1));
+
+        let balance = handle
+            .reserve_provider_balance([0x31; 32])
+            .expect("provider balance");
+        assert_eq!(balance.balance.as_micro(), 60);
+        assert!(balance.confirmed_balance.is_zero());
+        assert_eq!(balance.updated_at_unix, 1_800_000_000 + 0x52);
+
+        let replay = handle.reserve_movements_since(Some(0), 10);
+        assert_eq!(replay, vec![withdrawal.record.clone()]);
+        assert_eq!(
+            live_events.try_recv().expect("top-up live event"),
+            top_up.record
+        );
+        assert_eq!(
+            live_events.try_recv().expect("withdrawal live event"),
+            withdrawal.record
+        );
+
+        let snapshot = handle.reserve_movement_snapshot(1_800_000_300);
+        assert_eq!(snapshot.generated_at_unix, 1_800_000_300);
+        assert_eq!(snapshot.next_sequence, 2);
+        assert_eq!(snapshot.provider_balances.len(), 1);
+        assert_eq!(snapshot.movements.len(), 2);
+        assert!(handle.reserve_movements_since(None, 0).is_empty());
+    }
+
+    #[test]
+    fn node_handle_records_reserve_movement_custody_updates() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+        let mut live_events = handle.subscribe_reserve_movement_events();
+
+        let movement = handle
+            .record_reserve_movement(reserve_movement_request(
+                0x54,
+                0x31,
+                ReserveMovementKind::TopUp,
+                XorAmount::from_micro(100),
+            ))
+            .expect("record movement");
+        assert_eq!(
+            live_events.try_recv().expect("movement event"),
+            movement.record
+        );
+
+        let submitted = handle
+            .record_reserve_movement_custody_update(reserve_movement_custody_update(
+                0x54,
+                ReserveMovementCustodyStatus::Submitted,
+                0xAB,
+            ))
+            .expect("record custody status");
+        assert_eq!(
+            submitted.custody_status,
+            ReserveMovementCustodyStatus::Submitted
+        );
+        assert!(submitted.confirmed_balance_after.is_zero());
+        assert_eq!(handle.reserve_movement([0x54; 32]), Some(submitted.clone()));
+        assert_eq!(
+            live_events.try_recv().expect("custody event"),
+            submitted.clone()
+        );
+
+        let confirmed = handle
+            .record_reserve_movement_custody_update(reserve_movement_custody_update(
+                0x54,
+                ReserveMovementCustodyStatus::Confirmed,
+                0xAB,
+            ))
+            .expect("record confirmed custody status");
+        assert_eq!(
+            confirmed.custody_status,
+            ReserveMovementCustodyStatus::Confirmed
+        );
+        assert_eq!(confirmed.confirmed_balance_after.as_micro(), 100);
+        assert_eq!(
+            handle.reserve_movement_snapshot(1).movements[0].custody_status,
+            ReserveMovementCustodyStatus::Confirmed
+        );
+        assert_eq!(
+            handle
+                .reserve_provider_balance([0x31; 32])
+                .expect("provider balance")
+                .confirmed_balance
+                .as_micro(),
+            100
+        );
+    }
+
+    #[test]
+    fn node_handle_rejects_reserve_withdrawal_underflow() {
+        let cfg = StorageConfig::builder().enabled(false).build();
+        let handle = NodeHandle::new(cfg);
+
+        let err = handle
+            .record_reserve_movement(reserve_movement_request(
+                0x53,
+                0x31,
+                ReserveMovementKind::Withdrawal,
+                XorAmount::from_micro(1),
+            ))
+            .expect_err("withdrawal should fail");
+
+        assert!(matches!(
+            err,
+            ReserveMovementRuntimeError::InsufficientBalance { .. }
+        ));
+        assert!(handle.reserve_provider_balance([0x31; 32]).is_none());
     }
 
     #[test]

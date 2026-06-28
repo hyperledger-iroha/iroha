@@ -221,7 +221,16 @@ const SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1 = "sccp:evm:receipt-root-value:v1";
 const SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1 = "sccp:solana:message-proof:v1";
 const SCCP_SOLANA_TRANSACTION_STATUS_LEAF_PREFIX_V1 =
   "sccp:solana:transaction-status-leaf:v1";
+const SCCP_SOURCE_HEADER_PREFIX_V1 = "sccp:source:header:v1";
+const SCCP_SOURCE_EVENT_LEAF_PREFIX_V1 = "sccp:source:event-leaf:v1";
 const SCCP_SOURCE_NODE_PREFIX_V1 = "sccp:source:node:v1";
+const SCCP_SOURCE_ADAPTER_PROOF_PREFIX_V1 = "sccp:source-adapter-proof:v1";
+const SCCP_SOURCE_ADAPTER_TRANSCRIPT_PREFIX_V1 =
+  "sccp:source-adapter-transcript:v1";
+const SCCP_SOURCE_VERIFIER_MATERIAL_PREFIX_V1 =
+  "sccp:source-verifier-material:v1";
+const SCCP_SOURCE_VERIFIER_EVIDENCE_PREFIX_V1 =
+  "sccp:source-verifier-evidence:v1";
 const SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1 =
   "sccp:solana:epoch-stake-root:v1";
 const SCCP_SOLANA_STAKE_ACTIVATION_PREFIX_V1 =
@@ -554,6 +563,8 @@ const SCCP_TRON_MAX_WITNESSES = 64;
 const SCCP_U64_MAX = (1n << 64n) - 1n;
 const SCCP_U128_MAX = (1n << 128n) - 1n;
 const SCCP_I64_MAX = (1n << 63n) - 1n;
+const SCCP_TAIRA_XOR_BSC_SETTLEMENT_SCALE = 9;
+const SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR = 1_000_000_000n;
 const NORITO_COMPACT_LEN_FLAG = 0x02;
 const NORITO_CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const NORITO_INSTRUCTION_BOX_SCHEMA_HASH_HEX =
@@ -3783,6 +3794,59 @@ const normalizeTairaXorBurnRecordSettlementAmount = (input, fallbackAmount) => {
   return normalized;
 };
 
+const tairaXorBscMinorUnitsToSettlementAmount = (amount) => {
+  const whole = amount / SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR;
+  const fractional = amount % SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR;
+  if (fractional === 0n) {
+    return whole.toString();
+  }
+  return `${whole}.${fractional
+    .toString()
+    .padStart(SCCP_TAIRA_XOR_BSC_SETTLEMENT_SCALE, "0")
+    .replace(/0+$/u, "")}`;
+};
+
+const tairaXorBscSettlementAmountToMinorUnits = (value) => {
+  const normalized = normalizeNonEmptyString(value, "settlementAmount");
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/u.test(normalized)) {
+    throw new TypeError(
+      "settlementAmount must be a positive decimal amount with at most 9 decimal places",
+    );
+  }
+  if (/^0(?:\.0+)?$/u.test(normalized)) {
+    throw new RangeError("settlementAmount must be greater than zero");
+  }
+  const [whole, fractional = ""] = normalized.split(".");
+  return (
+    BigInt(whole) * SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR +
+    BigInt(fractional.padEnd(SCCP_TAIRA_XOR_BSC_SETTLEMENT_SCALE, "0"))
+  );
+};
+
+const normalizeTairaXorBscBurnRecordSettlementAmount = (
+  input,
+  descriptorAmount,
+) => {
+  const amount = strictOptionalResultField(
+    input,
+    "settlementAmount",
+    "settlementAmount",
+    "settlement_amount",
+    "burnAmount",
+    "burn_amount",
+  );
+  if (amount === SCCP_OPTIONAL_FIELD_MISSING || amount == null) {
+    return tairaXorBscMinorUnitsToSettlementAmount(descriptorAmount);
+  }
+  const normalizedAmount = tairaXorBscSettlementAmountToMinorUnits(amount);
+  if (normalizedAmount !== descriptorAmount) {
+    throw new RangeError(
+      "settlementAmount must match the descriptor amount at 9-decimal TAIRA XOR scale",
+    );
+  }
+  return tairaXorBscMinorUnitsToSettlementAmount(normalizedAmount);
+};
+
 const normalizeTairaXorBurnRecordAuthority = (input, sender) => {
   const authority = strictOptionalResultField(input, "authority", "authority");
   if (authority === SCCP_OPTIONAL_FIELD_MISSING || authority == null) {
@@ -4306,7 +4370,7 @@ export const buildTairaXorBscSccpBurnRecordContractPayload = (input) => {
   const sender = descriptor.payload.sender;
   normalizeTairaXorBurnRecordAuthority(input, sender);
   const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
-  const settlementAmount = normalizeTairaXorBurnRecordSettlementAmount(
+  const settlementAmount = normalizeTairaXorBscBurnRecordSettlementAmount(
     input,
     amount,
   );
@@ -14257,14 +14321,20 @@ const normalizeEvmProofResult = (result, request) => {
     throw new TypeError("EVM-family SCCP proof result must be an object");
   }
   requireProductionEvmProofRequest(request);
+  const proofBytesInput = strictOptionalResultField(
+    result,
+    "proofResult.proofBytes",
+    "proofBytes",
+    "proof_bytes",
+  );
+  const legacyProofBytesInput =
+    proofBytesInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? strictOptionalResultField(result, "proofResult.proof", "proof")
+      : SCCP_OPTIONAL_FIELD_MISSING;
   const proofBytes = toBytes(
-    strictResultField(
-      result,
-      "proofResult.proofBytes",
-      "proofBytes",
-      "proof_bytes",
-      "proof",
-    ),
+    proofBytesInput !== SCCP_OPTIONAL_FIELD_MISSING
+      ? proofBytesInput
+      : legacyProofBytesInput,
     "proofBytes",
   );
   requireGroth16ProofBytesForContext(proofBytes, "proofBytes", {
@@ -15034,13 +15104,12 @@ const normalizeGroth16SubmissionInput = (
   const resultProofBytes =
     proofResult === null
       ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.proofBytes",
-          "proofBytes",
-          "proof_bytes",
-          "proof",
-        );
+    : strictOptionalResultField(
+        proofResult,
+        "proofResult.proofBytes",
+        "proofBytes",
+        "proof_bytes",
+      );
   const proofBytes = toBytes(
     inputProofBytes !== SCCP_OPTIONAL_FIELD_MISSING
       ? inputProofBytes
@@ -35594,6 +35663,869 @@ export function canonicalEvmReceiptRootMptValue(receiptRoot) {
   return value;
 }
 
+const sccpNoritoSchemaHashHex = (typeName) =>
+  bytesToHex(
+    sha256(
+      concatBytes(
+        textEncoder.encode("norito:v1:type-name\0"),
+        textEncoder.encode(typeName),
+      ),
+    ).slice(0, 16),
+    false,
+  );
+
+const SCCP_SOURCE_CONSENSUS_PROOF_SCHEMA_HASH_HEX = sccpNoritoSchemaHashHex(
+  "iroha_sccp::SccpSourceConsensusProofV1",
+);
+const SCCP_SOURCE_MESSAGE_INCLUSION_PROOF_SCHEMA_HASH_HEX =
+  sccpNoritoSchemaHashHex(
+    "iroha_sccp::SccpSourceMessageInclusionProofV1",
+  );
+
+const noritoStructValue = (fields) =>
+  concatBytes(...fields.map((field) => noritoField(field, false)));
+
+const noritoU8 = (value) => Uint8Array.from([value & 0xff]);
+const noritoU32Value = (value) => writeU32Le(new Uint8Array(), value);
+const noritoU64Value = (value) => noritoU64Le(value);
+const noritoRawByteVecValue = (value, label) => {
+  const bytes = toBytes(value, label);
+  return concatBytes(noritoU64Le(bytes.length), bytes);
+};
+const noritoByteVecSequenceValue = (items, label) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  return concatBytes(
+    noritoU64Le(items.length),
+    ...items.map((item, index) =>
+      noritoField(
+        noritoRawByteVecValue(item, `${label}[${index}]`),
+        false,
+        `${label}[${index}]`,
+      ),
+    ),
+  );
+};
+const noritoU64SequenceValue = (items, label) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  return concatBytes(
+    noritoU64Le(items.length),
+    ...items.map((item, index) =>
+      noritoField(noritoU64Value(item), false, `${label}[${index}]`),
+    ),
+  );
+};
+const noritoStructSequenceValue = (items, label, encode) => {
+  if (!Array.isArray(items)) {
+    throw new TypeError(`${label} must be an array`);
+  }
+  return concatBytes(
+    noritoU64Le(items.length),
+    ...items.map((item, index) =>
+      noritoField(encode(item, `${label}[${index}]`), false, `${label}[${index}]`),
+    ),
+  );
+};
+const noritoEnumValue = (variantIndex, body) =>
+  concatBytes(noritoU32Value(variantIndex), noritoField(body, false));
+
+const bscTemplateSourceVerifierMaterial = () => {
+  const sourceDomain = SCCP_DOMAIN_BSC;
+  const sourceChain = "bsc";
+  const sourceProofPlan = 2;
+  const finalityModelCanonical = 2;
+  const componentHash = (componentId) => {
+    let out = new Uint8Array();
+    out = writeU8(out, 1);
+    out = writeU32Le(out, sourceDomain);
+    out = writeBytes(out, textEncoder.encode(sourceChain));
+    out = writeU8(out, sourceProofPlan);
+    out = writeU8(out, finalityModelCanonical);
+    out = writeBytes(
+      out,
+      textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
+    );
+    out = writeBytes(out, textEncoder.encode(componentId));
+    return bytesToHex(
+      prefixedBlake2b(SCCP_SOURCE_VERIFIER_MATERIAL_PREFIX_V1, out),
+    );
+  };
+  const sourceTrustAnchorId = "sccp:bsc:source-trust-anchor:active:v1";
+  const consensusVerifierId =
+    "sccp:bsc:consensus-verifier:BscValidatorSetReceiptProof:v1";
+  const messageInclusionVerifierId =
+    "sccp:bsc:message-inclusion-verifier:BscValidatorSetReceiptProof:v1";
+  const finalityPolicyId = "sccp:bsc:finality-policy:BscValidatorSet:v1";
+  return Object.freeze({
+    version: 1,
+    sourceDomain,
+    sourceChain,
+    sourceProofPlan,
+    finalityModel: 1,
+    finalityModelCanonical,
+    adapterCircuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+    sourceTrustAnchorId,
+    sourceTrustAnchorHash: componentHash(sourceTrustAnchorId),
+    consensusVerifierId,
+    consensusVerifierHash: componentHash(consensusVerifierId),
+    messageInclusionVerifierId,
+    messageInclusionVerifierHash: componentHash(messageInclusionVerifierId),
+    finalityPolicyId,
+    finalityPolicyHash: componentHash(finalityPolicyId),
+    sourceStateVerifierId: "",
+    sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
+    sourceBridgeEmitterId: "",
+    sourceBridgeEmitterAddress: "0x",
+    sourceBridgeEmitterCodeHash: SCCP_ZERO_HASH_V1,
+    sourceBridgeNetworkId: SCCP_ZERO_HASH_V1,
+    sourceBridgeOwnerAddress: "0x",
+    sourceBridgeConfigHash: SCCP_ZERO_HASH_V1,
+    sourceAdapterDeploymentHash: SCCP_ZERO_HASH_V1,
+    sourceAdapterDeploymentReceiptHash: SCCP_ZERO_HASH_V1,
+  });
+};
+
+const sccpSourceEventLeafHash = (sourceEventDigest) =>
+  bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_EVENT_LEAF_PREFIX_V1,
+      nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"),
+    ),
+  );
+
+const hashSccpSourceMerkleNode = (left, right) =>
+  bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_NODE_PREFIX_V1,
+      concatBytes(
+        hexToBytes(left, "sourceMerkle.left", 32),
+        hexToBytes(right, "sourceMerkle.right", 32),
+      ),
+    ),
+  );
+
+const sccpSourceMessageRootFromBranch = (leafHash, leafIndex, branch) => {
+  let current = normalizeNonZeroHex32(leafHash, "sourceEventLeafHash");
+  let index = normalizeUnsignedBigIntMax(
+    leafIndex,
+    "leafIndex",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  for (const [branchIndex, siblingValue] of branch.entries()) {
+    const sibling = normalizeNonZeroHex32(
+      siblingValue,
+      `inclusionBranch[${branchIndex}]`,
+    );
+    current =
+      (index & 1n) === 0n
+        ? hashSccpSourceMerkleNode(current, sibling)
+        : hashSccpSourceMerkleNode(sibling, current);
+    index >>= 1n;
+  }
+  return current;
+};
+
+const sccpSourceFinalizedHeaderHash = ({
+  sourceDomain,
+  finalityModelCanonical,
+  finalityHeight,
+  finalityBlockHash,
+  receiptOrMessageRoot,
+}) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = writeU8(out, finalityModelCanonical);
+  out = writeU64Le(out, finalityHeight);
+  out = concatBytes(
+    out,
+    hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+    hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+  );
+  return bytesToHex(prefixedBlake2b(SCCP_SOURCE_HEADER_PREFIX_V1, out));
+};
+
+const buildSingleLeafEvmReceiptRootMarkerTrieProof = ({
+  receiptRootIndex,
+  receiptOrMessageRoot,
+}) => {
+  const index = normalizeUnsignedBigIntMax(
+    receiptRootIndex,
+    "receiptRootIndex",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  const key = rlpEncodeValue(minimalBigEndianBytes(index, "receiptRootIndex"));
+  const rootMarkerValue = canonicalEvmReceiptRootMptValue(receiptOrMessageRoot);
+  const root = buildTrieNode([
+    {
+      path: bytesToNibbles(key),
+      value: rootMarkerValue,
+    },
+  ]);
+  const proofNodes = collectTrieProofNodes(root, bytesToNibbles(key));
+  return Object.freeze({
+    receiptsRoot: bytesToHex(keccak_256(encodeTrieNode(root))),
+    receiptTrieKey: bytesToHex(key),
+    receiptTrieProofNodes: Object.freeze(proofNodes.map((node) => copyBytes(node))),
+    syntheticRootMarker: true,
+  });
+};
+
+const normalizeBscSourceProofReceiptTrie = ({
+  blockReceipts,
+  receiptRootIndex,
+  receiptOrMessageRoot,
+}) => {
+  if (Array.isArray(blockReceipts) && blockReceipts.length > 0) {
+    const proof = buildEvmReceiptTrieProofFromReceipts(blockReceipts, {
+      transactionIndex: receiptRootIndex,
+    });
+    return Object.freeze({
+      receiptsRoot: proof.receiptsRoot,
+      receiptTrieKey: proof.receiptTrieKey,
+      receiptTrieProofNodes: proof.receiptTrieProofNodes,
+      syntheticRootMarker: false,
+    });
+  }
+  return buildSingleLeafEvmReceiptRootMarkerTrieProof({
+    receiptRootIndex,
+    receiptOrMessageRoot,
+  });
+};
+
+const canonicalBscValidatorSetSealProofBytes = (seal) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU64Le(out, seal.totalPower);
+  out = writeU64Le(out, seal.signedPower);
+  out = concatBytes(
+    out,
+    hexToBytes(seal.commitMessageHash, "seal.commitMessageHash", 32),
+  );
+  out = writeU32Le(out, seal.validatorPublicKeys.length);
+  for (const publicKey of seal.validatorPublicKeys) {
+    out = writeBytes(out, publicKey);
+  }
+  out = writeU32Le(out, seal.validatorPowers.length);
+  for (const power of seal.validatorPowers) {
+    out = writeU64Le(out, power);
+  }
+  out = writeBytes(out, seal.signersBitmap);
+  out = writeU32Le(out, seal.signatures.length);
+  for (const signature of seal.signatures) {
+    out = writeBytes(out, signature);
+  }
+  return out;
+};
+
+const canonicalBscValidatorSetSourceAdapterProofBytes = (adapter) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 2);
+  out = writeU8(out, 1);
+  out = writeU32Le(out, SCCP_DOMAIN_BSC);
+  out = writeU64Le(out, adapter.validatorEpoch);
+  out = writeU64Le(out, adapter.blockNumber);
+  out = concatBytes(
+    out,
+    hexToBytes(adapter.blockHash, "adapter.blockHash", 32),
+    hexToBytes(adapter.receiptsRoot, "adapter.receiptsRoot", 32),
+    hexToBytes(adapter.validatorSetHash, "adapter.validatorSetHash", 32),
+    hexToBytes(adapter.commitSealHash, "adapter.commitSealHash", 32),
+    hexToBytes(adapter.receiptTrieProofHash, "adapter.receiptTrieProofHash", 32),
+  );
+  out = concatBytes(out, canonicalBscValidatorSetSealProofBytes(adapter.sealProof));
+  out = writeU32Le(out, 0);
+  out = writeU64Le(out, adapter.receiptRootIndex);
+  out = writeU32Le(out, adapter.receiptTrieProofNodes.length);
+  for (const node of adapter.receiptTrieProofNodes) {
+    out = writeBytes(out, node);
+  }
+  return out;
+};
+
+const sccpSourceAdapterProofHash = (adapter) =>
+  bytesToHex(
+    prefixedBlake2b(
+      SCCP_SOURCE_ADAPTER_PROOF_PREFIX_V1,
+      canonicalBscValidatorSetSourceAdapterProofBytes(adapter),
+    ),
+  );
+
+const sccpSourceAdapterTranscriptHash = ({
+  sourceDomain,
+  targetDomain,
+  sourceProofPlan,
+  finalityModelCanonical,
+  finalityHeight,
+  finalityBlockHash,
+  receiptOrMessageRoot,
+  sourceEventDigest,
+  adapter,
+}) => {
+  let out = new Uint8Array();
+  out = writeU32Le(out, sourceDomain);
+  out = writeU32Le(out, targetDomain);
+  out = writeU8(out, sourceProofPlan);
+  out = writeU8(out, finalityModelCanonical);
+  out = writeU64Le(out, finalityHeight);
+  out = concatBytes(
+    out,
+    hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+    hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+    hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+  );
+  out = writeBytes(out, canonicalBscValidatorSetSourceAdapterProofBytes(adapter));
+  return bytesToHex(
+    prefixedBlake2b(SCCP_SOURCE_ADAPTER_TRANSCRIPT_PREFIX_V1, out),
+  );
+};
+
+const noritoBscSealProofValue = (seal) =>
+  noritoStructValue([
+    noritoU8(seal.version),
+    noritoU64Value(seal.totalPower),
+    noritoU64Value(seal.signedPower),
+    hexToBytes(seal.commitMessageHash, "seal.commitMessageHash", 32),
+    noritoByteVecSequenceValue(seal.validatorPublicKeys, "seal.validatorPublicKeys"),
+    noritoU64SequenceValue(seal.validatorPowers, "seal.validatorPowers"),
+    noritoRawByteVecValue(seal.signersBitmap, "seal.signersBitmap"),
+    noritoByteVecSequenceValue(seal.signatures, "seal.signatures"),
+  ]);
+
+const noritoBscSourceAdapterProofValue = (adapter) =>
+  noritoEnumValue(
+    1,
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_BSC),
+      noritoU64Value(adapter.validatorEpoch),
+      noritoU64Value(adapter.blockNumber),
+      hexToBytes(adapter.blockHash, "adapter.blockHash", 32),
+      hexToBytes(adapter.receiptsRoot, "adapter.receiptsRoot", 32),
+      hexToBytes(adapter.validatorSetHash, "adapter.validatorSetHash", 32),
+      hexToBytes(adapter.commitSealHash, "adapter.commitSealHash", 32),
+      hexToBytes(adapter.receiptTrieProofHash, "adapter.receiptTrieProofHash", 32),
+      noritoBscSealProofValue(adapter.sealProof),
+      noritoStructSequenceValue(
+        [],
+        "adapter.validatorSetTransitionProofs",
+        () => new Uint8Array(),
+      ),
+      noritoU64Value(adapter.receiptRootIndex),
+      noritoByteVecSequenceValue(
+        adapter.receiptTrieProofNodes,
+        "adapter.receiptTrieProofNodes",
+      ),
+    ]),
+  );
+
+const noritoSourceVerifierEvidenceValue = (evidence) =>
+  noritoStructValue([
+    noritoU8(evidence.version),
+    noritoU32Value(evidence.sourceDomain),
+    noritoStringValue(evidence.sourceChain, false, "evidence.sourceChain"),
+    noritoU32Value(evidence.sourceProofPlan),
+    noritoU32Value(evidence.finalityModel),
+    hexToBytes(evidence.adapterProofHash, "evidence.adapterProofHash", 32),
+    hexToBytes(
+      evidence.adapterTranscriptHash,
+      "evidence.adapterTranscriptHash",
+      32,
+    ),
+    noritoStringValue(
+      evidence.adapterCircuitId,
+      false,
+      "evidence.adapterCircuitId",
+    ),
+    noritoStringValue(
+      evidence.sourceTrustAnchorId,
+      false,
+      "evidence.sourceTrustAnchorId",
+    ),
+    hexToBytes(
+      evidence.sourceTrustAnchorHash,
+      "evidence.sourceTrustAnchorHash",
+      32,
+    ),
+    noritoStringValue(
+      evidence.consensusVerifierId,
+      false,
+      "evidence.consensusVerifierId",
+    ),
+    hexToBytes(
+      evidence.consensusVerifierHash,
+      "evidence.consensusVerifierHash",
+      32,
+    ),
+    noritoStringValue(
+      evidence.messageInclusionVerifierId,
+      false,
+      "evidence.messageInclusionVerifierId",
+    ),
+    hexToBytes(
+      evidence.messageInclusionVerifierHash,
+      "evidence.messageInclusionVerifierHash",
+      32,
+    ),
+    noritoStringValue(
+      evidence.finalityPolicyId,
+      false,
+      "evidence.finalityPolicyId",
+    ),
+    hexToBytes(evidence.finalityPolicyHash, "evidence.finalityPolicyHash", 32),
+    noritoStringValue(
+      evidence.sourceStateVerifierId,
+      false,
+      "evidence.sourceStateVerifierId",
+    ),
+    hexToBytes(
+      evidence.sourceStateVerifierHash,
+      "evidence.sourceStateVerifierHash",
+      32,
+    ),
+    noritoStringValue(
+      evidence.sourceBridgeEmitterId,
+      false,
+      "evidence.sourceBridgeEmitterId",
+    ),
+    noritoRawByteVecValue(
+      toMaybeEmptyBytes(
+        evidence.sourceBridgeEmitterAddress,
+        "evidence.sourceBridgeEmitterAddress",
+      ),
+      "evidence.sourceBridgeEmitterAddress",
+    ),
+    hexToBytes(
+      evidence.sourceBridgeEmitterCodeHash,
+      "evidence.sourceBridgeEmitterCodeHash",
+      32,
+    ),
+    hexToBytes(
+      evidence.sourceBridgeNetworkId,
+      "evidence.sourceBridgeNetworkId",
+      32,
+    ),
+    noritoRawByteVecValue(
+      toMaybeEmptyBytes(
+        evidence.sourceBridgeOwnerAddress,
+        "evidence.sourceBridgeOwnerAddress",
+      ),
+      "evidence.sourceBridgeOwnerAddress",
+    ),
+    hexToBytes(
+      evidence.sourceBridgeConfigHash,
+      "evidence.sourceBridgeConfigHash",
+      32,
+    ),
+    hexToBytes(
+      evidence.sourceAdapterDeploymentHash,
+      "evidence.sourceAdapterDeploymentHash",
+      32,
+    ),
+    hexToBytes(
+      evidence.sourceAdapterDeploymentReceiptHash,
+      "evidence.sourceAdapterDeploymentReceiptHash",
+      32,
+    ),
+  ]);
+
+const noritoSourceAdapterVerificationProofValue = (proof) =>
+  noritoStructValue([
+    noritoU8(proof.version),
+    noritoStringValue(proof.proofFamily, false, "adapterVerification.proofFamily"),
+    noritoStringValue(proof.circuitId, false, "adapterVerification.circuitId"),
+    noritoRawByteVecValue(proof.proofBytes, "adapterVerification.proofBytes"),
+  ]);
+
+const buildBscSourceConsensusProofBytes = ({
+  material,
+  adapter,
+  adapterTranscriptHash,
+  evidence,
+  adapterVerificationProof,
+  finalityHeight,
+  finalityBlockHash,
+  receiptOrMessageRoot,
+  finalizedHeaderHash,
+}) =>
+  noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_BSC),
+      noritoStringValue("bsc", false, "sourceChain"),
+      noritoU32Value(material.sourceProofPlan),
+      noritoU32Value(material.finalityModel),
+      noritoU64Value(finalityHeight),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
+      noritoBscSourceAdapterProofValue(adapter),
+      hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
+      noritoSourceVerifierEvidenceValue(evidence),
+      noritoSourceAdapterVerificationProofValue(adapterVerificationProof),
+    ]),
+    SCCP_SOURCE_CONSENSUS_PROOF_SCHEMA_HASH_HEX,
+  );
+
+const buildBscSourceMessageInclusionProofBytes = ({
+  messageId,
+  payloadHash,
+  sourceEventDigest,
+  sourceEventLeafHash,
+  receiptOrMessageRoot,
+}) =>
+  noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_BSC),
+      noritoU32Value(SCCP_DOMAIN_SORA),
+      hexToBytes(messageId, "messageId", 32),
+      hexToBytes(payloadHash, "payloadHash", 32),
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(sourceEventLeafHash, "sourceEventLeafHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      noritoU64Value(0),
+    ]),
+    SCCP_SOURCE_MESSAGE_INCLUSION_PROOF_SCHEMA_HASH_HEX,
+  );
+
+const bscPlaceholderValidatorPrivateKey = ({
+  sourceEventDigest,
+  finalityBlockHash,
+  receiptsRoot,
+}) => {
+  let seed = prefixedKeccak(
+    "sccp:bsc:placeholder-validator-secret:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(receiptsRoot, "receiptsRoot", 32),
+    ),
+  );
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (secp256k1.utils.isValidPrivateKey(seed)) {
+      return seed;
+    }
+    seed = keccak_256(seed);
+  }
+  throw new TypeError("failed to derive a valid BSC placeholder validator key");
+};
+
+const bscRecoverableSignature = (messageHash, privateKey) => {
+  const signature = secp256k1.sign(
+    hexToBytes(messageHash, "commitMessageHash", 32),
+    privateKey,
+    { prehash: false, lowS: true },
+  );
+  const compact = signature.toCompactRawBytes();
+  const recovery = signature.recovery ?? signature.recoveryBit;
+  if (!Number.isInteger(recovery) || recovery < 0 || recovery > 3) {
+    throw new TypeError("BSC placeholder validator signature recovery id is missing");
+  }
+  return concatBytes(compact, Uint8Array.from([recovery + 27]));
+};
+
+export function buildBscPlaceholderSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC placeholder source-chain proof input must be an object");
+  }
+  const optionalInput = (label, ...names) => {
+    const selected = strictOptionalResultField(input, label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const messageId = normalizeNonZeroHex32(
+    strictResultField(input, "messageId", "messageId", "message_id"),
+    "messageId",
+  );
+  const payloadHash = normalizeNonZeroHex32(
+    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
+    "payloadHash",
+  );
+  const commitmentRoot = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "commitmentRoot",
+  );
+  const observedSourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "sourceEventDigest",
+  );
+  const expectedSourceEventDigest = sccpSourceEventDigest(
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  );
+  const sourceEventDigest = expectedSourceEventDigest;
+  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
+  const branchSeed = prefixedBlake2b(
+    "sccp:bsc:placeholder-source-branch:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+    ),
+  );
+  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
+  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
+    sourceEventLeafHash,
+    0,
+    inclusionBranch,
+  );
+
+  const receipt = input.receipt && typeof input.receipt === "object" ? input.receipt : {};
+  const block = input.block && typeof input.block === "object" ? input.block : {};
+  const receiptRootIndex = normalizeUnsignedBigIntMax(
+    optionalInput(
+      "receiptRootIndex",
+      "receiptRootIndex",
+      "receipt_root_index",
+      "transactionIndex",
+      "transaction_index",
+    ) ??
+      receipt.transactionIndex ??
+      receipt.transaction_index ??
+      0,
+    "receiptRootIndex",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  const finalityHeight = normalizeUnsignedBigIntMax(
+    optionalInput(
+      "finalityHeight",
+      "finalityHeight",
+      "finality_height",
+      "blockNumber",
+      "block_number",
+    ) ??
+      block.number ??
+      block.blockNumber ??
+      receipt.blockNumber ??
+      receipt.block_number,
+    "finalityHeight",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  if (finalityHeight === 0n) {
+    throw new TypeError("finalityHeight must not be zero");
+  }
+  const finalityBlockHash = normalizeNonZeroHex32(
+    optionalInput(
+      "finalityBlockHash",
+      "finalityBlockHash",
+      "finality_block_hash",
+      "blockHash",
+      "block_hash",
+    ) ??
+      block.hash ??
+      block.blockHash ??
+      receipt.blockHash ??
+      receipt.block_hash,
+    "finalityBlockHash",
+  );
+  const material = bscTemplateSourceVerifierMaterial();
+  const receiptProof = normalizeBscSourceProofReceiptTrie({
+    blockReceipts: input.blockReceipts ?? input.block_receipts,
+    receiptRootIndex,
+    receiptOrMessageRoot,
+  });
+  const validatorEpoch = finalityHeight / SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS;
+  if (validatorEpoch === 0n) {
+    throw new TypeError("BSC finalityHeight must fall inside a nonzero Parlia epoch");
+  }
+  const privateKey = bscPlaceholderValidatorPrivateKey({
+    sourceEventDigest,
+    observedSourceEventDigest,
+    finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+  });
+  const publicKey = secp256k1.getPublicKey(privateKey, true);
+  const fullPublicKey = secp256k1.getPublicKey(privateKey, false);
+  const validatorAddress = keccak_256(fullPublicKey.slice(1)).slice(12);
+  const validatorPower = 3n;
+  const validatorSetHash = bscValidatorSetHashFromPayload({
+    validatorAddresses: [bytesToHex(validatorAddress)],
+    validatorPowers: [validatorPower],
+  });
+  const commitMessageHash = bscCommitMessageHash({
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+  });
+  const signature = bscRecoverableSignature(commitMessageHash, privateKey);
+  const sealProof = Object.freeze({
+    version: 1,
+    totalPower: validatorPower,
+    signedPower: validatorPower,
+    commitMessageHash,
+    validatorPublicKeys: Object.freeze([publicKey]),
+    validatorPowers: Object.freeze([validatorPower]),
+    signersBitmap: Uint8Array.from([1]),
+    signatures: Object.freeze([signature]),
+  });
+  const commitSealHash = bscCommitSealHash({
+    version: 1,
+    totalPower: validatorPower,
+    signedPower: validatorPower,
+    commitMessageHash,
+    validatorPublicKeys: [publicKey],
+    validatorPowers: [validatorPower],
+    signersBitmap: Uint8Array.from([1]),
+    signatures: [signature],
+    validatorSetHash,
+  });
+  const receiptTrieProofHash = bscSccpReceiptProofHash({
+    sourceEventDigest,
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    commitSealHash,
+    receiptRootIndex,
+    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+    inclusionBranch,
+  });
+  const adapter = Object.freeze({
+    version: 1,
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    commitSealHash,
+    receiptTrieProofHash,
+    sealProof,
+    receiptRootIndex,
+    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+  });
+  const adapterProofHash = sccpSourceAdapterProofHash(adapter);
+  const adapterTranscriptHash = sccpSourceAdapterTranscriptHash({
+    sourceDomain: SCCP_DOMAIN_BSC,
+    targetDomain: SCCP_DOMAIN_SORA,
+    sourceProofPlan: material.sourceProofPlan,
+    finalityModelCanonical: material.finalityModelCanonical,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+    sourceEventDigest,
+    adapter,
+  });
+  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
+    sourceDomain: SCCP_DOMAIN_BSC,
+    finalityModelCanonical: material.finalityModelCanonical,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+  });
+  const evidence = Object.freeze({
+    version: 1,
+    sourceDomain: SCCP_DOMAIN_BSC,
+    sourceChain: "bsc",
+    sourceProofPlan: material.sourceProofPlan,
+    finalityModel: material.finalityModel,
+    adapterProofHash,
+    adapterTranscriptHash,
+    adapterCircuitId: material.adapterCircuitId,
+    sourceTrustAnchorId: material.sourceTrustAnchorId,
+    sourceTrustAnchorHash: material.sourceTrustAnchorHash,
+    consensusVerifierId: material.consensusVerifierId,
+    consensusVerifierHash: material.consensusVerifierHash,
+    messageInclusionVerifierId: material.messageInclusionVerifierId,
+    messageInclusionVerifierHash: material.messageInclusionVerifierHash,
+    finalityPolicyId: material.finalityPolicyId,
+    finalityPolicyHash: material.finalityPolicyHash,
+    sourceStateVerifierId: material.sourceStateVerifierId,
+    sourceStateVerifierHash: material.sourceStateVerifierHash,
+    sourceBridgeEmitterId: material.sourceBridgeEmitterId,
+    sourceBridgeEmitterAddress: material.sourceBridgeEmitterAddress,
+    sourceBridgeEmitterCodeHash: material.sourceBridgeEmitterCodeHash,
+    sourceBridgeNetworkId: material.sourceBridgeNetworkId,
+    sourceBridgeOwnerAddress: material.sourceBridgeOwnerAddress,
+    sourceBridgeConfigHash: material.sourceBridgeConfigHash,
+    sourceAdapterDeploymentHash: material.sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash: material.sourceAdapterDeploymentReceiptHash,
+  });
+  const adapterVerificationProof = Object.freeze({
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    circuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+    proofBytes: prefixedBlake2b(
+      "sccp:bsc:placeholder-source-adapter-opening:v1",
+      hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
+    ),
+  });
+  const consensusProof = buildBscSourceConsensusProofBytes({
+    material,
+    adapter,
+    adapterTranscriptHash,
+    evidence,
+    adapterVerificationProof,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+    finalizedHeaderHash,
+  });
+  const messageInclusionProof = buildBscSourceMessageInclusionProofBytes({
+    messageId,
+    payloadHash,
+    sourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+  });
+  const sourceProofBytes = noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_BSC),
+      noritoU32Value(SCCP_DOMAIN_SORA),
+      noritoStringValue("bsc", false, "sourceChain"),
+      noritoU32Value(material.sourceProofPlan),
+      noritoU32Value(material.finalityModel),
+      hexToBytes(messageId, "messageId", 32),
+      hexToBytes(payloadHash, "payloadHash", 32),
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+      noritoU64Value(finalityHeight),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      noritoRawByteVecValue(consensusProof, "consensusProof"),
+      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
+      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
+    ]),
+    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
+  );
+  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+  return Object.freeze({
+    sourceProofHex: bytesToHex(sourceProofBytes),
+    sourceProofBytes: copyBytes(sourceProofBytes),
+    sourceEventDigest,
+    observedSourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+    finalityHeight: finalityHeight.toString(),
+    finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    receiptRootIndex: receiptRootIndex.toString(),
+    syntheticRootMarker: receiptProof.syntheticRootMarker,
+  });
+}
+
 export function canonicalTronReceiptRootMptValue(receiptRoot) {
   const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");
   const value = rlpList([
@@ -41485,9 +42417,9 @@ const readTairaXorEvmAddressPayload = (value, label) => {
       payload === SCCP_OPTIONAL_FIELD_MISSING
         ? strictResultField(value, `${label}.value`, "value")
         : payload;
-    return nonZeroHex(selected, `${label}.value`, 20);
+    return normalizeEvmTransactionAddress(selected, `${label}.value`);
   }
-  return nonZeroHex(value, label, 20);
+  return normalizeEvmTransactionAddress(value, label);
 };
 
 export function bindTairaXorTronToTairaSourceProofPackage(input) {

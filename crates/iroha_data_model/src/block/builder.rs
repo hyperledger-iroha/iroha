@@ -191,6 +191,13 @@ impl BlockBuilder {
             time_triggers: self.time_triggers,
             merkle: self.entry_merkle,
             result_merkle: self.result_merkle,
+            committed_fragment_count: u64::try_from(
+                self.results
+                    .iter()
+                    .filter(|result| result.as_ref().is_ok())
+                    .count(),
+            )
+            .unwrap_or(u64::MAX),
             transaction_results: self.results,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),

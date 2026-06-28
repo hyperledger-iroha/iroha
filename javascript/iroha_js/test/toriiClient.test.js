@@ -4608,7 +4608,7 @@ test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
   fixture.dataspaces[1].accounts[0].assets[1].asset_id = FIXTURE_ASSET_ID_C;
   const canonical = fixture.uaid;
   const rawHex = canonical.slice("uaid:".length);
-  const mixed = `UaiD:  ${rawHex.toUpperCase()}  `;
+  const mixed = `UaiD:${rawHex.toUpperCase()}`;
   const fetchImpl = async (url) => {
     capturedUrl = url;
     return createResponse({
@@ -4618,12 +4618,36 @@ test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getUaidPortfolio(` ${mixed} `);
+  const result = await client.getUaidPortfolio(mixed);
   assert.equal(
     capturedUrl,
     `${BASE_URL}/v1/accounts/${encodeURIComponent(canonical)}/portfolio`,
   );
   assert.equal(result.uaid, canonical);
+});
+
+test("getUaidPortfolio rejects padded UAID path literals before dispatch", async () => {
+  let fetchCalled = false;
+  const canonical = toriiFixtures.uaid.portfolio.uaid;
+  const rawHex = canonical.slice("uaid:".length);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch should not run for padded UAID path literals");
+    },
+  });
+
+  for (const value of [
+    ` ${canonical}`,
+    `${canonical} `,
+    `uaid: ${rawHex}`,
+  ]) {
+    await assert.rejects(
+      () => client.getUaidPortfolio(value),
+      /getUaidPortfolio\.uaid must not contain surrounding whitespace/u,
+    );
+  }
+  assert.equal(fetchCalled, false);
 });
 
 test("getUaidPortfolio encodes assetId filters", async () => {
@@ -13239,7 +13263,7 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
           verifier_entrypoint:
             "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
           platform_payload: {
-            platform: "evm_contract_call",
+            platform: "EvmGroth16ContractCall",
             payload: {
               proof_bytes: "aa55",
               public_inputs: {
@@ -13681,6 +13705,152 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
       finalityProof: "bb66",
     },
   });
+});
+
+test("getSccpMessageProofJob preserves Groth16 proof summary destination binding", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const staleDestinationBindingHash = "58".repeat(32);
+  const summaryDestinationBindingHash = "59".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        chain_family: "Evm",
+        chain: "bsc-testnet",
+        local_domain: 0,
+        counterparty_domain: 2,
+        security_model: "RecursiveZk",
+        anchor_governance: "CryptographicProof",
+        destination_binding: {
+          version: 1,
+          key: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
+          binding_hash: staleDestinationBindingHash,
+        },
+        proof_family: "groth16-bn254-v1",
+        verifier_backend: { version: 1, key: "evm-groth16-bn254-v1" },
+        message_backend: "sccp/groth16-bn254-v1/bsc",
+        registry_backend: "bridge/sccp/groth16-bn254-v1/bsc",
+        manifest_seed: "iroha:sccp:bridge-proof:message:groth16:v1:bsc",
+        finality_model: "EthereumBeaconExecution",
+        verifier_target: "EvmContract",
+        submission_template: {
+          version: 1,
+          encoding: "evm_abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          required_arguments: [
+            { key: "proof_bytes", description: "Groth16 proof bytes." },
+            { key: "public_inputs", description: "SCCP public input words." },
+            { key: "statement_hash", description: "SCCP statement hash." },
+          ],
+        },
+        submission_package: {
+          version: 1,
+          proof_family: "groth16-bn254-v1",
+          verifier_backend: { version: 1, key: "evm-groth16-bn254-v1" },
+          envelope_encoding: "evm_abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          platform_payload: {
+            platform: "EvmGroth16ContractCall",
+            payload: {
+              proof_bytes: "aa55",
+              public_inputs: {
+                message_id: messageId,
+                payload_hash: payloadHash,
+                target_domain_word: "00".repeat(31) + "02",
+                commitment_root: commitmentRoot,
+                finality_height_word: "00".repeat(31) + "13",
+                finality_block_hash: finalityBlockHash,
+              },
+              statement_hash: "55".repeat(32),
+            },
+          },
+          arguments: [
+            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
+            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
+          ],
+          envelope_bytes: "77",
+        },
+        groth16_proof_summary: {
+          platform_payload: "evm_groth16_contract_call",
+          version: 1,
+          proof_len_bytes: 384,
+          public_input_word_count: 6,
+          groth16_public_signal_count: 9,
+          message_id: messageId,
+          source_domain: 0,
+          commitment_root: commitmentRoot,
+          destination_binding_key: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
+          destination_binding_hash: summaryDestinationBindingHash,
+        },
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 2,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        payload_kind: "transfer",
+        payload_projection: {
+          Transfer: {
+            version: 1,
+            source_domain: 0,
+            dest_domain: 2,
+            nonce: "21",
+            asset_home_domain: 0,
+            asset_id: { TextUtf8: { value: "xor#universal" } },
+            amount: "77",
+            sender: { TextUtf8: { value: "nexus:soraswap" } },
+            recipient: { EvmHex: { bytes: "12".repeat(20) } },
+            route_id: { TextUtf8: { value: "nexus:bsc:xor" } },
+          },
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 2,
+            message_id: messageId,
+            payload_hash: payloadHash,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1, amount: "77" } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
+
+  assert.equal(result.destinationBinding.bindingHash, staleDestinationBindingHash);
+  assert.deepEqual(result.groth16ProofSummary, {
+    platformPayload: "evm_groth16_contract_call",
+    version: 1,
+    proofLenBytes: 384,
+    publicInputWordCount: 6,
+    groth16PublicSignalCount: 9,
+    messageId,
+    sourceDomain: 0,
+    commitmentRoot,
+    destinationBindingKey: "sccp:0:2:bsc:evm-groth16-bn254-v1:1",
+    destinationBindingHash: summaryDestinationBindingHash,
+  });
+  assert.equal(result.proofEnvelopeSummary, null);
+  assert.equal(result.submissionPackage.platformPayload.kind, "evm_groth16_contract_call");
 });
 
 test("getSccpMessageProofJob rejects invalid TRON payload projection", async () => {
@@ -18238,6 +18408,59 @@ test("listContractEvents encodes generic contract event filters", async () => {
   assert.equal(payload.items[0].block_height, 9);
 });
 
+test("contract query helpers reject padded selector filters before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch must not run for padded selector filters");
+    },
+  });
+
+  const asyncCases = [
+    [
+      "activity contractAddress",
+      () => client.listContractActivity({ contractAddress: " tairac1router" }),
+      /contractAddress must not contain surrounding whitespace/u,
+    ],
+    [
+      "activity contractAlias",
+      () => client.listContractActivity({ contractAlias: "dlmm_router " }),
+      /contractAlias must not contain surrounding whitespace/u,
+    ],
+    [
+      "event contractAddress",
+      () => client.listContractEvents({ contractAddress: "tairac1router " }),
+      /contractAddress must not contain surrounding whitespace/u,
+    ],
+    [
+      "event contractAlias",
+      () => client.listContractEvents({ contractAlias: " dlmm_router" }),
+      /contractAlias must not contain surrounding whitespace/u,
+    ],
+    [
+      "event participant",
+      () => client.listContractEvents({ participant: `${FIXTURE_ALICE_ID} ` }),
+      /participant must not contain surrounding whitespace/u,
+    ],
+    [
+      "event assetId",
+      () => client.listContractEvents({ assetId: " xor#universal" }),
+      /assetId must not contain surrounding whitespace/u,
+    ],
+  ];
+
+  for (const [label, action, pattern] of asyncCases) {
+    await assert.rejects(action, pattern, label);
+  }
+
+  assert.throws(
+    () => client.streamContractEvents({ participant: ` ${FIXTURE_ALICE_ID}` }),
+    /participant must not contain surrounding whitespace/u,
+  );
+  assert.equal(fetchCalled, false);
+});
+
 test("listContractEvents rejects camelCase payload aliases", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
@@ -22514,21 +22737,29 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-test("getOfflineReadiness fetches canonical readiness payload", async () => {
-  let capturedRequest = null;
-  const readiness = {
+function canonicalOfflineReadinessPayload(overrides = {}) {
+  return {
     offline_telemetry: true,
-    offline_kagemusha_abi7: true,
-    offline_kagemusha_abi7_mode: "recursive_compact_v1",
-    offline_kagemusha_abi7_bridge_abi_version: 7,
-    offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_abi7_artifacts: true,
     offline_kagemusha_recursive_compact_available: true,
     offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
     offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_recursive_compact_artifacts_available: true,
+    offline_kagemusha_recursive_compact_artifacts_available: false,
+    ...overrides,
   };
+}
+
+const OFFLINE_READINESS_REMOVED_ABI7_FIELDS = [
+  "offline_kagemusha_abi7",
+  "offline_kagemusha_abi7_mode",
+  "offline_kagemusha_abi7_bridge_abi_version",
+  "offline_kagemusha_abi7_circuit_id",
+  "offline_kagemusha_abi7_artifacts",
+];
+
+test("getOfflineReadiness fetches canonical readiness payload", async () => {
+  let capturedRequest = null;
+  const readiness = canonicalOfflineReadinessPayload();
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init = {}) => {
       capturedRequest = { url, init };
@@ -22552,7 +22783,70 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
 });
 
-test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
+test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
+  const cases = [
+    [
+      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+      0,
+      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+      "007",
+      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
+      "2147483648",
+      /offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_available",
+      1,
+      /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
+    ],
+    [
+      "offline_kagemusha_recursive_compact_circuit_id",
+      "kagemusha-recursive-compact-v1 ",
+      /offline readiness response\.offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace/,
+    ],
+  ];
+
+  for (const [field, value, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: canonicalOfflineReadinessPayload({ [field]: value }),
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getOfflineReadiness(),
+      pattern,
+      `${field}=${String(value)} should be rejected`,
+    );
+  }
+});
+
+test("getOfflineReadiness rejects removed ABI-7 readiness fields", async () => {
+  for (const field of OFFLINE_READINESS_REMOVED_ABI7_FIELDS) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: canonicalOfflineReadinessPayload({ [field]: true }),
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getOfflineReadiness(),
+      new RegExp(`offline readiness response\\.${field} is not supported; use offline_kagemusha_recursive_compact_\\*`),
+    );
+  }
+});
+
+test("getOfflineReadiness rejects payload missing recursive compact family", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
@@ -22571,7 +22865,7 @@ test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
 
   await assert.rejects(
     () => client.getOfflineReadiness(),
-    /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+    /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
   );
 });
 
@@ -23661,6 +23955,32 @@ test("SNS read helpers reject unsupported option fields", async () => {
   );
 });
 
+test("SNS domain route helpers reject padded selectors before dispatch", async () => {
+  let fetchCalled = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error("fetch should not run for padded SNS selectors");
+    },
+  });
+  const cases = [
+    ["getSnsRegistration", () => client.getSnsRegistration(" alice.sora")],
+    ["renewSnsRegistration", () => client.renewSnsRegistration("alice.sora ", {})],
+    ["transferSnsRegistration", () => client.transferSnsRegistration(" alice.sora ", {})],
+    ["freezeSnsRegistration", () => client.freezeSnsRegistration("alice.sora ", {})],
+    ["unfreezeSnsRegistration", () => client.unfreezeSnsRegistration(" alice.sora", {})],
+  ];
+
+  for (const [label, action] of cases) {
+    await assert.rejects(
+      action,
+      /selector must not contain surrounding whitespace/u,
+      `${label} should reject padded selectors before dispatch`,
+    );
+  }
+  assert.equal(fetchCalled, false);
+});
+
 test("registerSnsName rejects invalid controller types", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -23713,7 +24033,7 @@ test("freezeSnsRegistration posts normalized payload and parses record", async (
     },
   });
   const result = await client.freezeSnsRegistration(
-    "  alice.sora  ",
+    "alice.sora",
     { reason: "  abuse report ", until_ms: 5000, guardian_ticket: { token: "grant" } },
     { signal: controller.signal },
   );
@@ -23760,7 +24080,7 @@ test("unfreezeSnsRegistration posts governance hook payload", async () => {
       });
     },
   });
-  const result = await client.unfreezeSnsRegistration(" alice.sora ", {
+  const result = await client.unfreezeSnsRegistration("alice.sora", {
     proposal_id: " prop-123 ",
     council_vote_hash: " council-hash ",
     dao_vote_hash: " dao-hash ",

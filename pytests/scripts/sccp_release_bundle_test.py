@@ -558,6 +558,11 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
             "route canary blockers[0] contains sensitive name",
         ),
         (
+            "sensitive_nested_html_entity",
+            ["private&amp;#95;key-route-canary-blocker"],
+            "route canary blockers[0] contains sensitive name",
+        ),
+        (
             "valid_nonempty",
             ["route canary governance review pending"],
             "route canary blockers must be empty",
@@ -583,6 +588,7 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         assert "secret-token" not in blocker_text
         assert "secret%2dtoken" not in blocker_text
         assert "private&#95;key" not in blocker_text
+        assert "private&amp;#95;key" not in blocker_text
 
     upstream_hash_roles = (
         ("source verifier material hash", fixed_hex32(0xB1)),
@@ -4791,6 +4797,11 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
             "sha256": "4" * 64,
         },
         {
+            "path": "native-prover/private&amp;#95;key-artifact.bin",
+            "bytes": 128,
+            "sha256": "5" * 64,
+        },
+        {
             "path": "sccp-release-zero-byte-artifact.json",
             "bytes": 0,
             "sha256": "2" * 64,
@@ -4822,6 +4833,7 @@ def test_release_bundle_release_notes_reject_malformed_artifact_rows() -> None:
         assert "secret-token" not in notes
         assert "secret%2dtoken" not in notes
         assert "private&#95;key" not in notes
+        assert "private&amp;#95;key" not in notes
         assert "operator|" not in notes
         assert "Traceback" not in notes
     for notes in (builder_notes, verifier_notes):
@@ -9552,6 +9564,97 @@ def test_release_bundle_source_gate_hash_key_failures_are_bounded(
         verifier,
         "_source_adapter_gate_hash_key_for_domain_chain",
         broken_hash_key,
+    )
+
+    builder_crypto_errors = bundle._cryptographic_evidence_source_adapter_gate_bundle_errors(
+        "bundled report.cryptographic_evidence[0]",
+        payload,
+        audit_hashes,
+    )
+    builder_lane_errors = bundle._source_adapter_gate_semantic_errors(
+        "bundled report.evidence.lanes[0]",
+        lane,
+        source_gate,
+    )
+    verifier_crypto_errors = verifier._cryptographic_evidence_source_adapter_gate_schema_errors(
+        payload,
+        audit_hashes,
+    )
+    verifier_lane_errors = verifier._source_adapter_gate_coherence_errors(
+        "all-lanes summary lane domain 1 source_adapter_gate",
+        lane,
+        source_gate,
+    )
+
+    joined_errors = "\n".join(
+        builder_crypto_errors
+        + builder_lane_errors
+        + verifier_crypto_errors
+        + verifier_lane_errors
+    )
+    assert (
+        "bundled report.cryptographic_evidence[0] source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert (
+        "all-lanes summary lane domain 1 source_adapter_gate "
+        "source adapter gate hash-key validation failed"
+    ) in joined_errors
+    assert "secret-token-source-gate-hash-key" not in joined_errors
+
+
+def test_release_bundle_source_gate_hash_key_non_string_returns_are_bounded(
+    monkeypatch,
+) -> None:
+    """Source-gate hash-key helper drift must not stringify hostile objects."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    domain = 1
+    gate_hash = fixed_hex32(0xB8)
+    audit_hashes = {"evm_source_gate_hash": gate_hash}
+    payload = {
+        "domain": domain,
+        "chain": "eth",
+        "source_adapter_gate_required": True,
+        "source_adapter_gate_hash": gate_hash,
+    }
+    lane = {"domain": domain, "chain": "eth"}
+    source_gate = {
+        "required": True,
+        "ready": True,
+        "gate_hash": gate_hash,
+        "audit_hashes": audit_hashes,
+        "blockers": [],
+    }
+
+    class HostileHashKey:
+        def __str__(self) -> str:
+            raise RuntimeError("secret-token-source-gate-hash-key-str")
+
+        def __repr__(self) -> str:
+            return "secret-token-source-gate-hash-key-repr"
+
+    def hostile_hash_key(_domain, _chain):
+        return HostileHashKey()
+
+    monkeypatch.setattr(
+        bundle,
+        "_source_adapter_gate_hash_key_for_domain_chain",
+        hostile_hash_key,
+    )
+    monkeypatch.setattr(
+        verifier,
+        "_source_adapter_gate_hash_key_for_domain_chain",
+        hostile_hash_key,
     )
 
     builder_crypto_errors = bundle._cryptographic_evidence_source_adapter_gate_bundle_errors(
@@ -34740,51 +34843,58 @@ def test_release_bundle_public_sensitive_markers_reject_encoded_confusables() ->
 
     bundle = load_bundle_module()
     verifier = load_verify_helpers()
-    encoded_sensitive = "s%D0%B5cret-token"
-    blocker = f"operator {encoded_sensitive} blocker"
+    encoded_sensitive_cases = (
+        "s%D0%B5cret-token",
+        "private&amp;#95;key",
+        "client&amp;#32;secret",
+    )
 
-    assert bundle._public_text_contains_sensitive_marker(encoded_sensitive)
-    assert verifier._public_text_contains_sensitive_marker(encoded_sensitive)
-    assert (
-        bundle._native_evm_prover_duplicate_json_key_error(encoded_sensitive)
-        == "native EVM Groth16 prover bundle JSON contains duplicate key with "
-        "sensitive key name"
-    )
-    assert (
-        verifier._native_evm_prover_duplicate_json_key_blocker(
-            "readiness report native_evm_prover_bundle",
-            encoded_sensitive,
+    for encoded_sensitive in encoded_sensitive_cases:
+        blocker = f"operator {encoded_sensitive} blocker"
+
+        assert bundle._public_text_contains_sensitive_marker(encoded_sensitive)
+        assert verifier._public_text_contains_sensitive_marker(encoded_sensitive)
+        assert (
+            bundle._native_evm_prover_duplicate_json_key_error(encoded_sensitive)
+            == "native EVM Groth16 prover bundle JSON contains duplicate key with "
+            "sensitive key name"
         )
-        == "readiness report native_evm_prover_bundle JSON contains duplicate "
-        "key with sensitive key name"
-    )
-    assert (
-        bundle._public_blocker_text_error(blocker, "manifest", "blockers")
-        == "manifest blockers contains blocker with sensitive name"
-    )
-    assert verifier._public_blocker_text_issue(blocker) == "sensitive name"
-    assert (
-        verifier._public_blocker_text_blocker(
-            blocker,
-            "readiness report",
-            "blockers",
+        assert (
+            verifier._native_evm_prover_duplicate_json_key_blocker(
+                "readiness report native_evm_prover_bundle",
+                encoded_sensitive,
+            )
+            == "readiness report native_evm_prover_bundle JSON contains duplicate "
+            "key with sensitive key name"
         )
-        == "readiness report blockers contains blocker with sensitive name"
-    )
-    assert not bundle._release_notes_artifact_path_is_safe(
-        f"artifacts/{encoded_sensitive}.json"
-    )
+        assert (
+            bundle._public_blocker_text_error(blocker, "manifest", "blockers")
+            == "manifest blockers contains blocker with sensitive name"
+        )
+        assert verifier._public_blocker_text_issue(blocker) == "sensitive name"
+        assert (
+            verifier._public_blocker_text_blocker(
+                blocker,
+                "readiness report",
+                "blockers",
+            )
+            == "readiness report blockers contains blocker with sensitive name"
+        )
+        assert not bundle._release_notes_artifact_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
+        assert not verifier._readiness_native_evm_markdown_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
+        assert not verifier._release_notes_attachment_artifact_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
+
     assert not bundle._release_notes_artifact_path_is_safe(
         "artifacts/safe%0Aartifact.json"
     )
     assert not bundle._release_notes_artifact_path_is_safe(
         "artifacts/safe%E2%80%AEartifact.json"
-    )
-    assert not verifier._readiness_native_evm_markdown_path_is_safe(
-        f"artifacts/{encoded_sensitive}.json"
-    )
-    assert not verifier._release_notes_attachment_artifact_path_is_safe(
-        f"artifacts/{encoded_sensitive}.json"
     )
     assert not verifier._release_notes_attachment_artifact_path_is_safe(
         "artifacts/safe%0Aartifact.json"

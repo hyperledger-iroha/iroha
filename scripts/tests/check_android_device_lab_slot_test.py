@@ -1509,6 +1509,23 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab.CONTROL_PATH_REDACTION,
         )
 
+    def test_secret_detector_rejects_common_assignment_markers(self) -> None:
+        unsafe_values = (
+            "token=supersecret",
+            "secret=supersecret",
+            "client_secret=supersecret",
+            "password=supersecret",
+            "api_key=supersecret",
+            "api-key=supersecret",
+            "private_key=supersecret",
+            "Authorization: Bearer supersecret",
+        )
+        for value in unsafe_values:
+            with self.subTest(value=value):
+                self.assertTrue(device_lab.SECRET_RE.search(value))
+
+        self.assertFalse(device_lab.SECRET_RE.search("secretariat-release-notes"))
+
     def test_checked_in_sample_slot_passes_default_validation(self) -> None:
         root = Path(__file__).resolve().parents[2] / "fixtures" / "android" / "device_lab"
         report = device_lab.scan_slot(root / "slot-sample")
@@ -2385,6 +2402,12 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         commands = (
             ("reboot executable path", ["/sbin/reboot"]),
+            ("mixed-case kill executable path", ["/BIN/KiLl", "1234"]),
+            ("mixed-case adb token", ["AdB", "-s", "ABC123", "KiLl-SeRvEr"]),
+            (
+                "mixed-case adb sequence",
+                ["ADB", "-s", "ABC123", "SHELL", "AM", "FORCE-STOP", "pkg"],
+            ),
             ("pm clear", ["adb", "-s", "ABC123", "shell", "pm", "clear", "pkg"]),
             (
                 "pm disable-user",

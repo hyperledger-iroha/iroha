@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 
 import {
   buildMarkdownSummary,
@@ -88,4 +89,13 @@ test("buildPrometheusMetrics emits gauges and target details", () => {
       'js_release_matrix_target_exit_code{matrix_name="demo",git_rev="abc123",target="node18",status="failed",log_file="artifacts/matrix/node18.log"} 1',
     ),
   );
+});
+
+test("release matrix timeout path does not use SIGKILL escalation", async () => {
+  const script = await fs.readFile(
+    new URL("../scripts/release-matrix.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.ok(script.includes('child.kill("SIGTERM")'));
+  assert.ok(!script.includes("SIGKILL"));
 });

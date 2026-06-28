@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d471da0eaaa1f449a1e85b67fd2f858aa6972bb21aacfc73e8a947d9a75a2a69
-source_last_modified: "2026-01-22T15:38:30.697009+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: f752fac98bf3c70620089732451eea8ef09ad5d05db15b0d787ea82425b13752
+source_last_modified: "2026-06-25T16:00:00+00:00"
+translation_last_reviewed: 2026-06-25
 ---
 
 ---
@@ -660,11 +660,13 @@ sorafs_cli por trigger \
 ```
 
 The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
-manifest/provider pair is permitted, and submits a Norito
-`ManualPorChallengeV1` request to `POST /v1/sorafs/por/trigger`. Optional flags
-(`--samples`, `--deadline-secs`) override the scheduler defaults on a per-call
-basis. Responses are surfaced verbatim so auditors capture the assigned
-`challenge_id` or any governance error codes.
+manifest/provider pair is permitted, and submits the legacy Norito
+`ManualPorChallengeV1` request shape to `POST /v1/sorafs/por/trigger`. Torii now
+deliberately retires that route with a fail-closed `410 Gone` JSON response
+containing `route_state = "retired"`; live challenge admission must use governed
+`PorChallengeV1` submission through `/v1/sorafs/capacity/por-challenge` or the
+scheduler runtime. Responses are surfaced verbatim so auditors capture the
+retirement state or any future governance error codes.
 
 ### Export GovernanceLog verdicts
 

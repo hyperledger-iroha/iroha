@@ -16,6 +16,11 @@ from iroha_python.offline_cash import (
     offline_cash_available_transport_kinds,
 )
 
+ISSUER_PUBLIC_KEY_BASE64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+ISSUER_PUBLIC_KEY_BASE64URL = "__________________________________________8"
+SHORT_ISSUER_PUBLIC_KEY_BASE64 = "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqw"
+LONG_ISSUER_PUBLIC_KEY_BASE64 = "zc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3N"
+
 
 def test_offline_cash_transport_availability_hides_unsupported_nfc() -> None:
     capabilities = OfflineCashTransportCapabilities(
@@ -119,17 +124,48 @@ async def _assert_lifecycle_does_not_load_when_sync_fails() -> None:
     assert events == ["hasPending", "sync"]
 
 
-def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
-    snapshot = OfflineCashConfigurationSnapshot(
-        chain_id="00000042",
-        asset_definition_id="pkr#sbp",
-        offline_payments_enabled=True,
-        issuer_public_key_base64="issuer-key",
-        native_bridge_abi_version=7,
-        created_at_ms=100,
-        expires_at_ms=1000,
-    )
+def test_offline_cash_snapshot_requires_cached_identity_time_issuer_key_and_abi() -> None:
+    snapshot_kwargs = {
+        "chain_id": "00000042",
+        "asset_definition_id": "pkr#sbp",
+        "offline_payments_enabled": True,
+        "issuer_public_key_base64": ISSUER_PUBLIC_KEY_BASE64,
+        "native_bridge_abi_version": 7,
+        "artifact_set_id": "artifact-set",
+        "circuit_id": "kagemusha-recursive-compact-v1",
+        "created_at_ms": 100,
+        "expires_at_ms": 1000,
+    }
+    snapshot = OfflineCashConfigurationSnapshot(**snapshot_kwargs)
     snapshot.require_usable_for_offline_exchange(now_ms=999, required_native_bridge_abi_version=7)
+    url_key_kwargs = dict(snapshot_kwargs)
+    url_key_kwargs["issuer_public_key_base64"] = ISSUER_PUBLIC_KEY_BASE64URL
+    OfflineCashConfigurationSnapshot(**url_key_kwargs).require_usable_for_offline_exchange(
+        now_ms=999,
+        required_native_bridge_abi_version=7,
+    )
+
+    for field_name, value in (
+        ("chain_id", ""),
+        ("chain_id", " 00000042"),
+        ("chain_id", "00000042\n"),
+        ("chain_id", True),
+        ("asset_definition_id", ""),
+        ("asset_definition_id", "pkr sbp"),
+        ("asset_definition_id", "pkr#sbp\u2603"),
+        ("artifact_set_id", "artifact set"),
+        ("circuit_id", "kagemusha-recursive-compact-v1\n"),
+    ):
+        malformed_identity_kwargs = dict(snapshot_kwargs)
+        malformed_identity_kwargs[field_name] = value
+        malformed_identity = OfflineCashConfigurationSnapshot(**malformed_identity_kwargs)
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            malformed_identity.require_usable_for_offline_exchange(
+                now_ms=200,
+                required_native_bridge_abi_version=7,
+            )
+        assert error.value.code == "malformed_snapshot"
+        assert field_name in str(error.value)
 
     missing_key = OfflineCashConfigurationSnapshot(
         chain_id="00000042",
@@ -143,9 +179,13 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
 
     for issuer_key in (
         "",
-        " issuer-key",
-        "issuer-key ",
-        "issuer key",
+        f" {ISSUER_PUBLIC_KEY_BASE64}",
+        f"{ISSUER_PUBLIC_KEY_BASE64} ",
+        "not base64",
+        "!!!!",
+        f"{ISSUER_PUBLIC_KEY_BASE64}=",
+        SHORT_ISSUER_PUBLIC_KEY_BASE64,
+        LONG_ISSUER_PUBLIC_KEY_BASE64,
         "issuer-key\n",
         "issuer-key\u2603",
     ):
@@ -163,22 +203,55 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
             )
         assert error.value.code == "missing_issuer_public_key"
 
-    disabled = OfflineCashConfigurationSnapshot(
-        chain_id="00000042",
-        asset_definition_id="pkr#sbp",
-        offline_payments_enabled=False,
-        issuer_public_key_base64="issuer-key",
-        native_bridge_abi_version=7,
-    )
-    with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
-        disabled.require_usable_for_offline_exchange(now_ms=200, required_native_bridge_abi_version=7)
-    assert error.value.code == "offline_payments_disabled"
+    for field_name, value in (
+        ("created_at_ms", -1),
+        ("created_at_ms", 100.5),
+        ("created_at_ms", True),
+        ("expires_at_ms", -1),
+        ("expires_at_ms", 100.5),
+        ("expires_at_ms", True),
+        ("expires_at_ms", 100),
+    ):
+        malformed_time_kwargs = dict(snapshot_kwargs)
+        malformed_time_kwargs[field_name] = value
+        malformed_time = OfflineCashConfigurationSnapshot(**malformed_time_kwargs)  # type: ignore[arg-type]
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            malformed_time.require_usable_for_offline_exchange(
+                now_ms=200,
+                required_native_bridge_abi_version=7,
+            )
+        assert error.value.code == "malformed_snapshot"
+        assert field_name in str(error.value)
+
+    for now_ms in (-1, 999.5, True):
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            snapshot.require_usable_for_offline_exchange(
+                now_ms=now_ms,  # type: ignore[arg-type]
+                required_native_bridge_abi_version=7,
+            )
+        assert error.value.code == "malformed_snapshot"
+        assert "now_ms" in str(error.value)
+
+    for offline_payments_enabled in (False, "true", 1):
+        disabled = OfflineCashConfigurationSnapshot(
+            chain_id="00000042",
+            asset_definition_id="pkr#sbp",
+            offline_payments_enabled=offline_payments_enabled,  # type: ignore[arg-type]
+            issuer_public_key_base64=ISSUER_PUBLIC_KEY_BASE64,
+            native_bridge_abi_version=7,
+        )
+        with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
+            disabled.require_usable_for_offline_exchange(
+                now_ms=200,
+                required_native_bridge_abi_version=7,
+            )
+        assert error.value.code == "offline_payments_disabled"
 
     stale_abi = OfflineCashConfigurationSnapshot(
         chain_id="00000042",
         asset_definition_id="pkr#sbp",
         offline_payments_enabled=True,
-        issuer_public_key_base64="issuer-key",
+        issuer_public_key_base64=ISSUER_PUBLIC_KEY_BASE64,
         native_bridge_abi_version=6,
     )
     with pytest.raises(OfflineCashConfigurationSnapshotError) as error:
@@ -190,7 +263,7 @@ def test_offline_cash_snapshot_requires_cached_issuer_key() -> None:
             chain_id="00000042",
             asset_definition_id="pkr#sbp",
             offline_payments_enabled=True,
-            issuer_public_key_base64="issuer-key",
+            issuer_public_key_base64=ISSUER_PUBLIC_KEY_BASE64,
             native_bridge_abi_version=native_bridge_abi_version,  # type: ignore[arg-type]
         )
         with pytest.raises(OfflineCashConfigurationSnapshotError) as error:

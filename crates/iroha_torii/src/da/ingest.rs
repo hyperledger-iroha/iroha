@@ -20,7 +20,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{WrapErr, eyre};
 use flate2::read::{DeflateDecoder, GzDecoder};
-use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
+use iroha_config::parameters::actual::Nexus as ConfigNexus;
 use iroha_core::da::{LaneEpoch, ReplayFingerprint, ReplayInsertOutcome, ReplayKey};
 use iroha_crypto::{
     Hash, KeyPair, Signature,
@@ -134,7 +134,7 @@ pub async fn handler_post_da_ingest(
     })?;
 
     let proof_scheme =
-        lane_proof_scheme(&nexus.lane_config, request.lane_id).map_err(|(status, message)| {
+        lane_proof_scheme(&nexus, request.lane_id).map_err(|(status, message)| {
             ResponseError::from(build_error_response(status, &message, format))
         })?;
 
@@ -1243,19 +1243,20 @@ fn validate_request(
 }
 
 fn lane_proof_scheme(
-    lane_config: &ConfigLaneConfig,
+    nexus: &ConfigNexus,
     lane_id: LaneId,
 ) -> Result<DaProofScheme, (StatusCode, String)> {
-    let Some(entry) = lane_config.entry(lane_id) else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("lane {} not present in lane catalog", lane_id.as_u32()),
-        ));
-    };
-
-    match entry.proof_scheme {
-        DaProofScheme::MerkleSha256 | DaProofScheme::KzgBls12_381 => Ok(entry.proof_scheme),
-    }
+    iroha_core::da::active_lane_proof_policy(nexus, lane_id)
+        .map(|policy| policy.proof_scheme)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "lane {} not present in active lane catalog",
+                    lane_id.as_u32()
+                ),
+            )
+        })
 }
 
 fn manifest_fingerprint(

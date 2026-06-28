@@ -18,10 +18,15 @@ class SorafsReferenceValidatorsTest {
         assertTrue(!SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.isUserSignedPayload)
         assertEquals(1, SorafsPdpPayloadKind.COMMITMENT.bridgeCode)
         assertEquals(3, SorafsPdpPayloadKind.PROOF.bridgeCode)
+        assertEquals(1, SorafsPopPayloadKind.CREDENTIAL.bridgeCode)
+        assertEquals(6, SorafsPopPayloadKind.MEMBERSHIP_PROOF.bridgeCode)
+        assertEquals(7, SorafsPopPayloadKind.ISSUED_CREDENTIAL_BUNDLE.bridgeCode)
+        assertEquals(1, SorafsHedgingPayloadKind.PRICE_FEED.bridgeCode)
+        assertEquals(4, SorafsHedgingPayloadKind.BILLING_STATEMENT.bridgeCode)
         assertEquals(1, SorafsOrderbookSide.BID.bridgeCode)
         assertEquals(3, SorafsOrderbookTier.ARCHIVE.bridgeCode)
         assertEquals(4, SorafsOrderbookCancelReason.REPLACED.bridgeCode)
-        assertEquals(10, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(12, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
     }
 
     @Test
@@ -39,8 +44,8 @@ class SorafsReferenceValidatorsTest {
     @Test
     fun rejectsBlankLabelBeforeNativeDispatch() {
         val error = assertThrows(IllegalArgumentException::class.java) {
-            SorafsReferenceValidators.validatePdpPayloadJson(
-                SorafsPdpPayloadKind.PROOF,
+            SorafsReferenceValidators.validateHedgingPayloadJson(
+                SorafsHedgingPayloadKind.PRICE_FEED,
                 ByteArray(0),
                 label = " ",
                 generatedAtUnix = 1,

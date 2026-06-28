@@ -5,12 +5,17 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::reserve::{
+    ReserveAppealRecord, ReserveAppealStatus, ReserveLifecycleEvent, ReserveLifecyclePolicyRecord,
+    ReserveMovementCustodyStatus, ReserveMovementKind, ReserveMovementRecord,
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_crypto::sorafs::proof_token::{
     ModerationAction as ProofTokenModerationAction, ProofToken,
 };
 use iroha_data_model::sorafs::{
     gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
+    reserve::ReserveLifecycleStage,
     transparency::{
         MODERATION_LEDGER_ENTRY_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
         ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
@@ -37,6 +42,10 @@ const DETERMINISTIC_NOISE_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_
 const CYCLE_ID_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_aggregate.cycle_id.v1";
 const TRANSPARENCY_LEDGER_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.ledger.source_entry_id.v1";
+const RESERVE_SOURCE_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.reserve.source_payload.v1";
+const RESERVE_PRIVATE_FIELD_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.reserve.private_field.v1";
 
 /// One privacy-safe source entry admitted into the local transparency ledger worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +151,30 @@ pub enum TransparencySourceEntryAdapterError {
     /// Appeal finance settlement receipt source data is malformed.
     #[error("invalid appeal finance settlement receipt source: {message}")]
     InvalidAppealFinanceSettlementReceipt {
+        /// Validation detail.
+        message: String,
+    },
+    /// Reserve lifecycle event source data is malformed.
+    #[error("invalid reserve lifecycle event source: {message}")]
+    InvalidReserveLifecycleEvent {
+        /// Validation detail.
+        message: String,
+    },
+    /// Reserve movement source data is malformed.
+    #[error("invalid reserve movement source: {message}")]
+    InvalidReserveMovement {
+        /// Validation detail.
+        message: String,
+    },
+    /// Reserve appeal source data is malformed.
+    #[error("invalid reserve appeal source: {message}")]
+    InvalidReserveAppeal {
+        /// Validation detail.
+        message: String,
+    },
+    /// Reserve lifecycle policy source data is malformed.
+    #[error("invalid reserve lifecycle policy source: {message}")]
+    InvalidReserveLifecyclePolicy {
         /// Validation detail.
         message: String,
     },
@@ -404,6 +437,535 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         payload_digest,
         summary_digest: source_summary_digest("appeal_finance_settlement_receipt", &metadata),
         policy_digest: Some(policy_digest),
+        evidence_uris: Vec::new(),
+        metadata,
+    };
+    validate_adapter_source_entry(entry)
+}
+
+/// Derive a transparency source entry from a local reserve lifecycle event.
+///
+/// # Errors
+///
+/// Returns [`TransparencySourceEntryAdapterError`] when the local event is not
+/// suitable for the public governance log or the derived source entry is
+/// invalid.
+pub fn reserve_lifecycle_event_source_entry(
+    event: &ReserveLifecycleEvent,
+) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
+    validate_reserve_source_id(
+        "provider_id",
+        &event.provider_id,
+        reserve_lifecycle_source_error,
+    )?;
+    if event.observed_at_unix == 0 {
+        return Err(reserve_lifecycle_source_error(
+            "observed_at_unix must be non-zero",
+        ));
+    }
+    let current_stage = reserve_lifecycle_stage_label(event.current_stage);
+    let previous_stage = event.previous_stage.map(reserve_lifecycle_stage_label);
+    let provider_id_hex = hex::encode(event.provider_id);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("event_family".to_string(), "reserve_lifecycle".to_string());
+    metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
+    metadata.insert("sequence".to_string(), event.sequence.to_string());
+    metadata.insert("current_stage".to_string(), current_stage.to_string());
+    if let Some(previous_stage) = previous_stage {
+        metadata.insert("previous_stage".to_string(), previous_stage.to_string());
+    }
+    metadata.insert(
+        "rent_due_micro_xor".to_string(),
+        event.ledger.rent_due.as_micro().to_string(),
+    );
+    metadata.insert(
+        "reserve_shortfall_micro_xor".to_string(),
+        event.ledger.reserve_shortfall.as_micro().to_string(),
+    );
+    metadata.insert(
+        "top_up_shortfall_micro_xor".to_string(),
+        event.ledger.top_up_shortfall.as_micro().to_string(),
+    );
+    metadata.insert(
+        "grace_period_days".to_string(),
+        event.grace_period_days.to_string(),
+    );
+    metadata.insert(
+        "default_after_days".to_string(),
+        event.default_after_days.to_string(),
+    );
+    if let Some(policy_id) = event.applied_policy_id {
+        metadata.insert("applied_policy_id_hex".to_string(), hex::encode(policy_id));
+    }
+    if let Some(appeal_id) = event.applied_appeal_id {
+        metadata.insert("applied_appeal_id_hex".to_string(), hex::encode(appeal_id));
+    }
+    metadata.insert(
+        "credit_draw_micro_xor".to_string(),
+        event.lifecycle.credit_draw.as_micro().to_string(),
+    );
+    metadata.insert(
+        "credit_shortfall_micro_xor".to_string(),
+        event.lifecycle.credit_shortfall.as_micro().to_string(),
+    );
+    metadata.insert(
+        "accrued_interest_micro_xor".to_string(),
+        event.lifecycle.accrued_interest.as_micro().to_string(),
+    );
+    metadata.insert(
+        "requires_governance_notification".to_string(),
+        event.lifecycle.requires_governance_notification.to_string(),
+    );
+    metadata.insert(
+        "requires_manual_credit_approval".to_string(),
+        event.lifecycle.requires_manual_credit_approval.to_string(),
+    );
+    let metadata = metadata_vec(metadata);
+    let payload_digest = reserve_source_payload_digest(
+        "reserve_lifecycle_event",
+        &[
+            ("sequence", event.sequence.to_le_bytes().as_ref()),
+            ("provider_id", event.provider_id.as_ref()),
+            ("current_stage", current_stage.as_bytes()),
+            (
+                "previous_stage",
+                event
+                    .previous_stage
+                    .map(reserve_lifecycle_stage_label)
+                    .unwrap_or("")
+                    .as_bytes(),
+            ),
+            (
+                "observed_at_unix",
+                event.observed_at_unix.to_le_bytes().as_ref(),
+            ),
+            (
+                "grace_period_days",
+                event.grace_period_days.to_le_bytes().as_ref(),
+            ),
+            (
+                "default_after_days",
+                event.default_after_days.to_le_bytes().as_ref(),
+            ),
+            (
+                "applied_policy_id",
+                event
+                    .applied_policy_id
+                    .as_ref()
+                    .map_or(&[][..], |policy_id| policy_id.as_ref()),
+            ),
+            (
+                "applied_appeal_id",
+                event
+                    .applied_appeal_id
+                    .as_ref()
+                    .map_or(&[][..], |appeal_id| appeal_id.as_ref()),
+            ),
+            (
+                "rent_due",
+                event.ledger.rent_due.as_micro().to_le_bytes().as_ref(),
+            ),
+            (
+                "reserve_shortfall",
+                event
+                    .ledger
+                    .reserve_shortfall
+                    .as_micro()
+                    .to_le_bytes()
+                    .as_ref(),
+            ),
+            (
+                "credit_draw",
+                event
+                    .lifecycle
+                    .credit_draw
+                    .as_micro()
+                    .to_le_bytes()
+                    .as_ref(),
+            ),
+            (
+                "credit_shortfall",
+                event
+                    .lifecycle
+                    .credit_shortfall
+                    .as_micro()
+                    .to_le_bytes()
+                    .as_ref(),
+            ),
+        ],
+    );
+    let entry = TransparencyLedgerSourceEntry {
+        event_id: format!("reserve-lifecycle:{}:{provider_id_hex}", event.sequence),
+        occurred_at_unix: event.observed_at_unix,
+        kind: ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle".to_string()),
+        subject: format!("reserve-provider:{provider_id_hex}"),
+        subject_digest: source_subject_digest(
+            "reserve_lifecycle_event",
+            &provider_id_hex,
+            &payload_digest,
+        ),
+        payload_digest,
+        summary_digest: source_summary_digest("reserve_lifecycle_event", &metadata),
+        policy_digest: None,
+        evidence_uris: Vec::new(),
+        metadata,
+    };
+    validate_adapter_source_entry(entry)
+}
+
+/// Derive a transparency source entry from a local reserve movement record.
+///
+/// # Errors
+///
+/// Returns [`TransparencySourceEntryAdapterError`] when the local movement is
+/// not suitable for the public governance log or the derived source entry is
+/// invalid.
+pub fn reserve_movement_source_entry(
+    record: &ReserveMovementRecord,
+) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
+    validate_reserve_source_id(
+        "movement_id",
+        &record.movement_id,
+        reserve_movement_source_error,
+    )?;
+    validate_reserve_source_id(
+        "provider_id",
+        &record.provider_id,
+        reserve_movement_source_error,
+    )?;
+    if record.observed_at_unix == 0 {
+        return Err(reserve_movement_source_error(
+            "observed_at_unix must be non-zero",
+        ));
+    }
+    let movement_id_hex = hex::encode(record.movement_id);
+    let provider_id_hex = hex::encode(record.provider_id);
+    let kind = reserve_movement_kind_label(record.kind);
+    let custody_status = reserve_movement_custody_status_label(record.custody_status);
+    let custody_observed_at = record
+        .custody_updated_at_unix
+        .unwrap_or(record.observed_at_unix);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("event_family".to_string(), "reserve_movement".to_string());
+    metadata.insert("movement_id_hex".to_string(), movement_id_hex.clone());
+    metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
+    metadata.insert("sequence".to_string(), record.sequence.to_string());
+    metadata.insert("movement_kind".to_string(), kind.to_string());
+    metadata.insert(
+        "amount_micro_xor".to_string(),
+        record.amount.as_micro().to_string(),
+    );
+    metadata.insert(
+        "balance_after_micro_xor".to_string(),
+        record.balance_after.as_micro().to_string(),
+    );
+    metadata.insert(
+        "confirmed_balance_after_micro_xor".to_string(),
+        record.confirmed_balance_after.as_micro().to_string(),
+    );
+    metadata.insert("custody_status".to_string(), custody_status.to_string());
+    metadata.insert(
+        "provider_account_digest_hex".to_string(),
+        reserve_private_field_digest_hex("provider_account", &record.provider_account),
+    );
+    metadata.insert(
+        "reserve_account_digest_hex".to_string(),
+        reserve_private_field_digest_hex("reserve_account", &record.reserve_account),
+    );
+    metadata.insert(
+        "asset_definition_digest_hex".to_string(),
+        reserve_private_field_digest_hex("asset_definition_id", &record.asset_definition_id),
+    );
+    metadata.insert(
+        "idempotency_key_digest_hex".to_string(),
+        reserve_private_field_digest_hex("idempotency_key", record.idempotency_key.as_bytes()),
+    );
+    if let Some(tx_hash_hex) = &record.custody_tx_hash_hex {
+        metadata.insert("custody_tx_hash_hex".to_string(), tx_hash_hex.clone());
+    }
+    let metadata = metadata_vec(metadata);
+    let payload_digest = reserve_source_payload_digest(
+        "reserve_movement",
+        &[
+            ("sequence", record.sequence.to_le_bytes().as_ref()),
+            ("movement_id", record.movement_id.as_ref()),
+            ("provider_id", record.provider_id.as_ref()),
+            ("provider_account", record.provider_account.as_ref()),
+            ("reserve_account", record.reserve_account.as_ref()),
+            ("asset_definition_id", record.asset_definition_id.as_ref()),
+            ("kind", kind.as_bytes()),
+            ("amount", record.amount.as_micro().to_le_bytes().as_ref()),
+            (
+                "balance_after",
+                record.balance_after.as_micro().to_le_bytes().as_ref(),
+            ),
+            (
+                "confirmed_balance_after",
+                record
+                    .confirmed_balance_after
+                    .as_micro()
+                    .to_le_bytes()
+                    .as_ref(),
+            ),
+            ("idempotency_key", record.idempotency_key.as_bytes()),
+            ("custody_status", custody_status.as_bytes()),
+            (
+                "custody_tx_hash_hex",
+                record
+                    .custody_tx_hash_hex
+                    .as_deref()
+                    .unwrap_or("")
+                    .as_bytes(),
+            ),
+        ],
+    );
+    let entry = TransparencyLedgerSourceEntry {
+        event_id: format!(
+            "reserve-movement:{movement_id_hex}:{custody_status}:{custody_observed_at}"
+        ),
+        occurred_at_unix: custody_observed_at,
+        kind: ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement".to_string()),
+        subject: format!("reserve-provider:{provider_id_hex}"),
+        subject_digest: source_subject_digest(
+            "reserve_movement",
+            &provider_id_hex,
+            &payload_digest,
+        ),
+        payload_digest,
+        summary_digest: source_summary_digest("reserve_movement", &metadata),
+        policy_digest: None,
+        evidence_uris: Vec::new(),
+        metadata,
+    };
+    validate_adapter_source_entry(entry)
+}
+
+/// Derive a transparency source entry from a local reserve appeal record.
+///
+/// # Errors
+///
+/// Returns [`TransparencySourceEntryAdapterError`] when the local appeal is not
+/// suitable for the public governance log or the derived source entry is
+/// invalid.
+pub fn reserve_appeal_source_entry(
+    record: &ReserveAppealRecord,
+) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
+    validate_reserve_source_id("appeal_id", &record.appeal_id, reserve_appeal_source_error)?;
+    validate_reserve_source_id(
+        "provider_id",
+        &record.provider_id,
+        reserve_appeal_source_error,
+    )?;
+    if record.opened_at_unix == 0 {
+        return Err(reserve_appeal_source_error(
+            "opened_at_unix must be non-zero",
+        ));
+    }
+    if record.reason.trim().is_empty() {
+        return Err(reserve_appeal_source_error("reason must not be empty"));
+    }
+    let appeal_id_hex = hex::encode(record.appeal_id);
+    let provider_id_hex = hex::encode(record.provider_id);
+    let status = reserve_appeal_status_label(record.status);
+    let occurred_at_unix = record.decided_at_unix.unwrap_or(record.opened_at_unix);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("event_family".to_string(), "reserve_appeal".to_string());
+    metadata.insert("appeal_id_hex".to_string(), appeal_id_hex.clone());
+    metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
+    metadata.insert("sequence".to_string(), record.sequence.to_string());
+    metadata.insert("status".to_string(), status.to_string());
+    if let Some(stage) = record.requested_stage {
+        metadata.insert(
+            "requested_stage".to_string(),
+            reserve_lifecycle_stage_label(stage).to_string(),
+        );
+    }
+    metadata.insert(
+        "provider_account_digest_hex".to_string(),
+        reserve_private_field_digest_hex("provider_account", &record.provider_account),
+    );
+    metadata.insert(
+        "reason_digest_hex".to_string(),
+        reserve_private_field_digest_hex("reason", record.reason.as_bytes()),
+    );
+    metadata.insert(
+        "idempotency_key_digest_hex".to_string(),
+        reserve_private_field_digest_hex("idempotency_key", record.idempotency_key.as_bytes()),
+    );
+    if let Some(evidence_digest_hex) = &record.evidence_digest_hex {
+        metadata.insert(
+            "evidence_digest_hex".to_string(),
+            evidence_digest_hex.clone(),
+        );
+    }
+    if let Some(decision_account) = &record.decision_account {
+        metadata.insert(
+            "decision_account_digest_hex".to_string(),
+            reserve_private_field_digest_hex("decision_account", decision_account),
+        );
+    }
+    if let Some(decision_rationale) = &record.decision_rationale {
+        metadata.insert(
+            "decision_rationale_digest_hex".to_string(),
+            reserve_private_field_digest_hex("decision_rationale", decision_rationale.as_bytes()),
+        );
+    }
+    let metadata = metadata_vec(metadata);
+    let payload_digest = reserve_source_payload_digest(
+        "reserve_appeal",
+        &[
+            ("sequence", record.sequence.to_le_bytes().as_ref()),
+            ("appeal_id", record.appeal_id.as_ref()),
+            ("provider_id", record.provider_id.as_ref()),
+            ("provider_account", record.provider_account.as_ref()),
+            (
+                "requested_stage",
+                record
+                    .requested_stage
+                    .map(reserve_lifecycle_stage_label)
+                    .unwrap_or("")
+                    .as_bytes(),
+            ),
+            ("reason", record.reason.as_bytes()),
+            (
+                "evidence_digest_hex",
+                record
+                    .evidence_digest_hex
+                    .as_deref()
+                    .unwrap_or("")
+                    .as_bytes(),
+            ),
+            ("idempotency_key", record.idempotency_key.as_bytes()),
+            ("status", status.as_bytes()),
+            (
+                "decision_account",
+                record.decision_account.as_deref().unwrap_or(&[]),
+            ),
+            (
+                "decision_rationale",
+                record
+                    .decision_rationale
+                    .as_deref()
+                    .unwrap_or("")
+                    .as_bytes(),
+            ),
+        ],
+    );
+    let entry = TransparencyLedgerSourceEntry {
+        event_id: format!("reserve-appeal:{appeal_id_hex}:{status}:{occurred_at_unix}"),
+        occurred_at_unix,
+        kind: if record.status == ReserveAppealStatus::Open {
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_appeal".to_string())
+        } else {
+            ModerationLedgerEntryKindV1::AppealOutcome
+        },
+        subject: format!("reserve-provider:{provider_id_hex}"),
+        subject_digest: source_subject_digest("reserve_appeal", &provider_id_hex, &payload_digest),
+        payload_digest,
+        summary_digest: source_summary_digest("reserve_appeal", &metadata),
+        policy_digest: None,
+        evidence_uris: Vec::new(),
+        metadata,
+    };
+    validate_adapter_source_entry(entry)
+}
+
+/// Derive a transparency source entry from a local reserve lifecycle-policy record.
+///
+/// # Errors
+///
+/// Returns [`TransparencySourceEntryAdapterError`] when the local policy record
+/// is not suitable for the public governance log or the derived source entry is
+/// invalid.
+pub fn reserve_lifecycle_policy_source_entry(
+    record: &ReserveLifecyclePolicyRecord,
+) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
+    validate_reserve_source_id(
+        "policy_id",
+        &record.policy_id,
+        reserve_lifecycle_policy_source_error,
+    )?;
+    if record.observed_at_unix == 0 {
+        return Err(reserve_lifecycle_policy_source_error(
+            "observed_at_unix must be non-zero",
+        ));
+    }
+    if record.grace_period_days >= record.default_after_days {
+        return Err(reserve_lifecycle_policy_source_error(
+            "grace_period_days must be lower than default_after_days",
+        ));
+    }
+    let policy_id_hex = hex::encode(record.policy_id);
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "event_family".to_string(),
+        "reserve_lifecycle_policy".to_string(),
+    );
+    metadata.insert("policy_id_hex".to_string(), policy_id_hex.clone());
+    metadata.insert("sequence".to_string(), record.sequence.to_string());
+    metadata.insert(
+        "authority_account_digest_hex".to_string(),
+        reserve_private_field_digest_hex("authority_account", &record.authority_account),
+    );
+    metadata.insert(
+        "grace_period_days".to_string(),
+        record.grace_period_days.to_string(),
+    );
+    metadata.insert(
+        "default_after_days".to_string(),
+        record.default_after_days.to_string(),
+    );
+    metadata.insert(
+        "effective_at_unix".to_string(),
+        record.effective_at_unix.to_string(),
+    );
+    metadata.insert(
+        "reason_digest_hex".to_string(),
+        reserve_private_field_digest_hex("reason", record.reason.as_bytes()),
+    );
+    metadata.insert(
+        "idempotency_key_digest_hex".to_string(),
+        reserve_private_field_digest_hex("idempotency_key", record.idempotency_key.as_bytes()),
+    );
+    let metadata = metadata_vec(metadata);
+    let payload_digest = reserve_source_payload_digest(
+        "reserve_lifecycle_policy",
+        &[
+            ("sequence", record.sequence.to_le_bytes().as_ref()),
+            ("policy_id", record.policy_id.as_ref()),
+            ("authority_account", record.authority_account.as_ref()),
+            (
+                "grace_period_days",
+                record.grace_period_days.to_le_bytes().as_ref(),
+            ),
+            (
+                "default_after_days",
+                record.default_after_days.to_le_bytes().as_ref(),
+            ),
+            (
+                "effective_at_unix",
+                record.effective_at_unix.to_le_bytes().as_ref(),
+            ),
+            ("reason", record.reason.as_bytes()),
+            ("idempotency_key", record.idempotency_key.as_bytes()),
+        ],
+    );
+    let entry = TransparencyLedgerSourceEntry {
+        event_id: format!(
+            "reserve-lifecycle-policy:{policy_id_hex}:{}",
+            record.sequence
+        ),
+        occurred_at_unix: record.observed_at_unix,
+        kind: ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle_policy".to_string()),
+        subject: format!("reserve-policy:{policy_id_hex}"),
+        subject_digest: source_subject_digest(
+            "reserve_lifecycle_policy",
+            &policy_id_hex,
+            &payload_digest,
+        ),
+        payload_digest,
+        summary_digest: source_summary_digest("reserve_lifecycle_policy", &metadata),
+        policy_digest: Some(record.policy_id),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -1424,6 +1986,94 @@ fn metadata_vec(metadata: BTreeMap<String, String>) -> Vec<ModerationLedgerMetad
         .collect()
 }
 
+fn reserve_source_payload_digest(payload_kind: &str, parts: &[(&str, &[u8])]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(RESERVE_SOURCE_PAYLOAD_DIGEST_DOMAIN_V1);
+    hash_text(&mut hasher, payload_kind);
+    hasher.update(&(parts.len() as u64).to_le_bytes());
+    for (label, value) in parts {
+        hash_text(&mut hasher, label);
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn reserve_private_field_digest_hex(label: &str, value: &[u8]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(RESERVE_PRIVATE_FIELD_DIGEST_DOMAIN_V1);
+    hash_text(&mut hasher, label);
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+    hex::encode(hasher.finalize().as_bytes())
+}
+
+fn validate_reserve_source_id(
+    field: &'static str,
+    value: &[u8; 32],
+    err: fn(String) -> TransparencySourceEntryAdapterError,
+) -> Result<(), TransparencySourceEntryAdapterError> {
+    if value.iter().all(|byte| *byte == 0) {
+        return Err(err(format!("{field} must be non-zero")));
+    }
+    Ok(())
+}
+
+fn reserve_lifecycle_source_error(
+    message: impl Into<String>,
+) -> TransparencySourceEntryAdapterError {
+    TransparencySourceEntryAdapterError::InvalidReserveLifecycleEvent {
+        message: message.into(),
+    }
+}
+
+fn reserve_movement_source_error(
+    message: impl Into<String>,
+) -> TransparencySourceEntryAdapterError {
+    TransparencySourceEntryAdapterError::InvalidReserveMovement {
+        message: message.into(),
+    }
+}
+
+fn reserve_appeal_source_error(message: impl Into<String>) -> TransparencySourceEntryAdapterError {
+    TransparencySourceEntryAdapterError::InvalidReserveAppeal {
+        message: message.into(),
+    }
+}
+
+fn reserve_lifecycle_policy_source_error(
+    message: impl Into<String>,
+) -> TransparencySourceEntryAdapterError {
+    TransparencySourceEntryAdapterError::InvalidReserveLifecyclePolicy {
+        message: message.into(),
+    }
+}
+
+fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
+    match stage {
+        ReserveLifecycleStage::Active => "active",
+        ReserveLifecycleStage::Warning => "warning",
+        ReserveLifecycleStage::Grace => "grace",
+        ReserveLifecycleStage::Delinquent => "delinquent",
+        ReserveLifecycleStage::Default => "default",
+    }
+}
+
+fn reserve_movement_kind_label(kind: ReserveMovementKind) -> &'static str {
+    match kind {
+        ReserveMovementKind::TopUp => "top_up",
+        ReserveMovementKind::Withdrawal => "withdrawal",
+    }
+}
+
+fn reserve_movement_custody_status_label(status: ReserveMovementCustodyStatus) -> &'static str {
+    status.label()
+}
+
+fn reserve_appeal_status_label(status: ReserveAppealStatus) -> &'static str {
+    status.label()
+}
+
 fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
     let unix = unix_ms / 1_000;
     if unix == 0 {
@@ -1741,6 +2391,90 @@ mod tests {
         }
     }
 
+    fn reserve_quote_fixture() -> iroha_data_model::sorafs::reserve::ReserveQuote {
+        iroha_data_model::sorafs::reserve::ReservePolicyV1::default()
+            .quote(
+                iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
+                10,
+                iroha_data_model::sorafs::reserve::ReserveDuration::Monthly,
+                iroha_data_model::sorafs::reserve::ReserveTier::TierA,
+                sorafs_manifest::deal::XorAmount::zero(),
+            )
+            .expect("reserve quote")
+    }
+
+    fn reserve_lifecycle_event_fixture() -> ReserveLifecycleEvent {
+        let quote = reserve_quote_fixture();
+        let lifecycle = quote
+            .lifecycle_projection(3, 7, 30)
+            .expect("lifecycle projection");
+        ReserveLifecycleEvent {
+            sequence: 3,
+            provider_id: [0x44; 32],
+            previous_stage: Some(ReserveLifecycleStage::Warning),
+            current_stage: lifecycle.stage,
+            observed_at_unix: 1_800_000_040,
+            ledger: quote.ledger_projection(),
+            lifecycle,
+            grace_period_days: 7,
+            default_after_days: 30,
+            applied_policy_id: None,
+            applied_appeal_id: None,
+        }
+    }
+
+    fn reserve_movement_record_fixture() -> ReserveMovementRecord {
+        ReserveMovementRecord {
+            sequence: 4,
+            movement_id: [0x45; 32],
+            provider_id: [0x44; 32],
+            provider_account: b"provider-account".to_vec(),
+            reserve_account: b"reserve-account".to_vec(),
+            asset_definition_id: b"xor#sora".to_vec(),
+            kind: ReserveMovementKind::TopUp,
+            amount: sorafs_manifest::deal::XorAmount::from_micro(100),
+            balance_after: sorafs_manifest::deal::XorAmount::from_micro(100),
+            confirmed_balance_after: sorafs_manifest::deal::XorAmount::zero(),
+            idempotency_key: "movement-1".to_string(),
+            observed_at_unix: 1_800_000_050,
+            custody_status: ReserveMovementCustodyStatus::Submitted,
+            custody_tx_hash_hex: Some(hex::encode([0x55; 32])),
+            custody_updated_at_unix: Some(1_800_000_060),
+        }
+    }
+
+    fn reserve_appeal_record_fixture() -> ReserveAppealRecord {
+        ReserveAppealRecord {
+            sequence: 5,
+            appeal_id: [0x46; 32],
+            provider_id: [0x44; 32],
+            provider_account: b"provider-account".to_vec(),
+            requested_stage: Some(ReserveLifecycleStage::Grace),
+            reason: "provider asks for grace while custody tx settles".to_string(),
+            evidence_digest_hex: Some(hex::encode([0x56; 32])),
+            idempotency_key: "appeal-1".to_string(),
+            status: ReserveAppealStatus::Accepted,
+            opened_at_unix: 1_800_000_070,
+            decision_account: Some(b"reserve-authority".to_vec()),
+            decision_rationale: Some("custody evidence confirmed".to_string()),
+            decided_at_unix: Some(1_800_000_080),
+        }
+    }
+
+    fn reserve_lifecycle_policy_record_fixture() -> ReserveLifecyclePolicyRecord {
+        ReserveLifecyclePolicyRecord {
+            sequence: 6,
+            policy_id: [0x47; 32],
+            authority_account: b"reserve-authority".to_vec(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            effective_at_unix: 1_800_000_090,
+            reason: "mainnet rollout baseline".to_string(),
+            idempotency_key: "policy-1".to_string(),
+            observed_at_unix: 1_800_000_085,
+        }
+    }
+
     #[test]
     fn concrete_source_entry_adapters_derive_valid_entries() {
         let gar_receipt = gar_receipt_fixture(GarEnforcementActionV1::LegalHold);
@@ -1799,6 +2533,99 @@ mod tests {
         receipt_entry
             .validate()
             .expect("appeal settlement entry validates");
+
+        let reserve_lifecycle = reserve_lifecycle_event_fixture();
+        let reserve_lifecycle_entry = reserve_lifecycle_event_source_entry(&reserve_lifecycle)
+            .expect("reserve lifecycle source entry");
+        assert_eq!(
+            reserve_lifecycle_entry.kind,
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle".to_string())
+        );
+        assert_eq!(
+            reserve_lifecycle_entry.event_id,
+            format!(
+                "reserve-lifecycle:{}:{}",
+                reserve_lifecycle.sequence,
+                hex::encode(reserve_lifecycle.provider_id)
+            )
+        );
+        assert!(
+            reserve_lifecycle_entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "current_stage" && item.value == "grace")
+        );
+        reserve_lifecycle_entry
+            .validate()
+            .expect("reserve lifecycle entry validates");
+
+        let reserve_movement = reserve_movement_record_fixture();
+        let reserve_movement_entry =
+            reserve_movement_source_entry(&reserve_movement).expect("reserve movement entry");
+        assert_eq!(
+            reserve_movement_entry.kind,
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement".to_string())
+        );
+        assert_eq!(reserve_movement_entry.occurred_at_unix, 1_800_000_060);
+        assert!(
+            reserve_movement_entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "provider_account_digest_hex")
+        );
+        assert!(
+            !reserve_movement_entry
+                .metadata
+                .iter()
+                .any(|item| item.value == "provider-account")
+        );
+        reserve_movement_entry
+            .validate()
+            .expect("reserve movement entry validates");
+
+        let reserve_appeal = reserve_appeal_record_fixture();
+        let reserve_appeal_entry =
+            reserve_appeal_source_entry(&reserve_appeal).expect("reserve appeal entry");
+        assert_eq!(
+            reserve_appeal_entry.kind,
+            ModerationLedgerEntryKindV1::AppealOutcome
+        );
+        assert!(
+            reserve_appeal_entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "reason_digest_hex")
+        );
+        assert!(
+            !reserve_appeal_entry
+                .metadata
+                .iter()
+                .any(|item| item.value == reserve_appeal.reason)
+        );
+        reserve_appeal_entry
+            .validate()
+            .expect("reserve appeal entry validates");
+
+        let reserve_policy = reserve_lifecycle_policy_record_fixture();
+        let reserve_policy_entry =
+            reserve_lifecycle_policy_source_entry(&reserve_policy).expect("reserve policy entry");
+        assert_eq!(
+            reserve_policy_entry.kind,
+            ModerationLedgerEntryKindV1::Custom("sorafs_reserve_lifecycle_policy".to_string())
+        );
+        assert_eq!(
+            reserve_policy_entry.policy_digest,
+            Some(reserve_policy.policy_id)
+        );
+        assert!(
+            reserve_policy_entry
+                .metadata
+                .iter()
+                .any(|item| item.key == "authority_account_digest_hex")
+        );
+        reserve_policy_entry
+            .validate()
+            .expect("reserve policy entry validates");
     }
 
     #[test]
@@ -1828,6 +2655,24 @@ mod tests {
         assert!(matches!(
             err,
             TransparencySourceEntryAdapterError::InvalidAppealFinanceReport { .. }
+        ));
+
+        let mut reserve_lifecycle = reserve_lifecycle_event_fixture();
+        reserve_lifecycle.provider_id = [0; 32];
+        let err = reserve_lifecycle_event_source_entry(&reserve_lifecycle)
+            .expect_err("invalid reserve lifecycle rejected");
+        assert!(matches!(
+            err,
+            TransparencySourceEntryAdapterError::InvalidReserveLifecycleEvent { .. }
+        ));
+
+        let mut reserve_policy = reserve_lifecycle_policy_record_fixture();
+        reserve_policy.default_after_days = reserve_policy.grace_period_days;
+        let err = reserve_lifecycle_policy_source_entry(&reserve_policy)
+            .expect_err("invalid reserve policy rejected");
+        assert!(matches!(
+            err,
+            TransparencySourceEntryAdapterError::InvalidReserveLifecyclePolicy { .. }
         ));
     }
 

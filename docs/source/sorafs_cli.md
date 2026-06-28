@@ -681,11 +681,13 @@ sorafs_cli por trigger \
 ```
 
 The CLI reads a council-signed `ChallengeAuthTokenV1`, confirms the target
-manifest/provider pair is permitted, and submits a Norito
-`ManualPorChallengeV1` request to `POST /v1/sorafs/por/trigger`. Optional flags
-(`--samples`, `--deadline-secs`) override the scheduler defaults on a per-call
-basis. Responses are surfaced verbatim so auditors capture the assigned
-`challenge_id` or any governance error codes.
+manifest/provider pair is permitted, and submits the legacy Norito
+`ManualPorChallengeV1` request shape to `POST /v1/sorafs/por/trigger`. Torii now
+deliberately retires that route with a fail-closed `410 Gone` JSON response
+containing `route_state = "retired"`; live challenge admission must use governed
+`PorChallengeV1` submission through `/v1/sorafs/capacity/por-challenge` or the
+scheduler runtime. Responses are surfaced verbatim so auditors capture the
+retirement state or any future governance error codes.
 
 ### Export GovernanceLog verdicts
 

@@ -18,7 +18,7 @@ use iroha_data_model::{
     ChainId, DataSpaceId,
     account::AccountId,
     isi::InstructionBox,
-    nexus::{LaneCatalog, LaneId, LaneVisibility},
+    nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
     peer::PeerId,
     transaction::{SignedTransaction, signed::TransactionEntrypoint},
 };
@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     IrohaNetwork, NetworkMessage,
-    queue::{GossipBatchEntry, Queue, RoutingDecision, RoutingPlan},
+    queue::{GossipBatchEntry, Queue, RoutingDecision, RoutingPlan, resolve_routing_decision},
     state::{State, StatelessValidationContext, TransactionsReadOnly},
     tx::{
         AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
@@ -379,6 +379,7 @@ impl TransactionGossiper {
         shutdown_signal: ShutdownSignal,
     ) {
         let mut gossip_period = tokio::time::interval(self.gossip_period);
+        gossip_period.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = gossip_period.tick() => self.gossip_transactions(),
@@ -440,7 +441,13 @@ impl TransactionGossiper {
             return;
         }
         let index = self.deferred_index();
-        self.gossip_deferred[index].extend(hashes);
+        let slot = &mut self.gossip_deferred[index];
+        let mut seen: HashSet<_> = slot.iter().copied().collect();
+        for hash in hashes {
+            if seen.insert(hash) {
+                slot.push(hash);
+            }
+        }
     }
 
     fn retry_public_broadcast_hashes(&mut self, hashes: Vec<HashOf<SignedTransaction>>) {
@@ -474,19 +481,21 @@ impl TransactionGossiper {
         for entry in expiring {
             let peer_id = entry.peer_id.clone();
             if let Some(peer_map) = self.peer_recently_sent.get_mut(&peer_id) {
-                let should_remove = peer_map.get(&entry.tx_hash).copied().is_some_and(|expiry| {
-                    expiry == entry.expires_tick && expiry <= self.gossip_tick
-                });
-                if should_remove {
-                    peer_map.remove(&entry.tx_hash);
-                } else {
-                    deferred.push(entry);
+                match peer_map.get(&entry.tx_hash).copied() {
+                    Some(expiry) if expiry == entry.expires_tick && expiry <= self.gossip_tick => {
+                        peer_map.remove(&entry.tx_hash);
+                    }
+                    Some(expiry) if expiry == entry.expires_tick => {
+                        deferred.push(entry);
+                    }
+                    Some(_) | None => {
+                        // A newer send replaced this peer/hash expiry, or the
+                        // hash was already removed. Drop the stale ring entry.
+                    }
                 }
                 if peer_map.is_empty() {
                     empty_peers.insert(peer_id);
                 }
-            } else {
-                deferred.push(entry);
             }
         }
         for peer in empty_peers {
@@ -525,9 +534,6 @@ impl TransactionGossiper {
                 filtered.push(peer.clone());
             }
         }
-        if filtered.is_empty() && suppressed > 0 {
-            return (targets, suppressed);
-        }
         (filtered, suppressed)
     }
 
@@ -539,15 +545,9 @@ impl TransactionGossiper {
         if tx_hashes.is_empty() || targets.is_empty() {
             return (targets, 0, false);
         }
-        let original_targets = targets.clone();
-        let original_target_count = original_targets.len();
         let (targets, suppressed) =
             self.filter_targets_by_peer_recent_suppression(targets, tx_hashes);
-        if suppressed == original_target_count {
-            (original_targets, suppressed, true)
-        } else {
-            (targets, suppressed, false)
-        }
+        (targets, suppressed, false)
     }
 
     fn filter_targets_for_priority(
@@ -579,12 +579,13 @@ impl TransactionGossiper {
         for peer_id in targets {
             let peer_map = self.peer_recently_sent.entry(peer_id.clone()).or_default();
             for tx_hash in tx_hashes {
-                peer_map.insert(tx_hash.clone(), expires_tick);
-                slot.push(PeerRecentSuppressionEntry {
-                    peer_id: peer_id.clone(),
-                    tx_hash: tx_hash.clone(),
-                    expires_tick,
-                });
+                if peer_map.insert(*tx_hash, expires_tick) != Some(expires_tick) {
+                    slot.push(PeerRecentSuppressionEntry {
+                        peer_id: peer_id.clone(),
+                        tx_hash: *tx_hash,
+                        expires_tick,
+                    });
+                }
             }
         }
     }
@@ -614,15 +615,22 @@ impl TransactionGossiper {
         }
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
-        let (entries, lane_config, lane_catalog, commit_topology) = {
+        let (entries, lane_config, lane_catalog, dataspace_catalog, commit_topology) = {
             let nexus = self.state.nexus_snapshot();
             let lane_config = nexus.lane_config.clone();
             let lane_catalog = nexus.lane_catalog.clone();
+            let dataspace_catalog = nexus.dataspace_catalog.clone();
             let entries = self
                 .queue
                 .gossip_batch_with_state(self.gossip_size.get(), &self.state);
             let commit_topology = self.state.commit_topology_snapshot();
-            (entries, lane_config, lane_catalog, commit_topology)
+            (
+                entries,
+                lane_config,
+                lane_catalog,
+                dataspace_catalog,
+                commit_topology,
+            )
         };
 
         if entries.is_empty() {
@@ -643,7 +651,7 @@ impl TransactionGossiper {
                 lane_id: entry.routing.lane_id,
                 dataspace_id: entry.routing.dataspace_id,
             };
-            if let Err(reason) = validate_route(&lane_catalog, route) {
+            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1472,6 +1480,7 @@ impl TransactionGossiper {
 
         let nexus = self.state.nexus_snapshot();
         let lane_catalog = nexus.lane_catalog.clone();
+        let dataspace_catalog = nexus.dataspace_catalog.clone();
         let lane_config = nexus.lane_config.clone();
         let (max_clock_drift, tx_limits) = {
             let world_view = self.state.world_view();
@@ -1485,14 +1494,19 @@ impl TransactionGossiper {
         let ed25519_batch_cap = self.state.pipeline.signature_batch_max_ed25519;
         let stateless_cache_cap = self.state.pipeline.stateless_cache_cap;
 
-        struct GossipAdmissionCandidate {
-            tx: GossipTransaction,
+        struct MaterializedGossipCandidate {
+            entrypoint: TransactionEntrypoint,
+            payload: Arc<Vec<u8>>,
+            entrypoint_hash: HashOf<TransactionEntrypoint>,
             route: GossipRoute,
             plan: RoutingPlan,
             tx_hash: HashOf<SignedTransaction>,
+            prepared: Option<PreparedTransactionMetadata>,
+            ed25519_prechecked: bool,
+            precheck_rejection: Option<AcceptTransactionFail>,
         }
 
-        let mut candidates = Vec::with_capacity(batch_txs);
+        let mut materialized = Vec::with_capacity(batch_txs);
         for (idx, tx) in txs.into_iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
                 iroha_logger::warn!("route metadata missing for transaction gossip entry");
@@ -1546,7 +1560,7 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(&lane_catalog, route) {
+            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1645,33 +1659,10 @@ impl TransactionGossiper {
                 crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
-            candidates.push(GossipAdmissionCandidate {
-                tx,
-                route,
-                plan,
-                tx_hash,
-            });
-        }
-
-        struct MaterializedGossipCandidate {
-            entrypoint: TransactionEntrypoint,
-            payload: Arc<Vec<u8>>,
-            entrypoint_hash: HashOf<TransactionEntrypoint>,
-            route: GossipRoute,
-            plan: RoutingPlan,
-            tx_hash: HashOf<SignedTransaction>,
-            prepared: Option<PreparedTransactionMetadata>,
-            ed25519_prechecked: bool,
-            precheck_rejection: Option<AcceptTransactionFail>,
-        }
-
-        let mut materialized = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let entrypoint_hash = candidate.tx.hash_as_entrypoint();
-            let (entrypoint, payload) = match candidate.tx.into_entrypoint_with_payload() {
+            let entrypoint_hash = tx.hash_as_entrypoint();
+            let (entrypoint, payload) = match tx.into_entrypoint_with_payload() {
                 Ok(decoded) => decoded,
                 Err(err) => {
-                    let tx_hash = candidate.tx_hash;
                     iroha_logger::warn!(
                         %tx_hash,
                         ?err,
@@ -1679,8 +1670,8 @@ impl TransactionGossiper {
                     );
                     self.record_drop_metric(
                         plane,
-                        candidate.route.dataspace_id,
-                        &[candidate.route.lane_id],
+                        route.dataspace_id,
+                        &[route.lane_id],
                         "entrypoint_decode",
                         false,
                         None,
@@ -1706,9 +1697,9 @@ impl TransactionGossiper {
                 entrypoint,
                 payload,
                 entrypoint_hash,
-                route: candidate.route,
-                plan: candidate.plan,
-                tx_hash: candidate.tx_hash,
+                route,
+                plan,
+                tx_hash,
                 prepared,
                 ed25519_prechecked: false,
                 precheck_rejection: None,
@@ -2009,11 +2000,18 @@ impl TransactionGossiper {
                             );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
-                            iroha_logger::error!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "Failed to enqueue transaction."
-                            )
+                            if matches!(err, crate::queue::Error::Full) {
+                                iroha_logger::debug!(
+                                    tx = %tx.hash(),
+                                    "queue rejected gossiped transaction due to backpressure"
+                                );
+                            } else {
+                                iroha_logger::error!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "Failed to enqueue transaction."
+                                );
+                            }
                         }
                     }
                 }
@@ -2106,6 +2104,7 @@ impl TransactionGossiper {
 
         let nexus = self.state.nexus_snapshot();
         let lane_catalog = nexus.lane_catalog.clone();
+        let dataspace_catalog = nexus.dataspace_catalog.clone();
         let lane_config = nexus.lane_config.clone();
         let (max_clock_drift, tx_limits) = {
             let world_view = self.state.world_view();
@@ -2172,7 +2171,7 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(&lane_catalog, route) {
+            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -2451,11 +2450,18 @@ impl TransactionGossiper {
                             );
                         }
                         Err(crate::queue::Failure { tx, err }) => {
-                            iroha_logger::error!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "Failed to enqueue transaction."
-                            )
+                            if matches!(err, crate::queue::Error::Full) {
+                                iroha_logger::debug!(
+                                    tx = %tx.hash(),
+                                    "queue rejected gossiped transaction due to backpressure"
+                                );
+                            } else {
+                                iroha_logger::error!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "Failed to enqueue transaction."
+                                );
+                            }
                         }
                     }
                 }
@@ -2520,18 +2526,18 @@ fn decide_restricted_target_plan(
     }
 }
 
-fn validate_route(lane_catalog: &LaneCatalog, route: GossipRoute) -> Result<(), &'static str> {
-    let Some(lane) = lane_catalog
-        .lanes()
-        .iter()
-        .find(|lane| lane.id == route.lane_id)
-    else {
-        return Err("lane missing from catalog");
-    };
-    if lane.dataspace_id != route.dataspace_id {
-        return Err("route dataspace does not match lane catalog");
-    }
-    Ok(())
+fn validate_route(
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    route: GossipRoute,
+) -> Result<(), &'static str> {
+    resolve_routing_decision(
+        RoutingDecision::new(route.lane_id, route.dataspace_id),
+        lane_catalog,
+        dataspace_catalog,
+    )
+    .map(|_| ())
+    .map_err(|err| err.as_label())
 }
 
 fn dataspace_plane(lane_config: &LaneGeometry, dataspace_id: DataSpaceId) -> Option<GossipPlane> {
@@ -2703,6 +2709,7 @@ impl Clone for GossipTransaction {
 }
 
 const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
+const GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const GOSSIP_KNOWN_TX_HASH_CACHE_LIMIT: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2742,12 +2749,25 @@ struct GossipTxDecodeCacheEntry {
 
 struct GossipTxDecodeCache {
     map: HashMap<GossipTxDecodeCacheKey, GossipTxDecodeCacheEntry>,
+    bytes: usize,
+    count_limit: usize,
+    byte_limit: usize,
 }
 
 impl GossipTxDecodeCache {
     fn new() -> Self {
+        Self::with_limits(
+            GOSSIP_TX_DECODE_CACHE_LIMIT,
+            GOSSIP_TX_DECODE_CACHE_BYTE_LIMIT,
+        )
+    }
+
+    fn with_limits(count_limit: usize, byte_limit: usize) -> Self {
         Self {
             map: HashMap::new(),
+            bytes: 0,
+            count_limit,
+            byte_limit,
         }
     }
 
@@ -2756,10 +2776,24 @@ impl GossipTxDecodeCache {
     }
 
     fn insert(&mut self, key: GossipTxDecodeCacheKey, entry: GossipTxDecodeCacheEntry) {
-        if self.map.len() >= GOSSIP_TX_DECODE_CACHE_LIMIT {
+        let entry_len = entry.encoded.len();
+        if entry_len > self.byte_limit {
+            if let Some(previous) = self.map.remove(&key) {
+                self.bytes = self.bytes.saturating_sub(previous.encoded.len());
+            }
+            return;
+        }
+        if let Some(previous) = self.map.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(previous.encoded.len());
+        }
+        if self.map.len() >= self.count_limit
+            || self.bytes.saturating_add(entry_len) > self.byte_limit
+        {
             // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
             self.map.clear();
+            self.bytes = 0;
         }
+        self.bytes = self.bytes.saturating_add(entry_len);
         self.map.insert(key, entry);
     }
 }
@@ -3262,13 +3296,10 @@ fn partition_gossip_batch(
             requeue.push(hash);
             continue;
         };
-        let Some(plan_len) = routing_plan
+        let plan_len = routing_plan
             .encoded_len_exact()
             .or_else(|| routing_plan.encoded_len_hint())
-        else {
-            requeue.push(hash);
-            continue;
-        };
+            .unwrap_or_else(|| routing_plan.encode().len());
         let Some(plan_entry_len) = ncore::len_prefix_len(plan_len).checked_add(plan_len) else {
             requeue.push(hash);
             continue;
@@ -3556,6 +3587,58 @@ mod tests {
     }
 
     #[test]
+    fn gossip_transaction_decode_cache_is_byte_bounded() {
+        let (signed, _accepted) = build_transaction("gossip-decode-cache-byte-bound");
+        let tx_hash = signed.hash();
+        let mut cache = GossipTxDecodeCache::with_limits(8, 10);
+
+        let first = Arc::new(vec![1_u8; 6]);
+        let first_key = GossipTxDecodeCacheKey::from_bytes(first.as_slice());
+        cache.insert(
+            first_key,
+            GossipTxDecodeCacheEntry {
+                encoded: Arc::clone(&first),
+                tx_hash,
+                consumed: first.len(),
+            },
+        );
+        assert!(cache.get(&first_key).is_some());
+        assert_eq!(cache.bytes, first.len());
+
+        let second = Arc::new(vec![2_u8; 6]);
+        let second_key = GossipTxDecodeCacheKey::from_bytes(second.as_slice());
+        cache.insert(
+            second_key,
+            GossipTxDecodeCacheEntry {
+                encoded: Arc::clone(&second),
+                tx_hash,
+                consumed: second.len(),
+            },
+        );
+        assert!(
+            cache.get(&first_key).is_none(),
+            "inserting past the byte cap should clear older cached payloads"
+        );
+        assert!(cache.get(&second_key).is_some());
+        assert_eq!(cache.bytes, second.len());
+
+        let oversized = Arc::new(vec![3_u8; 11]);
+        cache.insert(
+            second_key,
+            GossipTxDecodeCacheEntry {
+                encoded: oversized,
+                tx_hash,
+                consumed: 11,
+            },
+        );
+        assert!(
+            cache.get(&second_key).is_none(),
+            "oversized payloads should not remain cached"
+        );
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
     fn gossip_transaction_try_deserialize_uses_decode_cache() {
         let (signed, _accepted) = build_transaction("gossip-try-deserialize-cache-test");
         let payload = payload_for(&signed);
@@ -3612,6 +3695,7 @@ mod tests {
             debug_packet_loss_outbound_percent: 0,
 deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
+            deferred_send_max_bytes_per_peer: defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -3633,6 +3717,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
+            p2p_outbound_frame_queue_max_high_bytes:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES,
+            p2p_outbound_frame_queue_max_low_bytes:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES,
+            p2p_outbound_frame_queue_max_high_frames:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES,
+            p2p_outbound_frame_queue_max_low_frames:
+                defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES,
             p2p_subscriber_queue_cap: defaults::network::P2P_SUBSCRIBER_QUEUE_CAP,
             consensus_ingress_rate_per_sec: defaults::network::CONSENSUS_INGRESS_RATE_PER_SEC,
             consensus_ingress_burst: defaults::network::CONSENSUS_INGRESS_BURST,
@@ -3918,6 +4010,28 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
+    fn gossip_deferred_slot_deduplicates_repeated_hashes() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+
+        let (_signed, accepted) = build_transaction("deferred-dedup");
+        let hash = accepted.hash();
+        gossiper
+            .queue
+            .push(accepted, gossiper.state.view())
+            .expect("queue accepts tx");
+
+        gossiper.defer_gossip_hashes([hash, hash]);
+        gossiper.defer_gossip_hashes([hash]);
+
+        assert_eq!(
+            gossiper.gossip_deferred[gossiper.deferred_index()].len(),
+            1,
+            "same transaction hash should be retained once per resend slot"
+        );
+    }
+
+    #[test]
     fn public_broadcast_retry_hashes_return_to_gossip_backlog() {
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let mut gossiper = closed_test_gossiper(resend_ticks);
@@ -4027,10 +4141,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![peer.clone()],
             std::slice::from_ref(&tx_hash),
         );
-        assert_eq!(
-            targets,
-            vec![peer.clone()],
-            "all-suppressed target sets must still be retried for liveness"
+        assert!(
+            targets.is_empty(),
+            "all-suppressed target sets should wait for resend TTL instead of replaying immediately"
         );
         assert_eq!(suppressed, 1);
 
@@ -4046,6 +4159,83 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         assert_eq!(targets, vec![peer]);
         assert_eq!(suppressed, 0);
+    }
+
+    #[test]
+    fn peer_recent_suppression_deduplicates_same_tick_entries() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-same-tick-dedup");
+        let tx_hash = signed.hash();
+        let slot = gossiper.peer_recent_slot_for_tick(
+            gossiper
+                .gossip_tick
+                .saturating_add(GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64),
+        );
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+
+        assert_eq!(
+            gossiper.peer_recent_ring[slot].len(),
+            1,
+            "same peer/hash expiry should have one ring entry"
+        );
+    }
+
+    #[test]
+    fn peer_recent_suppression_drops_stale_replaced_ring_entries() {
+        let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
+        let mut gossiper = closed_test_gossiper(resend_ticks);
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("suppression-stale-ring-entry");
+        let tx_hash = signed.hash();
+        let ttl = GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64;
+        let first_expiry = gossiper.gossip_tick.saturating_add(ttl);
+        let first_slot = gossiper.peer_recent_slot_for_tick(first_expiry);
+
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+        gossiper.advance_gossip_tick();
+        let second_expiry = gossiper.gossip_tick.saturating_add(ttl);
+        let second_slot = gossiper.peer_recent_slot_for_tick(second_expiry);
+        gossiper.remember_peer_recent_sends(
+            std::slice::from_ref(&peer),
+            std::slice::from_ref(&tx_hash),
+        );
+
+        assert_eq!(gossiper.peer_recent_ring[first_slot].len(), 1);
+        assert_eq!(gossiper.peer_recent_ring[second_slot].len(), 1);
+
+        gossiper.gossip_tick = first_expiry;
+        gossiper.expire_peer_recent_suppression();
+        assert!(
+            gossiper.peer_recent_ring[first_slot].is_empty(),
+            "overwritten expiry entry should be dropped instead of retained forever"
+        );
+        assert!(
+            gossiper
+                .peer_recently_sent
+                .get(&peer)
+                .is_some_and(|seen| seen.get(&tx_hash) == Some(&second_expiry)),
+            "newer suppression expiry should remain active"
+        );
+
+        gossiper.gossip_tick = second_expiry;
+        gossiper.expire_peer_recent_suppression();
+        assert!(
+            !gossiper.peer_recently_sent.contains_key(&peer),
+            "current suppression entry should still expire normally"
+        );
     }
 
     #[test]
@@ -4072,12 +4262,12 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
-    fn peer_recent_suppression_replays_when_every_target_was_recently_sent() {
+    fn peer_recent_suppression_defers_when_every_target_was_recently_sent() {
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
         let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
-        let (signed, _) = build_transaction("peer-recent-replay");
+        let (signed, _) = build_transaction("peer-recent-defer");
         let tx_hash = signed.hash();
         let targets = vec![peer_a.clone(), peer_b.clone()];
 
@@ -4086,9 +4276,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (targets, suppressed, replayed) = gossiper
             .filter_targets_or_replay_recent_suppressed(targets, std::slice::from_ref(&tx_hash));
 
-        assert_eq!(targets, vec![peer_a, peer_b]);
+        assert!(targets.is_empty());
         assert_eq!(suppressed, 2);
-        assert!(replayed);
+        assert!(!replayed);
     }
 
     #[test]
@@ -4488,6 +4678,54 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
+    fn partition_preserves_native_amx_full_routing_plan() {
+        let (signed, accepted) = build_transaction("native-amx-gossip");
+        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
+        let first_participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(7));
+        let second_participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8));
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                crate::queue::RouteLeg::new(
+                    first_participant,
+                    crate::queue::RouteLegRole::Participant,
+                ),
+                crate::queue::RouteLeg::new(
+                    second_participant,
+                    crate::queue::RouteLegRole::Participant,
+                ),
+            ],
+        );
+        let partitioned = partition_gossip_batch(
+            usize::MAX,
+            usize::MAX,
+            GossipPlane::Public,
+            vec![GossipBatchEntry {
+                tx: accepted,
+                routing: coordinator,
+                routing_plan: plan.clone(),
+                payload: payload_for(&signed),
+            }],
+        );
+
+        assert!(partitioned.requeue.is_empty());
+        assert_eq!(partitioned.message.plans, vec![plan.clone()]);
+        let decoded = decode_gossip_message(&partitioned.message);
+        assert_eq!(decoded.plans, vec![plan]);
+        let RoutingPlan::NativeAmx(native_plan) = &decoded.plans[0] else {
+            panic!("decoded gossip plan should remain native AMX");
+        };
+        assert_eq!(
+            native_plan
+                .participants
+                .iter()
+                .map(|leg| leg.route)
+                .collect::<Vec<_>>(),
+            vec![first_participant, second_participant]
+        );
+    }
+
+    #[test]
     fn partition_respects_max_count() {
         let (tx_a_signed, tx_a_accepted) = build_transaction("a");
         let (tx_b_signed, tx_b_accepted) = build_transaction("b");
@@ -4545,11 +4783,15 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     #[test]
     fn validate_route_rejects_missing_lane() {
         let catalog = LaneCatalog::default();
+        let dataspace_catalog = DataSpaceCatalog::default();
         let route = GossipRoute {
             lane_id: LaneId::new(5),
             dataspace_id: DataSpaceId::new(7),
         };
-        assert!(validate_route(&catalog, route).is_err());
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, route),
+            Err("unknown_lane")
+        );
     }
 
     #[test]
@@ -4566,11 +4808,54 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![lane],
         )
         .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "lane-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(3),
+                alias: "route-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
         let route = GossipRoute {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::new(3),
         };
-        assert!(validate_route(&catalog, route).is_err());
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, route),
+            Err("lane_dataspace_mismatch")
+        );
+    }
+
+    #[test]
+    fn validate_route_rejects_missing_dataspace() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "dangling".to_string(),
+            visibility: LaneVisibility::Restricted,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::default();
+        let route = GossipRoute {
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(9),
+        };
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, route),
+            Err("unknown_dataspace")
+        );
     }
 
     #[test]
@@ -4587,11 +4872,18 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![lane],
         )
         .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(9),
+            alias: "beta-dataspace".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
         let route = GossipRoute {
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),
         };
-        assert!(validate_route(&catalog, route).is_ok());
+        assert_eq!(validate_route(&catalog, &dataspace_catalog, route), Ok(()));
     }
 
     #[test]
@@ -5443,7 +5735,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
+            nexus.enabled = false;
             nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
@@ -5453,14 +5745,19 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             nexus.dataspace_catalog = dataspace_catalog;
         }
 
-        let queue = Arc::new(Queue::test_with_router_for_routes(
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(state.nexus.read().dataspace_catalog.clone());
+        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
             QueueConfig::default(),
-            &TimeSource::new_system(),
+            tokio::sync::broadcast::Sender::new(1),
             Arc::new(FixedRouter {
                 lane: restricted_lane,
                 dataspace: restricted_dataspace,
             }),
-            &[(restricted_lane, restricted_dataspace)],
+            crate::queue::QueueLimits::default(),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
         ));
 
         let now = Instant::now();

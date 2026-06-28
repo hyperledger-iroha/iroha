@@ -5,13 +5,8 @@ source: docs/source/sorafs_developer_docs_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c71ee040a3f536f0ca7245f0cb7399801bb2a4237e3dd23f970fa1b1ba5fd58f
-source_last_modified: "2026-01-04T10:50:53.672138+00:00"
+source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
----
-
----
-title: SoraFS Developer Documentation Plan
-summary: Structure for CLI/SDK developer guides and samples (SF-6).
 ---
 
 # SoraFS Developer Documentation Plan

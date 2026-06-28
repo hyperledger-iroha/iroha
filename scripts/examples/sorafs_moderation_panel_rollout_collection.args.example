@@ -1,0 +1,43 @@
+# Example:
+#   python3 scripts/run_sorafs_moderation_panel_rollout_evidence.py \
+#     @scripts/examples/sorafs_moderation_panel_rollout_collection.args.example \
+#     --dry-run
+
+--out-dir
+dist/sorafs-moderation-panel-rollout-evidence
+--now-unix
+1800009000
+--max-canary-age-secs
+86400
+--max-event-lag-secs
+900
+--max-route-latency-ms
+1500
+--min-panel-size
+7
+--min-peers
+4
+--appeal-intake-evidence
+/runtime/sorafs/moderation-panel/appeal-intake-canary.json
+--sortition-roster-evidence
+/runtime/sorafs/moderation-panel/sortition-roster-canary.json
+--evidence-viewer-evidence
+/runtime/sorafs/moderation-panel/evidence-viewer-canary.json
+--operator-workflow-evidence
+/runtime/sorafs/moderation-panel/operator-workflow-canary.json
+--juror-notifications-evidence
+/runtime/sorafs/moderation-panel/juror-notifications-canary.json
+--commit-reveal-evidence
+/runtime/sorafs/moderation-panel/commit-reveal-canary.json
+--decision-publication-evidence
+/runtime/sorafs/moderation-panel/decision-publication-canary.json
+--settlement-integration-evidence
+/runtime/sorafs/moderation-panel/settlement-integration-canary.json
+--transparency-reputation-evidence
+/runtime/sorafs/moderation-panel/transparency-reputation-canary.json
+--e2e-panel-evidence
+/runtime/sorafs/moderation-panel/e2e-panel.json
+--metrics-alerts-evidence
+/runtime/sorafs/moderation-panel/metrics-alerts-canary.json
+--governance-approval-evidence
+/runtime/sorafs/moderation-panel/governance-approval.json

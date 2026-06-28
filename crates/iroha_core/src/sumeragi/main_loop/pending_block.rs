@@ -1,6 +1,7 @@
 //! Pending-block state, local validation, and DA availability helpers.
 
 use std::{
+    borrow::Cow,
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -10,10 +11,7 @@ use iroha_data_model::block::{BlockHeader, SignedBlock};
 use iroha_logger::prelude::*;
 
 use super::{kura::KuraRetryDecision, proposals::block_payload_bytes};
-use crate::{
-    sumeragi::{consensus::Evidence, da, status},
-    tx::AcceptedTransaction,
-};
+use crate::sumeragi::{consensus::Evidence, da, status};
 
 /// Local validation lifecycle for a pending block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +79,6 @@ pub(super) struct PendingBlock {
     pub(super) parent_state_root: Option<Hash>,
     /// Execution roots captured during pre-vote validation (Commit phase only).
     pub(super) post_state_root: Option<Hash>,
-    pub(super) tx_batch: Option<Vec<AcceptedTransaction<'static>>>,
     pub(super) last_gate: Option<da::GateReason>,
     pub(super) last_gate_satisfied: Option<da::GateSatisfaction>,
     pub(super) inserted_at: Instant,
@@ -115,7 +112,6 @@ impl PendingBlock {
             view,
             parent_state_root: None,
             post_state_root: None,
-            tx_batch: None,
             last_gate: None,
             last_gate_satisfied: None,
             inserted_at: now,
@@ -138,6 +134,7 @@ impl PendingBlock {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn new_with_payload_bytes(
         block: SignedBlock,
         payload_hash: Hash,
@@ -150,28 +147,29 @@ impl PendingBlock {
         pending
     }
 
-    #[allow(dead_code)]
-    pub(super) fn with_transactions(
-        block: SignedBlock,
-        payload_hash: Hash,
-        height: u64,
-        view: u64,
-        tx_batch: Vec<AcceptedTransaction<'static>>,
-    ) -> Self {
-        let mut pending = Self::new(block, payload_hash, height, view);
-        pending.tx_batch = Some(tx_batch);
-        pending
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn take_tx_batch(&mut self) -> Option<Vec<AcceptedTransaction<'static>>> {
-        self.tx_batch.take()
-    }
-
+    #[cfg(test)]
     pub(super) fn payload_bytes(&self) -> &[u8] {
         self.payload_bytes
             .get_or_init(|| block_payload_bytes(&self.block))
             .as_slice()
+    }
+
+    pub(super) fn payload_bytes_cow(&self) -> Cow<'_, [u8]> {
+        if let Some(payload_bytes) = self.payload_bytes.get() {
+            Cow::Borrowed(payload_bytes.as_slice())
+        } else {
+            Cow::Owned(block_payload_bytes(&self.block))
+        }
+    }
+
+    pub(super) fn payload_hash_matches_block(&self) -> bool {
+        let payload_bytes = self.payload_bytes_cow();
+        Hash::new(payload_bytes.as_ref()) == self.payload_hash
+    }
+
+    #[cfg(test)]
+    pub(super) fn payload_bytes_cached_for_tests(&self) -> bool {
+        self.payload_bytes.get().is_some()
     }
 
     pub(super) fn set_block(&mut self, block: SignedBlock) {
@@ -179,6 +177,7 @@ impl PendingBlock {
         self.payload_bytes = OnceLock::new();
     }
 
+    #[cfg(test)]
     pub(super) fn set_block_with_payload_bytes(
         &mut self,
         block: SignedBlock,
@@ -189,7 +188,6 @@ impl PendingBlock {
         let _ = self.payload_bytes.set(payload_bytes);
     }
 
-    #[cfg(test)]
     pub(super) fn replace_block(
         &mut self,
         block: SignedBlock,
@@ -225,6 +223,7 @@ impl PendingBlock {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn replace_block_with_payload_bytes(
         &mut self,
         block: SignedBlock,
@@ -269,37 +268,6 @@ impl PendingBlock {
         view: u64,
     ) {
         self.set_block(block);
-        self.payload_hash = payload_hash;
-        self.height = height;
-        self.view = view;
-        self.aborted = false;
-        self.retired_same_height = false;
-        self.inserted_at = Instant::now();
-        self.last_progress = self.inserted_at;
-        self.validation_status = ValidationStatus::Pending;
-        self.validated_commit_artifact = None;
-        self.reset_commit_stage();
-        self.last_gate = None;
-        self.last_gate_satisfied = None;
-        self.reset_kura_retry();
-        self.last_precommit_rebroadcast = None;
-        self.last_validation_redrive = None;
-        self.last_quorum_reschedule = None;
-        self.last_quorum_reschedule_vote_count = 0;
-        self.parent_state_root = None;
-        self.post_state_root = None;
-        self.last_commit_evidence_replay = None;
-    }
-
-    pub(super) fn revive_after_abort_with_payload_bytes(
-        &mut self,
-        block: SignedBlock,
-        payload_hash: Hash,
-        height: u64,
-        view: u64,
-        payload_bytes: Vec<u8>,
-    ) {
-        self.set_block_with_payload_bytes(block, payload_bytes);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -488,15 +456,14 @@ impl PendingBlock {
         self.last_commit_evidence_replay = None;
     }
 
-    pub(super) fn refresh_retired_payload_with_payload_bytes(
+    pub(super) fn refresh_retired_payload(
         &mut self,
         block: SignedBlock,
         payload_hash: Hash,
         height: u64,
         view: u64,
-        payload_bytes: Vec<u8>,
     ) {
-        self.set_block_with_payload_bytes(block, payload_bytes);
+        self.set_block(block);
         self.payload_hash = payload_hash;
         self.height = height;
         self.view = view;
@@ -799,6 +766,23 @@ mod tests {
     }
 
     #[test]
+    fn pending_block_payload_bytes_cow_does_not_populate_cache() {
+        let block = sample_block(1);
+        let payload_bytes = block_payload_bytes(&block);
+        let payload_hash = Hash::new(&payload_bytes);
+        let pending = PendingBlock::new(block, payload_hash, 1, 0);
+
+        assert!(!pending.payload_bytes_cached_for_tests());
+        assert_eq!(
+            pending.payload_bytes_cow().as_ref(),
+            payload_bytes.as_slice()
+        );
+        assert!(!pending.payload_bytes_cached_for_tests());
+        assert!(pending.payload_hash_matches_block());
+        assert!(!pending.payload_bytes_cached_for_tests());
+    }
+
+    #[test]
     fn pending_block_payload_bytes_can_be_seeded_at_creation() {
         let block = sample_block(1);
         let payload_bytes = block_payload_bytes(&block);
@@ -806,6 +790,7 @@ mod tests {
         let pending =
             PendingBlock::new_with_payload_bytes(block, payload_hash, 1, 0, payload_bytes.clone());
 
+        assert!(pending.payload_bytes_cached_for_tests());
         assert_eq!(pending.payload_bytes(), payload_bytes.as_slice());
         assert_eq!(Hash::new(pending.payload_bytes()), payload_hash);
     }

@@ -51,6 +51,44 @@ public enum SorafsPdpPayloadKind: UInt32, Sendable {
     }
 }
 
+public enum SorafsPopPayloadKind: UInt32, Sendable {
+    case credential = 1
+    case commitmentRoot = 2
+    case revocationList = 3
+    case enrollmentRequest = 4
+    case renewalRequest = 5
+    case membershipProof = 6
+    case issuedCredentialBundle = 7
+
+    public var defaultLabel: String {
+        switch self {
+        case .credential: return "pop-credential.to"
+        case .commitmentRoot: return "pop-commitment-root.to"
+        case .revocationList: return "pop-revocation-list.to"
+        case .enrollmentRequest: return "pop-enrollment-request.to"
+        case .renewalRequest: return "pop-renewal-request.to"
+        case .membershipProof: return "pop-membership-proof.to"
+        case .issuedCredentialBundle: return "pop-issued-credential-bundle.to"
+        }
+    }
+}
+
+public enum SorafsHedgingPayloadKind: UInt32, Sendable {
+    case priceFeed = 1
+    case referencePriceDecision = 2
+    case billingLineItem = 3
+    case billingStatement = 4
+
+    public var defaultLabel: String {
+        switch self {
+        case .priceFeed: return "hedging-price-feed.to"
+        case .referencePriceDecision: return "hedging-reference-price-decision.to"
+        case .billingLineItem: return "billing-line-item.to"
+        case .billingStatement: return "billing-statement.to"
+        }
+    }
+}
+
 public enum SorafsOrderbookSide: UInt32, Sendable {
     case bid = 1
     case ask = 2
@@ -177,6 +215,14 @@ public enum SorafsReferenceValidators {
         NoritoNativeBridge.shared.isSorafsReferenceOrderbookSigningAvailable
     }
 
+    public static var isPopNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isSorafsReferencePopValidationAvailable
+    }
+
+    public static var isHedgingNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isSorafsReferenceHedgingValidationAvailable
+    }
+
     public static var isOrderbookFieldBuilderAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceOrderbookFieldBuilderAvailable
     }
@@ -202,6 +248,42 @@ public enum SorafsReferenceValidators {
     ) throws -> String {
         let resolvedLabel = try validatorLabel(label, fallback: kind.defaultLabel)
         guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateOrderbook(
+            kind: kind.rawValue,
+            payload: payload,
+            label: resolvedLabel,
+            generatedAtUnix: generatedAtUnix
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    public static func validatePopPayloadJSON(
+        kind: SorafsPopPayloadKind,
+        payload: Data,
+        label: String? = nil,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        let resolvedLabel = try validatorLabel(label, fallback: kind.defaultLabel)
+        guard let json = NoritoNativeBridge.shared.sorafsReferenceValidatePopPayload(
+            kind: kind.rawValue,
+            payload: payload,
+            label: resolvedLabel,
+            generatedAtUnix: generatedAtUnix
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    public static func validateHedgingPayloadJSON(
+        kind: SorafsHedgingPayloadKind,
+        payload: Data,
+        label: String? = nil,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        let resolvedLabel = try validatorLabel(label, fallback: kind.defaultLabel)
+        guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateHedgingPayload(
             kind: kind.rawValue,
             payload: payload,
             label: resolvedLabel,

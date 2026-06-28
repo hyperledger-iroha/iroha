@@ -230,6 +230,67 @@ pub struct ReserveLedgerProjection {
     pub needs_top_up_alert: bool,
 }
 
+/// Lifecycle stage derived from a reserve quote and payment aging inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "stage", content = "value"))]
+pub enum ReserveLifecycleStage {
+    /// Provider is current and reserve balance clears policy thresholds.
+    Active,
+    /// Provider should be warned and new manifest intake restricted.
+    Warning,
+    /// Rent is overdue but still within the automatic credit grace window.
+    Grace,
+    /// Rent is past grace and accrues penalty interest.
+    Delinquent,
+    /// Provider should be removed from advert rotation and escalated.
+    Default,
+}
+
+/// Deterministic reserve lifecycle projection for service and CLI automation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[allow(clippy::struct_excessive_bools)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveLifecycleProjection {
+    /// Derived lifecycle stage.
+    pub stage: ReserveLifecycleStage,
+    /// Days since the current rent obligation became due.
+    pub days_past_due: u16,
+    /// Grace window before delinquency.
+    pub grace_period_days: u16,
+    /// Default threshold after the due date.
+    pub default_after_days: u16,
+    /// Effective rent due for the period.
+    pub rent_due: XorAmount,
+    /// Reserve amount still required to satisfy underwriting.
+    pub reserve_shortfall: XorAmount,
+    /// Amount required to clear the top-up warning threshold.
+    pub top_up_shortfall: XorAmount,
+    /// Automatic credit draw applied to overdue rent.
+    pub credit_draw: XorAmount,
+    /// Remaining automatic credit capacity after the draw.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub credit_available_after_draw: Option<XorAmount>,
+    /// Uncovered rent after applying automatic credit.
+    pub credit_shortfall: XorAmount,
+    /// Pro-rated penalty interest accrued after the grace window.
+    pub accrued_interest: XorAmount,
+    /// Rent still payable after automatic credit plus accrued interest.
+    pub total_due_after_credit: XorAmount,
+    /// Whether new manifest intake should be restricted.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub restrict_new_manifests: bool,
+    /// Whether provider adverts should be disabled.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub disable_adverts: bool,
+    /// Whether governance notification is required.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub requires_governance_notification: bool,
+    /// Whether manual credit approval is required for this tier.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub requires_manual_credit_approval: bool,
+}
+
 impl ReserveQuote {
     /// Project ledger-facing rent/reserve deltas based on the quote.
     #[must_use]
@@ -245,6 +306,86 @@ impl ReserveQuote {
             meets_underwriting: reserve_shortfall.is_zero(),
             needs_top_up_alert: !top_up_shortfall.is_zero(),
         }
+    }
+
+    /// Project reserve lifecycle state from deterministic aging thresholds.
+    ///
+    /// The projection intentionally computes only policy state and transfer
+    /// amounts. It does not mutate provider status or submit ledger
+    /// instructions, keeping every node able to recompute the same result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReservePolicyError::InvalidLifecycleWindow`] when the grace
+    /// window is not strictly before the default threshold, or
+    /// [`ReservePolicyError::Overflow`] when interest arithmetic overflows.
+    pub fn lifecycle_projection(
+        &self,
+        days_past_due: u16,
+        grace_period_days: u16,
+        default_after_days: u16,
+    ) -> Result<ReserveLifecycleProjection, ReservePolicyError> {
+        if grace_period_days >= default_after_days {
+            return Err(ReservePolicyError::InvalidLifecycleWindow {
+                grace_period_days,
+                default_after_days,
+            });
+        }
+
+        let ledger = self.ledger_projection();
+        let automatic_credit_cap = self.credit_line_cap;
+        let credit_draw = if days_past_due == 0 {
+            XorAmount::zero()
+        } else {
+            automatic_credit_cap.map_or_else(XorAmount::zero, |cap| ledger.rent_due.min(cap))
+        };
+        let credit_available_after_draw =
+            automatic_credit_cap.map(|cap| cap.saturating_sub(credit_draw));
+        let credit_shortfall = ledger.rent_due.saturating_sub(credit_draw);
+        let delinquent_days = days_past_due.saturating_sub(grace_period_days);
+        let accrued_interest =
+            prorated_interest(credit_draw, self.interest_apr_bps, delinquent_days)?;
+        let total_due_after_credit = credit_shortfall.checked_add(accrued_interest)?;
+        let requires_manual_credit_approval =
+            days_past_due > 0 && automatic_credit_cap.is_none() && !ledger.rent_due.is_zero();
+        let stage = if days_past_due > default_after_days
+            || (days_past_due > 0 && !credit_shortfall.is_zero())
+        {
+            ReserveLifecycleStage::Default
+        } else if days_past_due > grace_period_days {
+            ReserveLifecycleStage::Delinquent
+        } else if days_past_due > 0 {
+            ReserveLifecycleStage::Grace
+        } else if ledger.needs_top_up_alert || !ledger.meets_underwriting {
+            ReserveLifecycleStage::Warning
+        } else {
+            ReserveLifecycleStage::Active
+        };
+        let restrict_new_manifests = !matches!(stage, ReserveLifecycleStage::Active);
+        let disable_adverts = matches!(stage, ReserveLifecycleStage::Default);
+        let requires_governance_notification = matches!(
+            stage,
+            ReserveLifecycleStage::Delinquent | ReserveLifecycleStage::Default
+        );
+
+        Ok(ReserveLifecycleProjection {
+            stage,
+            days_past_due,
+            grace_period_days,
+            default_after_days,
+            rent_due: ledger.rent_due,
+            reserve_shortfall: ledger.reserve_shortfall,
+            top_up_shortfall: ledger.top_up_shortfall,
+            credit_draw,
+            credit_available_after_draw,
+            credit_shortfall,
+            accrued_interest,
+            total_due_after_credit,
+            restrict_new_manifests,
+            disable_adverts,
+            requires_governance_notification,
+            requires_manual_credit_approval,
+        })
     }
 }
 
@@ -278,6 +419,16 @@ pub enum ReservePolicyError {
     /// Arithmetic overflow while computing the quote.
     #[error("reserve computation overflowed")]
     Overflow,
+    /// Lifecycle grace/default windows are invalid.
+    #[error(
+        "reserve lifecycle grace period ({grace_period_days}) must be before default threshold ({default_after_days})"
+    )]
+    InvalidLifecycleWindow {
+        /// Configured grace period in days.
+        grace_period_days: u16,
+        /// Configured default threshold in days.
+        default_after_days: u16,
+    },
 }
 
 impl From<DealAmountError> for ReservePolicyError {
@@ -457,6 +608,24 @@ fn divide_amount_by_ratio(
     Ok(XorAmount::from_micro(numerator / u128::from(ratio_bps)))
 }
 
+fn prorated_interest(
+    principal: XorAmount,
+    apr_bps: u16,
+    days: u16,
+) -> Result<XorAmount, ReservePolicyError> {
+    if principal.is_zero() || apr_bps == 0 || days == 0 {
+        return Ok(XorAmount::zero());
+    }
+    let scaled = principal
+        .as_micro()
+        .checked_mul(u128::from(apr_bps))
+        .and_then(|value| value.checked_mul(u128::from(days)))
+        .ok_or(ReservePolicyError::Overflow)?;
+    Ok(XorAmount::from_micro(
+        scaled / (u128::from(BASIS_POINTS_PER_UNIT) * 365),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +746,121 @@ mod tests {
         assert!(projection.meets_underwriting);
         assert!(projection.top_up_shortfall.is_zero());
         assert!(!projection.needs_top_up_alert);
+    }
+
+    #[test]
+    fn lifecycle_projection_warns_before_grace_when_reserve_is_low() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                XorAmount::zero(),
+            )
+            .expect("quote succeeds");
+        let lifecycle = quote
+            .lifecycle_projection(0, 7, 30)
+            .expect("lifecycle projection");
+
+        assert_eq!(lifecycle.stage, ReserveLifecycleStage::Warning);
+        assert!(lifecycle.restrict_new_manifests);
+        assert!(!lifecycle.disable_adverts);
+        assert!(lifecycle.credit_draw.is_zero());
+    }
+
+    #[test]
+    fn lifecycle_projection_draws_credit_during_grace() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                XorAmount::zero(),
+            )
+            .expect("quote succeeds");
+        let lifecycle = quote
+            .lifecycle_projection(3, 7, 30)
+            .expect("lifecycle projection");
+
+        assert_eq!(lifecycle.stage, ReserveLifecycleStage::Grace);
+        assert_eq!(lifecycle.credit_draw.as_micro(), 120_000_000);
+        assert!(lifecycle.credit_shortfall.is_zero());
+        assert_eq!(
+            lifecycle
+                .credit_available_after_draw
+                .expect("credit capacity")
+                .as_micro(),
+            120_000_000
+        );
+    }
+
+    #[test]
+    fn lifecycle_projection_accrues_interest_after_grace() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                StorageClass::Warm,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierB,
+                XorAmount::zero(),
+            )
+            .expect("quote succeeds");
+        let lifecycle = quote
+            .lifecycle_projection(12, 7, 30)
+            .expect("lifecycle projection");
+
+        assert_eq!(lifecycle.stage, ReserveLifecycleStage::Delinquent);
+        assert_eq!(lifecycle.credit_draw.as_micro(), 60_000_000);
+        assert_eq!(lifecycle.accrued_interest.as_micro(), 49_315);
+        assert_eq!(lifecycle.total_due_after_credit.as_micro(), 49_315);
+        assert!(lifecycle.requires_governance_notification);
+    }
+
+    #[test]
+    fn lifecycle_projection_defaults_when_credit_cannot_cover_rent() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                StorageClass::Hot,
+                10,
+                ReserveDuration::Monthly,
+                ReserveTier::TierC,
+                XorAmount::zero(),
+            )
+            .expect("quote succeeds");
+        let lifecycle = quote
+            .lifecycle_projection(1, 7, 30)
+            .expect("lifecycle projection");
+
+        assert_eq!(lifecycle.stage, ReserveLifecycleStage::Default);
+        assert!(lifecycle.requires_manual_credit_approval);
+        assert!(lifecycle.disable_adverts);
+        assert_eq!(lifecycle.credit_shortfall.as_micro(), 120_000_000);
+    }
+
+    #[test]
+    fn lifecycle_projection_rejects_invalid_windows() {
+        let policy = ReservePolicyV1::default();
+        let quote = policy
+            .quote(
+                StorageClass::Hot,
+                1,
+                ReserveDuration::Monthly,
+                ReserveTier::TierA,
+                XorAmount::zero(),
+            )
+            .expect("quote succeeds");
+        let error = quote
+            .lifecycle_projection(0, 30, 30)
+            .expect_err("invalid windows should fail");
+        assert!(matches!(
+            error,
+            ReservePolicyError::InvalidLifecycleWindow { .. }
+        ));
     }
 }

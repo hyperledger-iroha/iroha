@@ -61,6 +61,10 @@ APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
     "`deep` is intentionally Apalache-only in PR CI",
     "Every other PR baseline mode must have both a TLC runner case and README command.",
 )
+APALACHE_TYPECHECK_ONLY_MODES = {"fast"}
+APALACHE_TYPECHECK_ONLY_README_SNIPPETS = (
+    "The Apalache `fast` mode is intentionally a monolithic-module typecheck smoke.",
+)
 # Historical escape hatch for fast envelopes without direct *Exactness coverage.
 # Keep empty; new entries should be justified by an explicit formal debt note.
 LEGACY_FAST_ENVELOPE_WITHOUT_EXACTNESS = set()
@@ -103,6 +107,9 @@ TLC_CONSTRAINT_ASSIGN_RE = re.compile(
 APALACHE_LENGTH_ASSIGN_RE = re.compile(
     r"^\s*apalache_length=([^\s#]+)\s*$", re.MULTILINE
 )
+TYPECHECK_ONLY_ASSIGN_RE = re.compile(
+    r"^\s*typecheck_only=([01])\s*$", re.MULTILINE
+)
 RUNNER_APALACHE_VERSION_RE = re.compile(
     r'^\s*apalache_version="\$\{APALACHE_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)\}"\s*$',
     re.MULTILINE,
@@ -138,6 +145,7 @@ def shell_mutation_candidate_re(*variables: str) -> re.Pattern[str]:
 
 
 PROOF_INPUT_MUTATION_RE = shell_mutation_candidate_re("spec_file", "cfg_file")
+TYPECHECK_ONLY_MUTATION_RE = shell_mutation_candidate_re("typecheck_only")
 TLA_MODULE_RE = re.compile(
     r"^-{4}\s+MODULE\s+([A-Za-z_][A-Za-z0-9_]*)\s+-{4}\s*$"
 )
@@ -3363,6 +3371,113 @@ def modes_with_unexpected_failure_marker(
     return unexpected
 
 
+def apalache_typecheck_default_errors(path: Path = APALACHE_RUNNER) -> list[str]:
+    """Return errors for unsafe global typecheck_only defaults."""
+    lines = read_text(path).splitlines()
+    starts = [index for index, line in enumerate(lines) if line == 'case "$mode" in']
+    if len(starts) != 1:
+        return []
+    start = starts[0]
+    try:
+        end = next(
+            index for index, line in enumerate(lines[start + 1 :], start + 1)
+            if line == "esac"
+        )
+    except StopIteration:
+        return []
+
+    errors: list[str] = []
+    values: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if start <= index <= end:
+            continue
+        if not TYPECHECK_ONLY_MUTATION_RE.match(line):
+            continue
+        match = TYPECHECK_ONLY_ASSIGN_RE.match(line)
+        line_number = index + 1
+        if match is None:
+            errors.append(
+                f"Apalache runner {display_path(path)}:{line_number} has "
+                f"malformed top-level typecheck_only assignment: {line.strip()}"
+            )
+            continue
+        values.append((line_number, match.group(1)))
+
+    if len(values) != 1:
+        errors.append(
+            f"Apalache runner {display_path(path)} must declare exactly one "
+            f"top-level typecheck_only=0 default, found {len(values)}"
+        )
+    elif values[0][1] != "0":
+        errors.append(
+            f"Apalache runner {display_path(path)}:{values[0][0]} must set "
+            "top-level typecheck_only default to 0"
+        )
+    return errors
+
+
+def apalache_typecheck_only_mode_errors(
+    modes: list[str] | set[str],
+    cases: dict[str, RunnerCase],
+    allowed_modes: set[str] = APALACHE_TYPECHECK_ONLY_MODES,
+) -> list[str]:
+    """Return errors for Apalache modes that weaken checks to typecheck-only."""
+    errors: list[str] = []
+    marked_modes: set[str] = set()
+    for mode in sorted_unique(modes):
+        case = matching_case(mode, cases)
+        if case is None:
+            continue
+        errors.extend(
+            malformed_scalar_assignment_errors(
+                mode,
+                case,
+                "typecheck_only",
+                TYPECHECK_ONLY_ASSIGN_RE,
+                "Apalache runner",
+            )
+        )
+        assignments = TYPECHECK_ONLY_ASSIGN_RE.findall(case.body)
+        if len(assignments) > 1:
+            errors.append(
+                f"{mode}: Apalache runner case {case.label!r} at line "
+                f"{case.line} assigns typecheck_only {len(assignments)} times"
+            )
+            continue
+        if not assignments:
+            continue
+        value = assignments[0]
+        if value == "0":
+            errors.append(
+                f"{mode}: Apalache runner case {case.label!r} at line "
+                f"{case.line} sets typecheck_only=0 inside a mode case; keep "
+                "the default at top level"
+            )
+            continue
+        marked_modes.add(mode)
+        if mode not in allowed_modes:
+            errors.append(
+                f"{mode}: Apalache runner case {case.label!r} at line "
+                f"{case.line} sets typecheck_only=1 outside "
+                "APALACHE_TYPECHECK_ONLY_MODES"
+            )
+
+    for mode in sorted_unique(allowed_modes - marked_modes):
+        case = matching_case(mode, cases)
+        if case is None:
+            errors.append(
+                f"{mode}: listed in APALACHE_TYPECHECK_ONLY_MODES but has no "
+                "matching Apalache runner case"
+            )
+        else:
+            errors.append(
+                f"{mode}: listed in APALACHE_TYPECHECK_ONLY_MODES but "
+                f"Apalache runner case {case.label!r} at line {case.line} "
+                "does not set typecheck_only=1"
+            )
+    return errors
+
+
 def apalache_length_table_errors(
     documented_lengths: dict[str, int],
     cases: dict[str, RunnerCase],
@@ -3573,6 +3688,7 @@ def main() -> int:
     apalache_version_mismatches = apalache_version_pin_errors()
     expected_failure_semantics_mismatches = expected_failure_semantics_errors()
     runner_invocation_mismatches = runner_invocation_errors()
+    apalache_typecheck_default_mismatches = apalache_typecheck_default_errors()
     workflow_entrypoint_mismatches = workflow_entrypoint_errors()
     command_shape_mismatches: list[str] = []
     for path in (FAST_CI, EXPECTED_FAILURE_CI, NIGHTLY_WORKFLOW, README):
@@ -3754,6 +3870,15 @@ def main() -> int:
     apalache_only_readme_mismatches = required_text_errors(
         README,
         APALACHE_ONLY_PR_MODE_README_SNIPPETS,
+        "Sumeragi formal README",
+    )
+    apalache_typecheck_only_mismatches = apalache_typecheck_only_mode_errors(
+        set(all_modes_to_resolve) | exact_runner_modes,
+        apalache_cases,
+    )
+    apalache_typecheck_only_readme_mismatches = required_text_errors(
+        README,
+        APALACHE_TYPECHECK_ONLY_README_SNIPPETS,
         "Sumeragi formal README",
     )
     tlc_modes_to_resolve = readme_fast_table_set | readme_tlc_set | readme_bug_modes
@@ -4038,11 +4163,27 @@ def main() -> int:
             "Sumeragi formal runner invocations do not bind selected proof inputs:\n"
             + format_items(runner_invocation_mismatches)
         )
+    if apalache_typecheck_default_mismatches:
+        errors.append(
+            "Sumeragi Apalache typecheck-only default is miswired:\n"
+            + format_items(apalache_typecheck_default_mismatches)
+        )
     errors.extend(pr_tlc_cross_check_mismatches)
     if apalache_only_readme_mismatches:
         errors.append(
             "Sumeragi formal README is missing Apalache-only PR mode documentation:\n"
             + format_items(apalache_only_readme_mismatches)
+        )
+    if apalache_typecheck_only_mismatches:
+        errors.append(
+            "Sumeragi Apalache typecheck-only modes are miswired:\n"
+            + format_items(apalache_typecheck_only_mismatches)
+        )
+    if apalache_typecheck_only_readme_mismatches:
+        errors.append(
+            "Sumeragi formal README is missing Apalache typecheck-only "
+            "documentation:\n"
+            + format_items(apalache_typecheck_only_readme_mismatches)
         )
     if missing_tlc_runner_modes:
         errors.append(

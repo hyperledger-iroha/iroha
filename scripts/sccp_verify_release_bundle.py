@@ -427,7 +427,10 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
 ];""",
             "pub const SCCP_NEXUS_FINALITY_CHAIN_ID_V1: &str =",
             "00000000-0000-0000-0000-000000000753",
-            "proof.chain_id != SCCP_NEXUS_FINALITY_CHAIN_ID_V1",
+            "pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str =",
+            "809574f5-fee7-5e69-bfcf-52451e42d50f",
+            "!matches!(",
+            "SCCP_NEXUS_FINALITY_CHAIN_ID_V1 | SCCP_TAIRA_FINALITY_CHAIN_ID_V1",
             "accepted non-canonical Nexus finality chain id",
         ),
     ),
@@ -4043,6 +4046,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_release_bundle_source_gate_requirement_failures_are_bounded",
             "test_release_bundle_source_gate_audit_key_failures_are_bounded",
             "test_release_bundle_source_gate_hash_key_failures_are_bounded",
+            "test_release_bundle_source_gate_hash_key_non_string_returns_are_bounded",
             "test_release_bundle_canonical_fixed_hex_parser_failures_are_bounded",
             "public crypto route-canary transcript template replays cover every launch domain",
             "public crypto source-record template replays hit direct row validators",
@@ -12851,6 +12855,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_replay",
             "test_release_bundle_source_gate_audit_key_failures_are_bounded",
             "test_release_bundle_source_gate_hash_key_failures_are_bounded",
+            "test_release_bundle_source_gate_hash_key_non_string_returns_are_bounded",
             "evm_message_proof_accepted_transaction for finalized ",
             "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
@@ -16384,7 +16389,10 @@ def _source_adapter_gate_hash_key_for_domain_chain_or_errors(
     """Return source-gate hash-key role or a bounded verifier blocker."""
 
     try:
-        return _source_adapter_gate_hash_key_for_domain_chain(domain, chain), []
+        key = _source_adapter_gate_hash_key_for_domain_chain(domain, chain)
+        if key is not None and not isinstance(key, str):
+            raise TypeError("source adapter gate hash key must be a string")
+        return key, []
     except (SystemExit, RuntimeError, TypeError, ValueError):
         return None, [f"{label} source adapter gate hash-key validation failed"]
 
@@ -20870,9 +20878,14 @@ def _active_launch_lane(evidence: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _decoded_public_blocker_text(value: str) -> str:
-    decoded = html_unescape(value)
-    for _ in range(3):
-        next_decoded = unquote(decoded)
+    decoded = value
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        for _percent_pass in range(3):
+            next_percent_decoded = unquote(next_decoded)
+            if next_percent_decoded == next_decoded:
+                break
+            next_decoded = next_percent_decoded
         if next_decoded == decoded:
             break
         decoded = next_decoded
