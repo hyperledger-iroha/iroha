@@ -86,8 +86,10 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             throw error
         }
         switch value {
-        case "ios", "android":
-            return value
+        case "ios", "ios-appattest", "ios-app-attest":
+            return "ios"
+        case "android", "android-keymint":
+            return "android"
         default:
             throw error
         }
@@ -128,7 +130,7 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard binding.platform == Self.platform else {
+        guard Self.isSupportedPlatform(binding.platform) else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         guard !accountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -192,7 +194,7 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard proof.platform == Self.platform else {
+        guard Self.isSupportedPlatform(proof.platform) else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         let metadata = try requireMetadata(binding)
@@ -641,6 +643,15 @@ public struct IosOfflineProofVerifier {
     private static let attestationAuthDataPrefixSize = attestationAuthDataFixedSize + aaguidSize + 2
     private static let assertionAuthDataSize = 37
     private static let flagAttestedCredentialData = 0x40
+
+    private static func isSupportedPlatform(_ platform: String) -> Bool {
+        switch platform {
+        case "ios", "ios-appattest", "ios-app-attest":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 public extension IosOfflineProofVerifier {
@@ -648,6 +659,18 @@ public extension IosOfflineProofVerifier {
         let attestation = try decodeAttestationObject(attestationReportBase64)
         let authData = try parseAttestationAuthData(attestation.authData)
         return authData.rpIdHash.hexStringLowercased()
+    }
+
+    func captureAttestationCredentialPublicKeyBase64(_ attestationReportBase64: String) throws -> String {
+        let attestation = try decodeAttestationObject(attestationReportBase64)
+        let authData = try parseAttestationAuthData(attestation.authData)
+        let publicKey = try credentialPublicKey(from: authData.credentialPublicKey)
+        guard let representation = publicKeyRepresentation(publicKey), !representation.isEmpty else {
+            throw OfflineProofVerifierError.invalidBinding(
+                "Offline device binding attestation public key is invalid."
+            )
+        }
+        return representation.base64EncodedString()
     }
 }
 
@@ -678,7 +701,7 @@ public struct AndroidOfflineProofVerifier {
     }
 
     public func verifyDeviceBinding(_ binding: ToriiOfflineDeviceBinding) throws {
-        guard binding.platform == Self.platform else {
+        guard Self.isSupportedPlatform(binding.platform) else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         guard !binding.attestationKeyId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -766,7 +789,7 @@ public struct AndroidOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard proof.platform == Self.platform else {
+        guard Self.isSupportedPlatform(proof.platform) else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         guard binding.attestationKeyId.caseInsensitiveCompare(proof.attestationKeyId) == .orderedSame else {
@@ -881,6 +904,15 @@ public struct AndroidOfflineProofVerifier {
     private static let keyAttestationOID = "1.3.6.1.4.1.11129.2.1.17"
     private static let securityLevelTrustedEnvironment = 1
     private static let securityLevelStrongBox = 2
+
+    private static func isSupportedPlatform(_ platform: String) -> Bool {
+        switch platform {
+        case "android", "android-keymint":
+            return true
+        default:
+            return false
+        }
+    }
     private static let androidKeyAttestationRootCAPEM = """
     -----BEGIN CERTIFICATE-----
     MIIFHDCCAwSgAwIBAgIJAPHBcqaZ6vUdMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV

@@ -39,7 +39,7 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
-    kura::{BlockCount, Kura},
+    kura::{BlockCount, Error as KuraError, Kura},
     nexus::space_directory::SpaceDirectoryManifestRecord,
     query::store::LiveQueryStoreHandle,
     state::{
@@ -1097,11 +1097,24 @@ fn restore_space_directory_manifests_from_kura(
 fn reconcile_snapshot_hash_height_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     block_count: usize,
-    _kura: &Kura,
-    _hard_fork_snapshot_bootstrap: bool,
+    kura: &Kura,
+    hard_fork_snapshot_bootstrap: bool,
 ) -> Result<(), TryReadError> {
     let snapshot_height = snapshot_hashes.len();
     if snapshot_height <= block_count {
+        return Ok(());
+    }
+
+    if hard_fork_snapshot_bootstrap {
+        let extended = kura
+            .extend_hash_only_prefix_from_snapshot(snapshot_hashes)
+            .map_err(TryReadError::Kura)?;
+        iroha_logger::warn!(
+            snapshot_height,
+            previous_kura_height = block_count,
+            extended,
+            "hard-fork snapshot bootstrap: accepted audited snapshot ahead of Kura block bodies"
+        );
         return Ok(());
     }
 
@@ -1241,12 +1254,6 @@ fn try_read_snapshot_bundle(
         });
     }
     let snapshot_hashes = state.committed_block_hashes_snapshot();
-    reconcile_snapshot_hash_height_with_kura(
-        &snapshot_hashes,
-        block_count,
-        kura,
-        hard_fork_snapshot_bootstrap_enabled(),
-    )?;
     let snapshot_height = snapshot_hashes.len();
     if snapshot_height > 0
         && !has_offline_note_replay_keys
@@ -1254,6 +1261,18 @@ fn try_read_snapshot_bundle(
     {
         return Err(TryReadError::MissingOfflineNoteReplayKeys { snapshot_height });
     }
+    if snapshot_height > block_count
+        && hard_fork_snapshot_bootstrap_enabled()
+        && !has_space_directory_manifest_section
+    {
+        return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
+    }
+    reconcile_snapshot_hash_height_with_kura(
+        &snapshot_hashes,
+        block_count,
+        kura,
+        hard_fork_snapshot_bootstrap_enabled(),
+    )?;
     let hash_reconcile_started_at = Instant::now();
     reconcile_snapshot_hashes_with_kura(
         &mut state,
@@ -1906,6 +1925,8 @@ pub enum TryReadError {
         /// Height recorded by the legacy snapshot.
         snapshot_height: usize,
     },
+    /// Failed to reconcile snapshot block hashes with Kura
+    Kura(#[source] KuraError),
     /// Failed to reconcile snapshot state with Kura while committing a block revert
     StateCommit(TransactionsBlockError),
 }
@@ -2918,8 +2939,12 @@ mod tests {
     }
 
     #[test]
-    async fn hard_fork_snapshot_hash_reconcile_rejects_state_ahead_of_kura() {
-        let kura = Kura::blank_kura_for_testing();
+    async fn hard_fork_snapshot_hash_reconcile_extends_state_ahead_of_kura() {
+        let tmp_root = tempdir().unwrap();
+        let kura_store_dir = tmp_root.path().join("kura");
+        let lane_config = LaneConfig::default();
+        let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
         let mut state = state_factory_with_kura(Arc::clone(&kura));
         let block = signed_block_with_transaction(accepted_log_transaction("canonical"));
         let canonical_hash = block.hash();
@@ -2937,18 +2962,19 @@ mod tests {
             }
         ));
 
-        let err = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, true)
-            .expect_err("hard-fork snapshot ahead of Kura must also be rejected");
-        assert!(matches!(
-            err,
-            TryReadError::MismatchedHeight {
-                snapshot_height: 2,
-                kura_height: 1,
-            }
-        ));
+        reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, true)
+            .expect("hard-fork snapshot ahead of Kura should extend hash-only prefix");
 
-        reconcile_snapshot_hash_height_with_kura(&[canonical_hash], 1, &kura, true)
-            .expect("hard-fork snapshot at durable Kura height should be accepted");
+        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(
+            kura.block_hash_at_height(nonzero!(2_usize)),
+            Some(extra_hash)
+        );
+        assert!(
+            kura.get_block(nonzero!(2_usize)).is_none(),
+            "snapshot-extended tail should not invent a block body"
+        );
+        assert_eq!(kura.durable_blocks_count(), 2);
     }
 
     #[test]

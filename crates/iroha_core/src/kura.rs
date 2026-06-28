@@ -2235,8 +2235,19 @@ impl Kura {
 
     fn prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
         let blocks_dir = entry.blocks_dir(&self.store_root);
-        let mut block_store = BlockStore::new(&blocks_dir);
-        block_store.create_files_if_they_do_not_exist()?;
+        let active = {
+            let active_dir = self.active_blocks_dir.lock();
+            blocks_dir == *active_dir
+        };
+        if active {
+            let _write_guard = self.block_store_write_lock.lock();
+            self.block_store
+                .lock()
+                .create_files_if_they_do_not_exist()?;
+        } else {
+            let mut block_store = BlockStore::new(&blocks_dir);
+            block_store.create_files_if_they_do_not_exist()?;
+        }
 
         let merge_path = entry.merge_log_path(&self.store_root);
         if let Some(parent) = merge_path.parent() {
@@ -2565,18 +2576,34 @@ impl Kura {
 
     fn init_hash_only_hard_fork_mode(
         block_store: &mut BlockStore,
-        block_index_count: usize,
+        mut block_index_count: usize,
         hard_fork_hash_only_block_count: usize,
     ) -> Result<ChainValidation, Error> {
-        let block_hashes_count: usize = block_store
+        let mut block_hashes_count: usize = block_store
             .read_hashes_count()?
             .try_into()
             .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
-        if block_hashes_count != block_index_count {
-            return Err(Error::HardForkSnapshotBootstrapHashHeightMismatch {
-                index_count: block_index_count,
-                hashes_count: block_hashes_count,
-            });
+        let mut repaired_height_mismatch = false;
+        if block_hashes_count > block_index_count {
+            warn!(
+                hashes_count = block_hashes_count,
+                index_count = block_index_count,
+                "hard-fork snapshot bootstrap: hashes journal exceeds durable index; truncating hashes to durable height"
+            );
+            block_store.truncate_hashes_to_count(block_index_count as u64)?;
+            block_store.truncate_data_to_index(block_index_count as u64)?;
+            block_hashes_count = block_index_count;
+            repaired_height_mismatch = true;
+        } else if block_hashes_count < block_index_count {
+            warn!(
+                hashes_count = block_hashes_count,
+                index_count = block_index_count,
+                "hard-fork snapshot bootstrap: durable index exceeds hashes journal; truncating index and data to hashes height"
+            );
+            block_store.write_index_count(block_hashes_count as u64)?;
+            block_store.truncate_data_to_index(block_hashes_count as u64)?;
+            block_index_count = block_hashes_count;
+            repaired_height_mismatch = true;
         }
 
         let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
@@ -2587,7 +2614,7 @@ impl Kura {
             );
             return Ok(ChainValidation {
                 hashes: expected_hashes,
-                truncated: false,
+                truncated: repaired_height_mismatch,
                 hash_mismatch: false,
                 hard_fork_hash_only_block_count: block_index_count,
             });
@@ -2607,6 +2634,7 @@ impl Kura {
         if validation.truncated || validation.hash_mismatch {
             block_store.overwrite_block_hashes(&validation.hashes)?;
         }
+        validation.truncated |= repaired_height_mismatch;
         info!(
             legacy_blocks = validation.hard_fork_hash_only_block_count,
             validated_blocks = validation
@@ -3196,10 +3224,18 @@ impl Kura {
                     return None;
                 }
             };
-            let BlockIndex { start, length } = index;
             let is_evicted = index.is_evicted();
+            let BlockIndex { start, length } = index;
 
             if length == 0 {
+                if is_evicted && self.is_hard_fork_hash_only_block(block_index) {
+                    debug!(
+                        block_index,
+                        height = block_index.saturating_add(1),
+                        "hard-fork snapshot bootstrap: legacy block body is unavailable"
+                    );
+                    return None;
+                }
                 error!(block_index, "Encountered zero-length block entry");
                 return None;
             }
@@ -5074,6 +5110,97 @@ impl Kura {
             .lock()
             .get(height.get().saturating_sub(1))
             .map(|(hash, _)| *hash)
+    }
+
+    /// Extend Kura's canonical hash chain using an audited hard-fork snapshot.
+    ///
+    /// The snapshot payload is the source of truth for hashes above the durable block body log.
+    /// Missing bodies are persisted as hash-only placeholders so the next committed block can
+    /// append at the snapshot height without replaying legacy blocks.
+    pub fn extend_hash_only_prefix_from_snapshot(
+        &self,
+        snapshot_hashes: &[HashOf<BlockHeader>],
+    ) -> Result<usize> {
+        let snapshot_height = snapshot_hashes.len();
+        let current_height = self.blocks_count();
+        if snapshot_height <= current_height {
+            return Ok(0);
+        }
+
+        {
+            let block_data = self.block_data.lock();
+            for (idx, (kura_hash, _)) in block_data.iter().enumerate() {
+                let Some(snapshot_hash) = snapshot_hashes.get(idx).copied() else {
+                    return Err(Error::BlockHeightGap {
+                        expected_next_height: u64::try_from(idx.saturating_add(1))?,
+                        actual_height: u64::try_from(snapshot_height)?,
+                    });
+                };
+                if *kura_hash != snapshot_hash {
+                    return Err(Error::BlockHeightConflict {
+                        height: u64::try_from(idx.saturating_add(1))?,
+                        expected: *kura_hash,
+                        actual: snapshot_hash,
+                    });
+                }
+            }
+        }
+
+        let _write_guard = self.block_store_write_lock.lock();
+        let mut block_store = self.block_store.lock();
+        for (idx, hash) in snapshot_hashes
+            .iter()
+            .copied()
+            .enumerate()
+            .skip(current_height)
+        {
+            let zero_based_height = u64::try_from(idx)?;
+            block_store.write_block_hash(zero_based_height, hash)?;
+            block_store.write_block_index(zero_based_height, EVICTED_BLOCK_START, 0)?;
+        }
+        block_store.publish_commit_marker(u64::try_from(snapshot_height)?)?;
+        drop(block_store);
+
+        let extended_from;
+        {
+            let mut block_data = self.block_data.lock();
+            extended_from = block_data.len();
+            for (idx, (kura_hash, _)) in block_data.iter().enumerate() {
+                let snapshot_hash = snapshot_hashes[idx];
+                if *kura_hash != snapshot_hash {
+                    return Err(Error::BlockHeightConflict {
+                        height: u64::try_from(idx.saturating_add(1))?,
+                        expected: *kura_hash,
+                        actual: snapshot_hash,
+                    });
+                }
+            }
+            block_data.extend(
+                snapshot_hashes[extended_from..]
+                    .iter()
+                    .copied()
+                    .map(|hash| (hash, None)),
+            );
+        }
+
+        for (idx, hash) in snapshot_hashes
+            .iter()
+            .copied()
+            .enumerate()
+            .skip(extended_from)
+        {
+            self.set_block_height_index_entry(idx.saturating_add(1), hash);
+        }
+        self.hard_fork_hash_only_block_count
+            .store(snapshot_height, Ordering::Relaxed);
+        let added = snapshot_height.saturating_sub(extended_from);
+        info!(
+            from_height = extended_from.saturating_add(1),
+            snapshot_height,
+            added,
+            "hard-fork snapshot bootstrap: extended Kura hash-only prefix from audited snapshot"
+        );
+        Ok(added)
     }
 }
 
@@ -7927,7 +8054,20 @@ impl BlockStore {
         Ok(aligned / SIZE_OF_BLOCK_HASH)
     }
 
-    fn data_backed_count(&mut self, mut candidate: u64, hashes_count: u64) -> Result<u64> {
+    fn data_backed_count(
+        &mut self,
+        mut candidate: u64,
+        hashes_count: u64,
+        allow_hash_only_tail: bool,
+    ) -> Result<u64> {
+        if candidate > hashes_count {
+            warn!(
+                index_count = candidate,
+                hashes_count,
+                "block store index exceeds hash journal; capping durable count to hashes height"
+            );
+            candidate = hashes_count;
+        }
         if candidate == 0 {
             return Ok(0);
         }
@@ -7940,6 +8080,9 @@ impl BlockStore {
             match self.read_block_index(candidate - 1) {
                 Ok(index) => {
                     if index.is_evicted() {
+                        if allow_hash_only_tail && index.length == 0 && candidate <= hashes_count {
+                            break;
+                        }
                         if index.length == 0
                             || index.length > STRICT_INIT_MAX_BLOCK_BYTES
                             || candidate > hashes_count
@@ -8005,7 +8148,11 @@ impl BlockStore {
             aligned / BlockIndex::SIZE
         };
         let hashes_count = self.align_hashes_len()?;
-        let data_backed_count = self.data_backed_count(logical_count, hashes_count)?;
+        let data_backed_count = self.data_backed_count(
+            logical_count,
+            hashes_count,
+            hard_fork_snapshot_bootstrap_enabled(),
+        )?;
         if matches!(self.fsync.mode, FsyncMode::Off) {
             self.write_commit_marker(data_backed_count)?;
             self.truncate_hashes_to_count(data_backed_count)?;
@@ -8101,6 +8248,18 @@ impl BlockStore {
         self.commit_marker_count = count;
         self.commit_marker_pending = None;
         Ok(())
+    }
+
+    fn publish_commit_marker(&mut self, count: u64) -> Result<()> {
+        self.commit_marker_pending = Some(count);
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            self.write_commit_marker(count)?;
+            self.commit_marker_count = count;
+            self.commit_marker_pending = None;
+            return Ok(());
+        }
+        self.mark_fsync_pending();
+        self.flush_pending_fsync(true)
     }
 
     fn sync_target(
@@ -9116,6 +9275,7 @@ mod tests {
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
+        block::BlockHeader,
         consensus::Qc,
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
@@ -15793,6 +15953,130 @@ mod tests {
         assert_eq!(validation.hard_fork_hash_only_block_count, 2);
         assert_eq!(store.read_index_count().unwrap(), 3);
         assert_eq!(store.read_hashes_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut store = new_block_store(&temp_dir);
+        let snapshot_tail_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8a; 32]));
+
+        store.write_block_hash(2, snapshot_tail_hash).unwrap();
+        store.write_block_index(2, EVICTED_BLOCK_START, 0).unwrap();
+
+        assert_eq!(store.read_index_count().unwrap(), 3);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+        assert_eq!(
+            store.data_backed_count(3, 3, false).unwrap(),
+            2,
+            "normal recovery should prune hash-only placeholder tails"
+        );
+        assert_eq!(
+            store.data_backed_count(3, 3, true).unwrap(),
+            3,
+            "hard-fork bootstrap should preserve audited hash-only placeholder tails"
+        );
+    }
+
+    #[test]
+    fn extend_hash_only_prefix_publishes_marker_when_fsync_off() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 2);
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Off;
+        let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+        assert_eq!(count, 2);
+
+        let mut snapshot_hashes = vec![
+            kura.get_block_hash(nonzero!(1_usize)).unwrap(),
+            kura.get_block_hash(nonzero!(2_usize)).unwrap(),
+        ];
+        let snapshot_tail_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9b; 32]));
+        snapshot_hashes.push(snapshot_tail_hash);
+
+        assert_eq!(
+            kura.extend_hash_only_prefix_from_snapshot(&snapshot_hashes)
+                .unwrap(),
+            1
+        );
+        assert_eq!(kura.blocks_count(), 3);
+        assert!(kura.get_block(nonzero!(3_usize)).is_none());
+
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
+        assert_eq!(reopened.read_index_count().unwrap(), 3);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 3);
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 3);
+        let marker = reopened
+            .read_commit_marker()
+            .unwrap()
+            .expect("commit marker");
+        assert_eq!(marker.count, 3);
+        assert_eq!(
+            reopened.read_block_index(2).unwrap(),
+            (EVICTED_BLOCK_START, 0)
+        );
+    }
+
+    #[test]
+    fn hard_fork_init_repairs_index_tail_beyond_hash_journal() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+        let mut store = new_block_store(&temp_dir);
+        let retained_data_len = store.data_end_for_index_prefix(3).unwrap();
+
+        store.truncate_hashes_to_count(3).unwrap();
+        assert_eq!(store.read_index_count().unwrap(), 4);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+        assert!(store.data_file_len().unwrap() > retained_data_len);
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2).unwrap();
+
+        assert!(validation.truncated);
+        assert_eq!(validation.hashes.len(), 3);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 2);
+        assert_eq!(store.read_index_count().unwrap(), 3);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+        assert_eq!(store.data_file_len().unwrap(), retained_data_len);
+    }
+
+    #[test]
+    fn hard_fork_init_truncates_hash_tail_beyond_index() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 3);
+        let mut store = new_block_store(&temp_dir);
+
+        store.write_index_count(2).unwrap();
+        assert_eq!(store.read_index_count().unwrap(), 2);
+        assert_eq!(store.read_hashes_count().unwrap(), 3);
+
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1).unwrap();
+
+        assert!(validation.truncated);
+        assert_eq!(validation.hashes.len(), 2);
+        assert_eq!(validation.hard_fork_hash_only_block_count, 1);
+        assert_eq!(store.read_index_count().unwrap(), 2);
+        assert_eq!(store.read_hashes_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+        let mut store = new_block_store(&temp_dir);
+
+        store.truncate_hashes_to_count(3).unwrap();
+        store.write_commit_marker(4).unwrap();
+
+        let mut reopened = new_block_store(&temp_dir);
+        reopened.create_files_if_they_do_not_exist().unwrap();
+
+        assert_eq!(reopened.read_durable_index_count().unwrap(), 3);
+        assert_eq!(reopened.read_index_count().unwrap(), 3);
+        assert_eq!(reopened.read_hashes_count().unwrap(), 3);
     }
 
     #[test]

@@ -44,6 +44,51 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
+    func testCounterpartyVerifierDispatchesCanonicalAbi7PlatformAliases() {
+        for platform in ["ios-appattest", "ios-app-attest"] {
+            let binding = ToriiOfflineDeviceBinding(
+                platform: platform,
+                attestationKeyId: "",
+                deviceId: "ios-device",
+                offlinePublicKey: "",
+                attestationReportBase64: ""
+            )
+
+            XCTAssertThrowsError(
+                try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
+                    accountId: "account",
+                    binding: binding,
+                    expectedChallengeHashHex: nil
+                )
+            ) { error in
+                XCTAssertEqual(
+                    (error as? OfflineProofVerifierError)?.errorDescription,
+                    "Missing offline device binding challenge hash."
+                )
+            }
+        }
+
+        let androidBinding = ToriiOfflineDeviceBinding(
+            platform: "android-keymint",
+            attestationKeyId: "",
+            deviceId: "android-device",
+            offlinePublicKey: "",
+            attestationReportBase64: ""
+        )
+        XCTAssertThrowsError(
+            try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
+                accountId: "account",
+                binding: androidBinding,
+                expectedChallengeHashHex: nil
+            )
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Offline device binding is incomplete."
+            )
+        }
+    }
+
     func testCounterpartyVerifierRejectsPaddedPlatformBeforeDispatch() {
         let binding = ToriiOfflineDeviceBinding(
             platform: " ios",
