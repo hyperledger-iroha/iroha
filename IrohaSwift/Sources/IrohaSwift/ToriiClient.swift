@@ -9303,11 +9303,6 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
 }
 
 public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
-    public let offlineKagemushaAbi7: Bool
-    public let offlineKagemushaAbi7Mode: String
-    public let offlineKagemushaAbi7BridgeAbiVersion: UInt32
-    public let offlineKagemushaAbi7CircuitId: String
-    public let offlineKagemushaAbi7Artifacts: Bool
     public let offlineKagemushaRecursiveCompactAvailable: Bool
     public let offlineKagemushaRecursiveCompactMode: String
     public let offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion: UInt32
@@ -9326,15 +9321,10 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     public let offlineSyncOptional: Bool
 
     public var hasKagemushaRecursiveCompactMetadata: Bool {
-        offlineKagemushaAbi7
-            && offlineKagemushaAbi7Mode == "recursive_compact_v1"
-            && offlineKagemushaAbi7BridgeAbiVersion == 7
-            && offlineKagemushaAbi7CircuitId == "kagemusha-recursive-compact-v1"
-            && offlineKagemushaRecursiveCompactAvailable
-            && offlineKagemushaRecursiveCompactMode == offlineKagemushaAbi7Mode
-            && offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion == offlineKagemushaAbi7BridgeAbiVersion
-            && offlineKagemushaRecursiveCompactCircuitId == offlineKagemushaAbi7CircuitId
-            && offlineKagemushaRecursiveCompactArtifactsAvailable == offlineKagemushaAbi7Artifacts
+        offlineKagemushaRecursiveCompactAvailable
+            && offlineKagemushaRecursiveCompactMode == "recursive_compact_v1"
+            && offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion == 7
+            && offlineKagemushaRecursiveCompactCircuitId == "kagemusha-recursive-compact-v1"
     }
 
     public var hasCanonicalRecursiveVerifierMetadata: Bool {
@@ -9353,11 +9343,11 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case offlineKagemushaAbi7 = "offline_kagemusha_abi7"
-        case offlineKagemushaAbi7Mode = "offline_kagemusha_abi7_mode"
-        case offlineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
-        case offlineKagemushaAbi7CircuitId = "offline_kagemusha_abi7_circuit_id"
-        case offlineKagemushaAbi7Artifacts = "offline_kagemusha_abi7_artifacts"
+        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
+        case removedOfflineKagemushaAbi7Mode = "offline_kagemusha_abi7_mode"
+        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
+        case removedOfflineKagemushaAbi7CircuitId = "offline_kagemusha_abi7_circuit_id"
+        case removedOfflineKagemushaAbi7Artifacts = "offline_kagemusha_abi7_artifacts"
         case offlineKagemushaRecursiveCompactAvailable = "offline_kagemusha_recursive_compact_available"
         case offlineKagemushaRecursiveCompactMode = "offline_kagemusha_recursive_compact_mode"
         case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
@@ -9386,16 +9376,7 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let hasAbi7Family = Self.containsAny(
-            container,
-            keys: [
-                .offlineKagemushaAbi7,
-                .offlineKagemushaAbi7Mode,
-                .offlineKagemushaAbi7BridgeAbiVersion,
-                .offlineKagemushaAbi7CircuitId,
-                .offlineKagemushaAbi7Artifacts
-            ]
-        )
+        try Self.rejectRemovedAbi7Fields(in: container)
         let hasRecursiveCompactFamily = Self.containsAny(
             container,
             keys: [
@@ -9406,57 +9387,10 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
                 .offlineKagemushaRecursiveCompactArtifactsAvailable
             ]
         )
-        guard hasAbi7Family || hasRecursiveCompactFamily else {
-            throw Self.missingKey(.offlineKagemushaAbi7, in: container)
+        guard hasRecursiveCompactFamily else {
+            throw Self.missingKey(.offlineKagemushaRecursiveCompactAvailable, in: container)
         }
-        let abi7Family = hasAbi7Family ? try Self.decodeAbi7Family(from: container) : nil
-        let recursiveCompactFamily = hasRecursiveCompactFamily
-            ? try Self.decodeRecursiveCompactFamily(from: container)
-            : nil
-        if let abi7Family, let recursiveCompactFamily {
-            try Self.requireMatching(
-                abi7Family.available,
-                .offlineKagemushaAbi7,
-                recursiveCompactFamily.available,
-                .offlineKagemushaRecursiveCompactAvailable,
-                in: container
-            )
-            try Self.requireMatching(
-                abi7Family.mode,
-                .offlineKagemushaAbi7Mode,
-                recursiveCompactFamily.mode,
-                .offlineKagemushaRecursiveCompactMode,
-                in: container
-            )
-            try Self.requireMatching(
-                abi7Family.bridgeAbiVersion,
-                .offlineKagemushaAbi7BridgeAbiVersion,
-                recursiveCompactFamily.bridgeAbiVersion,
-                .offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion,
-                in: container
-            )
-            try Self.requireMatching(
-                abi7Family.circuitId,
-                .offlineKagemushaAbi7CircuitId,
-                recursiveCompactFamily.circuitId,
-                .offlineKagemushaRecursiveCompactCircuitId,
-                in: container
-            )
-            try Self.requireMatching(
-                abi7Family.artifacts,
-                .offlineKagemushaAbi7Artifacts,
-                recursiveCompactFamily.artifacts,
-                .offlineKagemushaRecursiveCompactArtifactsAvailable,
-                in: container
-            )
-        }
-        let abi7 = abi7Family ?? recursiveCompactFamily!
-        let recursiveCompact = recursiveCompactFamily ?? abi7Family!
-        offlineKagemushaAbi7 = abi7.available
-        offlineKagemushaAbi7Mode = abi7.mode
-        offlineKagemushaAbi7BridgeAbiVersion = abi7.bridgeAbiVersion
-        offlineKagemushaAbi7CircuitId = abi7.circuitId
-        offlineKagemushaAbi7Artifacts = abi7.artifacts
+        let recursiveCompact = try Self.decodeRecursiveCompactFamily(from: container)
         offlineKagemushaRecursiveCompactAvailable = recursiveCompact.available
         offlineKagemushaRecursiveCompactMode = recursiveCompact.mode
         offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = recursiveCompact.bridgeAbiVersion
@@ -9497,19 +9431,22 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         keys.contains { container.contains($0) }
     }
 
-    private static func decodeAbi7Family(
-        from container: KeyedDecodingContainer<CodingKeys>
-    ) throws -> KagemushaReadinessFamily {
-        KagemushaReadinessFamily(
-            available: try decodeRequiredBool(from: container, forKey: .offlineKagemushaAbi7),
-            mode: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaAbi7Mode),
-            bridgeAbiVersion: try decodeExactPositiveAbiVersion(
-                from: container,
-                forKey: .offlineKagemushaAbi7BridgeAbiVersion
-            ),
-            circuitId: try decodeRequiredExactString(from: container, forKey: .offlineKagemushaAbi7CircuitId),
-            artifacts: try decodeRequiredBool(from: container, forKey: .offlineKagemushaAbi7Artifacts)
-        )
+    private static func rejectRemovedAbi7Fields(
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        for key in [
+            CodingKeys.removedOfflineKagemushaAbi7,
+            .removedOfflineKagemushaAbi7Mode,
+            .removedOfflineKagemushaAbi7BridgeAbiVersion,
+            .removedOfflineKagemushaAbi7CircuitId,
+            .removedOfflineKagemushaAbi7Artifacts
+        ] where container.contains(key) {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
+            )
+        }
     }
 
     private static func decodeRecursiveCompactFamily(
@@ -9567,22 +9504,6 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
             )
         }
         return value
-    }
-
-    private static func requireMatching<T: Equatable>(
-        _ lhs: T,
-        _ lhsKey: CodingKeys,
-        _ rhs: T,
-        _ rhsKey: CodingKeys,
-        in container: KeyedDecodingContainer<CodingKeys>
-    ) throws {
-        guard lhs == rhs else {
-            throw DecodingError.dataCorruptedError(
-                forKey: lhsKey,
-                in: container,
-                debugDescription: "\(lhsKey.stringValue) must match \(rhsKey.stringValue)"
-            )
-        }
     }
 
     private static func decodeExactPositiveAbiVersion(

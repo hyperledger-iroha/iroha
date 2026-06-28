@@ -22740,11 +22740,6 @@ test("queryTriggers rejects unsupported option keys", async () => {
 function canonicalOfflineReadinessPayload(overrides = {}) {
   return {
     offline_telemetry: true,
-    offline_kagemusha_abi7: true,
-    offline_kagemusha_abi7_mode: "recursive_compact_v1",
-    offline_kagemusha_abi7_bridge_abi_version: 7,
-    offline_kagemusha_abi7_circuit_id: "kagemusha-recursive-compact-v1",
-    offline_kagemusha_abi7_artifacts: false,
     offline_kagemusha_recursive_compact_available: true,
     offline_kagemusha_recursive_compact_mode: "recursive_compact_v1",
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 7,
@@ -22754,29 +22749,13 @@ function canonicalOfflineReadinessPayload(overrides = {}) {
   };
 }
 
-const OFFLINE_READINESS_ABI7_FIELDS = [
+const OFFLINE_READINESS_REMOVED_ABI7_FIELDS = [
   "offline_kagemusha_abi7",
   "offline_kagemusha_abi7_mode",
   "offline_kagemusha_abi7_bridge_abi_version",
   "offline_kagemusha_abi7_circuit_id",
   "offline_kagemusha_abi7_artifacts",
 ];
-
-const OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS = [
-  "offline_kagemusha_recursive_compact_available",
-  "offline_kagemusha_recursive_compact_mode",
-  "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-  "offline_kagemusha_recursive_compact_circuit_id",
-  "offline_kagemusha_recursive_compact_artifacts_available",
-];
-
-function omitOfflineReadinessFields(fields) {
-  const payload = canonicalOfflineReadinessPayload();
-  for (const field of fields) {
-    delete payload[field];
-  }
-  return payload;
-}
 
 test("getOfflineReadiness fetches canonical readiness payload", async () => {
   let capturedRequest = null;
@@ -22802,65 +22781,10 @@ test("getOfflineReadiness fetches canonical readiness payload", async () => {
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_note"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_one_use_keys"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(response, "offline_recursive_note_proof"), false);
-
-  for (const aliasOnlyPayload of [
-    omitOfflineReadinessFields(OFFLINE_READINESS_ABI7_FIELDS),
-    omitOfflineReadinessFields(OFFLINE_READINESS_RECURSIVE_COMPACT_FIELDS),
-  ]) {
-    const aliasClient = new ToriiClient(BASE_URL, {
-      fetchImpl: async () =>
-        createResponse({
-          status: 200,
-          jsonData: aliasOnlyPayload,
-          headers: { "content-type": "application/json" },
-        }),
-    });
-    assert.deepEqual(await aliasClient.getOfflineReadiness(), readiness);
-  }
 });
 
 test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
   const cases = [
-    [
-      "offline_kagemusha_abi7",
-      "true",
-      /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
-    ],
-    [
-      "offline_kagemusha_abi7_mode",
-      " recursive_compact_v1",
-      /offline readiness response\.offline_kagemusha_abi7_mode must not contain surrounding whitespace/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      0,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      -1,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      7.5,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be a positive integer/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      "007",
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      " 7",
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string/,
-    ],
-    [
-      "offline_kagemusha_abi7_bridge_abi_version",
-      2147483648,
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range/,
-    ],
     [
       "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
       0,
@@ -22903,42 +22827,26 @@ test("getOfflineReadiness rejects noncanonical ABI versions", async () => {
       `${field}=${String(value)} should be rejected`,
     );
   }
+});
 
-  for (const [override, pattern] of [
-    [
-      { offline_kagemusha_recursive_compact_available: false },
-      /offline readiness response\.offline_kagemusha_abi7 must match offline readiness response\.offline_kagemusha_recursive_compact_available/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_mode: "recursive_compact_v2" },
-      /offline readiness response\.offline_kagemusha_abi7_mode must match offline readiness response\.offline_kagemusha_recursive_compact_mode/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_required_native_bridge_abi_version: 8 },
-      /offline readiness response\.offline_kagemusha_abi7_bridge_abi_version must match offline readiness response\.offline_kagemusha_recursive_compact_required_native_bridge_abi_version/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_circuit_id: "kagemusha-recursive-compact-v2" },
-      /offline readiness response\.offline_kagemusha_abi7_circuit_id must match offline readiness response\.offline_kagemusha_recursive_compact_circuit_id/,
-    ],
-    [
-      { offline_kagemusha_recursive_compact_artifacts_available: true },
-      /offline readiness response\.offline_kagemusha_abi7_artifacts must match offline readiness response\.offline_kagemusha_recursive_compact_artifacts_available/,
-    ],
-  ]) {
+test("getOfflineReadiness rejects removed ABI-7 readiness fields", async () => {
+  for (const field of OFFLINE_READINESS_REMOVED_ABI7_FIELDS) {
     const client = new ToriiClient(BASE_URL, {
       fetchImpl: async () =>
         createResponse({
           status: 200,
-          jsonData: canonicalOfflineReadinessPayload(override),
+          jsonData: canonicalOfflineReadinessPayload({ [field]: true }),
           headers: { "content-type": "application/json" },
         }),
     });
-    await assert.rejects(() => client.getOfflineReadiness(), pattern);
+    await assert.rejects(
+      () => client.getOfflineReadiness(),
+      new RegExp(`offline readiness response\\.${field} is not supported; use offline_kagemusha_recursive_compact_\\*`),
+    );
   }
 });
 
-test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
+test("getOfflineReadiness rejects payload missing recursive compact family", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
@@ -22957,7 +22865,7 @@ test("getOfflineReadiness rejects legacy-only readiness payload", async () => {
 
   await assert.rejects(
     () => client.getOfflineReadiness(),
-    /offline readiness response\.offline_kagemusha_abi7 must be boolean/,
+    /offline readiness response\.offline_kagemusha_recursive_compact_available must be boolean/,
   );
 });
 

@@ -13312,11 +13312,6 @@ export interface SubscriptionActionResponse {
 }
 
 export interface ToriiOfflineReadinessResponse {
-  offline_kagemusha_abi7: boolean;
-  offline_kagemusha_abi7_mode: string;
-  offline_kagemusha_abi7_bridge_abi_version: number;
-  offline_kagemusha_abi7_circuit_id: string;
-  offline_kagemusha_abi7_artifacts: boolean;
   offline_kagemusha_recursive_compact_available: boolean;
   offline_kagemusha_recursive_compact_mode: string;
   offline_kagemusha_recursive_compact_required_native_bridge_abi_version: number;

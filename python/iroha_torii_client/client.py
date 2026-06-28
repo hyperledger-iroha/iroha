@@ -2536,11 +2536,6 @@ class RbcSample:
 class OfflineReadiness:
     """Offline readiness advertised by Torii."""
 
-    offline_kagemusha_abi7: bool
-    offline_kagemusha_abi7_mode: str
-    offline_kagemusha_abi7_bridge_abi_version: int
-    offline_kagemusha_abi7_circuit_id: str
-    offline_kagemusha_abi7_artifacts: bool
     offline_kagemusha_recursive_compact_available: bool
     offline_kagemusha_recursive_compact_mode: str
     offline_kagemusha_recursive_compact_required_native_bridge_abi_version: int
@@ -2590,37 +2585,19 @@ class OfflineReadiness:
                 raise RuntimeError(f"{context} must fit in signed 32-bit range")
             return result
 
-        abi7_fields = (
+        removed_abi7_fields = (
             "offline_kagemusha_abi7",
             "offline_kagemusha_abi7_mode",
             "offline_kagemusha_abi7_bridge_abi_version",
             "offline_kagemusha_abi7_circuit_id",
             "offline_kagemusha_abi7_artifacts",
         )
-        recursive_compact_fields = (
-            "offline_kagemusha_recursive_compact_available",
-            "offline_kagemusha_recursive_compact_mode",
-            "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-            "offline_kagemusha_recursive_compact_circuit_id",
-            "offline_kagemusha_recursive_compact_artifacts_available",
-        )
-        has_abi7_family = any(field in payload for field in abi7_fields)
-        has_recursive_compact_family = any(
-            field in payload for field in recursive_compact_fields
-        )
-        if not has_abi7_family and not has_recursive_compact_family:
-            required_bool("offline_kagemusha_abi7")
-
-        def decode_abi7_family() -> Dict[str, Any]:
-            return {
-                "available": required_bool("offline_kagemusha_abi7"),
-                "mode": required_string("offline_kagemusha_abi7_mode"),
-                "bridge_abi_version": required_positive_int(
-                    "offline_kagemusha_abi7_bridge_abi_version"
-                ),
-                "circuit_id": required_string("offline_kagemusha_abi7_circuit_id"),
-                "artifacts": required_bool("offline_kagemusha_abi7_artifacts"),
-            }
+        for field in removed_abi7_fields:
+            if field in payload:
+                raise RuntimeError(
+                    f"offline readiness.{field} is not supported; "
+                    "use offline_kagemusha_recursive_compact_*"
+                )
 
         def decode_recursive_compact_family() -> Dict[str, Any]:
             return {
@@ -2639,46 +2616,7 @@ class OfflineReadiness:
                 ),
             }
 
-        abi7_family = decode_abi7_family() if has_abi7_family else None
-        recursive_compact_family = (
-            decode_recursive_compact_family() if has_recursive_compact_family else None
-        )
-        if abi7_family is not None and recursive_compact_family is not None:
-            for property_name, abi7_field, recursive_compact_field in (
-                (
-                    "available",
-                    "offline_kagemusha_abi7",
-                    "offline_kagemusha_recursive_compact_available",
-                ),
-                (
-                    "mode",
-                    "offline_kagemusha_abi7_mode",
-                    "offline_kagemusha_recursive_compact_mode",
-                ),
-                (
-                    "bridge_abi_version",
-                    "offline_kagemusha_abi7_bridge_abi_version",
-                    "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
-                ),
-                (
-                    "circuit_id",
-                    "offline_kagemusha_abi7_circuit_id",
-                    "offline_kagemusha_recursive_compact_circuit_id",
-                ),
-                (
-                    "artifacts",
-                    "offline_kagemusha_abi7_artifacts",
-                    "offline_kagemusha_recursive_compact_artifacts_available",
-                ),
-            ):
-                if abi7_family[property_name] != recursive_compact_family[property_name]:
-                    raise RuntimeError(
-                        f"offline readiness.{abi7_field} must match "
-                        f"offline readiness.{recursive_compact_field}"
-                    )
-
-        abi7 = abi7_family or recursive_compact_family
-        recursive_compact = recursive_compact_family or abi7_family
+        recursive_compact = decode_recursive_compact_family()
 
         def optional_bool(field: str) -> Optional[bool]:
             if field not in payload:
@@ -2686,11 +2624,6 @@ class OfflineReadiness:
             return ToriiClient._coerce_bool(payload.get(field), f"offline readiness.{field}")
 
         return cls(
-            offline_kagemusha_abi7=abi7["available"],
-            offline_kagemusha_abi7_mode=abi7["mode"],
-            offline_kagemusha_abi7_bridge_abi_version=abi7["bridge_abi_version"],
-            offline_kagemusha_abi7_circuit_id=abi7["circuit_id"],
-            offline_kagemusha_abi7_artifacts=abi7["artifacts"],
             offline_kagemusha_recursive_compact_available=recursive_compact["available"],
             offline_kagemusha_recursive_compact_mode=recursive_compact["mode"],
             offline_kagemusha_recursive_compact_required_native_bridge_abi_version=recursive_compact[

@@ -109,6 +109,7 @@ export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_uaid_portfolio_rejects_padded_asset_id_before_dispatch" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_parses_payload" \
   "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_noncanonical_abi_versions" \
-  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_legacy_only_payload"
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_removed_abi7_fields" \
+  "${ROOT_DIR}/python/iroha_torii_client/tests/test_client.py::test_get_offline_readiness_rejects_missing_recursive_compact_family"
 "${VENV_DIR}/bin/python" -m pytest -q tests/client_ledger_helpers_test.py \
   -k "zk_event_filters_reject_unsupported_backends_before_request or zk_verifying_key_event_filters_reject_malformed_names_before_request or zk_proof_event_filters_reject_malformed_hashes_before_request or zk_raw_event_filters_reject_malformed_privacy_matchers_before_request or zk_raw_event_filters_canonicalize_privacy_matchers_before_request"

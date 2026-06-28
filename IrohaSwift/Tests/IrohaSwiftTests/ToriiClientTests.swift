@@ -9635,14 +9635,9 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessParsesKagemushaAbi7Metadata() async throws {
+    func testGetOfflineReadinessParsesKagemushaRecursiveCompactMetadata() async throws {
         let payload = """
         {
-          "offline_kagemusha_abi7": true,
-          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-          "offline_kagemusha_abi7_bridge_abi_version": "7",
-          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_abi7_artifacts": false,
           "offline_kagemusha_recursive_compact_available": true,
           "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
           "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
@@ -9663,72 +9658,20 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let readiness = try await makeClient().getOfflineReadiness()
-        XCTAssertTrue(readiness.offlineKagemushaAbi7)
-        XCTAssertEqual(readiness.offlineKagemushaAbi7Mode, "recursive_compact_v1")
-        XCTAssertEqual(readiness.offlineKagemushaAbi7BridgeAbiVersion, 7)
-        XCTAssertEqual(readiness.offlineKagemushaAbi7CircuitId, "kagemusha-recursive-compact-v1")
-        XCTAssertFalse(readiness.offlineKagemushaAbi7Artifacts)
         XCTAssertTrue(readiness.offlineKagemushaRecursiveCompactAvailable)
+        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactMode, "recursive_compact_v1")
         XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion, 7)
+        XCTAssertEqual(readiness.offlineKagemushaRecursiveCompactCircuitId, "kagemusha-recursive-compact-v1")
         XCTAssertFalse(readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
         XCTAssertTrue(readiness.offlineTelemetry)
         XCTAssertFalse(readiness.offlineNote)
         XCTAssertFalse(readiness.hasCanonicalRecursiveVerifierMetadata)
         XCTAssertTrue(readiness.hasKagemushaRecursiveCompactMetadata)
-
-        let compactOnlyPayload = """
-        {
-          "offline_kagemusha_recursive_compact_available": true,
-          "offline_kagemusha_recursive_compact_mode": "recursive_compact_v1",
-          "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": 7,
-          "offline_kagemusha_recursive_compact_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_recursive_compact_artifacts_available": false,
-          "offline_telemetry": true
-        }
-        """.data(using: .utf8)!
-        let abi7OnlyPayload = """
-        {
-          "offline_kagemusha_abi7": true,
-          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-          "offline_kagemusha_abi7_bridge_abi_version": "7",
-          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_abi7_artifacts": false,
-          "offline_telemetry": true
-        }
-        """.data(using: .utf8)!
-
-        for aliasPayload in [compactOnlyPayload, abi7OnlyPayload] {
-            StubURLProtocol.handler = { request in
-                XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 200,
-                                               httpVersion: nil,
-                                               headerFields: ["Content-Type": "application/json"])!
-                return (response, aliasPayload)
-            }
-
-            let aliasReadiness = try await makeClient().getOfflineReadiness()
-            XCTAssertTrue(aliasReadiness.offlineKagemushaAbi7)
-            XCTAssertEqual(aliasReadiness.offlineKagemushaAbi7Mode, "recursive_compact_v1")
-            XCTAssertEqual(aliasReadiness.offlineKagemushaAbi7BridgeAbiVersion, 7)
-            XCTAssertEqual(aliasReadiness.offlineKagemushaAbi7CircuitId, "kagemusha-recursive-compact-v1")
-            XCTAssertFalse(aliasReadiness.offlineKagemushaAbi7Artifacts)
-            XCTAssertTrue(aliasReadiness.offlineKagemushaRecursiveCompactAvailable)
-            XCTAssertEqual(aliasReadiness.offlineKagemushaRecursiveCompactMode, "recursive_compact_v1")
-            XCTAssertEqual(aliasReadiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion, 7)
-            XCTAssertEqual(aliasReadiness.offlineKagemushaRecursiveCompactCircuitId, "kagemusha-recursive-compact-v1")
-            XCTAssertFalse(aliasReadiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
-            XCTAssertTrue(aliasReadiness.hasKagemushaRecursiveCompactMetadata)
-        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
-        func payload(abi7Enabled: String = "true",
-                     abi7Mode: String = "\"recursive_compact_v1\"",
-                     abi7: String = "7",
-                     abi7Circuit: String = "\"kagemusha-recursive-compact-v1\"",
-                     abi7Artifacts: String = "false",
+        func payload(extra: String = "",
                      compactAvailable: String = "true",
                      compactMode: String = "\"recursive_compact_v1\"",
                      compact: String = "7",
@@ -9736,11 +9679,7 @@ final class ToriiClientTests: XCTestCase {
                      compactArtifacts: String = "false") -> Data {
             """
             {
-              "offline_kagemusha_abi7": \(abi7Enabled),
-              "offline_kagemusha_abi7_mode": \(abi7Mode),
-              "offline_kagemusha_abi7_bridge_abi_version": \(abi7),
-              "offline_kagemusha_abi7_circuit_id": \(abi7Circuit),
-              "offline_kagemusha_abi7_artifacts": \(abi7Artifacts),
+              \(extra)
               "offline_kagemusha_recursive_compact_available": \(compactAvailable),
               "offline_kagemusha_recursive_compact_mode": \(compactMode),
               "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": \(compact),
@@ -9752,21 +9691,17 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let cases: [(Data, String)] = [
-            (payload(abi7Enabled: "\"true\""), "Expected to decode Bool"),
-            (payload(abi7Mode: "\" recursive_compact_v1\""), "offline_kagemusha_abi7_mode must not contain surrounding whitespace"),
-            (payload(abi7: "0"), "offline_kagemusha_abi7_bridge_abi_version must be a positive integer"),
-            (payload(abi7: "\"007\""), "offline_kagemusha_abi7_bridge_abi_version must be an exact positive integer string"),
-            (payload(abi7: "2147483648"), "offline_kagemusha_abi7_bridge_abi_version must fit in signed 32-bit range"),
             (payload(compact: "0"), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
             (payload(compact: "\" 7\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
+            (payload(compact: "\"007\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
             (payload(compact: "\"2147483648\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
             (payload(compactAvailable: "1"), "Expected to decode Bool"),
             (payload(compactCircuit: "\"kagemusha-recursive-compact-v1 \""), "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace"),
-            (payload(compactAvailable: "false"), "offline_kagemusha_abi7 must match offline_kagemusha_recursive_compact_available"),
-            (payload(compactMode: "\"recursive_compact_v2\""), "offline_kagemusha_abi7_mode must match offline_kagemusha_recursive_compact_mode"),
-            (payload(compact: "8"), "offline_kagemusha_abi7_bridge_abi_version must match offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
-            (payload(compactCircuit: "\"kagemusha-recursive-compact-v2\""), "offline_kagemusha_abi7_circuit_id must match offline_kagemusha_recursive_compact_circuit_id"),
-            (payload(compactArtifacts: "true"), "offline_kagemusha_abi7_artifacts must match offline_kagemusha_recursive_compact_artifacts_available")
+            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_mode\": \"recursive_compact_v1\","), "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_circuit_id\": \"kagemusha-recursive-compact-v1\","), "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_artifacts\": false,"), "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*")
         ]
 
         for (body, expectedMessage) in cases {

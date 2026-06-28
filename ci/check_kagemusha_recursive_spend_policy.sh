@@ -319,7 +319,7 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_lineage_witness_helpers_append_record_backed_material",
         "KagemushaRecursiveSpendLineageKeyArtifactsV1",
         "KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1",
-        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1",
+        "pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4",
         "is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len",
         "validate_kagemusha_recursive_spend_lineage_key_artifact_pair",
         "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
@@ -579,8 +579,8 @@ ADVERSARIAL_COVERAGE = {
         "previous_proof_count_mismatch",
     ),
     "crates/iroha_core/src/zk.rs": (
-        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 255;",
-        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 1;",
+        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS: usize = 64;",
+        "pub const KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS: usize = 4;",
         "pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =",
         "fn kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile",
         "fn kagemusha_recursive_spend_instance_values_expose_proof_chain_digest",
@@ -5214,13 +5214,13 @@ TODO_MARKER_RE = re.compile(r"\b(?:TODO|FIXME|XXX|TBD)\b")
 KAGEMUSHA_CONTENT_RE = re.compile(r"kagemusha", re.IGNORECASE)
 ALLOWED_ROADMAP_CSHARP_TODO_RE = re.compile(r"TODO\(C# Windows\)|Windows-machine TODOs?")
 CURRENT_ROADMAP_PROFILE_NEEDLES = (
-    "`255x1` profile source",
-    "`255x1` binary through `--iroha-bin`",
-    "regenerated current `255x1` profile hashes",
+    "`64x4` profile source",
+    "`64x4` binary through `--iroha-bin`",
+    "regenerated current `64x4` profile hashes",
 )
 STALE_ROADMAP_PROFILE_MARKERS = (
-    "`64x4`",
-    "fixed-window-64x4",
+    "`255x1`",
+    "fixed-window-255x1",
 )
 
 
@@ -8205,7 +8205,7 @@ if mode == "--negative-control-core-lineage-profile-split":
 if mode == "--negative-control-roadmap-current-profile-staleness":
     target = "roadmap.md"
     source = read(target)
-    mutated = source.replace("`255x1` profile source", "`64x4` profile source", 1)
+    mutated = source.replace("`64x4` profile source", "`255x1` profile source", 1)
     if mutated == source:
         raise SystemExit("negative control failed: unable to mutate roadmap current profile prose")
     text_overrides[target] = mutated
@@ -8213,7 +8213,7 @@ if mode == "--negative-control-roadmap-current-profile-staleness":
         run_checks()
     except PolicyError as error:
         message = str(error)
-        expected = "roadmap.md still references stale Kagemusha verifier-witness profile marker: `64x4`"
+        expected = "roadmap.md still references stale Kagemusha verifier-witness profile marker: `255x1`"
         if expected not in message:
             raise SystemExit(
                 "negative control failed: roadmap current profile staleness was rejected for the wrong reason: "

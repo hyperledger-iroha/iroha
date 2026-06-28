@@ -3513,7 +3513,7 @@ That batch summary is the host-side evidence surface feeding the private-hop
 recursive compact proof path. The data model now also has a recursive
 aggregation evidence statement that Norito/Poseidon-binds that batch digest and parameter
 fingerprint to the same ordered hop transcript and to the canonical
-`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-255x1` verifier-witness
+`pallas-ipa-transparent-v1/vesta-recursive-fixed-window-64x4` verifier-witness
 profile. It validates mode `2` evidence shape, hop continuity, witness count,
 profile, verifier opening length, fixed-window table schedule/base digests, and
 non-zero batch fields before reserved compact-token projection checks. The Poseidon2
@@ -3561,7 +3561,7 @@ hop: verifier-key commitment, the confidential transfer v2 schema hash, and a
 Poseidon2 hop-domain tag over chain, asset, hop index, roots, nullifiers, output
 commitments, proof hash, public-input digest, and verifier-key binding. The
 helper accepts at most 64 witnesses, matching the compact-token hop cap, and
-uses the 255-by-1 fixed-window Vesta verifier witness profile that covers the
+uses the 64-by-4 fixed-window Vesta verifier witness profile that covers the
 255-bit Pasta scalar width without a trusted setup. Its aggregate digest is
 Poseidon2-backed rather than a generic hash transcript, so the host-side
 reserved evidence path stays aligned with the field-friendly no-trusted-setup
