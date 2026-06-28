@@ -742,21 +742,21 @@ public struct AndroidOfflineProofVerifier {
               isHardwareSecurityLevel(keyDescription.keyMintSecurityLevel) else {
             throw OfflineProofVerifierError.invalidBinding("Offline device binding is not hardware-backed.")
         }
-        let expectedPublicKey = try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
-            binding.offlinePublicKey,
-            error: "Offline device binding public key is invalid."
-        )
         let attestedPublicKey = try OfflineProofVerifierSupport.subjectPublicKeyBytes(
             certificateDER: attestationCertificate.der,
             invalidMessage: "Offline device binding key does not match the attested key."
         )
+        let expectedPublicKey = try expectedAttestedPublicKey(for: binding)
         guard expectedPublicKey == attestedPublicKey else {
             throw OfflineProofVerifierError.invalidBinding(
                 "Offline device binding key does not match the attested key."
             )
         }
-        let expectedKeyId = OfflineProofVerifierSupport.sha256Hex(expectedPublicKey)
-        guard binding.attestationKeyId.caseInsensitiveCompare(expectedKeyId) == .orderedSame else {
+        guard attestationKeyIdMatches(
+            binding.attestationKeyId,
+            expectedPublicKey: expectedPublicKey,
+            platform: binding.platform
+        ) else {
             throw OfflineProofVerifierError.invalidBinding(
                 "Offline device binding attestation key id is invalid."
             )
@@ -773,12 +773,12 @@ public struct AndroidOfflineProofVerifier {
               reportString.hasPrefix(Self.uitestInsecureReportPrefix) else {
             return false
         }
-        let expectedPublicKey = try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
-            binding.offlinePublicKey,
-            error: "Offline device binding public key is invalid."
-        )
-        let expectedKeyId = OfflineProofVerifierSupport.sha256Hex(expectedPublicKey)
-        guard binding.attestationKeyId.caseInsensitiveCompare(expectedKeyId) == .orderedSame else {
+        let expectedPublicKey = try expectedAttestedPublicKey(for: binding)
+        guard attestationKeyIdMatches(
+            binding.attestationKeyId,
+            expectedPublicKey: expectedPublicKey,
+            platform: binding.platform
+        ) else {
             throw OfflineProofVerifierError.invalidBinding(
                 "Offline device binding attestation key id is invalid."
             )
@@ -791,13 +791,16 @@ public struct AndroidOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard binding.platform == Self.platform else {
+        guard Self.isSupportedPlatform(binding.platform),
+              Self.isSupportedPlatform(proof.platform) else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
-        guard proof.platform == Self.platform else {
-            throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
-        }
-        guard binding.attestationKeyId.caseInsensitiveCompare(proof.attestationKeyId) == .orderedSame else {
+        guard binding.platform == proof.platform,
+              attestationKeyIdsMatch(
+                  binding.attestationKeyId,
+                  proof.attestationKeyId,
+                  platform: proof.platform
+              ) else {
             throw OfflineProofVerifierError.invalidProof(
                 "Offline device proof does not match the device binding."
             )
@@ -810,16 +813,84 @@ public struct AndroidOfflineProofVerifier {
             proof.assertionBase64,
             error: "Offline device proof assertion is invalid."
         )
-        let publicKey = try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
-            binding.offlinePublicKey,
-            error: "Offline device binding public key is invalid."
+
+        switch proof.platform {
+        case Self.platform:
+            let publicKey = try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
+                binding.offlinePublicKey,
+                error: "Offline device binding public key is invalid."
+            )
+            guard try OfflineProofVerifierSupport.verifyEd25519Signature(
+                payload: challengeBytes,
+                signature: signatureBytes,
+                rawPublicKey: publicKey
+            ) else {
+                throw OfflineProofVerifierError.invalidProof("Offline device proof assertion is invalid.")
+            }
+        case Self.keyMintPlatform:
+            let publicKey = try keyMintAssertionPublicKey(for: binding)
+            guard attestationKeyIdMatches(
+                binding.attestationKeyId,
+                expectedPublicKey: publicKey,
+                platform: proof.platform
+            ) else {
+                throw OfflineProofVerifierError.invalidProof(
+                    "Offline device proof does not match the device binding."
+                )
+            }
+            guard try OfflineProofVerifierSupport.verifyP256Signature(
+                payload: challengeBytes,
+                signature: signatureBytes,
+                rawPublicKey: publicKey
+            ) else {
+                throw OfflineProofVerifierError.invalidProof("Offline device proof assertion is invalid.")
+            }
+        default:
+            throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
+        }
+    }
+
+    private func expectedAttestedPublicKey(for binding: ToriiOfflineDeviceBinding) throws -> Data {
+        switch binding.platform {
+        case Self.platform:
+            return try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
+                binding.offlinePublicKey,
+                error: "Offline device binding public key is invalid."
+            )
+        case Self.keyMintPlatform:
+            return try keyMintAssertionPublicKey(for: binding)
+        default:
+            throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
+        }
+    }
+
+    private func keyMintAssertionPublicKey(for binding: ToriiOfflineDeviceBinding) throws -> Data {
+        guard let assertionPublicKey = binding.assertionPublicKey,
+              !assertionPublicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OfflineProofVerifierError.invalidBinding(
+                "Offline device binding assertion public key is required for Android KeyMint."
+            )
+        }
+        return try OfflineProofVerifierSupport.decodeRawP256PublicKey(
+            assertionPublicKey,
+            error: "Offline device binding assertion public key is invalid."
         )
-        guard try OfflineProofVerifierSupport.verifyEd25519Signature(
-            payload: challengeBytes,
-            signature: signatureBytes,
-            rawPublicKey: publicKey
-        ) else {
-            throw OfflineProofVerifierError.invalidProof("Offline device proof assertion is invalid.")
+    }
+
+    private func attestationKeyIdMatches(_ keyId: String, expectedPublicKey: Data, platform: String) -> Bool {
+        attestationKeyIdsMatch(
+            keyId,
+            OfflineProofVerifierSupport.sha256Hex(expectedPublicKey),
+            platform: platform
+        )
+    }
+
+    private func attestationKeyIdsMatch(_ lhs: String, _ rhs: String, platform: String) -> Bool {
+        switch platform {
+        case Self.keyMintPlatform:
+            return lhs == rhs
+        default:
+            return lhs.caseInsensitiveCompare(rhs) == .orderedSame
         }
     }
 
@@ -905,13 +976,19 @@ public struct AndroidOfflineProofVerifier {
     ].compactMap { $0 }
 
     private static let platform = "android"
+    private static let keyMintPlatform = "android-keymint"
     private static let uitestInsecureReportPrefix = "e2e-offline-insecure:"
     private static let keyAttestationOID = "1.3.6.1.4.1.11129.2.1.17"
     private static let securityLevelTrustedEnvironment = 1
     private static let securityLevelStrongBox = 2
 
     private static func isSupportedPlatform(_ platform: String) -> Bool {
-        platform == Self.platform
+        switch platform {
+        case Self.platform, Self.keyMintPlatform:
+            return true
+        default:
+            return false
+        }
     }
     private static let androidKeyAttestationRootCAPEM = """
     -----BEGIN CERTIFICATE-----
@@ -1328,6 +1405,16 @@ private enum OfflineProofVerifierSupport {
         throw OfflineProofVerifierError.invalidBinding(error)
     }
 
+    static func decodeRawP256PublicKey(_ value: String, error: String) throws -> Data {
+        let decoded = try decodeBase64(value, error: error)
+        guard decoded.count == 65,
+              decoded.first == 0x04,
+              (try? P256.Signing.PublicKey(x963Representation: decoded)) != nil else {
+            throw OfflineProofVerifierError.invalidBinding(error)
+        }
+        return decoded
+    }
+
     static func verifyEd25519Signature(
         payload: Data,
         signature: Data,
@@ -1335,6 +1422,19 @@ private enum OfflineProofVerifierSupport {
     ) throws -> Bool {
         let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: rawPublicKey)
         return publicKey.isValidSignature(signature, for: payload)
+    }
+
+    static func verifyP256Signature(
+        payload: Data,
+        signature: Data,
+        rawPublicKey: Data
+    ) throws -> Bool {
+        let publicKey = try P256.Signing.PublicKey(x963Representation: rawPublicKey)
+        let signatures = [
+            try? P256.Signing.ECDSASignature(derRepresentation: signature),
+            try? P256.Signing.ECDSASignature(rawRepresentation: signature),
+        ].compactMap { $0 }
+        return signatures.contains { publicKey.isValidSignature($0, for: payload) }
     }
 
     static func sha256Hex(_ data: Data) -> String {

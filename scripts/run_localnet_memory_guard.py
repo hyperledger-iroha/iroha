@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 
 DEFAULT_OUT_DIR = Path("/tmp/iroha-oom-repro")
@@ -49,6 +50,20 @@ class MemorySample:
     peers: int
     phase: str
     run_index: int
+
+
+@dataclass(frozen=True)
+class StatusSnapshot:
+    """One compact /status sample from a guarded peer."""
+
+    timestamp: float
+    phase: str
+    run_index: int
+    peer_index: int
+    status_url: str
+    ok: bool
+    fields: dict[str, int | bool | str | None]
+    error: str | None = None
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -90,6 +105,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_LOAD_RUNS,
         help="Number of tx_load.py runs to execute against the same localnet process lifetime.",
+    )
+    parser.add_argument(
+        "--no-status-snapshots",
+        action="store_true",
+        help="Do not fetch compact /status snapshots alongside RSS samples.",
     )
     parser.add_argument("--target-dir", type=Path)
     parser.add_argument("--python-bin", default=sys.executable)
@@ -278,6 +298,97 @@ def sample_memory(processes: Iterable[PeerProcess], phase: str, run_index: int) 
     )
 
 
+def status_url_for_peer(base_api_port: int, peer_index: int) -> str:
+    """Return the local Torii /status URL for a peer index."""
+    return f"http://127.0.0.1:{base_api_port + peer_index}/status"
+
+
+def _int_field(payload: dict, key: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bool_field(payload: dict, key: str) -> bool | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    return bool(value)
+
+
+def extract_status_fields(payload: dict) -> dict[str, int | bool | str | None]:
+    """Extract compact high-signal counters from Torii /status JSON."""
+    sumeragi = payload.get("sumeragi") or {}
+    pending_rbc = sumeragi.get("pending_rbc") or {}
+    tx_gossip = sumeragi.get("tx_gossip") or {}
+    return {
+        "blocks": _int_field(payload, "blocks"),
+        "blocks_non_empty": _int_field(payload, "blocks_non_empty"),
+        "txs_approved": _int_field(payload, "txs_approved"),
+        "txs_rejected": _int_field(payload, "txs_rejected"),
+        "queue_size": _int_field(payload, "queue_size"),
+        "queue_retained_bytes": _int_field(payload, "queue_retained_bytes")
+        or _int_field(sumeragi, "tx_queue_retained_bytes"),
+        "queue_max_retained_bytes": _int_field(payload, "queue_max_retained_bytes")
+        or _int_field(sumeragi, "tx_queue_max_retained_bytes"),
+        "queue_saturated": _bool_field(payload, "queue_saturated")
+        if "queue_saturated" in payload
+        else _bool_field(sumeragi, "tx_queue_saturated"),
+        "queue_saturated_by_count": _bool_field(sumeragi, "tx_queue_saturated_by_count"),
+        "queue_saturated_by_bytes": _bool_field(sumeragi, "tx_queue_saturated_by_bytes"),
+        "rbc_store_sessions": _int_field(sumeragi, "rbc_store_sessions"),
+        "rbc_store_bytes": _int_field(sumeragi, "rbc_store_bytes"),
+        "rbc_store_pressure_level": _int_field(sumeragi, "rbc_store_pressure_level"),
+        "rbc_store_evictions_total": _int_field(sumeragi, "rbc_store_evictions_total"),
+        "pending_rbc_sessions": _int_field(pending_rbc, "sessions"),
+        "pending_rbc_chunks": _int_field(pending_rbc, "chunks"),
+        "pending_rbc_bytes": _int_field(pending_rbc, "bytes"),
+        "tx_gossip_queued": _int_field(tx_gossip, "queued"),
+        "tx_gossip_evicted_total": _int_field(tx_gossip, "evicted_total"),
+    }
+
+
+def sample_statuses(base_api_port: int, peers: int, phase: str, run_index: int) -> list[StatusSnapshot]:
+    """Fetch compact /status snapshots from all local peers."""
+    snapshots = []
+    timestamp = time.time()
+    for peer_index in range(peers):
+        status_url = status_url_for_peer(base_api_port, peer_index)
+        request = Request(status_url, headers={"Accept": "application/json"})
+        try:
+            with urlopen(request, timeout=1.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            snapshots.append(
+                StatusSnapshot(
+                    timestamp=timestamp,
+                    phase=phase,
+                    run_index=run_index,
+                    peer_index=peer_index,
+                    status_url=status_url,
+                    ok=True,
+                    fields=extract_status_fields(payload),
+                )
+            )
+        except Exception as exc:  # noqa: PERF203
+            snapshots.append(
+                StatusSnapshot(
+                    timestamp=timestamp,
+                    phase=phase,
+                    run_index=run_index,
+                    peer_index=peer_index,
+                    status_url=status_url,
+                    ok=False,
+                    fields={},
+                    error=str(exc),
+                )
+            )
+    return snapshots
+
+
 def stop_localnet(out_dir: Path) -> None:
     stop_script = out_dir / "stop.sh"
     if stop_script.exists():
@@ -291,6 +402,7 @@ def write_report(
     *,
     memory_limit_bytes: int,
     post_load_sample_seconds: float,
+    status_snapshots: Sequence[StatusSnapshot] = (),
     load_runs: int = DEFAULT_LOAD_RUNS,
     tx_returncodes: Sequence[int | None] | None = None,
 ) -> None:
@@ -306,6 +418,7 @@ def write_report(
         "last_total_rss_bytes": samples[-1].total_rss_bytes if samples else 0,
         "last_peer_rss_bytes": samples[-1].max_peer_rss_bytes if samples else 0,
         "samples": [sample.__dict__ for sample in samples],
+        "status_snapshots": [snapshot.__dict__ for snapshot in status_snapshots],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -352,6 +465,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     samples: list[MemorySample] = []
+    status_snapshots: list[StatusSnapshot] = []
     tx_returncodes: list[int | None] = []
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -362,6 +476,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tx_returncode,
             memory_limit_bytes=limit_bytes,
             post_load_sample_seconds=args.post_load_sample_seconds,
+            status_snapshots=status_snapshots,
             load_runs=args.load_runs,
             tx_returncodes=tx_returncodes,
         )
@@ -370,6 +485,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         processes = peer_processes(args.out_dir)
         sample = sample_memory(processes, phase, run_index)
         samples.append(sample)
+        if not args.no_status_snapshots:
+            status_snapshots.extend(sample_statuses(args.base_api_port, args.peers, phase, run_index))
         if sample.total_rss_bytes <= limit_bytes:
             return False
         print(

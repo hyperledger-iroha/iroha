@@ -543,19 +543,13 @@ fn missing_quorum_stale(
 }
 
 fn emit_pipeline_events(events_sender: &EventsSender, events: Vec<PipelineEventBox>) {
-    match events.len() {
-        0 => {}
-        1 => {
-            if let Some(event) = events.into_iter().next()
-                && let Err(err) = events_sender.send(EventBox::Pipeline(event))
-            {
-                debug!(?err, "failed to forward pipeline event");
-            }
-        }
-        _ => {
-            if let Err(err) = events_sender.send(EventBox::PipelineBatch(events)) {
-                debug!(?err, "failed to forward pipeline event batch");
-            }
+    // Tokio broadcast retention is measured in sent messages, not in heap bytes. Sending a whole
+    // block as one `PipelineBatch` lets the channel retain `events_buffer_capacity` block-sized
+    // vectors, which is unbounded with respect to transaction count. Emit individual events so the
+    // configured channel capacity bounds retained pipeline events directly.
+    for event in events {
+        if let Err(err) = events_sender.send(EventBox::Pipeline(event)) {
+            debug!(?err, "failed to forward pipeline event");
         }
     }
 }

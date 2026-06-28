@@ -379,6 +379,7 @@ impl TransactionGossiper {
         shutdown_signal: ShutdownSignal,
     ) {
         let mut gossip_period = tokio::time::interval(self.gossip_period);
+        gossip_period.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = gossip_period.tick() => self.gossip_transactions(),
@@ -533,9 +534,6 @@ impl TransactionGossiper {
                 filtered.push(peer.clone());
             }
         }
-        if filtered.is_empty() && suppressed > 0 {
-            return (targets, suppressed);
-        }
         (filtered, suppressed)
     }
 
@@ -547,15 +545,9 @@ impl TransactionGossiper {
         if tx_hashes.is_empty() || targets.is_empty() {
             return (targets, 0, false);
         }
-        let original_targets = targets.clone();
-        let original_target_count = original_targets.len();
         let (targets, suppressed) =
             self.filter_targets_by_peer_recent_suppression(targets, tx_hashes);
-        if suppressed == original_target_count {
-            (original_targets, suppressed, true)
-        } else {
-            (targets, suppressed, false)
-        }
+        (targets, suppressed, false)
     }
 
     fn filter_targets_for_priority(
@@ -4149,10 +4141,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             vec![peer.clone()],
             std::slice::from_ref(&tx_hash),
         );
-        assert_eq!(
-            targets,
-            vec![peer.clone()],
-            "all-suppressed target sets must still be retried for liveness"
+        assert!(
+            targets.is_empty(),
+            "all-suppressed target sets should wait for resend TTL instead of replaying immediately"
         );
         assert_eq!(suppressed, 1);
 
@@ -4271,12 +4262,12 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
-    fn peer_recent_suppression_replays_when_every_target_was_recently_sent() {
+    fn peer_recent_suppression_defers_when_every_target_was_recently_sent() {
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
         let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
-        let (signed, _) = build_transaction("peer-recent-replay");
+        let (signed, _) = build_transaction("peer-recent-defer");
         let tx_hash = signed.hash();
         let targets = vec![peer_a.clone(), peer_b.clone()];
 
@@ -4285,9 +4276,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (targets, suppressed, replayed) = gossiper
             .filter_targets_or_replay_recent_suppressed(targets, std::slice::from_ref(&tx_hash));
 
-        assert_eq!(targets, vec![peer_a, peer_b]);
+        assert!(targets.is_empty());
         assert_eq!(suppressed, 2);
-        assert!(replayed);
+        assert!(!replayed);
     }
 
     #[test]

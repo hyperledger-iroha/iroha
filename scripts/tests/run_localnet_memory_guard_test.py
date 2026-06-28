@@ -23,6 +23,7 @@ def test_defaults_are_guarded_for_localnet_repro():
     assert args.queue_hard_limit == 0
     assert args.post_load_sample_seconds == 30.0
     assert args.load_runs == 1
+    assert not args.no_status_snapshots
 
 
 def test_peer_count_below_four_is_rejected():
@@ -96,6 +97,17 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
         0,
         memory_limit_bytes=100,
         post_load_sample_seconds=30.0,
+        status_snapshots=[
+            MODULE.StatusSnapshot(
+                timestamp=3.0,
+                phase="post_load",
+                run_index=1,
+                peer_index=0,
+                status_url="http://127.0.0.1:48080/status",
+                ok=True,
+                fields={"queue_size": 0, "rbc_store_bytes": 12},
+            )
+        ],
         load_runs=2,
         tx_returncodes=[0, 0],
     )
@@ -110,6 +122,50 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
     assert payload["samples"][0]["phase"] == "load"
     assert payload["samples"][0]["run_index"] == 1
     assert payload["samples"][1]["phase"] == "post_load"
+    assert payload["status_snapshots"][0]["fields"]["rbc_store_bytes"] == 12
+
+
+def test_status_url_for_peer_uses_base_port():
+    assert MODULE.status_url_for_peer(48080, 3) == "http://127.0.0.1:48083/status"
+
+
+def test_extract_status_fields_reads_root_and_sumeragi_counters():
+    fields = MODULE.extract_status_fields(
+        {
+            "blocks": 7,
+            "blocks_non_empty": 5,
+            "txs_approved": 11,
+            "txs_rejected": 13,
+            "queue_size": 17,
+            "sumeragi": {
+                "tx_queue_retained_bytes": 19,
+                "tx_queue_max_retained_bytes": 23,
+                "tx_queue_saturated": True,
+                "tx_queue_saturated_by_count": False,
+                "tx_queue_saturated_by_bytes": True,
+                "rbc_store_sessions": 29,
+                "rbc_store_bytes": 31,
+                "rbc_store_pressure_level": 1,
+                "rbc_store_evictions_total": 37,
+                "pending_rbc": {
+                    "sessions": 2,
+                    "chunks": 3,
+                    "bytes": 41,
+                },
+                "tx_gossip": {
+                    "queued": 43,
+                    "evicted_total": 47,
+                },
+            },
+        }
+    )
+    assert fields["blocks"] == 7
+    assert fields["queue_retained_bytes"] == 19
+    assert fields["queue_saturated"] is True
+    assert fields["queue_saturated_by_bytes"] is True
+    assert fields["rbc_store_bytes"] == 31
+    assert fields["pending_rbc_bytes"] == 41
+    assert fields["tx_gossip_queued"] == 43
 
 
 def test_tx_load_log_path_keeps_legacy_name_for_single_run(tmp_path):

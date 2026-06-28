@@ -6220,7 +6220,8 @@ async fn handler_offline_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6241,16 +6242,8 @@ async fn handler_offline_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -6261,7 +6254,8 @@ async fn handler_offline_v2_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6282,16 +6276,8 @@ async fn handler_offline_v2_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
