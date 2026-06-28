@@ -200,6 +200,7 @@ const SNAPSHOT_MERKLE_TMP_FILE_NAME: &str = "snapshot.merkle.json.tmp";
 /// Default chunk size used to derive snapshot Merkle metadata.
 const _DEFAULT_MERKLE_CHUNK_SIZE: NonZeroUsize = defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES;
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP";
+const HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT";
 const HARD_FORK_SNAPSHOT_BOOTSTRAP_SHA256_ENV: &str = "IROHA_HARD_FORK_SNAPSHOT_BOOTSTRAP_SHA256";
 
 fn hard_fork_snapshot_bootstrap_enabled() -> bool {
@@ -235,6 +236,44 @@ fn hard_fork_snapshot_bootstrap_digest_matches(actual_digest: &str) -> bool {
         hard_fork_snapshot_bootstrap_enabled(),
         expected_digest.as_deref().and_then(std::ffi::OsStr::to_str),
     )
+}
+
+fn hard_fork_snapshot_bootstrap_hash_override_after_height(
+    block_count: usize,
+    bootstrap_enabled: bool,
+    digest_matches: bool,
+) -> Option<usize> {
+    if !bootstrap_enabled || !digest_matches {
+        return None;
+    }
+
+    let Some(raw_height) = std::env::var_os(HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV) else {
+        warn!(
+            env = HARD_FORK_SNAPSHOT_BOOTSTRAP_HEIGHT_ENV,
+            "hard-fork snapshot bootstrap hash override requires an explicit legacy height"
+        );
+        return None;
+    };
+    let raw_height = raw_height.to_string_lossy();
+    match raw_height.parse::<usize>() {
+        Ok(height) if height <= block_count => Some(height),
+        Ok(height) => {
+            warn!(
+                configured_height = height,
+                block_count,
+                "hard-fork snapshot bootstrap height exceeds durable block count; preserving existing Kura hashes"
+            );
+            Some(block_count)
+        }
+        Err(err) => {
+            warn!(
+                ?err,
+                value = %raw_height,
+                "failed to parse hard-fork snapshot bootstrap height; refusing divergent Kura hash override"
+            );
+            None
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug, displaydoc::Display)]
@@ -1098,10 +1137,18 @@ fn reconcile_snapshot_hash_height_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     block_count: usize,
     _kura: &Kura,
-    _hard_fork_snapshot_bootstrap: bool,
+    hard_fork_snapshot_bootstrap: bool,
 ) -> Result<(), TryReadError> {
     let snapshot_height = snapshot_hashes.len();
     if snapshot_height <= block_count {
+        return Ok(());
+    }
+    if hard_fork_snapshot_bootstrap {
+        warn!(
+            snapshot_height,
+            kura_height = block_count,
+            "hard-fork snapshot bootstrap: accepting snapshot height ahead of Kura block store"
+        );
         return Ok(());
     }
 
@@ -1116,15 +1163,31 @@ fn reconcile_snapshot_hashes_with_kura(
     snapshot_hashes: &[HashOf<BlockHeader>],
     kura: &Arc<Kura>,
     hard_fork_snapshot_bootstrap: bool,
+    hash_override_after_height: Option<usize>,
 ) -> Result<(), TryReadError> {
     let snapshot_height = snapshot_hashes.len();
     for (idx, snapshot_block_hash) in snapshot_hashes.iter().copied().enumerate() {
         let height = idx + 1;
         let height_nz = NonZeroUsize::new(height).expect("iterating from 1");
-        let kura_block_hash = kura
-            .block_hash_at_height(height_nz)
-            .ok_or(TryReadError::MissingBlock { height })?;
+        let kura_block_hash = match kura.block_hash_at_height(height_nz) {
+            Some(hash) => hash,
+            None if hard_fork_snapshot_bootstrap => {
+                continue;
+            }
+            None => return Err(TryReadError::MissingBlock { height }),
+        };
         if kura_block_hash == snapshot_block_hash {
+            continue;
+        }
+
+        if let Some(legacy_height) = hash_override_after_height
+            && height > legacy_height
+        {
+            warn!(
+                height,
+                legacy_height,
+                "hard-fork snapshot bootstrap: accepting digest-pinned snapshot hash over divergent Kura suffix hash"
+            );
             continue;
         }
 
@@ -1241,25 +1304,31 @@ fn try_read_snapshot_bundle(
         });
     }
     let snapshot_hashes = state.committed_block_hashes_snapshot();
+    let hard_fork_snapshot_bootstrap = hard_fork_snapshot_bootstrap_enabled();
+    let hard_fork_snapshot_digest_matches =
+        hard_fork_snapshot_bootstrap_digest_matches(&actual_digest);
     reconcile_snapshot_hash_height_with_kura(
         &snapshot_hashes,
         block_count,
         kura,
-        hard_fork_snapshot_bootstrap_enabled(),
+        hard_fork_snapshot_bootstrap,
     )?;
     let snapshot_height = snapshot_hashes.len();
-    if snapshot_height > 0
-        && !has_offline_note_replay_keys
-        && !hard_fork_snapshot_bootstrap_enabled()
-    {
+    if snapshot_height > 0 && !has_offline_note_replay_keys && !hard_fork_snapshot_bootstrap {
         return Err(TryReadError::MissingOfflineNoteReplayKeys { snapshot_height });
     }
     let hash_reconcile_started_at = Instant::now();
+    let hash_override_after_height = hard_fork_snapshot_bootstrap_hash_override_after_height(
+        block_count,
+        hard_fork_snapshot_bootstrap,
+        hard_fork_snapshot_digest_matches,
+    );
     reconcile_snapshot_hashes_with_kura(
         &mut state,
         &snapshot_hashes,
         kura,
-        hard_fork_snapshot_bootstrap_enabled(),
+        hard_fork_snapshot_bootstrap,
+        hash_override_after_height,
     )?;
     iroha_logger::info!(
         snapshot_height,
@@ -2918,7 +2987,7 @@ mod tests {
     }
 
     #[test]
-    async fn hard_fork_snapshot_hash_reconcile_rejects_state_ahead_of_kura() {
+    async fn hard_fork_snapshot_hash_reconcile_accepts_state_ahead_of_kura() {
         let kura = Kura::blank_kura_for_testing();
         let mut state = state_factory_with_kura(Arc::clone(&kura));
         let block = signed_block_with_transaction(accepted_log_transaction("canonical"));
@@ -2937,15 +3006,8 @@ mod tests {
             }
         ));
 
-        let err = reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, true)
-            .expect_err("hard-fork snapshot ahead of Kura must also be rejected");
-        assert!(matches!(
-            err,
-            TryReadError::MismatchedHeight {
-                snapshot_height: 2,
-                kura_height: 1,
-            }
-        ));
+        reconcile_snapshot_hash_height_with_kura(&hashes, 1, &kura, true)
+            .expect("hard-fork snapshot ahead of Kura should be accepted");
 
         reconcile_snapshot_hash_height_with_kura(&[canonical_hash], 1, &kura, true)
             .expect("hard-fork snapshot at durable Kura height should be accepted");
@@ -3048,8 +3110,9 @@ mod tests {
         snapshot_hashes[1] =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
 
-        let err = reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false)
-            .expect_err("non-latest hash mismatch must reject snapshot");
+        let err =
+            reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false, None)
+                .expect_err("non-latest hash mismatch must reject snapshot");
         assert!(matches!(
             err,
             TryReadError::MismatchedHash { height: 2, .. }
@@ -3073,7 +3136,7 @@ mod tests {
         snapshot_hashes[1] =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
 
-        reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false)
+        reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false, None)
             .expect("latest hash mismatch should preserve rollback behavior");
 
         assert_eq!(state.committed_height(), 1);
@@ -3082,6 +3145,42 @@ mod tests {
             Some(block1.hash()),
             "latest mismatch rollback should discard the snapshot tip"
         );
+    }
+
+    #[test]
+    async fn hard_fork_snapshot_hash_reconcile_accepts_digest_pinned_suffix_mismatch() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block1));
+        let block2 = signed_block_after_transaction(
+            accepted_log_transaction("second"),
+            Some(block1.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block2));
+        let block3 = signed_block_after_transaction(
+            accepted_log_transaction("third"),
+            Some(block2.as_ref()),
+        );
+        store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
+
+        let mut snapshot_hashes = state.committed_block_hashes_snapshot();
+        snapshot_hashes[1] =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; 32]));
+        snapshot_hashes[2] =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));
+
+        let err =
+            reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, true, Some(2))
+                .expect_err("mismatch at the configured legacy boundary must still fail");
+        assert!(matches!(
+            err,
+            TryReadError::MismatchedHash { height: 2, .. }
+        ));
+
+        reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, true, Some(1))
+            .expect("post-boundary mismatches are accepted for digest-pinned bootstrap recovery");
+        assert_eq!(state.committed_height(), 3);
     }
 
     #[test]

@@ -47680,7 +47680,7 @@ mod tests {
             tx.insert(
                 reset_dataspace_survivor_target_key,
                 AxtReplayRecord {
-                    dataspace: DataSpaceId::new(reset_lane.as_u32()),
+                    dataspace: DataSpaceId::new(reset_lane.as_u32().into()),
                     used_slot: 12,
                     retain_until_slot: 100,
                 },

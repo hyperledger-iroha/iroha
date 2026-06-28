@@ -14290,7 +14290,9 @@ async function commandPublishRouteManifest(options) {
   const { buildTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
-  const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
   const transaction = buildTransaction({
     chainId,
     authority,
@@ -14528,61 +14530,6 @@ async function waitForBurnRecordVkRegistryEntry(toriiUrl, vk, timeoutMs) {
   return { entry: lastEntry, problems: lastProblems };
 }
 
-async function submitBurnRecordVkRegisterViaAppApi({
-  toriiUrl,
-  authority,
-  privateKey,
-  vk,
-}) {
-  const { privateKeyMultihash } = await import(
-    "../javascript/iroha_js/src/crypto.js"
-  );
-  const encodedPrivateKey = privateKeyMultihash(privateKey, {
-    algorithm: "ed25519",
-  });
-  const exposedPrivateKey = encodedPrivateKey.includes(":")
-    ? encodedPrivateKey
-    : `ed25519:${encodedPrivateKey}`;
-  const registerUrl = new URL("/v1/zk/vk/register", toriiUrl);
-  const request = {
-    authority,
-    private_key: exposedPrivateKey,
-    backend: vk.id.backend,
-    name: vk.id.name,
-    version: vk.recordInput.version,
-    circuit_id: vk.recordInput.circuitId,
-    public_inputs_schema_hash_hex: vk.publicInputsSchemaHash.slice(2),
-    curve: vk.recordInput.curve,
-    gas_schedule_id: vk.recordInput.gasScheduleId,
-    vk_len: vk.vkBytes.bytes.length,
-    max_proof_bytes: vk.recordInput.maxProofBytes,
-    commitment_hex: vk.commitment.slice(2),
-    vk_bytes: vk.vkBytes.text,
-    status: vk.recordInput.status,
-  };
-  const response = await fetch(registerUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/plain, */*",
-    },
-    body: JSON.stringify(request),
-  });
-  if (![200, 201, 202, 204].includes(response.status)) {
-    const preview = await responseBodyPreview(response);
-    throw new Error(
-      `Torii responded with HTTP ${response.status} while registering burn-record VK${
-        preview ? `: ${preview}` : ""
-      }`,
-    );
-  }
-  return {
-    accepted: true,
-    httpStatus: response.status,
-    path: registerUrl.pathname,
-  };
-}
-
 async function commandPublishBurnRecordVk(options) {
   const manifestPath = normalizeBscRouteManifestPath(
     options["route-manifest"] ?? options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT,
@@ -14679,7 +14626,6 @@ async function commandPublishBurnRecordVk(options) {
       toriiUrl,
       chainId,
       authority,
-      appApiPath: "/v1/zk/vk/register",
       registryReadback: existingEntry,
       gasAssetId,
       gasLimit,
@@ -14715,16 +14661,76 @@ async function commandPublishBurnRecordVk(options) {
     normalizePrivateKey(process.env[privateKeyEnv], privateKeyEnv).slice(2),
     "hex",
   );
-  const submission = await submitBurnRecordVkRegisterViaAppApi({
-    toriiUrl,
+  const metadata = {
+    routeId,
+    assetKey,
+    action: "publish_burn_record_vk",
+    gas_asset_id: gasAssetId,
+    gas_limit: gasLimit,
+  };
+  const { buildTransaction } = await import(
+    "../javascript/iroha_js/src/transaction.js"
+  );
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
+  const transaction = buildTransaction({
+    chainId,
     authority,
+    instructions: [instruction],
+    metadata,
     privateKey,
-    vk,
   });
-  const registryResult = waitForCommit
-    ? await waitForBurnRecordVkRegistryEntry(toriiUrl, vk, commitTimeoutMs)
-    : { entry: null, problems: [] };
-  if (waitForCommit && (!registryResult.entry || registryResult.problems.length > 0)) {
+  const client = new ToriiClient(toriiUrl);
+  const hash = normalizeTransactionHash(
+    transaction.hash.toString("hex"),
+    "local transaction hash",
+  );
+  const submission = await submitSignedTransactionRawToTairaPipeline(
+    client,
+    toriiUrl,
+    transaction.signedTransaction,
+    hash,
+    { waitForCommit, timeoutMs: commitTimeoutMs },
+  );
+  const submittedHash = normalizeTransactionHash(
+    submission.hash,
+    "submitted transaction hash",
+  );
+  const statusKind = transactionStatusKind(submission.status);
+  const registryResult =
+    waitForCommit && statusKind === "Applied"
+      ? await waitForBurnRecordVkRegistryEntry(toriiUrl, vk, commitTimeoutMs)
+      : { entry: null, problems: [] };
+  const submissionEvidence = {
+    submitted: true,
+    alreadyRegistered: false,
+    toriiUrl,
+    chainId,
+    authority,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
+    registryReadback: registryResult.entry,
+    gasAssetId,
+    gasLimit,
+    waitForCommit,
+    commitTimeoutMs,
+  };
+  await writeJsonNoSecrets(out, {
+    ...artifact,
+    submission: submissionEvidence,
+  });
+  if (waitForCommit && statusKind !== "Applied") {
+    throw new Error(
+      `TAIRA burn-record VK registration was not applied: ${statusKind ?? "unknown"}.`,
+    );
+  }
+  if (
+    waitForCommit &&
+    (!registryResult.entry || registryResult.problems.length > 0)
+  ) {
     throw new Error(
       `TAIRA burn-record VK registry readback failed${
         registryResult.problems.length > 0
@@ -14733,24 +14739,6 @@ async function commandPublishBurnRecordVk(options) {
       }`,
     );
   }
-  const submissionEvidence = {
-    submitted: true,
-    alreadyRegistered: false,
-    toriiUrl,
-    chainId,
-    authority,
-    appApiPath: submission.path,
-    httpStatus: submission.httpStatus,
-    registryReadback: registryResult.entry,
-    gasAssetId,
-    gasLimit,
-    waitForCommit,
-    commitTimeoutMs,
-  };
-  await writeJsonNoSecrets(out, {
-      ...artifact,
-      submission: submissionEvidence,
-    });
   return {
     ok: true,
     wrote: out,
@@ -14759,8 +14747,10 @@ async function commandPublishBurnRecordVk(options) {
     toriiUrl,
     chainId,
     authority,
-    appApiPath: submission.path,
-    httpStatus: submission.httpStatus,
+    hash,
+    submittedHash,
+    statusKind,
+    status: submission.status ?? null,
     gasAssetId,
     gasLimit,
     waitForCommit,

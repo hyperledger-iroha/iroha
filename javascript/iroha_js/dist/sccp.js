@@ -554,6 +554,8 @@ const SCCP_TRON_MAX_WITNESSES = 64;
 const SCCP_U64_MAX = (1n << 64n) - 1n;
 const SCCP_U128_MAX = (1n << 128n) - 1n;
 const SCCP_I64_MAX = (1n << 63n) - 1n;
+const SCCP_TAIRA_XOR_BSC_SETTLEMENT_SCALE = 9;
+const SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR = 1_000_000_000n;
 const NORITO_COMPACT_LEN_FLAG = 0x02;
 const NORITO_CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const NORITO_INSTRUCTION_BOX_SCHEMA_HASH_HEX =
@@ -3783,6 +3785,59 @@ const normalizeTairaXorBurnRecordSettlementAmount = (input, fallbackAmount) => {
   return normalized;
 };
 
+const tairaXorBscMinorUnitsToSettlementAmount = (amount) => {
+  const whole = amount / SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR;
+  const fractional = amount % SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR;
+  if (fractional === 0n) {
+    return whole.toString();
+  }
+  return `${whole}.${fractional
+    .toString()
+    .padStart(SCCP_TAIRA_XOR_BSC_SETTLEMENT_SCALE, "0")
+    .replace(/0+$/u, "")}`;
+};
+
+const tairaXorBscSettlementAmountToMinorUnits = (value) => {
+  const normalized = normalizeNonEmptyString(value, "settlementAmount");
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/u.test(normalized)) {
+    throw new TypeError(
+      "settlementAmount must be a positive decimal amount with at most 9 decimal places",
+    );
+  }
+  if (/^0(?:\.0+)?$/u.test(normalized)) {
+    throw new RangeError("settlementAmount must be greater than zero");
+  }
+  const [whole, fractional = ""] = normalized.split(".");
+  return (
+    BigInt(whole) * SCCP_TAIRA_XOR_BSC_SETTLEMENT_FACTOR +
+    BigInt(fractional.padEnd(SCCP_TAIRA_XOR_BSC_SETTLEMENT_SCALE, "0"))
+  );
+};
+
+const normalizeTairaXorBscBurnRecordSettlementAmount = (
+  input,
+  descriptorAmount,
+) => {
+  const amount = strictOptionalResultField(
+    input,
+    "settlementAmount",
+    "settlementAmount",
+    "settlement_amount",
+    "burnAmount",
+    "burn_amount",
+  );
+  if (amount === SCCP_OPTIONAL_FIELD_MISSING || amount == null) {
+    return tairaXorBscMinorUnitsToSettlementAmount(descriptorAmount);
+  }
+  const normalizedAmount = tairaXorBscSettlementAmountToMinorUnits(amount);
+  if (normalizedAmount !== descriptorAmount) {
+    throw new RangeError(
+      "settlementAmount must match the descriptor amount at 9-decimal TAIRA XOR scale",
+    );
+  }
+  return tairaXorBscMinorUnitsToSettlementAmount(normalizedAmount);
+};
+
 const normalizeTairaXorBurnRecordAuthority = (input, sender) => {
   const authority = strictOptionalResultField(input, "authority", "authority");
   if (authority === SCCP_OPTIONAL_FIELD_MISSING || authority == null) {
@@ -4306,7 +4361,7 @@ export const buildTairaXorBscSccpBurnRecordContractPayload = (input) => {
   const sender = descriptor.payload.sender;
   normalizeTairaXorBurnRecordAuthority(input, sender);
   const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
-  const settlementAmount = normalizeTairaXorBurnRecordSettlementAmount(
+  const settlementAmount = normalizeTairaXorBscBurnRecordSettlementAmount(
     input,
     amount,
   );
@@ -14257,14 +14312,20 @@ const normalizeEvmProofResult = (result, request) => {
     throw new TypeError("EVM-family SCCP proof result must be an object");
   }
   requireProductionEvmProofRequest(request);
+  const proofBytesInput = strictOptionalResultField(
+    result,
+    "proofResult.proofBytes",
+    "proofBytes",
+    "proof_bytes",
+  );
+  const legacyProofBytesInput =
+    proofBytesInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? strictOptionalResultField(result, "proofResult.proof", "proof")
+      : SCCP_OPTIONAL_FIELD_MISSING;
   const proofBytes = toBytes(
-    strictResultField(
-      result,
-      "proofResult.proofBytes",
-      "proofBytes",
-      "proof_bytes",
-      "proof",
-    ),
+    proofBytesInput !== SCCP_OPTIONAL_FIELD_MISSING
+      ? proofBytesInput
+      : legacyProofBytesInput,
     "proofBytes",
   );
   requireGroth16ProofBytesForContext(proofBytes, "proofBytes", {
@@ -15034,13 +15095,12 @@ const normalizeGroth16SubmissionInput = (
   const resultProofBytes =
     proofResult === null
       ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.proofBytes",
-          "proofBytes",
-          "proof_bytes",
-          "proof",
-        );
+    : strictOptionalResultField(
+        proofResult,
+        "proofResult.proofBytes",
+        "proofBytes",
+        "proof_bytes",
+      );
   const proofBytes = toBytes(
     inputProofBytes !== SCCP_OPTIONAL_FIELD_MISSING
       ? inputProofBytes
@@ -41485,9 +41545,9 @@ const readTairaXorEvmAddressPayload = (value, label) => {
       payload === SCCP_OPTIONAL_FIELD_MISSING
         ? strictResultField(value, `${label}.value`, "value")
         : payload;
-    return nonZeroHex(selected, `${label}.value`, 20);
+    return normalizeEvmTransactionAddress(selected, `${label}.value`);
   }
-  return nonZeroHex(value, label, 20);
+  return normalizeEvmTransactionAddress(value, label);
 };
 
 export function bindTairaXorTronToTairaSourceProofPackage(input) {

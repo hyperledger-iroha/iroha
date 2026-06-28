@@ -2,6 +2,29 @@
 
 Last updated: 2026-06-27
 
+## 2026-06-27 SCCP TAIRA XOR settlement scaling and VK submit metadata
+
+- Scoped TAIRA XOR settlement amount handling so BSC burn-record payloads derive
+  9-decimal settlement amounts from descriptor units, while TRON records require
+  raw whole-amount burns in the overlay by scaling TRON record requirements into
+  common XOR base units before aggregation.
+- Changed `publish-burn-record-vk --submit true` to build, sign, and submit the
+  local `RegisterVerifyingKey` transaction through the raw pipeline with the
+  requested chain id, gas asset, and gas limit metadata, instead of posting
+  signing material to `/v1/zk/vk/register`.
+- Validation passed:
+  - `cargo fmt --all`
+  - `node --test --test-name-pattern "TAIRA XOR.*burn-record|TAIRA XOR BSC.*burn-record" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`4` passed)
+  - `node --test --test-name-pattern "publish-burn-record-vk|publish-route-manifest" scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`7` passed)
+  - `cd javascript/iroha_js && npm run build:dist`
+- Rust focused validation is currently blocked before these overlay tests run by
+  unrelated existing `iroha_core` compile errors in
+  `crates/iroha_core/src/smartcontracts/isi/staking.rs` (`E0282`, `E0283`,
+  `E0382`) and `crates/iroha_core/src/state.rs` (`E0308`) from
+  `cargo test -p iroha_core taira_tron_xor_record --lib -- --nocapture`.
+
 ## 2026-06-27 SoraFS runner namespace integer hardening
 
 - Hardened shared runner namespace integer validators so diagnostic containers

@@ -13671,7 +13671,7 @@ export interface ToriiSccpEvmWordPublicInputs {
 
 export type ToriiSccpPlatformSubmissionPayload =
   | {
-      kind: "evm_contract_call" | "tron_contract_call";
+      kind: "evm_contract_call" | "evm_groth16_contract_call" | "tron_contract_call";
       value: {
         proofBytes: string;
         publicInputs: ToriiSccpEvmWordPublicInputs;
@@ -13722,6 +13722,33 @@ export interface ToriiSccpCounterpartySubmissionPackage {
   envelopeBytes: string;
 }
 
+export interface ToriiSccpProofEnvelopeSummary {
+  version: number;
+  backend: string;
+  circuitId: string;
+  vkHash: string;
+  publicInputsSchemaHash: string;
+  publicInputsSchemaLenBytes: number;
+  publicInputColumnCount: number;
+  publicInputWordCount: number;
+  openProofLenBytes: number;
+  backendProofLenBytes: number;
+  auxLenBytes: number;
+}
+
+export interface ToriiSccpGroth16ProofSummary {
+  platformPayload: string;
+  version: number;
+  proofLenBytes: number;
+  publicInputWordCount: number;
+  groth16PublicSignalCount: number;
+  messageId: string;
+  sourceDomain: number;
+  commitmentRoot: string;
+  destinationBindingKey: string;
+  destinationBindingHash: string;
+}
+
 export interface ToriiSccpMessageTransparentProofArtifact {
   version: number;
   localDomain: number;
@@ -13738,6 +13765,8 @@ export interface ToriiSccpMessageTransparentProofArtifact {
   verifierTarget: ToriiSccpProofVerifierTarget;
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   proofBytes: string;
+  proofEnvelopeSummary: ToriiSccpProofEnvelopeSummary | null;
+  groth16ProofSummary?: ToriiSccpGroth16ProofSummary;
   submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;
 }
@@ -13826,6 +13855,8 @@ export interface ToriiSccpCounterpartyProofJob {
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   payloadKind: string;
   payloadProjection: ToriiSccpPayloadProjection;
+  proofEnvelopeSummary: ToriiSccpProofEnvelopeSummary | null;
+  groth16ProofSummary?: ToriiSccpGroth16ProofSummary;
   submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
   submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;

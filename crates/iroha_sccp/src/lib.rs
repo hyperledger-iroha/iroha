@@ -67,6 +67,8 @@ pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
 /// Public Sora Nexus chain id bound into SORA-origin SCCP finality proofs.
 pub const SCCP_NEXUS_FINALITY_CHAIN_ID_V1: &str = "00000000-0000-0000-0000-000000000753";
+/// Public TAIRA chain id bound into TAIRA-origin SCCP finality proofs.
+pub const SCCP_TAIRA_FINALITY_CHAIN_ID_V1: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 /// TAIRA testnet SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP asset key for XOR in the initial TRON bridge route.
@@ -33020,7 +33022,10 @@ pub fn recover_nexus_sccp_message_transparent_proof_with_source_verifier_materia
 
 pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
     if proof.version != 1
-        || proof.chain_id != SCCP_NEXUS_FINALITY_CHAIN_ID_V1
+        || !matches!(
+            proof.chain_id.as_str(),
+            SCCP_NEXUS_FINALITY_CHAIN_ID_V1 | SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+        )
         || proof.height == 0
         || proof.block_header_bytes.is_empty()
     {
@@ -71212,6 +71217,13 @@ mod tests {
         let mut proof = valid.clone();
         proof.version = 2;
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = valid.clone();
+        proof.chain_id = SCCP_TAIRA_FINALITY_CHAIN_ID_V1.to_owned();
+        assert!(
+            verify_nexus_bridge_finality_proof_structure(&proof),
+            "public TAIRA finality chain id must be accepted for TAIRA-origin SCCP routes"
+        );
 
         for chain_id in [
             String::new(),

@@ -17006,7 +17006,7 @@ test("builds a TAIRA XOR BSC burn-record contract payload and ZK IVM request", (
     networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
     sender: TAIRA_ACCOUNT_ID,
     recipientAddress: `0x${"11".repeat(20)}`,
-    amount: "25000000000000000",
+    amount: "25000000",
     nonce: 42,
     settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
   };
@@ -17020,15 +17020,20 @@ test("builds a TAIRA XOR BSC burn-record contract payload and ZK IVM request", (
     contract.payload.settlement_asset,
     input.settlementAssetDefinitionId,
   );
-  assert.equal(contract.payload.amount, input.amount);
+  assert.equal(contract.payload.amount, "0.025");
   assert.match(contract.payload.record_instruction, /^0x[0-9a-f]+$/u);
   assert.equal(
     contract.payload.record_instruction,
     contract.record_instruction_hex,
   );
+  const tinyContract = buildTairaXorBscSccpBurnRecordContractPayload({
+    ...input,
+    amount: "100000",
+  });
+  assert.equal(tinyContract.payload.amount, "0.0001");
   const settlementContract = buildTairaXorBscSccpBurnRecordContractPayload({
     ...input,
-    settlementAmount: "0.025",
+    settlementAmount: "0.025000000",
   });
   assert.equal(settlementContract.descriptor.payload.amount, input.amount);
   assert.equal(settlementContract.payload.amount, "0.025");
@@ -17192,7 +17197,14 @@ test("rejects unsafe TAIRA XOR BSC burn-record ZK request bindings", () => {
       }),
     /gasLimit must be greater than zero/,
   );
-  for (const settlementAmount of ["0", "0.0", "abc"]) {
+  for (const settlementAmount of [
+    "0",
+    "0.0",
+    "abc",
+    "100000",
+    "0.000001001",
+    "0.0000000001",
+  ]) {
     assert.throws(
       () =>
         buildTairaXorBscSccpBurnRecordContractPayload({
