@@ -3788,7 +3788,7 @@ final class OfflineNoteTests: XCTestCase {
 
         XCTAssertEqual(note.noteCommitmentHex, derivation.sourceNoteCommitment)
         XCTAssertEqual(issuerClient.lastIssueRequest?.noteCommitment.hexLowercased(), derivation.sourceNoteCommitment)
-        XCTAssertEqual(note.state, .spendable)
+        XCTAssertEqual(note.state, .issuePending)
     }
 
     /// Regression: `Wallet.load(assetDefinitionId:)` must forward the
@@ -5296,7 +5296,12 @@ final class OfflineNoteTests: XCTestCase {
         let derivation = fixture.chainVectors.derivation
         let recipientCertificate = try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         let audit = try Self.audit(fixture)
+        let issue = try Self.issue(fixture)
         let redeem = try Self.redeem(fixture)
+        let issuePending = try Self.sourceWalletNote(
+            fixture,
+            certificate: Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        ).withState(.issuePending, updatedAtMs: 1_700_000_003_000)
         let redeemPending = try OfflineNoteWalletNote(
             chainId: derivation.chainId,
             accountId: fixture.paymentToken.recipientAccountId,
@@ -5316,6 +5321,12 @@ final class OfflineNoteTests: XCTestCase {
 
         let committed = try OfflineNoteOutcomeIndex.fromExplorerOutcomes([
             OfflineNoteExplorerInstructionOutcome(
+                kind: OfflineNoteOutcomeIndex.kindIssue,
+                transactionStatus: "Committed",
+                transactionHashHex: "issue-tx",
+                encodedInstruction: try Self.issueInstructionEnvelope(issue)
+            ),
+            OfflineNoteExplorerInstructionOutcome(
                 kind: OfflineNoteOutcomeIndex.kindAudit,
                 transactionStatus: "Committed",
                 transactionHashHex: "audit-tx",
@@ -5329,15 +5340,24 @@ final class OfflineNoteTests: XCTestCase {
             ),
         ])
 
+        XCTAssertEqual(try committed.resolve(issuePending), OfflineNoteSyncResolution(
+            state: .spendable,
+            transactionHashHex: "issue-tx"
+        ))
         XCTAssertEqual(try committed.resolve(redeemPending), OfflineNoteSyncResolution(
             state: .redeemed,
             transactionHashHex: "redeem-tx"
         ))
 
         let rejected = OfflineNoteOutcomeIndex()
+            .recordRejectedIssue(issue, transactionHashHex: "issue-rejected")
             .recordRejectedAudit(audit, transactionHashHex: "audit-rejected")
             .recordRejectedRedeem(redeem, transactionHashHex: "redeem-rejected")
 
+        XCTAssertEqual(try rejected.resolve(issuePending), OfflineNoteSyncResolution(
+            state: .cancelled,
+            transactionHashHex: "issue-rejected"
+        ))
         XCTAssertEqual(try rejected.resolve(redeemPending), OfflineNoteSyncResolution(
             state: .spendable,
             transactionHashHex: "redeem-rejected"

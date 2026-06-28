@@ -59,14 +59,17 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
 
   @Override
   public CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> listOutcomes() {
+    final CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> issue =
+        fetchKind(OfflineNoteOutcomeIndex.KIND_ISSUE);
     final CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> audit =
         fetchKind(OfflineNoteOutcomeIndex.KIND_AUDIT);
     final CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> redeem =
         fetchKind(OfflineNoteOutcomeIndex.KIND_REDEEM);
-    return CompletableFuture.allOf(audit, redeem)
+    return CompletableFuture.allOf(issue, audit, redeem)
         .thenApply(
             ignored -> {
               final List<OfflineNoteExplorerInstructionOutcome> outcomes = new ArrayList<>();
+              outcomes.addAll(issue.join());
               outcomes.addAll(audit.join());
               outcomes.addAll(redeem.join());
               return outcomes;

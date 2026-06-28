@@ -264,8 +264,10 @@ for diagnostics and cross-language parity: `STATUS_ERROR`,
 `production_disabled = 4`, and `invalid_request = 5`; treat them as
 sanitized status metadata, not proof success.
 
-Legacy `SPEND_PENDING` records are migrated to `SPENT`, and legacy
-`CHANGE_PENDING` records are migrated to `SPENDABLE`.
+Wallet `load` persists newly issued local notes as `ISSUE_PENDING` until sync
+observes the matching `IssueOfflineNote` transaction commit; rejected issue
+outcomes cancel the pending note. Legacy `SPEND_PENDING` records are migrated
+to `SPENT`, and legacy `CHANGE_PENDING` records are migrated to `SPENDABLE`.
 `OfflineNoteTransferHandoff` exposes one integration surface for local token
 handoff modalities: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
