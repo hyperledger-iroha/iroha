@@ -11,9 +11,11 @@ import importlib.util
 import json
 import sys
 from dataclasses import dataclass
+from html import unescape as html_unescape
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
+from urllib.parse import unquote
 
 try:
     import tomllib
@@ -239,6 +241,52 @@ PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: PUBLIC_LANE_SOLANA_ROUTE_CANARY_FIELDS,
     SCCP_DOMAIN_TON: PUBLIC_LANE_TON_ROUTE_CANARY_FIELDS,
     SCCP_DOMAIN_TRON: PUBLIC_LANE_TRON_ROUTE_CANARY_FIELDS,
+}
+PUBLIC_LANE_ROUTE_CANARY_TEMPLATE_HASH_FIELDS_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: (
+        "evidence_hash",
+        "transaction_hash",
+        "receipt_block_hash",
+        "block_receipts_root",
+        "call_data_sha256",
+        "message_id",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+    ),
+    SCCP_DOMAIN_BSC: (
+        "evidence_hash",
+        "transaction_hash",
+        "receipt_block_hash",
+        "block_receipts_root",
+        "call_data_sha256",
+        "message_id",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+    ),
+    SCCP_DOMAIN_SOL: ("evidence_hash",),
+    SCCP_DOMAIN_TON: (
+        "evidence_hash",
+        "ton_account_state_hash",
+        "ton_last_transaction_hash",
+    ),
+    SCCP_DOMAIN_TRON: (
+        "evidence_hash",
+        "transaction_id",
+        "message_id",
+        "call_data_sha256",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+        "signature_sha256",
+    ),
 }
 PUBLIC_DOMAIN_LISTS = {
     "required_domains": (
@@ -1238,9 +1286,101 @@ SENSITIVE_PUBLIC_BLOCKER_MARKERS = (
     "api_key",
     "client-secret",
     "client_secret",
+    "recovery phrase",
+    "recovery-phrase",
+    "recovery_phrase",
     "session",
     "token",
 )
+PUBLIC_SENSITIVE_MARKER_CONFUSABLES = str.maketrans(
+    {
+        "Α": "A",
+        "А": "A",
+        "а": "a",
+        "Β": "B",
+        "В": "B",
+        "С": "C",
+        "с": "c",
+        "Е": "E",
+        "е": "e",
+        "І": "I",
+        "і": "i",
+        "Κ": "K",
+        "К": "K",
+        "κ": "k",
+        "к": "k",
+        "Μ": "M",
+        "М": "M",
+        "Ο": "O",
+        "О": "O",
+        "ο": "o",
+        "о": "o",
+        "Ρ": "P",
+        "Р": "P",
+        "ρ": "p",
+        "р": "p",
+        "Ѕ": "S",
+        "ѕ": "s",
+        "Τ": "T",
+        "Т": "T",
+        "τ": "t",
+        "т": "t",
+        "Χ": "X",
+        "Х": "X",
+        "χ": "x",
+        "х": "x",
+        "Υ": "Y",
+        "У": "Y",
+        "у": "y",
+    }
+)
+
+
+def _decoded_public_blocker_text(value: str) -> str:
+    decoded = value
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        for _percent_pass in range(3):
+            next_percent_decoded = unquote(next_decoded)
+            if next_percent_decoded == next_decoded:
+                break
+            next_decoded = next_percent_decoded
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    return decoded
+
+
+def _decoded_sensitive_public_marker_text(value: str) -> str:
+    return _decoded_public_blocker_text(value).translate(
+        PUBLIC_SENSITIVE_MARKER_CONFUSABLES
+    ).lower()
+
+
+def _decoded_public_blocker_text_issue(value: str) -> str | None:
+    decoded = _decoded_public_blocker_text(value)
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
+        return "contains control character"
+    if not decoded.isascii():
+        return "contains non-ASCII character"
+    if any(character in MARKDOWN_UNSAFE_BLOCKER_CHARACTERS for character in decoded):
+        return "contains Markdown-unsafe character"
+    return None
+
+
+def _decoded_public_nested_value_issue(value: str) -> str | None:
+    decoded = _decoded_public_blocker_text(value)
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in decoded):
+        return "contains control character"
+    if not decoded.isascii():
+        return "contains non-ASCII value"
+    if any(character in MARKDOWN_UNSAFE_BLOCKER_CHARACTERS for character in decoded):
+        return "contains Markdown-unsafe value"
+    return None
+
+
+def _canonical_public_blocker_key(value: str) -> str:
+    return _decoded_public_blocker_text(value).lower()
 
 
 def _blocker_text_issue(blocker: Any) -> str | None:
@@ -1252,8 +1392,12 @@ def _blocker_text_issue(blocker: Any) -> str | None:
         return "contains non-ASCII character"
     if any(character in MARKDOWN_UNSAFE_BLOCKER_CHARACTERS for character in blocker):
         return "contains Markdown-unsafe character"
-    if any(marker in blocker.lower() for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
+    normalized_blocker = _decoded_sensitive_public_marker_text(blocker)
+    if any(marker in normalized_blocker for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
         return "contains sensitive name"
+    decoded_issue = _decoded_public_blocker_text_issue(blocker)
+    if decoded_issue is not None:
+        return decoded_issue
     return None
 
 
@@ -1268,9 +1412,10 @@ def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
         if issue is not None:
             errors.append(f"{label} blockers[{index}] {issue}")
             continue
-        if blocker in seen_blockers:
+        blocker_key = _canonical_public_blocker_key(blocker)
+        if blocker_key in seen_blockers:
             errors.append(f"{label} blockers must not contain duplicate strings")
-        seen_blockers.add(blocker)
+        seen_blockers.add(blocker_key)
     if blockers:
         errors.append(f"{label} blockers must be empty")
     return errors
@@ -1290,11 +1435,16 @@ def _canonical_blocker_list(
         if issue is not None:
             errors.append(f"{label} blockers[{index}] {issue}")
             continue
-        if blocker in seen_blockers:
+        blocker_key = _canonical_public_blocker_key(blocker)
+        if blocker_key in seen_blockers:
             errors.append(f"{label} blockers must not contain duplicate strings")
-            blockers = [item for item in blockers if item != blocker]
+            blockers = [
+                item
+                for item in blockers
+                if _canonical_public_blocker_key(item) != blocker_key
+            ]
             continue
-        seen_blockers.add(blocker)
+        seen_blockers.add(blocker_key)
         blockers.append(blocker)
     return blockers, errors
 
@@ -1430,6 +1580,15 @@ def _reject_source_adapter_deployment_template_hashes(
                 f"{field} must be deployed source-adapter evidence, "
                 "not built-in template material"
             )
+    for field in ("adapter_verifier_vk_hash", "deployment_receipt_hash"):
+        raw = _hex_bytes(record.get(field), byte_length=32)
+        if raw is None:
+            continue
+        if any(raw == template_hash for template_hash in template_hashes.values()):
+            errors.append(
+                f"{field} must be deployed source-adapter evidence, "
+                "not built-in template material"
+            )
 
 
 def _reject_source_adapter_audit_template_hashes(
@@ -1531,12 +1690,18 @@ def _expect_distinct_byte_values(
             seen[raw] = field
 
 
+def _safe_public_key_sort_key(value: object) -> tuple[int, str]:
+    if isinstance(value, str):
+        return (0, value)
+    return (1, type(value).__name__)
+
+
 def _reject_unknown_fields(
     errors: list[str],
     record: dict[str, Any],
     allowed_fields: frozenset[str],
 ) -> None:
-    for field in sorted(record, key=lambda item: str(item)):
+    for field in sorted(record, key=_safe_public_key_sort_key):
         if field not in allowed_fields:
             errors.append(_unexpected_record_field_detail(field))
 
@@ -1649,6 +1814,11 @@ SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (
     "api_key",
     "client-secret",
     "client_secret",
+    "mnemonic",
+    "recovery-phrase",
+    "recovery_phrase",
+    "seed-phrase",
+    "seed_phrase",
     "session",
 )
 
@@ -1725,6 +1895,20 @@ def _unexpected_audit_hash_field_detail(field: object) -> str:
     ):
         return "source adapter gate audit hashes contains unexpected field with malformed name"
     return f"source adapter gate audit hashes contains unexpected field: {field}"
+
+
+def _public_audit_hash_field_is_safe(field: object) -> bool:
+    if not isinstance(field, str):
+        return False
+    lowered = field.lower()
+    return bool(field) and field.isascii() and not any(
+        marker in lowered for marker in SENSITIVE_MINIMAL_TOML_KEY_MARKERS
+    ) and all(
+        ord(ch) >= 0x20
+        and ord(ch) != 0x7F
+        and ch in MINIMAL_TOML_SAFE_KEY_CHARS
+        for ch in field
+    )
 
 
 def _is_canonical_decimal_text(value: object, *, positive: bool) -> bool:
@@ -2809,25 +2993,25 @@ def route_allowlist_hash_for_lane_evidence(
 ) -> bytes:
     """Return the canonical route allowlist hash for exact lane evidence."""
 
-    for label, value in (
+    evidence_hashes = (
         ("source_verifier_material_hash", source_verifier_material_hash),
         (
             "source_adapter_engine_deployment_hash",
             source_adapter_engine_deployment_hash,
         ),
         ("destination_binding_hash", destination_binding_hash),
-    ):
+    )
+    for label, value in evidence_hashes:
         if len(value) != 32 or not any(value):
             raise ValueError(f"{label} must be a non-zero 32-byte value")
+    template_hashes = tuple(_source_material_template_hashes(profile).values())
+    for label, value in evidence_hashes:
+        if value in template_hashes:
+            raise ValueError(
+                f"{label} must be deployed evidence, not built-in template material"
+            )
     seen_hash_roles: dict[bytes, str] = {}
-    for label, value in (
-        ("source_verifier_material_hash", source_verifier_material_hash),
-        (
-            "source_adapter_engine_deployment_hash",
-            source_adapter_engine_deployment_hash,
-        ),
-        ("destination_binding_hash", destination_binding_hash),
-    ):
+    for label, value in evidence_hashes:
         previous = seen_hash_roles.get(value)
         if previous is not None:
             raise ValueError(
@@ -3167,9 +3351,13 @@ def _source_adapter_gate_summary(
                     _hex_bytes(route_canary_value, byte_length=32),
                 )
             )
+    # Source-inventory marker: source_adapter_gate audit hashes use safe public key ordering before role checks.
     role_fields.extend(
         (f"audit_hashes.{field}", _hex_bytes(value, byte_length=32))
-        for field, value in sorted(audit_hashes.items())
+        for field, value in sorted(
+            audit_hashes.items(),
+            key=lambda item: _safe_public_key_sort_key(item[0]),
+        )
     )
     _expect_distinct_byte_values(
         blockers,
@@ -6277,6 +6465,11 @@ def _check_route_canary_evidence(
         errors.append(
             "route canary evidence hash metadata must be a non-zero bytes32"
         )
+    elif evidence_hash in tuple(_source_material_template_hashes(profile).values()):
+        errors.append(
+            "route canary evidence hash must be live evidence, "
+            "not built-in template material"
+        )
     else:
         canary["evidence_hash"] = _hex(evidence_hash)
 
@@ -6602,7 +6795,12 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
             else None
         )
         if isinstance(audit_hashes, dict):
-            for field, value in sorted(audit_hashes.items()):
+            for field, value in sorted(
+                audit_hashes.items(),
+                key=lambda item: _safe_public_key_sort_key(item[0]),
+            ):
+                if not _public_audit_hash_field_is_safe(field):
+                    continue
                 raw_audit = _hex_bytes(value, byte_length=32)
                 if raw_audit is not None and any(raw_audit):
                     governed_hashes.setdefault(
@@ -6688,6 +6886,32 @@ def _source_adapter_gate_requirements(
     return "", ()
 
 
+def _source_material_template_hash_values_or_errors(
+    label: str,
+    profile: LaneProfile,
+) -> tuple[tuple[bytes, ...], list[str]]:
+    """Return source-material template hashes or a bounded public blocker."""
+
+    try:
+        return tuple(_source_material_template_hashes(profile).values()), []
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return (), [f"{label} template material validation failed"]
+
+
+def _source_adapter_gate_requirements_or_errors(
+    label: str,
+    domain: Any,
+) -> tuple[tuple[str, tuple[str, ...]], list[str]]:
+    """Return source-gate requirements or a bounded public blocker."""
+
+    try:
+        return _source_adapter_gate_requirements(domain), []
+    except (SystemExit, RuntimeError, TypeError, ValueError):
+        return ("", ()), [
+            f"{label} source adapter gate requirement validation failed"
+        ]
+
+
 def _source_adapter_gate_template_hash_blockers(
     lane_label: str,
     domain: Any,
@@ -6703,7 +6927,13 @@ def _source_adapter_gate_template_hash_blockers(
     raw = _hex_bytes(value, byte_length=32)
     if raw is None:
         return []
-    if raw not in _source_material_template_hashes(profile).values():
+    template_hashes, template_errors = _source_material_template_hash_values_or_errors(
+        f"{lane_label}: {field_label}",
+        profile,
+    )
+    if template_errors:
+        return template_errors
+    if raw not in template_hashes:
         return []
     return [
         f"{lane_label}: {field_label} must be deployed evidence, "
@@ -6718,11 +6948,17 @@ def _source_adapter_gate_release_metadata_blockers(
     *,
     require_ready_state: bool = True,
 ) -> list[str]:
-    gate_field, expected_audit_fields = _source_adapter_gate_requirements(
-        lane.get("domain")
+    (
+        (gate_field, expected_audit_fields),
+        requirement_errors,
+    ) = _source_adapter_gate_requirements_or_errors(
+        lane_label,
+        lane.get("domain"),
     )
     gate_required = source_adapter_gate.get("required")
-    blockers: list[str] = []
+    blockers: list[str] = list(requirement_errors)
+    if requirement_errors:
+        return blockers
     if gate_required != bool(expected_audit_fields):
         blockers.append(
             f"{lane_label}: source adapter gate required flag must match lane policy"
@@ -6810,7 +7046,7 @@ def _source_adapter_gate_release_metadata_blockers(
         )
     for field in sorted(
         set(audit_hashes) - set(expected_audit_fields),
-        key=lambda item: str(item),
+        key=_safe_public_key_sort_key,
     ):
         blockers.append(f"{lane_label}: {_unexpected_audit_hash_field_detail(field)}")
     for field in expected_audit_fields:
@@ -7302,9 +7538,9 @@ def _evidence_bundle_root_errors(records: Any) -> tuple[dict[str, Any], list[str
         return {}, ["evidence bundle root must be an object"]
 
     errors: list[str] = []
-    for section in sorted(records, key=lambda item: str(item)):
+    for section in sorted(records, key=_safe_public_key_sort_key):
         if not isinstance(section, str):
-            errors.append(f"evidence section name must be a string: {section!r}")
+            errors.append("evidence section name must be a string")
         elif section not in SECTION_NAMES:
             errors.append(_evidence_unsupported_section_detail(section))
     return records, errors
@@ -7510,20 +7746,42 @@ def build_parser() -> argparse.ArgumentParser:
 
 SENSITIVE_CLI_ERROR_MARKERS = (
     "secret-token",
+    "secret key",
+    "secret-key",
+    "secret_key",
+    "private key",
     "private-key",
     "private_key",
     "password",
     "passphrase",
-    "bearer ",
+    "bearer",
     "authorization",
+    "access key",
     "access-key",
     "access_key",
+    "api key",
     "api-key",
     "api_key",
+    "client secret",
     "client-secret",
     "client_secret",
-    "session=",
-    "token=",
+    "credential",
+    "credentials",
+    "auth header",
+    "auth-header",
+    "auth_header",
+    "mnemonic",
+    "recovery phrase",
+    "recovery-phrase",
+    "recovery_phrase",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "signing key",
+    "signing-key",
+    "signing_key",
+    "session",
+    "token",
 )
 
 
@@ -7533,10 +7791,14 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     text = str(exc)
     if not text:
         return fallback
-    lowered = text.lower()
-    if any(marker in lowered for marker in SENSITIVE_CLI_ERROR_MARKERS):
+    if not text.isascii():
         return fallback
-    if any((ord(ch) < 0x20 and ch not in "\n\t") or ord(ch) == 0x7F for ch in text):
+    if _decoded_public_blocker_text_issue(text) is not None:
+        return fallback
+    normalized_text = _decoded_public_blocker_text(text).lower()
+    if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
+        return fallback
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
         return fallback
     return text
 
@@ -7555,7 +7817,7 @@ def _public_release_checklist_errors(
     expected_fields = {"ready", "items"}
     for field in sorted(
         (field for field in value if field not in expected_fields),
-        key=lambda item: str(item),
+        key=_safe_public_key_sort_key,
     ):
         errors.append(
             f"all-lanes summary release_checklist {_unexpected_record_field_detail(field)}"
@@ -7581,7 +7843,7 @@ def _public_release_checklist_errors(
             continue
         for field in sorted(
             (field for field in item if field not in RELEASE_CHECKLIST_ITEM_FIELDS),
-            key=lambda field: str(field),
+            key=_safe_public_key_sort_key,
         ):
             errors.append(f"{item_label} {_unexpected_record_field_detail(field)}")
 
@@ -7653,13 +7915,13 @@ def _public_nested_lane_value_errors(value: Any, label: str) -> list[str]:
         for index, nested in enumerate(value):
             errors.extend(_public_nested_lane_value_errors(nested, f"{label}[{index}]"))
     elif isinstance(value, str):
-        lowered = value.lower()
-        if any(marker in lowered for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
+        normalized_value = _decoded_sensitive_public_marker_text(value)
+        if any(marker in normalized_value for marker in SENSITIVE_PUBLIC_BLOCKER_MARKERS):
             errors.append(f"{label} contains sensitive value")
-        elif any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
-            errors.append(f"{label} contains control character")
-        elif not value.isascii():
-            errors.append(f"{label} contains non-ASCII value")
+        else:
+            decoded_issue = _decoded_public_nested_value_issue(value)
+            if decoded_issue is not None:
+                errors.append(f"{label} {decoded_issue}")
     return errors
 
 
@@ -7677,7 +7939,7 @@ def _public_lane_object_field_errors(
         f"{label} {_unexpected_record_field_detail(field)}"
         for field in sorted(
             (field for field in value if field not in allowed),
-            key=lambda field: str(field),
+            key=_safe_public_key_sort_key,
         )
     ]
 
@@ -7727,13 +7989,50 @@ def _public_lane_source_record_template_hash_errors(
     profile = LANE_PROFILES.get(domain)
     if profile is None:
         return []
-    template_hashes = tuple(_source_material_template_hashes(profile).values())
+    template_hashes, template_errors = _source_material_template_hash_values_or_errors(
+        label,
+        profile,
+    )
+    if template_errors:
+        return template_errors
     errors: list[str] = []
     for field in PUBLIC_LANE_SOURCE_RECORD_HASH_FIELDS:
         raw = _hex_bytes(value.get(field), byte_length=32)
         if raw is not None and raw in template_hashes:
             errors.append(
                 f"{label}.{field} must be deployed evidence, "
+                "not built-in template material"
+            )
+    return errors
+
+
+def _public_lane_route_canary_template_hash_errors(
+    value: Any,
+    label: str,
+    domain: Any,
+) -> list[str]:
+    """Return errors for copied route-canary hashes replaying templates."""
+
+    if not isinstance(value, dict) or not isinstance(domain, int):
+        return []
+    profile = LANE_PROFILES.get(domain)
+    if profile is None:
+        return []
+    template_hashes, template_errors = _source_material_template_hash_values_or_errors(
+        label,
+        profile,
+    )
+    if template_errors:
+        return template_errors
+    errors: list[str] = []
+    for field in PUBLIC_LANE_ROUTE_CANARY_TEMPLATE_HASH_FIELDS_BY_DOMAIN.get(
+        domain,
+        ("evidence_hash",),
+    ):
+        raw = _hex_bytes(value.get(field), byte_length=32)
+        if raw is not None and raw in template_hashes:
+            errors.append(
+                f"{label}.{field} must be live evidence, "
                 "not built-in template material"
             )
     return errors
@@ -7748,7 +8047,15 @@ def _public_lane_source_adapter_gate_template_hash_errors(
 
     if not isinstance(value, dict) or not isinstance(domain, int):
         return []
-    _gate_field, audit_fields = _source_adapter_gate_requirements(domain)
+    (
+        (_gate_field, audit_fields),
+        requirement_errors,
+    ) = _source_adapter_gate_requirements_or_errors(
+        f"{lane_label}.source_adapter_gate",
+        domain,
+    )
+    if requirement_errors:
+        return requirement_errors
     if not audit_fields:
         return []
     errors: list[str] = []
@@ -8202,7 +8509,15 @@ def _public_lane_route_canary_hash_role_errors(
         audit_hashes = source_adapter_gate.get("audit_hashes")
         domain = lane.get("domain")
         if isinstance(audit_hashes, dict) and domain in LANE_PROFILES:
-            _gate_field, audit_fields = _source_adapter_gate_requirements(domain)
+            (
+                (_gate_field, audit_fields),
+                requirement_errors,
+            ) = _source_adapter_gate_requirements_or_errors(
+                f"{label}.source_adapter_gate",
+                domain,
+            )
+            if requirement_errors:
+                return requirement_errors
             for field in audit_fields:
                 audit_hash = _hex_bytes(audit_hashes.get(field), byte_length=32)
                 if (
@@ -8829,7 +9144,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         lane_label = f"all-lanes summary lanes[{index}]"
         for field in sorted(
             (field for field in lane if field not in PUBLIC_LANE_FIELDS),
-            key=lambda field: str(field),
+            key=_safe_public_key_sort_key,
         ):
             errors.append(f"{lane_label} {_unexpected_record_field_detail(field)}")
         errors.extend(
@@ -8871,7 +9186,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         else:
             for field in sorted(
                 (field for field in records if field not in PUBLIC_LANE_RECORD_FIELDS),
-                key=lambda field: str(field),
+                key=_safe_public_key_sort_key,
             ):
                 errors.append(f"{lane_label} records {_unexpected_record_field_detail(field)}")
             for field in PUBLIC_LANE_RECORD_FIELDS:
@@ -8988,7 +9303,16 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     f"{lane_label}.source_adapter_gate.audit_hashes must be an object"
                 )
             elif domain in LANE_PROFILES:
-                _gate_field, audit_fields = _source_adapter_gate_requirements(domain)
+                (
+                    (_gate_field, audit_fields),
+                    requirement_errors,
+                ) = _source_adapter_gate_requirements_or_errors(
+                    f"{lane_label}.source_adapter_gate",
+                    domain,
+                )
+                if requirement_errors:
+                    errors.extend(requirement_errors)
+                    audit_fields = ()
                 errors.extend(
                     _public_lane_object_field_errors(
                         audit_hashes,
@@ -9416,6 +9740,13 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     )
                 )
             canary_label = f"{lane_label}.route_allowlist.route_canary"
+            errors.extend(
+                _public_lane_route_canary_template_hash_errors(
+                    route_canary,
+                    canary_label,
+                    domain,
+                )
+            )
             errors.extend(
                 _public_lane_optional_canonical_string_errors(
                     route_canary,
@@ -10064,7 +10395,7 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
     public_summary_fields = set(ALL_LANES_PUBLIC_SUMMARY_FIELDS)
     for field in sorted(
         (field for field in summary if field not in public_summary_fields),
-        key=lambda item: str(item),
+        key=_safe_public_key_sort_key,
     ):
         blockers.append(
             f"all-lanes summary {_unexpected_record_field_detail(field)}"

@@ -59,7 +59,7 @@ public final class IrohaKeyManager {
     if (providers.isEmpty()) {
       throw new IllegalArgumentException("At least one KeyProvider is required");
     }
-    this.providers = List.copyOf(providers);
+    this.providers = Collections.unmodifiableList(new ArrayList<>(providers));
     this.keystoreTelemetry =
         keystoreTelemetry == null ? KeystoreTelemetryEmitter.noop() : keystoreTelemetry;
     this.signingAlgorithm =
@@ -103,7 +103,7 @@ public final class IrohaKeyManager {
   /** Creates a manager with a software provider only (desktop/emulator friendly). */
   public static IrohaKeyManager withSoftwareProvider(final SigningAlgorithm signingAlgorithm) {
     return new IrohaKeyManager(
-        List.of(new SoftwareKeyProvider(signingAlgorithm)),
+        Collections.singletonList(new SoftwareKeyProvider(signingAlgorithm)),
         KeystoreTelemetryEmitter.noop(),
         signingAlgorithm);
   }
@@ -129,7 +129,7 @@ public final class IrohaKeyManager {
     Objects.requireNonNull(exportStore, "exportStore");
     Objects.requireNonNull(passphraseProvider, "passphraseProvider");
     return new IrohaKeyManager(
-        List.of(
+        Collections.singletonList(
             new SoftwareKeyProvider(
                 SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
                 exportStore,
@@ -192,7 +192,7 @@ public final class IrohaKeyManager {
       throws KeyManagementException {
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(preference, "preference");
-    if (alias.isBlank()) {
+    if (alias.trim().isEmpty()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
     enforceAlgorithmPreference(preference);
@@ -637,7 +637,7 @@ public final class IrohaKeyManager {
   public Optional<KeyAttestation> generateAttestation(
       final String alias, final byte[] challenge) throws KeyManagementException {
     Objects.requireNonNull(alias, "alias");
-    if (alias.isBlank()) {
+    if (alias.trim().isEmpty()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
 

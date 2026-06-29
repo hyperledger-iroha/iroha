@@ -288,8 +288,14 @@ SameHeightVoteConflictMatchesSpec ==
   /\ \A c \in PendingVerificationCases:
        ActualPendingOutput(c) = SpecPendingOutput(c)
 
+SameHeightVoteConflictExactness ==
+  /\ SameHeightVoteConflictMatchesSpec
+SameHeightVoteConflictCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ SameHeightVoteConflictExactness
+
 SafetyFast ==
-  SameHeightVoteConflictMatchesSpec
+  SameHeightVoteConflictExactness
 
 BugSelectsNonlocal ==
   ActualSelectionOutput("wrong_signer_ignored") =

@@ -378,21 +378,33 @@ ClassicPreimageMutableMaterialExactness ==
   /\ AllConcretePreimagesExcludeMutableSignatures
 
 ClassicSigningPreimageExactness ==
-  /\ ClassicPreimageLiveStateExactness
-  /\ ClassicPreimageSpecProjectionExactness
-  /\ ClassicPreimageDomainExactness
-  /\ ClassicPreimageTypeExactness
-  /\ ClassicPreimageVoteSubjectExactness
-  /\ ClassicPreimageHighestQcExactness
-  /\ ClassicPreimageVrfBodyExactness
-  /\ ClassicPreimageMutableMaterialExactness
+  /\ FieldsMatchSpec
+  /\ PreimagesBindDomain
+  /\ VoteUsesVoteTypeOnly
+  /\ VrfCommitUsesCommitTypeOnly
+  /\ VrfRevealUsesRevealTypeOnly
+  /\ VoteBindsSubject
+  /\ VoteWithoutHighestBindsAbsenceOnly
+  /\ VoteWithHighestBindsReference
+  /\ VrfCommitBindsBody
+  /\ VrfRevealBindsBody
+  /\ PreimagesExcludeMutableSignatures
+  /\ AllConcretePreimagesMatchSpec
+  /\ AllConcretePreimagesBindDomain
+  /\ ConcreteVoteTypeAnchors
+  /\ ConcreteVrfCommitTypeAnchors
+  /\ ConcreteVrfRevealTypeAnchors
+  /\ AllConcreteVotesBindSubject
+  /\ VoteWithoutHighestConcreteAnchors
+  /\ VoteWithHighestConcreteAnchors
+  /\ VrfConcreteBodyAnchors
+  /\ AllConcretePreimagesExcludeMutableSignatures
   /\ ClassicPreimageSafetyAnchors
 
 Safety == ClassicSigningPreimageExactness
 
 ClassicSigningPreimageCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ ClassicPreimageSafetyAnchors
+  /\ ClassicSigningPreimageExactness
 
 ====

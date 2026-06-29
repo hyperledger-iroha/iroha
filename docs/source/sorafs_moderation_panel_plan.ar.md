@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 401219b49e74c36c4b024888b11317431f5d34a00e474686e858d409b600a507
+source_hash: 54625457389e1b7ba8e82e0fc7682f0de239461aa0bf39019d96f1defbf76c99
 source_last_modified: "2026-06-25T17:11:06+00:00"
 translation_last_reviewed: 2026-06-25
 ---

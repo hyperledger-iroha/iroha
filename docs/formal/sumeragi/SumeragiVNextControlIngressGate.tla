@@ -336,7 +336,7 @@ ZeroNewViewDoesNotTrigger ==
 NonzeroViewTriggers ==
   candidate \in NonzeroViewCases => triggerViewChange
 
-Safety ==
+VNextControlIngressExactness ==
   /\ MatchesSpec
   /\ RechainNoRoundDoesNotMutateLiveRound
   /\ CurrentRechainCertificateIsNoOp
@@ -350,6 +350,13 @@ Safety ==
   /\ ViewMissingRoundOrNoHighestDoesNotAbort
   /\ ZeroNewViewDoesNotTrigger
   /\ NonzeroViewTriggers
+
+Safety ==
+  VNextControlIngressExactness
+
+VNextControlIngressCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextControlIngressExactness
 
 =============================================================================
 ====

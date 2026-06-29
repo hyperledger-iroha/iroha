@@ -332,6 +332,12 @@ NewViewHighestQcVotesMatchesSpec ==
 SafetyFast ==
   NewViewHighestQcVotesMatchesSpec
 
+NewViewHighestQcVotesExactness ==
+  /\ NewViewHighestQcVotesMatchesSpec
+NewViewHighestQcVotesCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NewViewHighestQcVotesExactness
+
 BugIncludeNonSigner ==
   ActualGroups("signers_filter") = SpecGroups("signers_filter")
 

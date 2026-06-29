@@ -201,6 +201,13 @@ LiveVoteRosterMatchesSpec ==
 SafetyFast ==
   LiveVoteRosterMatchesSpec
 
+LiveVoteRosterExactness ==
+  /\ LiveVoteRosterMatchesSpec
+
+LiveVoteRosterCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ LiveVoteRosterExactness
+
 BugAllowFuturePending ==
   ActualActions(FutureWithPendingIgnored) =
     SpecActions(FutureWithPendingIgnored)

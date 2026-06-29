@@ -168,4 +168,21 @@ DuplicateReadyDoesNotInflateDeliver ==
 DeliveredMatchesSpec ==
   delivered = (distinctReady >= RequiredSpec(uniquePeers, forceOne, localEmission))
 
+RbcDeliverQuorumExactness ==
+  /\ RequiredMatchesSpec
+  /\ DefaultQuorumMatchesDedupedTopology
+  /\ ForceOneLocalEmissionUsesSingleReadyThreshold
+  /\ ForceOneInboundAcceptanceUsesProtocolThreshold
+  /\ ReadyCountUsesDistinctSenders
+  /\ NoDeliverBeforeDistinctReadyQuorum
+  /\ DuplicateReadyDoesNotInflateDeliver
+  /\ DeliveredMatchesSpec
+
+Safety ==
+  RbcDeliverQuorumExactness
+
+RbcDeliverQuorumCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RbcDeliverQuorumExactness
+
 ====

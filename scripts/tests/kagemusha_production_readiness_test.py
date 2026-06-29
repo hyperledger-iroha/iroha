@@ -11718,7 +11718,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             manifest["abi6_reserved_lineage"]["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = "operator_override_v1"
             write_json(out, manifest)
             stderr = io.StringIO()
@@ -11755,7 +11755,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "compact_token_max_hops"
             ] = "forged-abi6-limit-do-not-leak"
             manifest["abi6_reserved_lineage"]["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = "forged_abi6_mode_do_not_leak"
             write_json(out, manifest)
             stderr = io.StringIO()
@@ -16376,7 +16376,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["abi6_reserved_lineage"]["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = ""
             summary["lineage_proof_evidence"]["circuit_ids"]["append"] = True
             write_json(summary_path, summary)
@@ -24911,7 +24911,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -24996,7 +24996,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -25029,7 +25029,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": limits,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                     "token=abi6-mode-secret": "must stay hidden",
                 },
                 "token=abi6-manifest-secret": "must stay hidden",
@@ -25175,7 +25175,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "transition_profile"
             ] = "token=abi6-domain-value-secret"
             manifest["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = "token=abi6-mode-value-secret"
             manifest["operations"][0]["name"] = "token=abi6-operation-value-secret"
             manifest["operations"][0]["input_archives"] = [
@@ -25206,7 +25206,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "abi6_manifest_proof_circuit_ids",
                 "abi6_manifest_limit",
                 "abi6_manifest_domains",
-                "abi6_manifest_fallback_mode",
+                "abi6_manifest_recursive_unavailable_mode",
                 "abi6_manifest_modes",
                 "abi6_manifest_operation_inventory",
                 "abi6_manifest_hop_policy",
@@ -26801,7 +26801,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                     "modes": {
                         "preferred_when_recursive_available": "recursive_spend_v1",
-                        "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                        "preferred_when_recursive_unavailable": None,
                     },
                 }
                 write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -26840,7 +26840,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(external_manifest, manifest)
@@ -26884,7 +26884,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(manifest_path, manifest)
@@ -26950,7 +26950,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(manifest_path, manifest)
@@ -27007,7 +27007,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -27044,7 +27044,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(external_manifest, manifest)

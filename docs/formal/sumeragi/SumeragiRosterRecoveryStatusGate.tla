@@ -198,7 +198,7 @@ Next ==
 TypeInvariant ==
   checked \in 0..19
 
-Safety ==
+RosterRecoveryStatusActionsMatchSpec ==
   /\ ImplementationActions(ResetEmpty) = SpecActions(ResetEmpty)
   /\ ImplementationActions(DetectedRecord) = SpecActions(DetectedRecord)
   /\ ImplementationActions(ElectionAttemptRecord) =
@@ -233,7 +233,10 @@ Safety ==
        SpecActions(ResetAfterRecordsClears)
 
 RosterRecoveryStatusExactness ==
-  Safety
+  /\ RosterRecoveryStatusActionsMatchSpec
+
+Safety ==
+  RosterRecoveryStatusExactness
 
 RosterRecoveryStatusCorrectnessEnvelope ==
   /\ TypeInvariant

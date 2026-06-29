@@ -26,7 +26,9 @@ cross-artifact `release_manifest_digest_hex` binding from release archives,
 downstream packages, cookbook smoke, FFI/header contract, and governance
 approval evidence back to a valid signed manifest in the same bundle, and
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
-collection planner/runner. The JavaScript SDK already exposes the Rust-backed
+collection planner/runner with dry-run `evidence_contract` output for each
+selected release evidence schema and required payload field. The JavaScript SDK
+already exposes the Rust-backed
 orderbook and PDP reference validators from both the package root and
 `@iroha/iroha-js/sorafs`; the Python SDK exposes the same orderbook and PDP
 outcome contract from `iroha_python.sorafs` and the package root.
@@ -387,8 +389,9 @@ convert decoded or raw Norito payloads into the shared validation functions.
 4. Before promotion, run
    `scripts/run_sorafs_reference_sdk_release_evidence.py
    @scripts/examples/sorafs_reference_sdk_release_collection.args.example
-   --dry-run` to capture the exact verifier command and thresholds, then execute
-   the runner against reviewed evidence paths.
+   --dry-run` to capture the exact verifier command, thresholds, and
+   `evidence_contract` schema/field requirements, then execute the runner
+   against reviewed evidence paths.
 
 ### Metrics Guide
 
@@ -462,7 +465,9 @@ not bound to the governed release key roster, targets, downstream packages,
 smoke evidence, and a `release_manifest_digest_hex` matching a valid signed
 manifest artifact in the same bundle. Release-manifest binding failures are
 recorded on the offending artifact before required-kind validity is computed,
-so the JSON summary matches the fail-closed release decision.
+so the JSON summary matches the fail-closed release decision. The runner's
+dry-run plan includes an `evidence_contract` map that operators can review
+before collecting release evidence.
 
 The release evidence scripts have focused Python coverage in:
 
@@ -489,10 +494,11 @@ Implemented locally:
 - Published operator, metrics, and binding-generation guidance for packaging,
   telemetry extraction, C FFI header synchronization, downstream selector
   parity, and SF-11 release evidence handoff.
-- Fail-closed SF-11 release evidence gate, collection planner, operator argfile
-  templates, and focused tests for release archives, signed manifests,
-  downstream bindings, cookbook smoke, FFI/header contract, and governance
-  approval, including cross-artifact signed-manifest digest binding.
+- Fail-closed SF-11 release evidence gate, collection planner with dry-run
+  `evidence_contract` schema/field output, operator argfile templates, and
+  focused tests for release archives, signed manifests, downstream bindings,
+  cookbook smoke, FFI/header contract, and governance approval, including
+  cross-artifact signed-manifest digest binding.
 
 Remaining production gates:
 - Run the packaging helper for the supported release targets and publish signed

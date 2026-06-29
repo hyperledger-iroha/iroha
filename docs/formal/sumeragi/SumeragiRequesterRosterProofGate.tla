@@ -153,8 +153,15 @@ TypeInvariant ==
 AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
 
+RequesterRosterProofExactness ==
+  /\ AllCasesMatchSpec
+
+RequesterRosterProofCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RequesterRosterProofExactness
+
 Safety ==
-  AllCasesMatchSpec
+  RequesterRosterProofExactness
 
 PositiveProofSources ==
   /\ Matches("committed_snapshot")

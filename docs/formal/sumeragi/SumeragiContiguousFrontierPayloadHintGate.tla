@@ -267,11 +267,6 @@ PayloadHintRejectsIneligibleInputs ==
   /\ ActualHash(NoEligible) = 0
 
 ContiguousFrontierPayloadHintExactness ==
-  /\ PayloadHintHasExactPositiveEvidence
-  /\ PayloadHintPreservesDeterministicOrdering
-  /\ PayloadHintRejectsIneligibleInputs
-
-SafetyFast ==
   /\ PhaseRanksExact
   /\ SelectionExact
   /\ DeferredOrderingStable
@@ -280,7 +275,11 @@ SafetyFast ==
   /\ MarkerFallbackStable
   /\ MarkerEligibilityStable
   /\ EmptyFallbackStable
-  /\ ContiguousFrontierPayloadHintExactness
+  /\ PayloadHintHasExactPositiveEvidence
+  /\ PayloadHintPreservesDeterministicOrdering
+  /\ PayloadHintRejectsIneligibleInputs
+
+SafetyFast == ContiguousFrontierPayloadHintExactness
 
 PhaseRankAnchors ==
   /\ PhaseRanksExact
@@ -344,8 +343,7 @@ ContiguousFrontierPayloadHintSafetyAnchors ==
 
 ContiguousFrontierPayloadHintCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ ContiguousFrontierPayloadHintSafetyAnchors
+  /\ ContiguousFrontierPayloadHintExactness
 
 Safety == ContiguousFrontierPayloadHintSafetyAnchors
 

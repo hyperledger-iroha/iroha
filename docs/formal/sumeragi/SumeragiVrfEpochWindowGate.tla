@@ -254,7 +254,7 @@ OutsideWindowsRejected ==
     /\ "outside_windows_rejected" \in fields
     /\ "outside_windows_accepted" \notin fields
 
-Safety ==
+VrfEpochWindowExactness ==
   /\ FieldsMatchSpec
   /\ ParameterClampsHold
   /\ ZeroLengthClamped
@@ -263,5 +263,14 @@ Safety ==
   /\ CommitWindowStable
   /\ RevealWindowStable
   /\ OutsideWindowsRejected
+
+VrfEpochWindowCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VrfEpochWindowExactness
+
+NoBugInvariant == VrfEpochWindowExactness
+
+Safety ==
+  VrfEpochWindowExactness
 
 ====

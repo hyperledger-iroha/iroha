@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -87,6 +88,16 @@ def _runner_notice_message(message: Any) -> str:
     ):
         raise ValueError("runner notice message must be a non-empty canonical string")
     return message
+
+
+def runner_path_size_open_flags() -> int:
+    """Return descriptor flags for no-follow runner artifact size checks."""
+
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
 
 
 def _runner_path_sequence(paths: Any, errors: list[str], *, label: str) -> Sequence[Any] | None:
@@ -255,8 +266,20 @@ def inspect_runner_path_size(
             f"{path_label} `{path_diagnostic_label(path)}` must be a path"
         )
         return None
+    path_is_symlink = inspect_runner_path_is_symlink(path, error_list, label=path_label)
+    if path_is_symlink is None:
+        return None
+    if path_is_symlink:
+        error_list.append(
+            f"{path_label} `{path_diagnostic_label(path)}` must not be a symlink"
+        )
+        return None
+    if not validate_runner_input_parent_chain(path, error_list, label=path_label):
+        return None
+    fd = -1
     try:
-        return path.stat().st_size
+        fd = os.open(path, runner_path_size_open_flags())
+        return os.fstat(fd).st_size
     except (OSError, RuntimeError) as error:
         _record_path_inspection_failure(
             error_list,
@@ -265,6 +288,9 @@ def inspect_runner_path_size(
             error=error,
         )
         return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def inspect_runner_path_is_dir(
@@ -348,13 +374,25 @@ def validate_runner_output_parent(
     return True
 
 
+def validate_runner_input_parent_chain(
+    path: Path,
+    errors: list[str],
+    *,
+    label: str,
+) -> bool:
+    """Validate an input path's parent chain before trusting its identity."""
+
+    return validate_runner_output_parent(path, errors, label=label)
+
+
 def validate_runner_output_dir(
     out_dir: Path,
     errors: list[str],
     *,
     label: str = "--out-dir",
+    require_exists: bool = False,
 ) -> bool:
-    """Validate a runner output directory target before command execution."""
+    """Validate a runner output directory target before or after command execution."""
 
     error_list = _require_error_list(errors)
     output_label = _require_label(label)
@@ -376,6 +414,8 @@ def validate_runner_output_dir(
             "must not be a symlink"
         )
         return False
+    if not validate_runner_output_parent(out_dir, error_list, label=output_label):
+        return False
     out_dir_exists = inspect_runner_path_exists(out_dir, error_list, label=output_label)
     if out_dir_exists is None:
         return False
@@ -394,6 +434,12 @@ def validate_runner_output_dir(
             )
             return False
         return True
+    if require_exists:
+        error_list.append(
+            f"{output_label} `{path_diagnostic_label(out_dir)}` "
+            "must exist and be a directory"
+        )
+        return False
     return validate_runner_output_parent(out_dir, error_list, label=output_label)
 
 
@@ -412,16 +458,32 @@ def validate_runner_preflight(
             "must exist and be a file"
         )
     else:
-        verifier_is_file = inspect_runner_path_is_file(
+        verifier_is_symlink = inspect_runner_path_is_symlink(
             verifier,
             errors,
             label="--verifier",
         )
-        if verifier_is_file is False:
-            errors.append(
-                f"--verifier `{path_diagnostic_label(verifier)}` "
-                "must exist and be a file"
-            )
+        if verifier_is_symlink is not None:
+            if verifier_is_symlink:
+                errors.append(
+                    f"--verifier `{path_diagnostic_label(verifier)}` "
+                    "must not be a symlink"
+                )
+            elif validate_runner_input_parent_chain(
+                verifier,
+                errors,
+                label="--verifier",
+            ):
+                verifier_is_file = inspect_runner_path_is_file(
+                    verifier,
+                    errors,
+                    label="--verifier",
+                )
+                if verifier_is_file is False:
+                    errors.append(
+                        f"--verifier `{path_diagnostic_label(verifier)}` "
+                        "must exist and be a file"
+                    )
 
     out_dir = getattr(args, "out_dir", None)
     if not isinstance(out_dir, Path):
@@ -444,28 +506,44 @@ def validate_runner_preflight(
             errors,
             label="--summary-out",
         )
-        if summary_out_is_symlink:
+        if summary_out_is_symlink is None:
+            pass
+        elif summary_out_is_symlink:
             errors.append(
                 f"--summary-out `{path_diagnostic_label(summary_out)}` "
                 "must not be a symlink"
             )
-        summary_out_exists = inspect_runner_path_exists(
-            summary_out,
-            errors,
-            label="--summary-out",
-        )
-        if summary_out_exists:
-            summary_out_is_dir = inspect_runner_path_is_dir(
+        elif validate_runner_output_parent(summary_out, errors, label="--summary-out"):
+            summary_out_exists = inspect_runner_path_exists(
                 summary_out,
                 errors,
                 label="--summary-out",
             )
-            if summary_out_is_dir:
-                errors.append(
-                    f"--summary-out `{path_diagnostic_label(summary_out)}` "
-                    "must not be a directory"
+            if summary_out_exists:
+                summary_out_is_dir = inspect_runner_path_is_dir(
+                    summary_out,
+                    errors,
+                    label="--summary-out",
                 )
-            elif summary_out_is_dir is False:
+                if summary_out_is_dir:
+                    errors.append(
+                        f"--summary-out `{path_diagnostic_label(summary_out)}` "
+                        "must not be a directory"
+                    )
+                elif summary_out_is_dir is False:
+                    summary_out_identity = resolve_runner_output_path(summary_out, errors)
+                    if (
+                        out_dir_identity is not None
+                        and summary_out_identity is not None
+                        and summary_out_identity == out_dir_identity
+                    ):
+                        errors.append(
+                            "--summary-out `{}` must not be the same path as --out-dir `{}`".format(
+                                path_diagnostic_label(summary_out),
+                                path_diagnostic_label(out_dir),
+                            )
+                        )
+            elif summary_out_exists is False:
                 summary_out_identity = resolve_runner_output_path(summary_out, errors)
                 if (
                     out_dir_identity is not None
@@ -478,20 +556,6 @@ def validate_runner_preflight(
                             path_diagnostic_label(out_dir),
                         )
                     )
-        elif summary_out_exists is False:
-            validate_runner_output_parent(summary_out, errors, label="--summary-out")
-            summary_out_identity = resolve_runner_output_path(summary_out, errors)
-            if (
-                out_dir_identity is not None
-                and summary_out_identity is not None
-                and summary_out_identity == out_dir_identity
-            ):
-                errors.append(
-                    "--summary-out `{}` must not be the same path as --out-dir `{}`".format(
-                        path_diagnostic_label(summary_out),
-                        path_diagnostic_label(out_dir),
-                    )
-                )
     return errors
 
 
@@ -631,17 +695,22 @@ def require_existing_files(
         path_exists = inspect_runner_path_exists(path, errors, label=path_label)
         if path_exists is None:
             continue
-        path_is_symlink = False
-        if not path_exists:
-            inspected_symlink = inspect_runner_path_is_symlink(
-                path,
-                errors,
-                label=path_label,
+        path_is_symlink = inspect_runner_path_is_symlink(
+            path,
+            errors,
+            label=path_label,
+        )
+        if path_is_symlink is None:
+            continue
+        if path_is_symlink:
+            errors.append(
+                f"{path_label} `{path_diagnostic_label(path)}` "
+                "must not be a symlink"
             )
-            if inspected_symlink is None:
-                continue
-            path_is_symlink = inspected_symlink
-        if not path_exists and not path_is_symlink:
+            continue
+        if not validate_runner_input_parent_chain(path, errors, label=path_label):
+            continue
+        if not path_exists:
             errors.append(
                 f"{path_label} `{path_diagnostic_label(path)}` "
                 "must exist and be a file"
@@ -691,17 +760,22 @@ def require_existing_dirs(
         path_exists = inspect_runner_path_exists(path, errors, label=path_label)
         if path_exists is None:
             continue
-        path_is_symlink = False
-        if not path_exists:
-            inspected_symlink = inspect_runner_path_is_symlink(
-                path,
-                errors,
-                label=path_label,
+        path_is_symlink = inspect_runner_path_is_symlink(
+            path,
+            errors,
+            label=path_label,
+        )
+        if path_is_symlink is None:
+            continue
+        if path_is_symlink:
+            errors.append(
+                f"{path_label} `{path_diagnostic_label(path)}` "
+                "must not be a symlink"
             )
-            if inspected_symlink is None:
-                continue
-            path_is_symlink = inspected_symlink
-        if not path_exists and not path_is_symlink:
+            continue
+        if not validate_runner_input_parent_chain(path, errors, label=path_label):
+            continue
+        if not path_exists:
             errors.append(
                 f"{path_label} `{path_diagnostic_label(path)}` "
                 "must exist and be a directory"
@@ -764,6 +838,25 @@ def validate_command_plan_artifacts(
                 f"reserved output path `{path_diagnostic_label(path)}` "
                 "must be a path"
             )
+            continue
+        reserved_is_symlink = inspect_runner_path_is_symlink(
+            path,
+            errors,
+            label="reserved output path",
+        )
+        if reserved_is_symlink is None:
+            continue
+        if reserved_is_symlink:
+            errors.append(
+                f"reserved output path `{path_diagnostic_label(path)}` "
+                "must not be a symlink"
+            )
+            continue
+        if not validate_runner_output_parent(
+            path,
+            errors,
+            label="reserved output path",
+        ):
             continue
         resolved = resolve_runner_output_path(path, errors)
         if resolved is not None:
@@ -943,8 +1036,23 @@ def run_command_plan(plan: Any, out_dir: Path) -> int:
                 (f"{label} failed with exit code {result.returncode}",)
             )
             return result.returncode
+        out_dir_errors: list[str] = []
+        if not validate_runner_output_dir(
+            out_dir,
+            out_dir_errors,
+            require_exists=True,
+        ):
+            emit_runner_error_lines(out_dir_errors)
+            return 1
         if artifact is not None:
             artifact_errors: list[str] = []
+            if not validate_runner_output_parent(
+                artifact,
+                artifact_errors,
+                label=f"{label} expected artifact",
+            ):
+                emit_runner_error_lines(artifact_errors)
+                return 1
             artifact_is_symlink = inspect_runner_path_is_symlink(
                 artifact,
                 artifact_errors,

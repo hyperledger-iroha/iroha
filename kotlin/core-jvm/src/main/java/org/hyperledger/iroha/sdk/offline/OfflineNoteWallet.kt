@@ -38,8 +38,8 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 /**
- * Archived classic Offline Note wallet/model helpers retained for compatibility
- * fixtures; production offline payments use Kagemusha.
+ * Archived classic Offline Note wallet/model helpers kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
  */
 enum class OfflineNoteWalletNoteState {
     SPENDABLE,
@@ -1194,7 +1194,7 @@ class ToriiOfflineNoteOutcomeProvider @JvmOverloads constructor(
         headers.keys.firstOrNull { it.equals(name, ignoreCase = true) }
 }
 
-/** Compatibility submitter that rejects retired classic Offline Note payment transactions. */
+/** Fail-closed submitter that rejects retired classic Offline Note payment transactions. */
 @Suppress("UNUSED_PARAMETER")
 class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
     client: IrohaClient,
@@ -1249,8 +1249,8 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
 }
 
 /**
- * Archived classic Offline Note wallet facade retained for compatibility
- * fixtures; production offline payments use Kagemusha.
+ * Archived classic Offline Note wallet facade kept as fixture-only input;
+ * production offline payments use Kagemusha.
  */
 class OfflineNoteWallet @JvmOverloads constructor(
     private val chainId: String,

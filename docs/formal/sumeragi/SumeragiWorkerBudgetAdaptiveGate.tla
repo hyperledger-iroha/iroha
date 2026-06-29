@@ -432,7 +432,7 @@ NoBacklogPreservesCaps ==
     /\ payloadCap = "Preserve"
     /\ rbcCap = "Preserve"
 
-Safety ==
+WorkerBudgetAdaptiveExactness ==
   /\ MatchesSpec
   /\ WorkerTimeBudgetClamps
   /\ VoteDrainBudgetClamps
@@ -442,6 +442,15 @@ Safety ==
   /\ AdaptiveVoteBacklogCaps
   /\ AdaptiveBlockBacklogCaps
   /\ NoBacklogPreservesCaps
+
+WorkerBudgetAdaptiveCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerBudgetAdaptiveExactness
+
+NoBugInvariant == WorkerBudgetAdaptiveExactness
+
+Safety ==
+  WorkerBudgetAdaptiveExactness
 
 =============================================================================
 ====

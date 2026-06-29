@@ -280,8 +280,12 @@ Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
 
+PhaseLatencyStatusActionsMatchSpec ==
+  \A c \in Candidates:
+    ImplementationActions(c) = SpecActions(c)
+
 PhaseLatencyStatusExactness ==
-  Safety
+  /\ PhaseLatencyStatusActionsMatchSpec
 
 PhaseLatencyStatusCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -561,8 +561,17 @@ BlockingPendingBlocksCoreSafety ==
   /\ ProgressRescheduleAndAgeWindow
 
 BlockingPendingBlocksExactness ==
-  BlockingPendingBlocksCoreSafety
-
+  /\ ClassicResultMatchesSpec
+  /\ ProgressResultMatchesSpec
+  /\ ClassicCountsMatchPredicate
+  /\ ProgressCountsMatchPredicate
+  /\ ClassicCommitQcDominatesReschedule
+  /\ ClassicRescheduleAndFastUnblockRelease
+  /\ ClassicRequiresActiveTipPending
+  /\ ProgressZeroQuorumFallsBackToClassic
+  /\ ProgressRejectsAbortedAndOffTip
+  /\ ProgressVoteAndQcEvidenceBlocks
+  /\ ProgressRescheduleAndAgeWindow
 BlockingPendingBlocksCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ BlockingPendingBlocksExactness

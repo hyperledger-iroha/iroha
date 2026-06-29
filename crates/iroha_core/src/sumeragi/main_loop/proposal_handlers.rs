@@ -2357,12 +2357,13 @@ impl Actor {
             .as_ref()
             .is_some_and(|vote| {
                 block_created_highest_qc.is_some_and(|highest_qc| {
-                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                    self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                         height,
                         view,
                         highest_qc,
                         vote.block_hash,
                         vote.view,
+                        vote.phase,
                     )
                 })
             });
@@ -2416,7 +2417,9 @@ impl Actor {
             self.same_height_vote_lock_blocking_candidate(height, view, Some(block_hash));
         let new_view_qc_supersedes_vote_lock = same_height_vote_lock.as_ref().is_some_and(|lock| {
             block_created_highest_qc.is_some_and(|highest_qc| {
-                self.new_view_qc_supersedes_same_height_vote_lock(height, view, highest_qc, lock)
+                self.new_view_qc_supersedes_noncommit_same_height_vote_lock(
+                    height, view, highest_qc, lock,
+                )
             })
         });
         let stale_vote_lock_can_rotate = same_height_vote_lock.as_ref().is_some_and(|lock| {
@@ -3108,24 +3111,38 @@ impl Actor {
                 && !self.block_known_for_lock(lock.subject_block_hash)
                 && (hint_highest.height, hint_highest.view) >= (lock.height, lock.view)
             {
-                warn!(
-                    locked_qc_height = lock.height,
-                    locked_qc_view = lock.view,
-                    locked_qc_hash = %lock.subject_block_hash,
-                    hint_highest_qc_height = hint_highest.height,
-                    hint_highest_qc_view = hint_highest.view,
-                    hint_highest_qc_hash = %hint_highest.subject_block_hash,
-                    height,
-                    view,
-                    "locked QC missing from local block store; replacing lock from BlockCreated hint"
-                );
-                self.locked_qc = Some(hint_highest);
-                super::status::set_locked_qc(
-                    hint_highest.height,
-                    hint_highest.view,
-                    Some(hint_highest.subject_block_hash),
-                );
-                adopted_missing_locked_qc = true;
+                if self.block_known_for_lock(hint_highest.subject_block_hash) {
+                    warn!(
+                        locked_qc_height = lock.height,
+                        locked_qc_view = lock.view,
+                        locked_qc_hash = %lock.subject_block_hash,
+                        hint_highest_qc_height = hint_highest.height,
+                        hint_highest_qc_view = hint_highest.view,
+                        hint_highest_qc_hash = %hint_highest.subject_block_hash,
+                        height,
+                        view,
+                        "locked QC missing from local block store; replacing lock from known BlockCreated hint"
+                    );
+                    self.locked_qc = Some(hint_highest);
+                    super::status::set_locked_qc(
+                        hint_highest.height,
+                        hint_highest.view,
+                        Some(hint_highest.subject_block_hash),
+                    );
+                    adopted_missing_locked_qc = true;
+                } else {
+                    info!(
+                        locked_qc_height = lock.height,
+                        locked_qc_view = lock.view,
+                        locked_qc_hash = %lock.subject_block_hash,
+                        hint_highest_qc_height = hint_highest.height,
+                        hint_highest_qc_view = hint_highest.view,
+                        hint_highest_qc_hash = %hint_highest.subject_block_hash,
+                        height,
+                        view,
+                        "deferring BlockCreated hint lock adoption until hinted highest-QC payload is locally known"
+                    );
+                }
             }
             let hint_highest_missing = !self.block_known_for_lock(hint_highest.subject_block_hash);
             if hint_highest_missing && !adopted_missing_locked_qc {
@@ -3229,24 +3246,58 @@ impl Actor {
                     let locked_missing =
                         locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
                     if locked_missing {
-                        warn!(
-                            ?reason,
-                            locked_qc_height = self.locked_qc.map(|qc| qc.height),
-                            locked_qc_view = self.locked_qc.map(|qc| qc.view),
-                            locked_qc_hash = ?locked_hash,
-                            hint_highest_qc_height = hint.highest_qc.height,
-                            hint_highest_qc_view = hint.highest_qc.view,
-                            hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
-                            height,
-                            view,
-                            "locked QC missing from kura; accepting BlockCreated and replacing lock"
-                        );
-                        self.locked_qc = Some(hint.highest_qc);
-                        super::status::set_locked_qc(
-                            hint.highest_qc.height,
-                            hint.highest_qc.view,
-                            Some(hint.highest_qc.subject_block_hash),
-                        );
+                        if self.block_known_for_lock(hint.highest_qc.subject_block_hash) {
+                            warn!(
+                                ?reason,
+                                locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                                locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                                locked_qc_hash = ?locked_hash,
+                                hint_highest_qc_height = hint.highest_qc.height,
+                                hint_highest_qc_view = hint.highest_qc.view,
+                                hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                                height,
+                                view,
+                                "locked QC missing from kura; accepting BlockCreated and replacing lock with known hint"
+                            );
+                            self.locked_qc = Some(hint.highest_qc);
+                            super::status::set_locked_qc(
+                                hint.highest_qc.height,
+                                hint.highest_qc.view,
+                                Some(hint.highest_qc.subject_block_hash),
+                            );
+                        } else {
+                            info!(
+                                ?reason,
+                                locked_qc_height = self.locked_qc.map(|qc| qc.height),
+                                locked_qc_view = self.locked_qc.map(|qc| qc.view),
+                                locked_qc_hash = ?locked_hash,
+                                hint_highest_qc_height = hint.highest_qc.height,
+                                hint_highest_qc_view = hint.highest_qc.view,
+                                hint_highest_qc_hash = ?hint.highest_qc.subject_block_hash,
+                                height,
+                                view,
+                                "deferring BlockCreated while locked QC and replacement hint payloads are both missing"
+                            );
+                            self.defer_round_until_highest_qc_dependency_resolves(
+                                height,
+                                view,
+                                hint.highest_qc,
+                                "block_created_missing_lock_and_hint",
+                            );
+                            self.preserve_block_created_for_highest_qc_repair(
+                                &block,
+                                frontier.clone(),
+                                inline_hint,
+                                inline_proposal,
+                                sender.clone(),
+                            );
+                            self.record_consensus_message_handling(
+                                super::status::ConsensusMessageKind::BlockCreated,
+                                super::status::ConsensusMessageOutcome::Dropped,
+                                super::status::ConsensusMessageReason::MissingHighestQc,
+                            );
+                            return Ok(());
+                        }
                     } else if let Some(lock) = self.locked_qc.filter(|lock| {
                         matches!(reason, LockedQcRejection::HeightRegressed { .. })
                             && lock.height == height

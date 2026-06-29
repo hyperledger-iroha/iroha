@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shlex
 from collections.abc import Mapping, Sequence
@@ -20,6 +21,7 @@ MAX_RESPONSE_ARGFILE_BYTES = 256 * 1024
 MAX_RESPONSE_ARGFILE_DEPTH = 16
 MAX_EXPANDED_ARGS = 8192
 CANONICAL_DECIMAL_INTEGER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)\Z")
+RESPONSE_ARGFILE_CHUNK_BYTES = 1024 * 1024
 
 
 def _require_string_sequence(values: Any, *, label: str) -> Sequence[Any]:
@@ -94,6 +96,88 @@ def non_negative_int_arg(value: str) -> int:
     return parsed
 
 
+def _response_argfile_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _validate_response_argfile_parent_chain(path: Path) -> None:
+    for parent in (path.parent, *path.parent.parents):
+        parent_label = path_diagnostic_label(parent)
+        try:
+            if parent.is_symlink():
+                raise ValueError(f"@ARGFILE parent `{parent_label}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                raise ValueError(
+                    f"@ARGFILE parent `{parent_label}` must be a directory when it exists"
+                )
+        except ValueError:
+            raise
+        except (OSError, RuntimeError) as error:
+            raise ValueError(
+                "failed to inspect @ARGFILE parent `{}`: {}".format(
+                    parent_label,
+                    error_diagnostic_label(error, path_label=parent_label),
+                )
+            ) from error
+
+
+def _read_response_argfile_bytes(path: Path, path_label: str) -> bytes:
+    try:
+        if path.is_symlink():
+            raise ValueError(f"@ARGFILE `{path_label}` must not be a symlink")
+        _validate_response_argfile_parent_chain(path)
+        if not path.is_file():
+            raise ValueError(f"@ARGFILE `{path_label}` must exist and be a file")
+    except ValueError:
+        raise
+    except (OSError, RuntimeError) as error:
+        raise ValueError(
+            "failed to stat @ARGFILE `{}`: {}".format(
+                path_label,
+                error_diagnostic_label(error, path_label=path_label),
+            )
+        ) from error
+
+    chunks: list[bytes] = []
+    size = 0
+    fd = -1
+    try:
+        fd = os.open(path, _response_argfile_open_flags())
+        declared_size = os.fstat(fd).st_size
+        if declared_size > MAX_RESPONSE_ARGFILE_BYTES:
+            raise ValueError(
+                f"@ARGFILE `{path_label}` exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes"
+            )
+        handle = os.fdopen(fd, "rb")
+        fd = -1
+        with handle:
+            for chunk in iter(lambda: handle.read(RESPONSE_ARGFILE_CHUNK_BYTES), b""):
+                size += len(chunk)
+                if size > MAX_RESPONSE_ARGFILE_BYTES:
+                    raise ValueError(
+                        f"@ARGFILE `{path_label}` exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes"
+                    )
+                chunks.append(chunk)
+    except ValueError:
+        raise
+    except (OSError, RuntimeError) as error:
+        raise ValueError(
+            "failed to read @ARGFILE `{}`: {}".format(
+                path_label,
+                error_diagnostic_label(error, path_label=path_label),
+            )
+        ) from error
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return b"".join(chunks)
+
+
 def expand_response_args(
     args: Sequence[str],
     parser: argparse.ArgumentParser,
@@ -131,31 +215,7 @@ def expand_response_args(
         if resolved in seen:
             raise ValueError(f"recursive @ARGFILE reference `{path_label}`")
         try:
-            if not path.is_file():
-                raise ValueError(
-                    f"@ARGFILE `{path_label}` must exist and be a file"
-                )
-            size = path.stat().st_size
-        except (OSError, RuntimeError) as error:
-            raise ValueError(
-                "failed to stat @ARGFILE `{}`: {}".format(
-                    path_label,
-                    error_diagnostic_label(error, path_label=path_label),
-                )
-            ) from error
-        if size > MAX_RESPONSE_ARGFILE_BYTES:
-            raise ValueError(
-                f"@ARGFILE `{path_label}` exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes"
-            )
-        try:
-            contents = path.read_bytes().decode("utf-8")
-        except (OSError, RuntimeError) as error:
-            raise ValueError(
-                "failed to read @ARGFILE `{}`: {}".format(
-                    path_label,
-                    error_diagnostic_label(error, path_label=path_label),
-                )
-            ) from error
+            contents = _read_response_argfile_bytes(path, path_label).decode("utf-8")
         except UnicodeDecodeError as error:
             raise ValueError(
                 "@ARGFILE `{}` must be UTF-8: {}".format(
@@ -163,6 +223,8 @@ def expand_response_args(
                     error_diagnostic_label(error, path_label=path_label),
                 )
             ) from error
+        except ValueError:
+            raise
         file_args: list[str] = []
         for line_number, line in enumerate(contents.splitlines(), 1):
             try:

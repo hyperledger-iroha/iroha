@@ -248,12 +248,15 @@ Next ==
 TypeInvariant ==
   checked \in 0..24
 
-Safety ==
+KuraStoreStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
 KuraStoreStatusExactness ==
-  Safety
+  /\ KuraStoreStatusActionsMatchSpec
+
+Safety ==
+  KuraStoreStatusExactness
 
 KuraStoreStatusCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -219,7 +219,7 @@ DirectCommitQcForBlockMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 DirectCommitQcForBlockExactness ==
-  DirectCommitQcForBlockMatchesSpec
+  /\ DirectCommitQcForBlockMatchesSpec
 
 DirectCommitQcForBlockCorrectnessEnvelope ==
   /\ TypeInvariant

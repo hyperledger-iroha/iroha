@@ -88,5 +88,5 @@ from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
 readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_abi7)
+print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
 ```

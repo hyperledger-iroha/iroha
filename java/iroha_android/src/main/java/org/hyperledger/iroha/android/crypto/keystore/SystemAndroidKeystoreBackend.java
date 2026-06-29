@@ -79,7 +79,7 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
   @Override
   public Optional<KeyPair> load(final String alias) throws KeyManagementException {
     Objects.requireNonNull(alias, "alias");
-    if (alias.isBlank()) {
+    if (alias.trim().isEmpty()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
     try {
@@ -104,7 +104,7 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       throws KeyManagementException {
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(parameters, "parameters");
-    if (alias.isBlank()) {
+    if (alias.trim().isEmpty()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
 
@@ -182,7 +182,7 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
   public Optional<KeyAttestation> generateAttestation(
       final String alias, final byte[] challenge) throws KeyManagementException {
     Objects.requireNonNull(alias, "alias");
-    if (alias.isBlank()) {
+    if (alias.trim().isEmpty()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
     final byte[] challengeCopy = challenge == null ? new byte[0] : challenge.clone();

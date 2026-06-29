@@ -164,7 +164,7 @@ RepairAdmissionMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockBodyRepairExactness ==
-  RepairAdmissionMatchesSpec
+  /\ RepairAdmissionMatchesSpec
 
 BlockBodyRepairCorrectnessEnvelope ==
   /\ TypeInvariant

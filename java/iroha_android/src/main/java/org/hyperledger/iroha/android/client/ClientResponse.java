@@ -37,7 +37,7 @@ public final class ClientResponse {
     this.body = Arrays.copyOf(Objects.requireNonNull(body, "body"), body.length);
     this.message = Objects.requireNonNull(message, "message");
     this.transactionHashHex = transactionHashHex == null ? null : transactionHashHex;
-    this.rejectCode = rejectCode == null || rejectCode.isBlank() ? null : rejectCode;
+    this.rejectCode = rejectCode == null || rejectCode.trim().isEmpty() ? null : rejectCode;
   }
 
   public int statusCode() {

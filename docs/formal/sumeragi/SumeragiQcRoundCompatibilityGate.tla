@@ -200,7 +200,7 @@ ViewOnlyComparisonIsRejected ==
   => /\ ImplementationCompatible("lowerHeightHigherView")
      /\ ~ImplementationCompatible("futureHeightLowerView")
 
-Safety ==
+QcRoundCompatibilityExactness ==
   /\ CompatibilityMatchesSpec
   /\ WrongEpochNeverCompatible
   /\ LowerHeightAlwaysCompatible
@@ -210,5 +210,12 @@ Safety ==
   /\ SameHeightFutureViewRejected
   /\ FutureHeightNeverCompatible
   /\ ViewOnlyComparisonIsRejected
+
+Safety ==
+  QcRoundCompatibilityExactness
+
+QcRoundCompatibilityCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ QcRoundCompatibilityExactness
 
 ====

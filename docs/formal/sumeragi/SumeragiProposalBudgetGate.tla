@@ -447,8 +447,7 @@ ProposalBudgetMatchesSpec ==
   /\ \A c \in StaleCases: ActualStaleOutput(c) = SpecStaleOutput(c)
 
 ProposalBudgetExactness ==
-  ProposalBudgetMatchesSpec
-
+  /\ ProposalBudgetMatchesSpec
 ProposalBudgetCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ ProposalBudgetExactness

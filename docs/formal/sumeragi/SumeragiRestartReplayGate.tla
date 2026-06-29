@@ -331,11 +331,11 @@ RestartReplayCanonicalCheckpointExactness ==
 
 RestartReplayExactness ==
   /\ RestartReplayCaseGroupsComplete
-  /\ RestartReplaySnapshotValidationExactness
-  /\ RestartReplayKuraParityExactness
-  /\ RestartReplayLegacyManifestExactness
-  /\ RestartReplayWriteBackExactness
-  /\ RestartReplayCanonicalCheckpointExactness
+  /\ RestartReplayActionExactFor(RestartReplaySnapshotValidationCases)
+  /\ RestartReplayActionExactFor(RestartReplayKuraParityCases)
+  /\ RestartReplayActionExactFor(RestartReplayLegacyManifestCases)
+  /\ RestartReplayActionExactFor(RestartReplayWriteBackCases)
+  /\ RestartReplayActionExactFor(RestartReplayCanonicalCheckpointCases)
 
 RestartReplayCorrectnessEnvelope ==
   /\ TypeInvariant

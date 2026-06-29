@@ -452,7 +452,7 @@ AcceptedVotesTouchProgress ==
 AcceptedVotesRequestPipelineExceptStaleNewView ==
   candidate \in (AcceptedCases \ {"stale_new_view"}) => pipeline_requested
 
-Safety ==
+VoteAdmissionExactness ==
   /\ AcceptMatchesSpec
   /\ RecordMatchesSpec
   /\ DeferredMatchesSpec
@@ -478,5 +478,13 @@ Safety ==
   /\ AcceptedVotesAttemptQc
   /\ AcceptedVotesTouchProgress
   /\ AcceptedVotesRequestPipelineExceptStaleNewView
+
+Safety == VoteAdmissionExactness
+
+VoteAdmissionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteAdmissionExactness
+
+NoBugInvariant == VoteAdmissionExactness
 
 ====

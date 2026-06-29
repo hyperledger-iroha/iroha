@@ -360,8 +360,13 @@ PendingBlockActiveForTipCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 PendingBlockActiveForTipExactness ==
-  PendingBlockActiveForTipCoreSafety
-
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ EachEvidenceSourceCanKeepPendingActive
+  /\ InactivePendingNeverActive
+  /\ TipExtensionIsRequired
+  /\ ConsensusEvidenceIsRequired
+  /\ LookupShapeMatchesShortCircuit
 PendingBlockActiveForTipCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ PendingBlockActiveForTipExactness

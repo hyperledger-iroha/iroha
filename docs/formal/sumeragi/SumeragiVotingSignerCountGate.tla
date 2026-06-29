@@ -209,7 +209,8 @@ DuplicateSupportCollapsed ==
   /\ ActualCount("duplicates_collapsed") < OccurrenceCount("duplicates_collapsed")
 
 VotingSignerSupportCountExactness ==
-  /\ Safety
+  /\ \A c \in Cases:
+    ActualCount(c) = SpecCount(c)
   /\ SpecCountBounds
   /\ VoteSupportAnchors
   /\ EmptyAndZeroRosterSupportExact

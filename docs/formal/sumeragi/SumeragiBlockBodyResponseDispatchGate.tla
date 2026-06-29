@@ -177,7 +177,7 @@ ResponseDispatchMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockBodyResponseDispatchExactness ==
-  ResponseDispatchMatchesSpec
+  /\ ResponseDispatchMatchesSpec
 
 BlockBodyResponseDispatchCorrectnessEnvelope ==
   /\ TypeInvariant

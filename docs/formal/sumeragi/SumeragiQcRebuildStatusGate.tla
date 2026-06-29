@@ -184,12 +184,15 @@ Next ==
 TypeInvariant ==
   checked \in 0..18
 
-Safety ==
+QcRebuildStatusActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
 
 QcRebuildStatusExactness ==
-  Safety
+  /\ QcRebuildStatusActionsMatchSpec
+
+Safety ==
+  QcRebuildStatusExactness
 
 QcRebuildStatusCorrectnessEnvelope ==
   /\ TypeInvariant

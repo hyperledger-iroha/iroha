@@ -101,7 +101,7 @@ public final class ConfidentialAssetToriiClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return baseUri;
     }
     if (path.startsWith("http://") || path.startsWith("https://")) {
@@ -198,7 +198,7 @@ public final class ConfidentialAssetToriiClient {
       return "unknown transport error";
     }
     final String detail = cause.getMessage();
-    return detail == null || detail.isBlank() ? cause.getClass().getSimpleName() : detail;
+    return detail == null || detail.trim().isEmpty() ? cause.getClass().getSimpleName() : detail;
   }
 
   private static String buildHttpFailureMessage(
@@ -209,16 +209,16 @@ public final class ConfidentialAssetToriiClient {
       final String bodyPreview) {
     final StringBuilder message =
         new StringBuilder("Confidential asset request failed with HTTP ").append(statusCode);
-    if (statusMessage != null && !statusMessage.isBlank()) {
+    if (statusMessage != null && !statusMessage.trim().isEmpty()) {
       message.append(" (").append(statusMessage).append(")");
     }
     if (request != null) {
       message.append(" on ").append(request.uri().getPath());
     }
-    if (rejectCode != null && !rejectCode.isBlank()) {
+    if (rejectCode != null && !rejectCode.trim().isEmpty()) {
       message.append(". reject_code=").append(rejectCode);
     }
-    if (bodyPreview != null && !bodyPreview.isBlank()) {
+    if (bodyPreview != null && !bodyPreview.trim().isEmpty()) {
       message.append(". body=").append(bodyPreview);
     }
     return message.toString();
@@ -233,7 +233,7 @@ public final class ConfidentialAssetToriiClient {
     if (request != null) {
       message.append(" for ").append(request.uri().getPath());
     }
-    if (bodyPreview != null && !bodyPreview.isBlank()) {
+    if (bodyPreview != null && !bodyPreview.trim().isEmpty()) {
       message.append(". body=").append(bodyPreview);
     }
     return message.toString();

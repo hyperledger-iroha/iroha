@@ -203,6 +203,16 @@ SourceClassesMatch ==
 ScenarioOutcomesMatch ==
   \A c \in Scenarios: ActualScenario(c) = SpecScenario(c)
 
+RoundRecoveryBundleWindowExactness ==
+  /\ ClassLabelsMatch
+  /\ SourceLabelsMatch
+  /\ SourceClassesMatch
+  /\ ScenarioOutcomesMatch
+
+RoundRecoveryBundleWindowCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ RoundRecoveryBundleWindowExactness
+
 BugCommitClassLabelWrong ==
   ActualClassLabel(CommitClass) = SpecClassLabel(CommitClass)
 

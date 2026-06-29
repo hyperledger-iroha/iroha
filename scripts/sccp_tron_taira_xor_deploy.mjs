@@ -119,9 +119,11 @@ const POST_DEPLOY_LIVE_EVIDENCE_BLOCKER_KEYS = Object.freeze([
   "route_canary_production_blockers",
 ]);
 const DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN =
-  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret)/iu;
+  /(?:private[\s_-]?key|mnemonic|recovery[\s_-]?phrase|seed[\s_-]?phrase|secret)/iu;
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
+const HTML_ENTITY_PATTERN =
+  /&(?:#([0-9]{1,7})|#x([0-9a-f]{1,6})|amp|lt|gt|quot|apos);/giu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 const PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN =
   /(?:change[\s._-]*me|replace[\s._-]*(?:me|before[\s._-]*production)|to[\s._-]*do|todo|example|sample|stub|test[\s._-]*only|your[\s._-]+[a-z0-9_-]+)/iu;
@@ -2807,7 +2809,90 @@ function normalizeOptionalStringList(value, label) {
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be a list of non-empty strings`);
   }
-  return value.map((entry, index) => normalizeNonEmptyText(entry, `${label}[${index}]`));
+  const seenBlockers = new Set();
+  return value.map((entry, index) => {
+    const normalized = normalizeNonEmptyText(entry, `${label}[${index}]`);
+    if (/[\u0000-\u001f\u007f]/u.test(normalized)) {
+      throw new Error(`${label}[${index}] contains control character`);
+    }
+    if (/[^\u0020-\u007e]/u.test(normalized)) {
+      throw new Error(`${label}[${index}] must be printable ASCII`);
+    }
+    const decodedIssue = decodedPublicBlockerTextIssue(normalized);
+    if (decodedIssue !== null) {
+      throw new Error(`${label}[${index}] ${decodedIssue}`);
+    }
+    if (sensitivePublicBlockerText(normalized)) {
+      throw new Error(`${label}[${index}] contains sensitive name`);
+    }
+    const blockerKey = canonicalPublicBlockerKey(normalized);
+    if (seenBlockers.has(blockerKey)) {
+      throw new Error(`${label} must not contain duplicate strings`);
+    }
+    seenBlockers.add(blockerKey);
+    return normalized;
+  });
+}
+
+function decodedPublicBlockerText(value) {
+  let decoded = value.replace(
+    HTML_ENTITY_PATTERN,
+    (match, decimalEntity, hexEntity) => {
+      if (decimalEntity !== undefined) {
+        const codePoint = Number.parseInt(decimalEntity, 10);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (hexEntity !== undefined) {
+        const codePoint = Number.parseInt(hexEntity, 16);
+        return codePoint > 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      const namedEntity = match.toLowerCase();
+      if (namedEntity === "&amp;") return "&";
+      if (namedEntity === "&lt;") return "<";
+      if (namedEntity === "&gt;") return ">";
+      if (namedEntity === "&quot;") return '"';
+      if (namedEntity === "&apos;") return "'";
+      return match;
+    },
+  );
+  for (let index = 0; index < 3; index += 1) {
+    let nextDecoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+  }
+  return decoded;
+}
+
+function decodedPublicBlockerTextIssue(value) {
+  const decoded = decodedPublicBlockerText(value);
+  if (/[\u0000-\u001f\u007f]/u.test(decoded)) {
+    return "contains decoded control character";
+  }
+  if (/[^\u0020-\u007e]/u.test(decoded)) {
+    return "contains decoded non-ASCII character";
+  }
+  return null;
+}
+
+function sensitivePublicBlockerText(value) {
+  return DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN.test(
+    decodedPublicBlockerText(value),
+  );
+}
+
+function canonicalPublicBlockerKey(value) {
+  return decodedPublicBlockerText(value).toLowerCase();
 }
 
 function postDeployLiveEvidenceProductionBlockers(record) {
@@ -2829,9 +2914,32 @@ function postDeployLiveEvidenceProductionBlockers(record) {
   return blockers;
 }
 
+function isCanonicalTronBase58MaterialString(value) {
+  try {
+    normalizeTronBase58Address(value, "route manifest opaque TRON address");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isOpaqueProductionMaterialString(value) {
+  const text = value.trim();
+  return (
+    text === value &&
+    (/^0x[0-9a-f]{64}$/u.test(text) ||
+      /^sha256:[0-9a-f]{64}$/u.test(text) ||
+      isCanonicalTronBase58MaterialString(text) ||
+      (text.length >= 96 && /^[A-Za-z0-9+/=_-]+$/u.test(text)))
+  );
+}
+
 function productionHandoffPlaceholderReason(value, path = "route manifest", seen = new WeakSet()) {
   if (typeof value === "string") {
-    return PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(value) ? path : null;
+    return !isOpaqueProductionMaterialString(value) &&
+      PRODUCTION_HANDOFF_PLACEHOLDER_PATTERN.test(value)
+      ? path
+      : null;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) return null;

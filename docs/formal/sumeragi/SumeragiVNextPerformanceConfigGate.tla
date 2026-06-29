@@ -220,8 +220,34 @@ VNextPerformanceConfigCoreSafety ==
   /\ ConfigDurationIndependence
   /\ ConfigOverflowSaturationAnchors
 
+VNextPerformanceConfigExactness ==
+  /\ \A c \in DurationCases:
+       ActualDurationMillis(c) = SpecDurationMillis(c)
+  /\ \A c \in ConfigCases:
+       ActualWindow(c) = SpecWindow(c)
+  /\ \A c \in ConfigCases:
+       ActualSuspicionMs(c) = SpecSuspicionMs(c)
+  /\ \A c \in ConfigCases:
+       ActualThreshold(c) = SpecThreshold(c)
+  /\ \A c \in ConfigCases:
+       ActualMaxTainted(c) = SpecMaxTainted(c)
+  /\ \A c \in ConfigCases:
+       ActualCooldownMs(c) = SpecCooldownMs(c)
+  /\ ActualDurationMillis("duration_overflow") = MaxU64
+  /\ ActualSuspicionMs("config_overflow_suspicion") = MaxU64
+  /\ ActualCooldownMs("config_overflow_cooldown") = MaxU64
+  /\ DurationBounds
+  /\ DurationSaturationAnchors
+  /\ ConfigFieldPreservation
+  /\ ConfigDurationConversion
+  /\ ConfigDurationIndependence
+  /\ ConfigOverflowSaturationAnchors
+VNextPerformanceConfigCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VNextPerformanceConfigExactness
+
 SafetyFast ==
-  VNextPerformanceConfigCoreSafety
+  VNextPerformanceConfigExactness
 
 BugDurationOverflowWraps ==
   ActualDurationMillis("duration_overflow") =

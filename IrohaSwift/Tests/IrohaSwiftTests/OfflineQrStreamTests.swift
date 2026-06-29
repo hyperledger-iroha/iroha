@@ -67,12 +67,12 @@ final class OfflineQrStreamTests: XCTestCase {
         }
     }
 
-    func testQrStreamTextCodecRejectsLegacyVersionedPrefix() throws {
+    func testQrStreamTextCodecRejectsRetiredVersionedPrefix() throws {
         let payload = makePayload(length: 64)
-        let legacy = "iroha:qr-old:" + payload.base64EncodedString()
+        let retiredPrefix = "iroha:qr-old:" + payload.base64EncodedString()
 
         XCTAssertThrowsError(
-            try OfflineQrStreamTextCodec.decode(legacy, encoding: .base64)
+            try OfflineQrStreamTextCodec.decode(retiredPrefix, encoding: .base64)
         )
     }
 

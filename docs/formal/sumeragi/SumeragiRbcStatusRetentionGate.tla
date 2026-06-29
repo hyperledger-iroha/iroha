@@ -179,7 +179,8 @@ RbcStatusRetentionMatchesSpec ==
        /\ ActualUpdatedTimestamp(c) = SpecUpdatedTimestamp(c)
        /\ ActualSummaryTag(c) = SpecSummaryTag(c)
 
-RbcStatusRetentionExactness == RbcStatusRetentionMatchesSpec
+RbcStatusRetentionExactness ==
+  /\ RbcStatusRetentionMatchesSpec
 
 RbcStatusRetentionCorrectnessEnvelope ==
   /\ TypeInvariant

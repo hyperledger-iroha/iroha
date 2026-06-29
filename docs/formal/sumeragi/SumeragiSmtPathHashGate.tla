@@ -200,7 +200,7 @@ ActionsMatchSpec ==
     ImplementationActions(candidate) = SpecActions(candidate)
 
 SmtPathHashExactness ==
-  ActionsMatchSpec
+  /\ ActionsMatchSpec
 
 SmtPathHashCorrectnessEnvelope ==
   /\ TypeInvariant

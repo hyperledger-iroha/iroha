@@ -272,8 +272,21 @@ VoteBackedEvidenceCoreSafety ==
   /\ LocalSlotRequiresKnownBlock
   /\ HeightIgnoresViewButNotHeightEpochOrPhase
 
-NoBugInvariant == VoteBackedEvidenceCoreSafety
+VoteBackedEvidenceExactness ==
+  /\ SlotEvidenceMatchesSpec
+  /\ LocalSlotEvidenceMatchesSpec
+  /\ HeightEvidenceMatchesSpec
+  /\ SlotSourcesAccepted
+  /\ SlotRejectsWrongShape
+  /\ LocalSlotRequiresKnownBlock
+  /\ HeightIgnoresViewButNotHeightEpochOrPhase
 
-SafetyFast == VoteBackedEvidenceCoreSafety
+VoteBackedEvidenceCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ VoteBackedEvidenceExactness
+
+NoBugInvariant == VoteBackedEvidenceExactness
+
+SafetyFast == VoteBackedEvidenceExactness
 
 ====

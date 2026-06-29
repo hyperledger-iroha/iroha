@@ -280,6 +280,7 @@ dotnet_test_passed_count() {
   printf '%s\n' "$dotnet_output" | "$SCCP_CORRIDOR_PYTHON_BIN" -c '
 import re
 import sys
+import unicodedata
 
 ASSEMBLY = "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
 DURATION = (
@@ -293,15 +294,50 @@ SUMMARY_RE = re.compile(
     rf"(?P<duration>{DURATION})[ ]+-[ ]+"
     rf"{re.escape(ASSEMBLY)}$"
 )
+SUMMARY_LIKE_RE = re.compile(r"^[ ]*Passed!\s*-")
+ANSI_ESCAPE_PATTERN = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]"
+    r"|\][^\x07]*(?:\x07|\x1b\\)"
+    r"|[PX^_][^\x1b]*(?:\x1b\\)"
+    r"|[@-Z\\-_]"
+    r")"
+)
+ASCII_CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def normalized_summary_line(line):
+    stripped_line = ASCII_CONTROL_CHARACTER_PATTERN.sub(
+        "",
+        ANSI_ESCAPE_PATTERN.sub("", line),
+    )
+    return "".join(
+        character
+        for character in stripped_line
+        if unicodedata.category(character) != "Cf"
+    )
 
 matches = []
+malformed_summary_lines = 0
 for line in sys.stdin.read().splitlines():
     normalized = line.rstrip("\r")
-    match = SUMMARY_RE.fullmatch(normalized)
+    scan_line = normalized_summary_line(normalized)
+    scan_lines = (normalized,) if scan_line == normalized else (normalized, scan_line)
+    match = next(
+        (
+            candidate_match
+            for scan_line in scan_lines
+            for candidate_match in (SUMMARY_RE.fullmatch(scan_line),)
+            if candidate_match is not None
+        ),
+        None,
+    )
     if match is not None:
         matches.append(match)
+    elif any(SUMMARY_LIKE_RE.match(scan_line) for scan_line in scan_lines):
+        malformed_summary_lines += 1
 
-if len(matches) != 1:
+if malformed_summary_lines or len(matches) != 1:
     print(
         "SCCP .NET SDK validation requires exactly one canonical VSTest summary "
         f"for {ASSEMBLY}; found: {len(matches)}",
@@ -347,8 +383,23 @@ import re
 import xml.etree.ElementTree as ET
 
 ASSEMBLY = "Hyperledger.Iroha.Sdk.Tests.dll"
-SCCP_TEST_NAME_RE = re.compile(r"(^|[.])Sccp[A-Za-z0-9_]*(?:$|[.])")
+VSTEST_XML_NAMESPACE = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
+TRUSTED_VSTEST_ELEMENT_NAMES = frozenset(
+    (
+        "TestRun",
+        "Results",
+        "TestDefinitions",
+        "UnitTestResult",
+        "UnitTest",
+        "Execution",
+        "TestMethod",
+    )
+)
+SCCP_TEST_NAME_RE = re.compile(r"(^|[.])Sccp[A-Za-z0-9_]+(?:$|[.])")
+TRX_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 ASCII_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+ASCII_WHITESPACE_RE = re.compile(r"\s")
+TRX_ASSEMBLY_PATH_FORBIDDEN_RE = re.compile(r"[<>\"']")
 trx_path = sys.argv[1]
 expected_passed_count = int(sys.argv[2])
 
@@ -364,7 +415,8 @@ except OSError:
     fail("requires TRX result to be readable XML")
 
 lowered_trx = trx_bytes.lower()
-if b"<!doctype" in lowered_trx or b"<!entity" in lowered_trx:
+dtd_probe = lowered_trx.replace(b"\x00", b"")
+if b"<!doctype" in dtd_probe or b"<!entity" in dtd_probe:
     fail("requires TRX result to contain no DTD or entity declarations")
 
 try:
@@ -373,11 +425,37 @@ except ET.ParseError:
     fail("requires TRX result to be well-formed XML")
 
 
+def split_tag(tag):
+    if tag.startswith("{"):
+        namespace, name = tag[1:].split("}", 1)
+        return namespace, name
+    return "", tag
+
+
 def local_name(tag):
-    return tag.rsplit("}", 1)[-1]
+    return split_tag(tag)[1]
 
 
-if local_name(root.tag) != "TestRun":
+def is_allowed_vstest_namespace(namespace):
+    return namespace in ("", VSTEST_XML_NAMESPACE)
+
+
+def is_vstest_element(element, name):
+    namespace, element_name = split_tag(element.tag)
+    return element_name == name and is_allowed_vstest_namespace(namespace)
+
+
+root_namespace, _root_name = split_tag(root.tag)
+for element in root.iter():
+    namespace, name = split_tag(element.tag)
+    if name in TRUSTED_VSTEST_ELEMENT_NAMES and not is_allowed_vstest_namespace(namespace):
+        fail(
+            "requires TRX VSTest elements to use no namespace or the VSTest 2010 XML namespace"
+        )
+    if name in TRUSTED_VSTEST_ELEMENT_NAMES and namespace != root_namespace:
+        fail("requires TRX VSTest elements to use one consistent namespace")
+
+if not is_vstest_element(root, "TestRun"):
     fail("requires TRX root to be a VSTest TestRun")
 
 
@@ -385,11 +463,58 @@ def path_basename(value):
     return value.replace("\\", "/").rsplit("/", 1)[-1]
 
 
+def trx_assembly_reference_problem(value):
+    if path_basename(value) != ASSEMBLY:
+        return None
+    if (
+        not value
+        or value != value.strip()
+        or not value.isascii()
+        or ASCII_CONTROL_RE.search(value) is not None
+        or TRX_ASSEMBLY_PATH_FORBIDDEN_RE.search(value) is not None
+    ):
+        return "requires canonical TRX assembly path values"
+    normalized = value.replace("\\", "/")
+    if "://" in normalized:
+        return "requires canonical TRX assembly path values"
+    segments = normalized.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        return "requires canonical TRX assembly path values"
+    assembly_segments = [
+        index for index, segment in enumerate(segments) if segment == ASSEMBLY
+    ]
+    if assembly_segments != [len(segments) - 1]:
+        return "requires canonical TRX assembly path values"
+    if any(segment.endswith(".dll") for segment in segments[:-1]):
+        return "requires canonical TRX assembly path values"
+    return None
+
+
+def is_trusted_assembly_reference(value):
+    return (
+        path_basename(value) == ASSEMBLY
+        and trx_assembly_reference_problem(value) is None
+    )
+
+
 def is_canonical_trx_test_name(value):
     return bool(
         value
         and value == value.strip()
+        and value.isascii()
         and ASCII_CONTROL_RE.search(value) is None
+        and ASCII_WHITESPACE_RE.search(value) is None
+    )
+
+
+def is_canonical_trx_identifier(value):
+    return bool(
+        value
+        and value == value.strip()
+        and value.isascii()
+        and ASCII_CONTROL_RE.search(value) is None
+        and ASCII_WHITESPACE_RE.search(value) is None
+        and TRX_IDENTIFIER_RE.fullmatch(value)
     )
 
 
@@ -404,17 +529,33 @@ sccp_test_id_to_names = {}
 sccp_execution_id_to_names = {}
 seen_unit_test_ids = set()
 seen_execution_ids = set()
+seen_unit_result_bindings = set()
+seen_unit_result_test_ids = set()
+seen_unit_result_execution_ids = set()
+seen_unit_result_test_names = set()
 has_expected_assembly = False
 
-results_sections = [child for child in root if local_name(child.tag) == "Results"]
+results_sections = [child for child in root if is_vstest_element(child, "Results")]
 test_definition_sections = [
-    child for child in root if local_name(child.tag) == "TestDefinitions"
+    child for child in root if is_vstest_element(child, "TestDefinitions")
 ]
+all_results_sections = [
+    element for element in root.iter() if is_vstest_element(element, "Results")
+]
+all_test_definition_sections = [
+    element for element in root.iter() if is_vstest_element(element, "TestDefinitions")
+]
+if len(results_sections) != len(all_results_sections):
+    fail("requires every TRX Results section to appear directly under the VSTest TestRun root")
+if len(test_definition_sections) != len(all_test_definition_sections):
+    fail(
+        "requires every TRX TestDefinitions section to appear directly under the VSTest TestRun root"
+    )
 all_unit_results = [
-    element for element in root.iter() if local_name(element.tag) == "UnitTestResult"
+    element for element in root.iter() if is_vstest_element(element, "UnitTestResult")
 ]
 unit_results = (
-    [child for child in results_sections[0] if local_name(child.tag) == "UnitTestResult"]
+    [child for child in results_sections[0] if is_vstest_element(child, "UnitTestResult")]
     if len(results_sections) == 1
     else []
 )
@@ -425,13 +566,19 @@ if all_unit_results and (
         "requires every TRX UnitTestResult to appear directly under the VSTest Results section"
     )
 all_unit_tests = [
-    element for element in root.iter() if local_name(element.tag) == "UnitTest"
+    element for element in root.iter() if is_vstest_element(element, "UnitTest")
+]
+all_test_methods = [
+    element for element in root.iter() if is_vstest_element(element, "TestMethod")
+]
+all_executions = [
+    element for element in root.iter() if is_vstest_element(element, "Execution")
 ]
 unit_tests = (
     [
         child
         for child in test_definition_sections[0]
-        if local_name(child.tag) == "UnitTest"
+        if is_vstest_element(child, "UnitTest")
     ]
     if len(test_definition_sections) == 1
     else []
@@ -442,66 +589,120 @@ if all_unit_tests and (
     fail(
         "requires every TRX UnitTest definition to appear directly under the VSTest TestDefinitions section"
     )
+unit_test_test_methods = [
+    child
+    for unit_test in unit_tests
+    for child in unit_test
+    if is_vstest_element(child, "TestMethod")
+]
+unit_test_executions = [
+    child
+    for unit_test in unit_tests
+    for child in unit_test
+    if is_vstest_element(child, "Execution")
+]
+if all_test_methods and (
+    len(test_definition_sections) != 1
+    or len(unit_test_test_methods) != len(all_test_methods)
+):
+    fail(
+        "requires every TRX TestMethod definition to appear directly under a VSTest UnitTest definition"
+    )
+if all_executions and (
+    len(test_definition_sections) != 1
+    or len(unit_test_executions) != len(all_executions)
+):
+    fail(
+        "requires every TRX Execution definition to appear directly under a VSTest UnitTest definition"
+    )
+if len(results_sections) != 1:
+    fail("requires exactly one VSTest Results section")
+if len(test_definition_sections) != 1:
+    fail("requires exactly one VSTest TestDefinitions section")
 
 for element in unit_tests:
     element_has_expected_assembly = False
     for attribute_name in ("codeBase", "storage"):
         attribute_value = element.attrib.get(attribute_name)
-        if attribute_value and path_basename(attribute_value) == ASSEMBLY:
+        if attribute_value:
+            assembly_problem = trx_assembly_reference_problem(attribute_value)
+            if assembly_problem:
+                fail(assembly_problem)
+        if attribute_value and is_trusted_assembly_reference(attribute_value):
             element_has_expected_assembly = True
             has_expected_assembly = True
     test_id = element.attrib.get("id")
-    if test_id:
-        if test_id in seen_unit_test_ids:
-            fail("requires unique TRX UnitTest id values")
-        seen_unit_test_ids.add(test_id)
-    definition_values = [
-        element.attrib.get("name"),
-        element.attrib.get("className"),
+    if test_id is None:
+        fail("requires every TRX UnitTest definition to carry id")
+    if not is_canonical_trx_identifier(test_id):
+        fail("requires canonical TRX UnitTest id values")
+    if test_id in seen_unit_test_ids:
+        fail("requires unique TRX UnitTest id values")
+    seen_unit_test_ids.add(test_id)
+    direct_test_methods = [
+        child for child in element if is_vstest_element(child, "TestMethod")
     ]
-    definition_result_names = set(
-        value for value in (element.attrib.get("name"),) if value
-    )
-    definition_has_expected_assembly = element_has_expected_assembly
+    if len(direct_test_methods) != 1:
+        fail(
+            "requires every TRX UnitTest definition to contain exactly one direct TestMethod"
+        )
+    direct_executions = [
+        child for child in element if is_vstest_element(child, "Execution")
+    ]
+    if len(direct_executions) > 1:
+        fail(
+            "requires every TRX UnitTest definition to contain at most one direct Execution"
+        )
+    definition_sccp_method_names = set()
     for child in element:
         child_name = local_name(child.tag)
         if child_name == "Execution":
             execution_id = child.attrib.get("id")
-            if execution_id:
-                if execution_id in seen_execution_ids:
-                    fail("requires unique TRX Execution id values")
-                seen_execution_ids.add(execution_id)
-                if test_id:
-                    execution_id_to_test_id[execution_id] = test_id
+            if execution_id is None:
+                fail("requires every TRX Execution definition to carry id")
+            if not is_canonical_trx_identifier(execution_id):
+                fail("requires canonical TRX Execution id values")
+            if execution_id in seen_execution_ids:
+                fail("requires unique TRX Execution id values")
+            seen_execution_ids.add(execution_id)
+            execution_id_to_test_id[execution_id] = test_id
         if child_name == "TestMethod":
+            method_has_expected_assembly = element_has_expected_assembly
             for attribute_name in ("codeBase", "storage"):
                 attribute_value = child.attrib.get(attribute_name)
-                if attribute_value and path_basename(attribute_value) == ASSEMBLY:
-                    definition_has_expected_assembly = True
+                if attribute_value:
+                    assembly_problem = trx_assembly_reference_problem(attribute_value)
+                    if assembly_problem:
+                        fail(assembly_problem)
+                if attribute_value and is_trusted_assembly_reference(attribute_value):
+                    method_has_expected_assembly = True
                     has_expected_assembly = True
-            definition_values.extend(
-                (
-                    child.attrib.get("name"),
-                    child.attrib.get("className"),
-                )
-            )
             child_name_value = child.attrib.get("name")
             child_class_name = child.attrib.get("className")
-            if child_name_value and child_class_name:
-                definition_result_names.add(f"{child_class_name}.{child_name_value}")
-    if definition_has_expected_assembly and any(
-        has_sccp_test_name_token(value) for value in definition_values
-    ):
+            if child_name_value is None:
+                fail("requires every TRX TestMethod definition to carry name")
+            if child_class_name is None:
+                fail("requires every TRX TestMethod definition to carry className")
+            if not is_canonical_trx_test_name(child_class_name):
+                fail("requires canonical TRX TestMethod className values")
+            if not is_canonical_trx_test_name(child_name_value):
+                fail("requires canonical TRX TestMethod name values")
+            method_result_name = f"{child_class_name}.{child_name_value}"
+            if method_has_expected_assembly and has_sccp_test_name_token(
+                method_result_name
+            ):
+                definition_sccp_method_names.add(method_result_name)
+    if definition_sccp_method_names:
         if test_id:
             assembly_sccp_test_ids.add(test_id)
-            sccp_test_id_to_names[test_id] = set(definition_result_names)
+            sccp_test_id_to_names[test_id] = set(definition_sccp_method_names)
         for child in element:
             if local_name(child.tag) == "Execution":
                 execution_id = child.attrib.get("id")
                 if execution_id:
                     assembly_sccp_execution_ids.add(execution_id)
                     sccp_execution_id_to_names[execution_id] = set(
-                        definition_result_names
+                        definition_sccp_method_names
                     )
 
 if not has_expected_assembly:
@@ -512,8 +713,32 @@ for result in unit_results:
         fail(
             "requires TRX result to contain no failed, skipped, timed-out, or aborted SCCP test results"
         )
+    if result.attrib.get("isExecuted") not in (None, "true"):
+        fail("requires every present TRX UnitTestResult isExecuted flag to be true")
     result_test_id = result.attrib.get("testId")
     result_execution_id = result.attrib.get("executionId")
+    if result_test_id is not None:
+        if not is_canonical_trx_identifier(result_test_id):
+            fail("requires canonical TRX UnitTestResult testId values")
+        if result_test_id in seen_unit_result_test_ids:
+            fail("requires unique TRX UnitTestResult testId values")
+        seen_unit_result_test_ids.add(result_test_id)
+    if result_execution_id is not None:
+        if not is_canonical_trx_identifier(result_execution_id):
+            fail("requires canonical TRX UnitTestResult executionId values")
+        if result_execution_id in seen_unit_result_execution_ids:
+            fail("requires unique TRX UnitTestResult executionId values")
+        seen_unit_result_execution_ids.add(result_execution_id)
+    if result_execution_id:
+        result_binding = ("executionId", result_execution_id)
+    elif result_test_id:
+        result_binding = ("testId", result_test_id)
+    else:
+        result_binding = None
+    if result_binding is not None:
+        if result_binding in seen_unit_result_bindings:
+            fail("requires unique TRX UnitTestResult testId/executionId bindings")
+        seen_unit_result_bindings.add(result_binding)
     test_id_matches = result_test_id in assembly_sccp_test_ids
     execution_id_matches = result_execution_id in assembly_sccp_execution_ids
     if not (test_id_matches or execution_id_matches):
@@ -537,21 +762,25 @@ for result in unit_results:
             "requires TRX UnitTestResult testId and executionId to bind the same SCCP test definition"
         )
     result_test_name = result.attrib.get("testName")
-    if result_test_name is not None:
-        allowed_result_names = set()
-        if result_test_id:
-            allowed_result_names.update(sccp_test_id_to_names.get(result_test_id, set()))
-        if result_execution_id:
-            allowed_result_names.update(
-                sccp_execution_id_to_names.get(result_execution_id, set())
-            )
-        if (
-            result_test_name not in allowed_result_names
-            or not has_sccp_test_name_token(result_test_name)
-        ):
-            fail(
-                "requires TRX UnitTestResult testName to match its SCCP test definition"
-            )
+    if result_test_name is None:
+        fail("requires every TRX UnitTestResult to carry testName")
+    if result_test_name in seen_unit_result_test_names:
+        fail("requires unique TRX UnitTestResult testName values")
+    seen_unit_result_test_names.add(result_test_name)
+    allowed_result_names = set()
+    if result_test_id:
+        allowed_result_names.update(sccp_test_id_to_names.get(result_test_id, set()))
+    if result_execution_id:
+        allowed_result_names.update(
+            sccp_execution_id_to_names.get(result_execution_id, set())
+        )
+    if (
+        result_test_name not in allowed_result_names
+        or not has_sccp_test_name_token(result_test_name)
+    ):
+        fail(
+            "requires TRX UnitTestResult testName to match its SCCP test definition"
+        )
 
 has_passed_sccp_result = False
 for result in unit_results:

@@ -466,9 +466,12 @@ MissingBlockRecoverySafetyAnchors ==
   /\ SuppressionCleanupAnchors
   /\ SuppressionRangePullAnchors
 
+RbcMissingBlockRecoveryExactness ==
+  /\ RbcMissingBlockRecoveryMatchesSpec
+  /\ MissingBlockRecoverySafetyAnchors
+
 RbcMissingBlockRecoveryCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ MissingBlockRecoverySafetyAnchors
+  /\ RbcMissingBlockRecoveryExactness
 
 ====

@@ -40,12 +40,41 @@ cargo test -p sorafs_chunker --test vectors --quiet
 # Verify canonical handles are published everywhere.
 python3 <<'PY'
 import json
+import os
+import stat
 from pathlib import Path
 
 CANONICAL = "sorafs.sf1@1.0.0"
 
+def read_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+def fail(path: Path, message: str) -> None:
+    raise SystemExit(f"{path} {message}")
+
+def read_json_no_follow(path: Path) -> dict:
+    if path.is_symlink():
+        fail(path, "must not be a symlink")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        fail(path, "is missing")
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(path, "must be a regular file")
+    fd = os.open(path, read_open_flags())
+    try:
+        descriptor_stat = os.fstat(fd)
+        if not stat.S_ISREG(descriptor_stat.st_mode):
+            fail(path, "must be a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return json.load(handle)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
 def expect_aliases(path: Path) -> None:
-    data = json.loads(path.read_text())
+    data = read_json_no_follow(path)
     aliases = data.get("profile_aliases")
     if not isinstance(aliases, list):
         raise SystemExit(f"{path} missing profile_aliases")

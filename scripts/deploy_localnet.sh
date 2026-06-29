@@ -498,12 +498,17 @@ fi
 
 echo "Building Iroha tools ($PROFILE)..."
 cd "$IROHA_DIR"
+build_tool_bins() {
+  "${cargo_runner[@]}" build "$@" -p iroha_kagami --bin kagami
+  "${cargo_runner[@]}" build "$@" -p irohad --bin irohad
+  "${cargo_runner[@]}" build "$@" -p iroha_cli --bin iroha
+}
 if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
   echo "Skipping Iroha tool build; using existing binaries."
 elif [[ "$PROFILE" == "release" ]]; then
-  "${cargo_runner[@]}" build --release --bin kagami --bin irohad --bin iroha
+  build_tool_bins --release
 else
-  "${cargo_runner[@]}" build --bin kagami --bin irohad --bin iroha
+  build_tool_bins
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"

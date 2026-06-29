@@ -357,7 +357,13 @@ RbcReadyEmissionCoreSafety ==
   /\ InvalidationStopsDelivery
   /\ SpecialCasesStable
 
-RbcReadyEmissionExactness == RbcReadyEmissionCoreSafety
+RbcReadyEmissionExactness ==
+  /\ DecisionExact
+  /\ TerminalCasesDoNotPublish
+  /\ DeferralCasesDoNotEmitReady
+  /\ ReadySuccessRecordsAndBroadcasts
+  /\ InvalidationStopsDelivery
+  /\ SpecialCasesStable
 
 RbcReadyEmissionCorrectnessEnvelope ==
   /\ TypeInvariant

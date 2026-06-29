@@ -534,22 +534,6 @@ pub(crate) struct PipelinePreflightQueue {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub(crate) struct PipelinePreflightSponsoredContractOperation {
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub contract_alias: Option<String>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub contract_address: Option<String>,
-    pub entrypoints: Vec<String>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
 pub(crate) struct PipelinePreflightFees {
     pub fee_asset_id: String,
     pub fee_sink_account_id: String,
@@ -567,7 +551,6 @@ pub(crate) struct PipelinePreflightFees {
     pub burn_from_unix_timestamp_ms: u64,
     pub settlement_mode: String,
     pub successful_claim_fee_exempt_authorities: Vec<String>,
-    pub sponsored_contract_operation_allowlist: Vec<PipelinePreflightSponsoredContractOperation>,
 }
 
 #[derive(
@@ -14652,16 +14635,6 @@ pub(crate) fn build_pipeline_preflight_response(
             successful_claim_fee_exempt_authorities: nexus
                 .fees
                 .successful_claim_fee_exempt_authorities,
-            sponsored_contract_operation_allowlist: nexus
-                .fees
-                .sponsored_contract_operation_allowlist
-                .into_iter()
-                .map(|entry| PipelinePreflightSponsoredContractOperation {
-                    contract_alias: entry.contract_alias.map(|alias| alias.to_string()),
-                    contract_address: entry.contract_address.map(|address| address.to_string()),
-                    entrypoints: entry.entrypoints.into_iter().collect(),
-                })
-                .collect(),
         },
     }
 }
@@ -72539,6 +72512,7 @@ pub async fn handle_v1_accounts_onboard(
         let permission = iroha_data_model::permission::Permission::from(
             iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                 sponsor: sponsor.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
         );
         permission_instructions.push(InstructionBox::from(Grant::account_permission(

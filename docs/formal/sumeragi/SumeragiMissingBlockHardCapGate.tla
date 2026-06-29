@@ -264,24 +264,12 @@ MissingBlockHardCapGroupedCases ==
 MissingBlockHardCapCaseGroupsComplete ==
   MissingBlockHardCapGroupedCases = Candidates
 
-MissingBlockHardCapDecisionExact ==
-  HardCapDecisionMatchesSpec
-
-MissingBlockHardCapSideEffectsExact ==
-  DuplicateAndTriggerSideEffects
-
-MissingBlockHardCapNoActionableExact ==
-  NoActionableCleanupIsTerminal
-
-MissingBlockHardCapRangePullExact ==
-  RangePullProgressDoesNotRotate
-
 MissingBlockHardCapExactness ==
   /\ MissingBlockHardCapCaseGroupsComplete
-  /\ MissingBlockHardCapDecisionExact
-  /\ MissingBlockHardCapSideEffectsExact
-  /\ MissingBlockHardCapNoActionableExact
-  /\ MissingBlockHardCapRangePullExact
+  /\ HardCapDecisionMatchesSpec
+  /\ DuplicateAndTriggerSideEffects
+  /\ NoActionableCleanupIsTerminal
+  /\ RangePullProgressDoesNotRotate
 
 MissingBlockHardCapCorrectnessEnvelope ==
   /\ TypeInvariant

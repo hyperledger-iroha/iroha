@@ -329,7 +329,7 @@ CommitConflictMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncCommitConflictExactness ==
-  CommitConflictMatchesSpec
+  /\ CommitConflictMatchesSpec
 
 BlockSyncCommitConflictCorrectnessEnvelope ==
   /\ TypeInvariant

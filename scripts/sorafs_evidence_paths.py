@@ -99,11 +99,22 @@ def evidence_path_identities(paths: object, errors: list[str]) -> set[Path]:
     """Return canonical identities for paths, skipping paths already recorded as errors."""
 
     identities: set[Path] = set()
-    path_items = evidence_path_collection(paths, errors, label="evidence")
+    error_list = _require_error_list(errors)
+    path_items = evidence_path_collection(paths, error_list, label="evidence")
     if path_items is None:
         return identities
+    if error_list:
+        return identities
     for path in path_items:
-        resolved = resolve_evidence_path(path, errors)
+        is_file = inspect_evidence_file(path, error_list)
+        if is_file is None:
+            continue
+        if not is_file:
+            error_list.append(
+                f"evidence file `{_path_label(path)}` must exist and be a file"
+            )
+            continue
+        resolved = resolve_evidence_path(path, error_list)
         if resolved is not None:
             identities.add(resolved)
     return identities
@@ -121,7 +132,13 @@ def is_explicit_evidence_path(
         errors,
         label="explicit evidence",
     )
-    if identities is None:
+    if identities is None or not identities:
+        return False
+    is_file = inspect_evidence_file(path, errors)
+    if is_file is None:
+        return False
+    if not is_file:
+        errors.append(f"evidence file `{_path_label(path)}` must exist and be a file")
         return False
     resolved = resolve_evidence_path(path, errors)
     return resolved is not None and resolved in identities
@@ -136,12 +153,39 @@ def reserved_output_path_identities(
     """Return canonical identities for output paths that evidence must not reuse."""
 
     identities: dict[Path, Path] = {}
-    path_items = evidence_path_collection(paths, errors, label=label)
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    path_items = evidence_path_collection(paths, error_list, label=path_label)
     if path_items is None:
         return identities
     for path in path_items:
-        resolved = resolve_evidence_path(path, errors, label=label)
+        if not isinstance(path, Path):
+            error_list.append(f"{path_label} `{_path_label(path)}` must be a path")
+            continue
+        try:
+            if path.is_symlink():
+                error_list.append(
+                    f"{path_label} `{_path_label(path)}` must not be a symlink"
+                )
+                continue
+        except (OSError, RuntimeError) as error:
+            output_path_label = _path_label(path)
+            error_list.append(
+                f"{path_label} `{output_path_label}` cannot be inspected: "
+                f"{_error_label(error, path_label=output_path_label)}"
+            )
+            continue
+        if not validate_evidence_parent_chain(path, error_list, label=path_label):
+            continue
+        resolved = resolve_evidence_path(path, error_list, label=path_label)
         if resolved is not None:
+            previous_path = identities.get(resolved)
+            if previous_path is not None:
+                error_list.append(
+                    f"duplicate {path_label} path `{_path_label(path)}` "
+                    f"matches `{_path_label(previous_path)}`"
+                )
+                continue
             identities[resolved] = path
     return identities
 
@@ -157,6 +201,17 @@ def inspect_evidence_directory(
         error_list.append(f"evidence directory `{_path_label(directory)}` must be a path")
         return None
     try:
+        if directory.is_symlink():
+            error_list.append(
+                f"evidence directory `{_path_label(directory)}` must not be a symlink"
+            )
+            return None
+        if not validate_evidence_parent_chain(
+            directory,
+            error_list,
+            label="evidence directory",
+        ):
+            return None
         return directory.is_dir()
     except (OSError, RuntimeError) as error:
         directory_label = _path_label(directory)
@@ -165,6 +220,75 @@ def inspect_evidence_directory(
             f"{_error_label(error, path_label=directory_label)}"
         )
         return None
+
+
+def inspect_evidence_file(
+    path: Path,
+    errors: list[str],
+) -> bool | None:
+    """Return whether `path` is a regular file, recording inspection failures."""
+
+    error_list = _require_error_list(errors)
+    if not isinstance(path, Path):
+        error_list.append(f"evidence file `{_path_label(path)}` must be a path")
+        return None
+    try:
+        if path.is_symlink():
+            error_list.append(
+                f"evidence file `{_path_label(path)}` must not be a symlink"
+            )
+            return None
+        if not validate_evidence_parent_chain(
+            path,
+            error_list,
+            label="evidence file",
+        ):
+            return None
+        return path.is_file()
+    except (OSError, RuntimeError) as error:
+        path_label = _path_label(path)
+        error_list.append(
+            f"evidence file `{path_label}` cannot be inspected: "
+            f"{_error_label(error, path_label=path_label)}"
+        )
+        return None
+
+
+def validate_evidence_parent_chain(
+    path: Path,
+    errors: list[str],
+    *,
+    label: str,
+) -> bool:
+    """Validate an evidence path's parent chain before trusting its identity."""
+
+    error_list = _require_error_list(errors)
+    evidence_label = _require_label(label)
+    if not isinstance(path, Path):
+        error_list.append(f"{evidence_label} `{_path_label(path)}` must be a path")
+        return False
+    for parent in (path.parent, *path.parent.parents):
+        parent_label = f"{evidence_label} parent"
+        try:
+            if parent.is_symlink():
+                error_list.append(
+                    f"{parent_label} `{_path_label(parent)}` must not be a symlink"
+                )
+                return False
+            if parent.exists() and not parent.is_dir():
+                error_list.append(
+                    f"{parent_label} `{_path_label(parent)}` "
+                    "must be a directory when it exists"
+                )
+                return False
+        except (OSError, RuntimeError) as error:
+            parent_path_label = _path_label(parent)
+            error_list.append(
+                f"{parent_label} `{parent_path_label}` cannot be inspected: "
+                f"{_error_label(error, path_label=parent_path_label)}"
+            )
+            return False
+    return True
 
 
 def scan_evidence_directory_json(
@@ -176,6 +300,14 @@ def scan_evidence_directory_json(
     error_list = _require_error_list(errors)
     if not isinstance(directory, Path):
         error_list.append(f"evidence directory `{_path_label(directory)}` must be a path")
+        return []
+    is_dir = inspect_evidence_directory(directory, error_list)
+    if is_dir is None:
+        return []
+    if not is_dir:
+        error_list.append(
+            f"evidence directory `{_path_label(directory)}` must exist and be a directory"
+        )
         return []
     try:
         return sorted(directory.rglob("*.json"))
@@ -212,15 +344,26 @@ def record_reserved_output_evidence_conflicts(
     )
     if evidence_dir_items is None or evidence_file_items is None:
         return
+    reserved_error_count = len(error_list)
     reserved_outputs = reserved_output_path_identities(
         reserved_output_paths,
         error_list,
         label=output_label,
     )
+    if len(error_list) != reserved_error_count:
+        return
     if not reserved_outputs:
         return
 
-    def check(path: Path) -> None:
+    def check(path: object) -> None:
+        is_file = inspect_evidence_file(path, error_list)
+        if is_file is None:
+            return
+        if not is_file:
+            error_list.append(
+                f"evidence file `{_path_label(path)}` must exist and be a file"
+            )
+            return
         resolved = resolve_evidence_path(path, error_list)
         if resolved is None:
             return
@@ -275,6 +418,14 @@ def discover_evidence_files(
         return files
 
     def add(path: Path, *, explicit: bool) -> None:
+        is_file = inspect_evidence_file(path, error_list)
+        if is_file is None:
+            return
+        if not is_file:
+            error_list.append(
+                f"evidence file `{_path_label(path)}` must exist and be a file"
+            )
+            return
         resolved = resolve_evidence_path(path, error_list)
         if resolved is None:
             return
@@ -288,6 +439,10 @@ def discover_evidence_files(
         previous = seen.get(resolved)
         if previous is not None:
             previous_path, previous_explicit = previous
+            try:
+                files.remove(previous_path)
+            except ValueError:
+                pass
             if explicit and previous_explicit:
                 error_list.append(
                     f"duplicate explicit evidence file `{_path_label(path)}` "

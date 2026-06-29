@@ -295,7 +295,11 @@ RbcDeliveredRebroadcastCoreSafety ==
   /\ NextStable
   /\ TickStable
 
-RbcDeliveredRebroadcastExactness == RbcDeliveredRebroadcastCoreSafety
+RbcDeliveredRebroadcastExactness ==
+  /\ NextDueExact
+  /\ TickExact
+  /\ NextStable
+  /\ TickStable
 
 RbcDeliveredRebroadcastCorrectnessEnvelope ==
   /\ TypeInvariant

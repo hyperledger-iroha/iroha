@@ -30,6 +30,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 /** Torii-backed issuer client for Offline Note wallet loads. */
 public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClient {
   private static final String KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill";
+  private static final String HEADER_WITNESS = "X-Iroha-Witness";
   public static final String RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE =
       "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows.";
 
@@ -57,8 +58,8 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
         PlatformHttpTransportExecutor.createDefault(),
         URI.create("http://localhost:8080"),
         Duration.ofSeconds(15),
-        Map.of(),
-        List.of(),
+        Collections.emptyMap(),
+        Collections.emptyList(),
         System::currentTimeMillis,
         new UuidOfflineNoteIdGenerator());
   }
@@ -132,8 +133,11 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     this.baseUri = Objects.requireNonNull(baseUri, "baseUri");
     this.timeout = timeout;
     this.defaultHeaders =
-        Collections.unmodifiableMap(new LinkedHashMap<>(defaultHeaders == null ? Map.of() : defaultHeaders));
-    this.observers = List.copyOf(observers == null ? List.of() : observers);
+        Collections.unmodifiableMap(stripRetiredCanonicalBodyAuthHeaders(
+            defaultHeaders == null ? Collections.emptyMap() : defaultHeaders));
+    this.observers =
+        Collections.unmodifiableList(
+            new ArrayList<>(observers == null ? Collections.emptyList() : observers));
     this.clock = Objects.requireNonNull(clock, "clock");
     this.nonceGenerator = Objects.requireNonNull(nonceGenerator, "nonceGenerator");
     this.idempotencyKeysEnabled = idempotencyKeysEnabled;
@@ -297,7 +301,9 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
                             + response.statusCode()
                             + " on "
                             + request.uri().getPath()
-                            + (bodyPreview == null || bodyPreview.isBlank() ? "" : ". body=" + bodyPreview),
+                            + (bodyPreview == null || bodyPreview.isEmpty()
+                                ? ""
+                                : ". body=" + bodyPreview),
                         response.statusCode(),
                         null,
                         bodyPreview);
@@ -411,13 +417,13 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
         requiredString(value, "key_id"),
         requiredString(value, "device_id"),
         requiredString(value, "account_id"),
-        decodeBase64(requiredString(value, "public_key"), "public_key"),
-        requiredString(value, "assertion_scheme"),
-        requiredString(value, "assertion_key_algorithm"),
-        decodeBase64(requiredString(value, "assertion_public_key"), "assertion_public_key"),
+        decodeExactBase64(requiredString(value, "public_key"), "public_key"),
+        requiredAssertionScheme(value),
+        requiredAssertionKeyAlgorithm(value),
+        decodeExactBase64(requiredString(value, "assertion_public_key"), "assertion_public_key"),
         optionalAssertionUsageCountLimit(value.get("assertion_usage_count_limit")),
         requiredBoolean(value, "one_use"),
-        decodeBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"));
+        decodeExactBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"));
   }
 
   private static StoredLineageState storedLineageState(
@@ -518,6 +524,44 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     return Integer.valueOf(1);
   }
 
+  private static String requiredAssertionScheme(final Map<String, Object> value) {
+    final String scheme = requiredString(value, "assertion_scheme");
+    final String expected = expectedAssertionScheme(requiredString(value, "platform"));
+    if (!scheme.equals(expected)) {
+      throw new IllegalStateException("assertion_scheme must be " + expected);
+    }
+    return scheme;
+  }
+
+  private static String requiredAssertionKeyAlgorithm(final Map<String, Object> value) {
+    final String algorithm = requiredString(value, "assertion_key_algorithm");
+    final String expected = expectedAssertionKeyAlgorithm(requiredString(value, "platform"));
+    if (!algorithm.equals(expected)) {
+      throw new IllegalStateException("assertion_key_algorithm must be " + expected);
+    }
+    return algorithm;
+  }
+
+  private static String expectedAssertionScheme(final String platform) {
+    if (OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      return OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME;
+    }
+    if (OfflineNoteV2.IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      return OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME;
+    }
+    throw new IllegalStateException("platform must be a supported first-release value");
+  }
+
+  private static String expectedAssertionKeyAlgorithm(final String platform) {
+    if (OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      return OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM;
+    }
+    if (OfflineNoteV2.IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      return OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM;
+    }
+    throw new IllegalStateException("platform must be a supported first-release value");
+  }
+
   private static Long optionalLong(final Object value) {
     if (value == null) {
       return null;
@@ -549,11 +593,18 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     throw new IllegalStateException("value must be an integer");
   }
 
-  private static byte[] decodeBase64(final String value, final String field) {
+  private static byte[] decodeExactBase64(final String value, final String field) {
     try {
-      return Base64.getDecoder().decode(value);
+      if (value.isEmpty() || !value.equals(value.trim())) {
+        throw new IllegalArgumentException(field + " must be canonical base64");
+      }
+      final byte[] decoded = Base64.getDecoder().decode(value);
+      if (decoded.length == 0 || !Base64.getEncoder().encodeToString(decoded).equals(value)) {
+        throw new IllegalArgumentException(field + " must be canonical base64");
+      }
+      return decoded;
     } catch (IllegalArgumentException ex) {
-      throw new IllegalStateException(field + " must be base64", ex);
+      throw new IllegalStateException(field + " must be canonical base64", ex);
     }
   }
 
@@ -594,6 +645,25 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
     return false;
   }
 
+  private static LinkedHashMap<String, String> stripRetiredCanonicalBodyAuthHeaders(
+      final Map<String, String> headers) {
+    final LinkedHashMap<String, String> filtered = new LinkedHashMap<>();
+    for (final Map.Entry<String, String> entry : headers.entrySet()) {
+      if (!isRetiredCanonicalBodyAuthHeader(entry.getKey())) {
+        filtered.put(entry.getKey(), entry.getValue());
+      }
+    }
+    return filtered;
+  }
+
+  private static boolean isRetiredCanonicalBodyAuthHeader(final String name) {
+    return CanonicalRequestSigner.HEADER_ACCOUNT.equalsIgnoreCase(name)
+        || CanonicalRequestSigner.HEADER_SIGNATURE.equalsIgnoreCase(name)
+        || CanonicalRequestSigner.HEADER_TIMESTAMP_MS.equalsIgnoreCase(name)
+        || CanonicalRequestSigner.HEADER_NONCE.equalsIgnoreCase(name)
+        || HEADER_WITNESS.equalsIgnoreCase(name);
+  }
+
   private static String idempotencyKey(final String path, final byte[] body) {
     final String action =
         path.contains("/keys/refill")
@@ -628,7 +698,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
       return "unknown transport error";
     }
     final String detail = cause.getMessage();
-    return detail == null || detail.isBlank() ? cause.getClass().getSimpleName() : detail;
+    return detail == null || detail.trim().isEmpty() ? cause.getClass().getSimpleName() : detail;
   }
 
   private static String responseBodyPreview(final byte[] body) {

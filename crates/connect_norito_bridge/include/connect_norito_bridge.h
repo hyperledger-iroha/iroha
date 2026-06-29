@@ -90,26 +90,26 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
-// ---------------- Offline Note prover helpers ----------------
-// Generate a recursive Halo2/IPA proof for an Offline redemption.
-// Input: Norito-archive bytes of `OfflineNoteRedeem` (recursive_proof field is ignored).
-// Output: Norito-archive bytes of `OfflineNoteRecursiveProof` (slot back into the redemption).
+// ---------------- Retired Offline Note prover helpers ----------------
+// Retired fail-closed entry point for classic `RedeemOfflineNote` proofs.
+// Always fails without producing proof bytes; production offline payments must
+// use Kagemusha transfer/redeem flows.
 int32_t connect_norito_offline_prove_note_redeem(
     const uint8_t* redeem_norito_ptr,
     unsigned long redeem_norito_len,
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
-// Generate a recursive Halo2/IPA proof for an Offline audit bundle.
-// Input: Norito-archive bytes of `OfflineNoteAuditBundle` (recursive_proof field is ignored).
-// Output: Norito-archive bytes of `OfflineNoteRecursiveProof` (slot back into the audit bundle).
+// Retired fail-closed entry point for classic `AuditOfflineNote` proofs.
+// Always fails without producing proof bytes; production offline payments must
+// use Kagemusha transfer/redeem flows.
 int32_t connect_norito_offline_prove_note_audit(
     const uint8_t* audit_norito_ptr,
     unsigned long audit_norito_len,
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
-// Retired compatibility entry point for classic `RedeemOfflineNote` payments.
+// Retired fail-closed entry point for classic `RedeemOfflineNote` payments.
 // Always fails without producing signed transaction bytes; production offline
 // payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_redeem_offline_note_signed_transaction(
@@ -125,7 +125,7 @@ int32_t connect_norito_encode_redeem_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic `AuditOfflineNote` payments.
+// Retired fail-closed entry point for classic `AuditOfflineNote` payments.
 // Always fails without producing signed transaction bytes; production offline
 // payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_audit_offline_note_signed_transaction(
@@ -141,7 +141,7 @@ int32_t connect_norito_encode_audit_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic `IssueOfflineNote` payments.
+// Retired fail-closed entry point for classic `IssueOfflineNote` payments.
 // Always fails without producing signed transaction bytes; production offline
 // top-ups must use Kagemusha online-to-offline flows.
 int32_t connect_norito_encode_issue_offline_note_signed_transaction(
@@ -157,7 +157,7 @@ int32_t connect_norito_encode_issue_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic Offline Note defund payments.
+// Retired fail-closed entry point for classic Offline Note defund payments.
 // Always fails without producing signed transaction bytes; production offline
 // payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_defund_offline_note_signed_transaction(
@@ -174,7 +174,7 @@ int32_t connect_norito_encode_defund_offline_note_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic `RedeemOfflineNote` payments
+// Retired fail-closed entry point for classic `RedeemOfflineNote` payments
 // with transaction metadata. Always fails without producing signed transaction
 // bytes; production offline payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_redeem_offline_note_signed_transaction_with_metadata(
@@ -191,7 +191,7 @@ int32_t connect_norito_encode_redeem_offline_note_signed_transaction_with_metada
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic `AuditOfflineNote` payments
+// Retired fail-closed entry point for classic `AuditOfflineNote` payments
 // with transaction metadata. Always fails without producing signed transaction
 // bytes; production offline payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_audit_offline_note_signed_transaction_with_metadata(
@@ -208,7 +208,7 @@ int32_t connect_norito_encode_audit_offline_note_signed_transaction_with_metadat
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic `IssueOfflineNote` payments
+// Retired fail-closed entry point for classic `IssueOfflineNote` payments
 // with transaction metadata. Always fails without producing signed transaction
 // bytes; production offline top-ups must use Kagemusha online-to-offline flows.
 int32_t connect_norito_encode_issue_offline_note_signed_transaction_with_metadata(
@@ -225,7 +225,7 @@ int32_t connect_norito_encode_issue_offline_note_signed_transaction_with_metadat
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Retired compatibility entry point for classic Offline Note defund payments
+// Retired fail-closed entry point for classic Offline Note defund payments
 // with transaction metadata. Always fails without producing signed transaction
 // bytes; production offline payments must use Kagemusha transfer/redeem flows.
 int32_t connect_norito_encode_defund_offline_note_signed_transaction_with_metadata(
@@ -243,9 +243,8 @@ int32_t connect_norito_encode_defund_offline_note_signed_transaction_with_metada
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-// Generate a recursive Halo2/IPA proof for an Offline redemption against a chain-supplied verifying key.
-// Input: Norito-archive bytes of `OfflineNoteRedeem` and `VerifyingKeyBox`.
-// Output: Norito-archive bytes of `OfflineNoteRecursiveProof`.
+// Retired fail-closed entry point for classic `RedeemOfflineNote` proofs
+// against a chain-supplied verifying key.
 int32_t connect_norito_offline_prove_note_redeem_with_vk(
     const uint8_t* redeem_norito_ptr,
     unsigned long redeem_norito_len,
@@ -254,9 +253,8 @@ int32_t connect_norito_offline_prove_note_redeem_with_vk(
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
-// Generate a recursive Halo2/IPA proof for an Offline audit bundle against a chain-supplied verifying key.
-// Input: Norito-archive bytes of `OfflineNoteAuditBundle` and `VerifyingKeyBox`.
-// Output: Norito-archive bytes of `OfflineNoteRecursiveProof`.
+// Retired fail-closed entry point for classic `AuditOfflineNote` proofs
+// against a chain-supplied verifying key.
 int32_t connect_norito_offline_prove_note_audit_with_vk(
     const uint8_t* audit_norito_ptr,
     unsigned long audit_norito_len,
@@ -284,15 +282,6 @@ int32_t connect_norito_offline_verify_note_audit_with_vk(
     const uint8_t* vk_norito_ptr,
     unsigned long vk_norito_len,
     int32_t* out_valid);
-
-// Legacy unanchored Kagemusha compact-token prover retained for ABI compatibility only.
-// Production callers must use `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`.
-// Valid `KagemushaVerifiedFoldBundle` input returns ERR_KAGEMUSHA_PROVE and no output bytes.
-int32_t connect_norito_kagemusha_prove_verified_compact_payment_token(
-    const uint8_t* verified_bundle_norito_ptr,
-    unsigned long verified_bundle_norito_len,
-    uint8_t** out_compact_token_ptr,
-    unsigned long* out_compact_token_len);
 
 // Verify private Kagemusha hop proofs against verifier records and generate a compact folded-token proof.
 // Input: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.

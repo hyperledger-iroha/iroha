@@ -136,8 +136,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertFalse(abi6.chainAdmissible)
         assertEquals("offline verification failed", abi6.chainAdmissionReason)
         assertFalse(abi6.witnesslessRedeemSupported)
-        assertTrue(abi6.lineageWitnessRequired)
-        assertEquals(abi6.lineageWitnessRequired, abi6.lineageWitnessRequiredForRedeem)
+        assertTrue(abi6.lineageWitnessRequiredForRedeem)
 
         val abi7 = KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
             sharedRecursiveSpendArchive(FixtureAbi.ABI7, "verify_result"),
@@ -145,8 +144,7 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         assertTrue(abi7.hopCount >= 1)
         assertTrue(abi7.encodedBytes > 0)
         assertEquals(abi7.chainAdmissionReason.isEmpty(), abi7.chainAdmissible)
-        assertEquals(!abi7.lineageWitnessRequired, abi7.witnesslessRedeemSupported)
-        assertEquals(abi7.lineageWitnessRequired, abi7.lineageWitnessRequiredForRedeem)
+        assertEquals(!abi7.lineageWitnessRequiredForRedeem, abi7.witnesslessRedeemSupported)
         val trailingVerifyResultField = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
                 recursiveSpendVerifyResultWithTrailingField(),
@@ -207,13 +205,13 @@ class KagemushaRecursiveSpendRequestCodecsTest {
         )
         assertEquals("kagemusha-recursive-spend-abi-chain", init.chainId)
         assertEquals("686w6ABhTWPaCrWNjjXs7X1SW6w9", init.asset)
-        val fallbackAssetBundle = KagemushaRecursiveSpendRequestCodecs.decodeBundle(
+        val rawHexAssetBundle = KagemushaRecursiveSpendRequestCodecs.decodeBundle(
             recursiveSpendBundleWithAccumulatorField(
                 2,
                 fixedArrayPayload(0x01, 16),
             ),
         )
-        assertEquals("hex:01010101010101010101010101010101", fallbackAssetBundle.asset)
+        assertEquals("hex:01010101010101010101010101010101", rawHexAssetBundle.asset)
         assertTrue(init.initialRoot.any { it.toInt() != 0 })
         assertTrue(init.finalRoot.any { it.toInt() != 0 })
         assertEquals("7", init.currentNote.amount)

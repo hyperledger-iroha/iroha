@@ -82,12 +82,12 @@ use iroha_data_model::{
         AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AxtEnvelopeRecord,
         AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
         AxtReplayRecord, DataSpaceCatalog, DataSpaceId, DomainCommittee, DomainEndorsement,
-        DomainEndorsementPolicy, DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE,
-        LaneCatalog, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError,
-        LaneRelayQuorumContext, PublicLaneRewardRecord, PublicLaneStakeShare, PublicLaneUnbonding,
-        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
-        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
-        lane_relay_fastpq_claim_digest,
+        DomainEndorsementPolicy, DomainEndorsementRecord, FeeSponsorPolicy, FeeSponsorPolicyId,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId, LaneRelayEmergencyValidatorSet,
+        LaneRelayEnvelope, LaneRelayError, LaneRelayQuorumContext, PublicLaneRewardRecord,
+        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
+        PublicLaneValidatorStatus, UniversalAccountId, VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+        VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
     },
     nft::{NftEntry, NftValue},
     oracle::{
@@ -435,6 +435,7 @@ macro_rules! build_world_block {
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
+            fee_sponsor_policies: $state.fee_sponsor_policies.$method(),
             identifier_claims: $state.identifier_claims.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
             account_recovery_policies: $state.account_recovery_policies.$method(),
@@ -636,6 +637,7 @@ macro_rules! build_world_transaction {
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
+            fee_sponsor_policies: $state.fee_sponsor_policies.transaction(),
             identifier_claims: $state.identifier_claims.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
             account_recovery_policies: $state.account_recovery_policies.transaction(),
@@ -1027,7 +1029,7 @@ struct AccountPermissionSummary {
     hydrated: bool,
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
-    fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
+    fee_sponsor_policies: std::collections::BTreeSet<FeeSponsorPolicyId>,
 }
 
 pub(crate) fn parse_permission_account_field(
@@ -1050,31 +1052,40 @@ pub(crate) fn parse_permission_account_field(
         .map(Into::into)
 }
 
-pub(crate) fn fee_sponsor_from_permission(
+pub(crate) fn parse_permission_name_field(
+    payload: &iroha_primitives::json::Json,
+    field: &str,
+) -> Option<Name> {
+    let value = norito::json::parse_value(payload.get()).ok()?;
+    let map = match value {
+        norito::json::Value::Object(map) => map,
+        _ => return None,
+    };
+    let entry = map.get(field)?;
+    let literal = match entry {
+        norito::json::Value::String(value) => value.as_str(),
+        _ => return None,
+    };
+    Name::from_str(literal).ok()
+}
+
+pub(crate) fn fee_sponsor_policy_from_permission(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     permission: &Permission,
-) -> Option<iroha_data_model::account::AccountId> {
+) -> Option<FeeSponsorPolicyId> {
     (permission.name() == "CanUseFeeSponsor")
         .then(|| {
-            parse_permission_account_field(
+            let sponsor = parse_permission_account_field(
                 world,
                 dataspace_catalog,
                 permission.payload(),
                 "sponsor",
-            )
+            )?;
+            let name = parse_permission_name_field(permission.payload(), "policy")?;
+            Some(FeeSponsorPolicyId::new(sponsor, name))
         })
         .flatten()
-}
-
-pub(crate) fn permission_allows_fee_sponsor(
-    world: &impl WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    permission: &Permission,
-    sponsor: &iroha_data_model::account::AccountId,
-) -> bool {
-    fee_sponsor_from_permission(world, dataspace_catalog, permission)
-        .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
 }
 
 pub(crate) fn dataspace_fee_sponsor_from_config(
@@ -1097,17 +1108,29 @@ pub(crate) fn dataspace_fee_sponsor_from_config(
         })
 }
 
-pub(crate) fn dataspace_fee_sponsor_matches(
+pub(crate) fn dataspace_fee_sponsor_policy_from_config(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
+    dataspace_fee_sponsor_policies: &BTreeMap<DataSpaceId, Name>,
     dataspace: DataSpaceId,
-    sponsor: &AccountId,
-) -> bool {
-    dataspace_fee_sponsor_from_config(world, dataspace_catalog, dataspace_fee_sponsors, dataspace)
-        .is_ok_and(|configured| {
-            configured.is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
-        })
+) -> Result<Option<FeeSponsorPolicyId>, iroha_data_model::ValidationFail> {
+    let Some(sponsor) = dataspace_fee_sponsor_from_config(
+        world,
+        dataspace_catalog,
+        dataspace_fee_sponsors,
+        dataspace,
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(policy) = dataspace_fee_sponsor_policies.get(&dataspace).cloned() else {
+        return Err(iroha_data_model::ValidationFail::InternalError(format!(
+            "nexus.dataspace_catalog fee_sponsor_account_id for dataspace {} requires fee_sponsor_policy",
+            dataspace.as_u64()
+        )));
+    };
+    Ok(Some(FeeSponsorPolicyId::new(sponsor, policy)))
 }
 
 impl AccountPermissionSummary {
@@ -1115,7 +1138,7 @@ impl AccountPermissionSummary {
         self.hydrated = false;
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
-        self.fee_sponsors.clear();
+        self.fee_sponsor_policies.clear();
     }
 
     fn apply_grant(
@@ -1144,10 +1167,10 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) =
-                    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+                if let Some(policy_id) =
+                    fee_sponsor_policy_from_permission(world, dataspace_catalog, permission)
                 {
-                    self.fee_sponsors.insert(sponsor);
+                    self.fee_sponsor_policies.insert(policy_id);
                 }
             }
             _ => {}
@@ -1701,14 +1724,12 @@ pub enum LaneLifecycleError {
     /// Dataspace fee sponsor references a dataspace not present in the catalog.
     #[error("nexus dataspace fee sponsor references unknown dataspace {0}")]
     DataspaceFeeSponsorUnknownDataspace(DataSpaceId),
-    /// Sponsored contract allowlist entry must specify a contract target.
-    #[error(
-        "nexus sponsored contract allowlist entry {0} must set contract_alias or contract_address"
-    )]
-    SponsoredContractAllowlistMissingTarget(usize),
-    /// Sponsored contract allowlist entry must include at least one non-empty entrypoint.
-    #[error("nexus sponsored contract allowlist entry {0} must contain non-empty entrypoints")]
-    SponsoredContractAllowlistEmptyEntrypoints(usize),
+    /// Dataspace fee sponsor is missing a policy name.
+    #[error("nexus dataspace fee sponsor for dataspace {0} requires fee_sponsor_policy")]
+    DataspaceFeeSponsorMissingPolicy(DataSpaceId),
+    /// Dataspace fee sponsor policy references a dataspace without a sponsor.
+    #[error("nexus dataspace fee sponsor policy for dataspace {0} requires fee_sponsor_account_id")]
+    DataspaceFeeSponsorPolicyWithoutSponsor(DataSpaceId),
     /// Lifecycle plan references a dataspace that is not present in the catalog.
     #[error("lane lifecycle plan references unknown dataspace {0}")]
     UnknownDataspace(DataSpaceId),
@@ -1899,6 +1920,8 @@ pub struct World {
     pub(crate) ram_lfe_program_policies: Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry keyed by `(kind, business_rule)`.
     pub(crate) identifier_policies: Storage<IdentifierPolicyId, IdentifierPolicy>,
+    /// Sponsor-owned Nexus fee sponsorship policies keyed by `(sponsor, policy name)`.
+    pub(crate) fee_sponsor_policies: Storage<FeeSponsorPolicyId, FeeSponsorPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
@@ -2371,6 +2394,8 @@ pub struct WorldBlock<'world> {
     pub(crate) ram_lfe_program_policies: StorageBlock<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageBlock<'world, IdentifierPolicyId, IdentifierPolicy>,
+    /// Sponsor-owned Nexus fee sponsorship policy registry.
+    pub(crate) fee_sponsor_policies: StorageBlock<'world, FeeSponsorPolicyId, FeeSponsorPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
@@ -2974,6 +2999,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Global identifier policy registry.
     pub(crate) identifier_policies:
         StorageTransaction<'block, 'world, IdentifierPolicyId, IdentifierPolicy>,
+    /// Sponsor-owned Nexus fee sponsorship policy registry.
+    pub(crate) fee_sponsor_policies:
+        StorageTransaction<'block, 'world, FeeSponsorPolicyId, FeeSponsorPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims:
         StorageTransaction<'block, 'world, OpaqueAccountId, IdentifierClaimRecord>,
@@ -4444,6 +4472,8 @@ pub struct WorldView<'world> {
     pub(crate) ram_lfe_program_policies: StorageView<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageView<'world, IdentifierPolicyId, IdentifierPolicy>,
+    /// Sponsor-owned Nexus fee sponsorship policy registry.
+    pub(crate) fee_sponsor_policies: StorageView<'world, FeeSponsorPolicyId, FeeSponsorPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
@@ -6909,15 +6939,23 @@ pub(crate) struct PipelineParallelism {
     pool: Option<std::sync::Arc<rayon::ThreadPool>>,
 }
 
+const PIPELINE_AUTO_WORKER_MIN: usize = 2;
+const PIPELINE_AUTO_WORKER_MAX: usize = 8;
+
+fn resolve_pipeline_worker_threads(configured: usize) -> usize {
+    if configured == 0 {
+        let detected = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1);
+        detected.clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX)
+    } else {
+        configured.max(1)
+    }
+}
+
 impl PipelineParallelism {
     pub(crate) fn new(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
-        let workers = if pipeline.workers == 0 {
-            std::thread::available_parallelism()
-                .map(|count| count.get())
-                .unwrap_or(1)
-        } else {
-            pipeline.workers
-        };
+        let workers = resolve_pipeline_worker_threads(pipeline.workers);
         let pool = if workers > 1 {
             Some(std::sync::Arc::new(
                 rayon::ThreadPoolBuilder::new()
@@ -6938,6 +6976,29 @@ impl PipelineParallelism {
 
     pub(crate) fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
         self.pool.clone()
+    }
+}
+
+#[cfg(test)]
+mod pipeline_parallelism_tests {
+    use super::{
+        PIPELINE_AUTO_WORKER_MAX, PIPELINE_AUTO_WORKER_MIN, resolve_pipeline_worker_threads,
+    };
+
+    #[test]
+    fn pipeline_parallelism_auto_is_bounded() {
+        let expected = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+            .clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX);
+
+        assert_eq!(resolve_pipeline_worker_threads(0), expected);
+        assert!(resolve_pipeline_worker_threads(0) <= PIPELINE_AUTO_WORKER_MAX);
+    }
+
+    #[test]
+    fn pipeline_parallelism_preserves_explicit_workers() {
+        assert_eq!(resolve_pipeline_worker_threads(32), 32);
     }
 }
 
@@ -14669,6 +14730,7 @@ impl World {
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
+            fee_sponsor_policies: self.fee_sponsor_policies.view(),
             identifier_claims: self.identifier_claims.view(),
             account_rekey_records: self.account_rekey_records.view(),
             account_recovery_policies: self.account_recovery_policies.view(),
@@ -14953,6 +15015,8 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy>;
     /// Global identifier policy registry (read-only).
     fn identifier_policies(&self) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy>;
+    /// Sponsor-owned Nexus fee sponsorship policy registry (read-only).
+    fn fee_sponsor_policies(&self) -> &impl StorageReadOnly<FeeSponsorPolicyId, FeeSponsorPolicy>;
     /// Active identifier claims keyed by opaque identifier (read-only).
     fn identifier_claims(&self) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord>;
 
@@ -14968,6 +15032,12 @@ pub trait WorldReadOnly {
     #[inline]
     fn identifier_policies_iter(&self) -> impl Iterator<Item = &IdentifierPolicy> {
         self.identifier_policies().iter().map(|(_, policy)| policy)
+    }
+
+    /// Iterate registered fee sponsor policies.
+    #[inline]
+    fn fee_sponsor_policies_iter(&self) -> impl Iterator<Item = &FeeSponsorPolicy> {
+        self.fee_sponsor_policies().iter().map(|(_, policy)| policy)
     }
 
     /// Resolve an opaque identifier within a specific policy namespace.
@@ -16286,6 +16356,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy> {
                 &self.identifier_policies
             }
+            fn fee_sponsor_policies(
+                &self,
+            ) -> &impl StorageReadOnly<FeeSponsorPolicyId, FeeSponsorPolicy> {
+                &self.fee_sponsor_policies
+            }
             fn identifier_claims(
                 &self,
             ) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord> {
@@ -17113,6 +17188,7 @@ impl<'world> WorldBlock<'world> {
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
+            fee_sponsor_policies,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -17421,6 +17497,7 @@ impl<'world> WorldBlock<'world> {
         assets.commit();
         identifier_claims.commit();
         identifier_policies.commit();
+        fee_sponsor_policies.commit();
         ram_lfe_program_policies.commit();
         account_recovery_requests.commit();
         account_recovery_policies.commit();
@@ -18390,6 +18467,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
+            fee_sponsor_policies,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -18676,6 +18754,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         nfts_by_owner.apply();
         identifier_claims.apply();
         identifier_policies.apply();
+        fee_sponsor_policies.apply();
         ram_lfe_program_policies.apply();
         account_recovery_requests.apply();
         account_recovery_policies.apply();
@@ -23480,7 +23559,7 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        _commit_topology: &[PeerId],
+        commit_topology: &[PeerId],
         block_height: u64,
     ) -> Vec<PeerId> {
         let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, nexus) else {
@@ -23519,6 +23598,10 @@ impl State {
                     peer_has_live_consensus_key(world, &peer, block_height).then_some(peer)
                 })
                 .collect();
+        }
+
+        if autoscale_managed_lane_inherits_commit_topology_authority(lane_id, dataspace_id, nexus) {
+            return Self::live_commit_topology_peers(world, commit_topology, block_height);
         }
 
         if !matches!(
@@ -23586,6 +23669,21 @@ impl State {
         manifest_registry
             .status(lane_id)
             .is_some_and(|status| status.dataspace == dataspace_id)
+    }
+
+    fn live_commit_topology_peers(
+        world: &impl WorldReadOnly,
+        commit_topology: &[PeerId],
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        let mut peers: Vec<_> = commit_topology
+            .iter()
+            .filter(|peer_id| peer_has_live_consensus_key(world, peer_id, block_height))
+            .cloned()
+            .collect();
+        peers.sort();
+        peers.dedup();
+        peers
     }
 
     fn lane_relay_qc_signers(
@@ -25010,25 +25108,25 @@ impl State {
                     *dataspace_id,
                 ));
             }
-        }
-        for (index, entry) in nexus
-            .fees
-            .sponsored_contract_operation_allowlist
-            .iter()
-            .enumerate()
-        {
-            if entry.contract_alias.is_none() && entry.contract_address.is_none() {
-                return Err(LaneLifecycleError::SponsoredContractAllowlistMissingTarget(
-                    index,
+            if !nexus
+                .dataspace_fee_sponsor_policies
+                .contains_key(dataspace_id)
+            {
+                return Err(LaneLifecycleError::DataspaceFeeSponsorMissingPolicy(
+                    *dataspace_id,
                 ));
             }
-            if entry.entrypoints.is_empty()
-                || entry
-                    .entrypoints
-                    .iter()
-                    .any(|entrypoint| entrypoint.trim().is_empty())
-            {
-                return Err(LaneLifecycleError::SponsoredContractAllowlistEmptyEntrypoints(index));
+        }
+        for dataspace_id in nexus.dataspace_fee_sponsor_policies.keys() {
+            if !dataspace_ids.contains(dataspace_id) {
+                return Err(LaneLifecycleError::DataspaceFeeSponsorUnknownDataspace(
+                    *dataspace_id,
+                ));
+            }
+            if !nexus.dataspace_fee_sponsors.contains_key(dataspace_id) {
+                return Err(LaneLifecycleError::DataspaceFeeSponsorPolicyWithoutSponsor(
+                    *dataspace_id,
+                ));
             }
         }
         if !nexus.enabled
@@ -25362,6 +25460,7 @@ impl State {
     ) -> core::result::Result<(), LaneLifecycleError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let lanes_to_reset = {
+            let _state_commit_lock = self.state_commit_lock.lock();
             let _lifecycle_lock = self.lane_lifecycle_lock.lock();
             let lifecycle_update = {
                 let nexus = self.nexus.read();
@@ -26362,6 +26461,28 @@ fn ensure_autoscale_managed_lane_default_dataspace(
         dataspace: lane.dataspace_id,
         default_dataspace,
     })
+}
+
+fn autoscale_managed_lane_inherits_commit_topology_authority(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> bool {
+    if !nexus.enabled
+        || !nexus.autoscale.enabled
+        || lane_id == nexus.routing_policy.default_lane
+        || dataspace_id != nexus.routing_policy.default_dataspace
+        || ensure_autoscale_runtime_lane_bounds(&nexus.autoscale).is_err()
+    {
+        return false;
+    }
+
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .is_some_and(|lane| ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus).is_ok())
 }
 
 fn validate_nexus_routing_policy(
@@ -29236,6 +29357,22 @@ fn autoscale_scale_in_triggered(
         && utilization_p95_permille.unwrap_or(u64::MAX) <= utilization_threshold_permille
 }
 
+fn autoscale_scale_out_triggered(
+    can_scale_out: bool,
+    sample_count: usize,
+    required_window: usize,
+    latency_ratio_p95_permille: Option<u64>,
+    latency_threshold_permille: u64,
+    utilization_p95_permille: Option<u64>,
+    utilization_threshold_permille: u64,
+) -> bool {
+    can_scale_out
+        && required_window > 0
+        && sample_count >= required_window
+        && (latency_ratio_p95_permille.unwrap_or_default() >= latency_threshold_permille
+            || utilization_p95_permille.unwrap_or_default() >= utilization_threshold_permille)
+}
+
 fn autoscale_cooldown_active(
     last_transition_height: u64,
     cooldown_blocks: u16,
@@ -30771,7 +30908,7 @@ impl<'state> StateBlock<'state> {
         let next_scale_out_lane_id =
             self.next_autoscale_lane_id(autoscale.min_lanes.get(), autoscale.max_lanes.get());
         let can_scale_out = next_scale_out_lane_id.is_some();
-        let retire_lane = if autoscale_capacity_lanes > u64::from(autoscale.min_lanes.get()) {
+        let retire_lane = if autoscale_capacity_lanes > 1 {
             self.select_autoscale_lane_for_retire()
         } else {
             None
@@ -30800,10 +30937,15 @@ impl<'state> StateBlock<'state> {
                     autoscale_window_stats(&samples, target_block_ms);
                 let latency_ratio = latency_ratio_p95_permille.unwrap_or_default();
                 (
-                    samples.len() >= window_blocks
-                        && latency_ratio >= thresholds.scale_out_latency_permille
-                        && utilization_p95_permille.unwrap_or_default()
-                            >= thresholds.scale_out_utilization_permille,
+                    autoscale_scale_out_triggered(
+                        true,
+                        samples.len(),
+                        window_blocks,
+                        latency_ratio_p95_permille,
+                        thresholds.scale_out_latency_permille,
+                        utilization_p95_permille,
+                        thresholds.scale_out_utilization_permille,
+                    ),
                     latency_ratio,
                     utilization_p95_permille,
                 )
@@ -31902,45 +32044,190 @@ mod state_commit_lock_order_tests {
             retire: Vec::new(),
         };
 
-        let backend_guard = state.tiered_backend.lock();
         let (done_tx, done_rx) = mpsc::channel();
+        let barrier = Arc::new(Barrier::new(3));
         let lane_state = Arc::clone(&state);
         let lane_done = done_tx.clone();
+        let lane_barrier = Arc::clone(&barrier);
         let lane_handle = thread::spawn(move || {
+            lane_barrier.wait();
             lane_state
                 .apply_lane_lifecycle(&plan)
                 .expect("lane lifecycle");
             let _ = lane_done.send(());
         });
 
-        let wait_start = Instant::now();
-        while state.state_write_lock.try_lock().is_some() {
-            if wait_start.elapsed() > Duration::from_millis(200) {
-                break;
-            }
-            thread::yield_now();
-        }
-
         let commit_state = Arc::clone(&state);
         let commit_done = done_tx.clone();
+        let commit_barrier = Arc::clone(&barrier);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let commit_handle = thread::spawn(move || {
+            commit_barrier.wait();
             let block = commit_state.block(header);
             block.commit().expect("commit");
             let _ = commit_done.send(());
         });
 
-        drop(backend_guard);
+        barrier.wait();
 
         done_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("lane lifecycle completion");
+            .expect("first serialized operation completion");
         done_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("commit completion");
+            .expect("second serialized operation completion");
 
         lane_handle.join().expect("lane lifecycle thread");
         commit_handle.join().expect("commit thread");
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .by_alias("beta")
+                .is_some(),
+            "lane lifecycle should publish after serialization with commit"
+        );
+    }
+
+    #[test]
+    fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+        state.nexus.write().enabled = true;
+
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfigModel {
+                id: LaneId::new(1),
+                alias: "prebuilt-beta".to_string(),
+                ..LaneConfigModel::default()
+            }],
+            retire: Vec::new(),
+        };
+
+        let (block_ready_tx, block_ready_rx) = mpsc::channel();
+        let (commit_release_tx, commit_release_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let commit_state = Arc::clone(&state);
+        let commit_done = done_tx.clone();
+        let commit_handle = thread::spawn(move || {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let block = commit_state.block(header);
+            block_ready_tx
+                .send(())
+                .expect("notify prebuilt block is holding its overlay");
+            commit_release_rx
+                .recv()
+                .expect("wait for lifecycle catalog publication");
+            block.commit().expect("commit prebuilt block");
+            let _ = commit_done.send("commit");
+        });
+
+        block_ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("prebuilt block ready");
+
+        let lifecycle_state = Arc::clone(&state);
+        let lifecycle_done = done_tx.clone();
+        let lifecycle_handle = thread::spawn(move || {
+            lifecycle_state
+                .apply_lane_lifecycle(&plan)
+                .expect("lane lifecycle");
+            let _ = lifecycle_done.send("lifecycle");
+        });
+
+        let publication_start = Instant::now();
+        let mut catalog_published = false;
+        while publication_start.elapsed() < Duration::from_secs(1) {
+            if state
+                .nexus_snapshot()
+                .lane_catalog
+                .by_alias("prebuilt-beta")
+                .is_some()
+            {
+                catalog_published = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            catalog_published,
+            "lane lifecycle should publish catalog before waiting on world-backed cleanup"
+        );
+        commit_release_tx
+            .send(())
+            .expect("release prebuilt block commit");
+
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first operation completion");
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second operation completion");
+
+        lifecycle_handle.join().expect("lane lifecycle thread");
+        commit_handle.join().expect("commit thread");
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .by_alias("prebuilt-beta")
+                .is_some(),
+            "published lane should survive prebuilt block serialization"
+        );
+    }
+
+    #[test]
+    fn lane_lifecycle_waits_for_inflight_state_commit_lock() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+        state.nexus.write().enabled = true;
+
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfigModel {
+                id: LaneId::new(1),
+                alias: "serialized-beta".to_string(),
+                ..LaneConfigModel::default()
+            }],
+            retire: Vec::new(),
+        };
+
+        let commit_guard = state.state_commit_lock.lock();
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let lifecycle_state = Arc::clone(&state);
+        let handle = thread::spawn(move || {
+            attempt_tx
+                .send(())
+                .expect("notify lifecycle attempt started");
+            lifecycle_state
+                .apply_lane_lifecycle(&plan)
+                .expect("lane lifecycle");
+        });
+
+        attempt_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("lifecycle thread started");
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .by_alias("serialized-beta")
+                .is_none(),
+            "manual lifecycle must not publish while a state commit is in progress"
+        );
+
+        drop(commit_guard);
+        handle.join().expect("lane lifecycle thread");
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .by_alias("serialized-beta")
+                .is_some(),
+            "manual lifecycle should publish after the state commit lock is released"
+        );
     }
 
     #[test]
@@ -35419,6 +35706,7 @@ mod permission_cache_tests {
 
         let permission = CanUseFeeSponsor {
             sponsor: sponsor.clone(),
+            policy: "default".parse().expect("default fee sponsor policy"),
         };
         Grant::account_permission(permission.clone(), caller.clone())
             .execute(&sponsor, &mut stx)
@@ -35460,6 +35748,10 @@ mod permission_cache_tests {
         stx.nexus
             .dataspace_fee_sponsors
             .insert(DataSpaceId::UNIVERSAL, sponsor.to_string());
+        stx.nexus.dataspace_fee_sponsor_policies.insert(
+            DataSpaceId::UNIVERSAL,
+            "default".parse().expect("default fee sponsor policy"),
+        );
 
         assert!(
             stx.can_use_fee_sponsor(&caller, &sponsor),
@@ -37826,12 +38118,12 @@ impl StateTransaction<'_, '_> {
             .any(|authority| authority.subject_id() == owner.subject_id())
     }
 
-    /// Build or fetch cached set of sponsor accounts this account can charge fees to.
-    fn cached_fee_sponsors(
+    /// Build or fetch cached set of sponsor policy IDs this account can charge fees to.
+    fn cached_fee_sponsor_policies(
         &mut self,
         account: &AccountId,
-    ) -> &std::collections::BTreeSet<iroha_data_model::account::AccountId> {
-        &self.ensure_permission_summary(account).fee_sponsors
+    ) -> &std::collections::BTreeSet<FeeSponsorPolicyId> {
+        &self.ensure_permission_summary(account).fee_sponsor_policies
     }
 
     /// Fast check: does `caller` have `CanExecuteTrigger{trigger_id}` for `id`?
@@ -37840,26 +38132,39 @@ impl StateTransaction<'_, '_> {
         set.contains(id)
     }
 
-    /// Fast check: does `caller` have `CanUseFeeSponsor{sponsor}` for `sponsor`?
-    pub fn can_use_fee_sponsor(&mut self, caller: &AccountId, sponsor: &AccountId) -> bool {
-        let permitted_by_grant = {
-            let set = self.cached_fee_sponsors(caller);
+    /// Resolve policy IDs that can authorize `caller` to use `sponsor`.
+    pub fn fee_sponsor_policy_ids_for(
+        &mut self,
+        caller: &AccountId,
+        sponsor: &AccountId,
+    ) -> BTreeSet<FeeSponsorPolicyId> {
+        let mut policies = {
+            let set = self.cached_fee_sponsor_policies(caller);
             set.iter()
-                .any(|allowed| allowed.subject_id() == sponsor.subject_id())
+                .filter(|allowed| allowed.sponsor.subject_id() == sponsor.subject_id())
+                .cloned()
+                .collect::<BTreeSet<_>>()
         };
-        if permitted_by_grant {
-            return true;
-        }
 
-        self.current_dataspace_id.is_some_and(|dataspace_id| {
-            dataspace_fee_sponsor_matches(
+        if let Some(dataspace_id) = self.current_dataspace_id
+            && let Ok(Some(default_policy)) = dataspace_fee_sponsor_policy_from_config(
                 &self.world,
                 &self.nexus.dataspace_catalog,
                 &self.nexus.dataspace_fee_sponsors,
+                &self.nexus.dataspace_fee_sponsor_policies,
                 dataspace_id,
-                sponsor,
             )
-        })
+            && default_policy.sponsor.subject_id() == sponsor.subject_id()
+        {
+            policies.insert(default_policy);
+        }
+
+        policies
+    }
+
+    /// Fast check: does `caller` have any fee sponsor policy for `sponsor`?
+    pub fn can_use_fee_sponsor(&mut self, caller: &AccountId, sponsor: &AccountId) -> bool {
+        !self.fee_sponsor_policy_ids_for(caller, sponsor).is_empty()
     }
 
     fn seed_trigger_call_hash(&mut self, event: &ExecuteTriggerEvent) {
@@ -39229,6 +39534,7 @@ pub(crate) mod deserialize {
         let ram_lfe_program_policies = take_ram_lfe_program_policies(&mut map)?;
         validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
+        let fee_sponsor_policies = take_optional_default(&mut map, "fee_sponsor_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let account_recovery_policies =
             take_optional_default(&mut map, "account_recovery_policies")?;
@@ -39399,6 +39705,7 @@ pub(crate) mod deserialize {
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
+            fee_sponsor_policies,
             identifier_claims,
             account_rekey_records,
             account_recovery_policies,
@@ -42760,11 +43067,19 @@ mod tests {
             &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanUseFeeSponsor {
                 sponsor: account_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             }),
         );
 
         assert!(summary.reg_trigger_authorities.contains(&account_id));
-        assert!(summary.fee_sponsors.contains(&account_id));
+        assert!(
+            summary
+                .fee_sponsor_policies
+                .contains(&FeeSponsorPolicyId::new(
+                    account_id,
+                    "default".parse().expect("default fee sponsor policy"),
+                ))
+        );
     }
 
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
@@ -42934,6 +43249,77 @@ mod tests {
             1_100,
             Some(251),
             250
+        ));
+    }
+
+    #[test]
+    fn autoscale_scale_out_triggered_accepts_hot_latency_or_utilization() {
+        assert!(autoscale_scale_out_triggered(
+            true,
+            4,
+            4,
+            Some(1_200),
+            1_200,
+            Some(10),
+            600
+        ));
+        assert!(autoscale_scale_out_triggered(
+            true,
+            4,
+            4,
+            Some(10),
+            1_200,
+            Some(600),
+            600
+        ));
+        assert!(autoscale_scale_out_triggered(
+            true,
+            4,
+            4,
+            Some(1_200),
+            1_200,
+            Some(600),
+            600
+        ));
+    }
+
+    #[test]
+    fn autoscale_scale_out_triggered_rejects_disabled_short_or_cold_windows() {
+        assert!(!autoscale_scale_out_triggered(
+            false,
+            4,
+            4,
+            Some(1_200),
+            1_200,
+            Some(600),
+            600
+        ));
+        assert!(!autoscale_scale_out_triggered(
+            true,
+            3,
+            4,
+            Some(1_200),
+            1_200,
+            Some(600),
+            600
+        ));
+        assert!(!autoscale_scale_out_triggered(
+            true,
+            4,
+            0,
+            Some(1_200),
+            1_200,
+            Some(600),
+            600
+        ));
+        assert!(!autoscale_scale_out_triggered(
+            true,
+            4,
+            4,
+            Some(1_199),
+            1_200,
+            Some(599),
+            600
         ));
     }
 
@@ -43856,6 +44242,75 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
+    }
+
+    #[test]
+    fn autoscale_transition_retires_public_profile_elastic_lane_when_window_is_cold() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![
+                    LaneConfig {
+                        id: LaneId::new(0),
+                        alias: "core".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: LaneId::new(1),
+                        alias: "governance".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: LaneId::new(2),
+                        alias: "zk".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+                3,
+                4,
+                200,
+            ))
+            .expect("apply autoscale public-profile test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![autoscale_elastic_lane_config(
+                        LaneId::new(3),
+                        DataSpaceId::UNIVERSAL,
+                        1,
+                    )],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed public-profile elastic lane");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, LaneId::new(1), LaneId::new(2)],
+            "cold public-profile scale-in should retire only the managed elastic lane"
+        );
+        assert_eq!(nexus.autoscale.last_transition_height, 2);
     }
 
     #[test]
@@ -47000,7 +47455,6 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let elastic_lane = autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
         state
             .set_nexus(autoscale_transition_test_nexus(
                 vec![
@@ -47021,16 +47475,6 @@ mod tests {
                 200,
             ))
             .expect("apply autoscale manual-lane scale-in guard test nexus config");
-        state
-            .apply_lane_lifecycle_with_options(
-                &iroha_data_model::nexus::LaneLifecyclePlan {
-                    additions: vec![elastic_lane],
-                    retire: Vec::new(),
-                },
-                false,
-                true,
-            )
-            .expect("seed internally managed elastic lane");
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -47051,12 +47495,7 @@ mod tests {
                 .iter()
                 .map(|lane| lane.id)
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                LaneId::SINGLE,
-                LaneId::new(2),
-                LaneId::new(4),
-                LaneId::new(5),
-            ]),
+            BTreeSet::from([LaneId::SINGLE, LaneId::new(4), LaneId::new(5),]),
             "unrelated manual lanes must not make default-route capacity eligible for scale-in"
         );
         assert_eq!(
@@ -52677,60 +53116,6 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_rejects_sponsored_contract_allowlist_entry_without_target() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        let entry = nexus
-            .fees
-            .sponsored_contract_operation_allowlist
-            .first_mut()
-            .expect("default sponsored allowlist entry");
-        entry.contract_alias = None;
-        entry.contract_address = None;
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("sponsored allowlist entry must name a contract target");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::SponsoredContractAllowlistMissingTarget(0)
-        ));
-    }
-
-    #[test]
-    fn set_nexus_rejects_sponsored_contract_allowlist_entry_without_entrypoints() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
-
-        let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            ..Default::default()
-        };
-        nexus
-            .fees
-            .sponsored_contract_operation_allowlist
-            .first_mut()
-            .expect("default sponsored allowlist entry")
-            .entrypoints
-            .clear();
-
-        let err = state
-            .set_nexus(nexus)
-            .expect_err("sponsored allowlist entry must include entrypoints");
-        assert!(matches!(
-            err,
-            LaneLifecycleError::SponsoredContractAllowlistEmptyEntrypoints(0)
-        ));
-    }
-
-    #[test]
     fn set_nexus_rejects_lane_relay_emergency_threshold_above_members() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -52829,7 +53214,7 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_allows_dataspace_fee_sponsor_for_known_dataspace() {
+    fn set_nexus_rejects_dataspace_fee_sponsor_without_policy() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
@@ -52846,6 +53231,64 @@ mod tests {
             ..Default::default()
         };
 
+        let err = state
+            .set_nexus(nexus)
+            .expect_err("dataspace fee sponsors must reference a policy");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::DataspaceFeeSponsorMissingPolicy(DataSpaceId::UNIVERSAL)
+        ));
+    }
+
+    #[test]
+    fn set_nexus_rejects_dataspace_fee_sponsor_policy_without_sponsor() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut fees = iroha_config::parameters::actual::NexusFees::default();
+        fees.sponsorship_enabled = true;
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            fees,
+            dataspace_fee_sponsor_policies: BTreeMap::from([(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            )]),
+            ..Default::default()
+        };
+
+        let err = state
+            .set_nexus(nexus)
+            .expect_err("dataspace fee sponsor policies require a sponsor");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::DataspaceFeeSponsorPolicyWithoutSponsor(DataSpaceId::UNIVERSAL)
+        ));
+    }
+
+    #[test]
+    fn set_nexus_allows_dataspace_fee_sponsor_for_known_dataspace() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut fees = iroha_config::parameters::actual::NexusFees::default();
+        fees.sponsorship_enabled = true;
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            fees,
+            dataspace_fee_sponsors: BTreeMap::from([(
+                DataSpaceId::UNIVERSAL,
+                "sponsor".to_string(),
+            )]),
+            dataspace_fee_sponsor_policies: BTreeMap::from([(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            )]),
+            ..Default::default()
+        };
+
         state
             .set_nexus(nexus)
             .expect("known dataspace fee sponsor should be accepted");
@@ -52856,6 +53299,15 @@ mod tests {
                 .get(&DataSpaceId::UNIVERSAL)
                 .map(String::as_str),
             Some("sponsor")
+        );
+        assert_eq!(
+            state
+                .nexus_snapshot()
+                .dataspace_fee_sponsor_policies
+                .get(&DataSpaceId::UNIVERSAL)
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("default")
         );
     }
 
@@ -59593,6 +60045,114 @@ mod tests {
         assert_eq!(
             state.authoritative_lane_validator_accounts(LaneId::SINGLE),
             vec![ALICE_ID.clone()]
+        );
+    }
+
+    fn autoscale_elastic_catalog_lane_for_test(
+        lane_id: LaneId,
+        created_height: u64,
+    ) -> iroha_data_model::nexus::LaneConfig {
+        let mut lane = iroha_data_model::nexus::LaneConfig {
+            id: lane_id,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..Default::default()
+        };
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        lane
+    }
+
+    fn install_autoscale_elastic_catalog_for_test(
+        state: &State,
+        lane: iroha_data_model::nexus::LaneConfig,
+    ) {
+        let lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(lane.id.as_u32().saturating_add(1))
+                .expect("nonzero lane count"),
+            vec![iroha_data_model::nexus::LaneConfig::default(), lane],
+        )
+        .expect("autoscale lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(2_u32);
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+
+    #[test]
+    fn authoritative_lane_peers_for_autoscale_elastic_lane_inherit_commit_topology() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        install_autoscale_elastic_catalog_for_test(
+            &state,
+            autoscale_elastic_catalog_lane_for_test(lane_id, 7),
+        );
+
+        let keypairs: Vec<_> = (0..3)
+            .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let inactive_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        seed_consensus_keys_with_pops(&state, &keypairs);
+        let mut expected: Vec<_> = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        let inactive_peer = PeerId::new(inactive_keypair.public_key().clone());
+
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            for peer in &expected {
+                topology.push(peer.clone());
+            }
+            topology.push(inactive_peer);
+            topology.commit();
+        }
+        expected.sort();
+
+        assert_eq!(state.authoritative_lane_peer_ids(lane_id), expected);
+        assert!(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .is_empty(),
+            "commit-topology inheritance must not fabricate public staking records"
+        );
+    }
+
+    #[test]
+    fn authoritative_lane_peers_do_not_inherit_commit_topology_for_malformed_autoscale_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let mut malformed = autoscale_elastic_catalog_lane_for_test(lane_id, 7);
+        malformed.alias = "not-elastic".to_owned();
+        install_autoscale_elastic_catalog_for_test(&state, malformed);
+
+        let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(PeerId::new(keypair.public_key().clone()));
+            topology.commit();
+        }
+
+        assert!(
+            state.authoritative_lane_peer_ids(lane_id).is_empty(),
+            "malformed autoscale-owned lanes must fail closed"
         );
     }
 

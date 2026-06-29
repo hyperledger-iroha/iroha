@@ -227,8 +227,12 @@ HighestQcOptionalSelectionCoreSafety ==
   /\ IgnoredEvidenceCannotClearSelection
 
 HighestQcOptionalSelectionExactness ==
-  HighestQcOptionalSelectionCoreSafety
-
+  /\ SelectedMatchesSpec
+  /\ NoSelectionWithoutSomeNewView
+  /\ SelectionComesFromEmbeddedNewViewQc
+  /\ EmbeddedHighestNotCertificateSubject
+  /\ MaxCandidateSelected
+  /\ IgnoredEvidenceCannotClearSelection
 HighestQcOptionalSelectionCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ HighestQcOptionalSelectionExactness

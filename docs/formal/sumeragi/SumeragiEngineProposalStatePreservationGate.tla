@@ -269,7 +269,7 @@ ValuesStayInDomain ==
     /\ InitialReconfiguration(candidate) \in ReconfigurationValues
     /\ ImplementationReconfiguration(candidate) \in ReconfigurationValues
 
-Safety ==
+EngineProposalStatePreservationExactness ==
   /\ AcceptedPreservesCommitted
   /\ AcceptedPreservesPrepareVoteCache
   /\ AcceptedPreservesPendingMap
@@ -282,6 +282,13 @@ Safety ==
   /\ RejectedPreservesReconfiguration
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineProposalStatePreservationExactness
+
+EngineProposalStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineProposalStatePreservationExactness
 
 =============================================================================
 ====

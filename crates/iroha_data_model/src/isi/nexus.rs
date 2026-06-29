@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     account::AccountId,
     metadata::Metadata,
-    nexus::{LaneId, LaneRelayEnvelope, ProofBlob},
+    nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, LaneId, LaneRelayEnvelope, ProofBlob},
     peer::PeerId,
 };
 use iroha_primitives::numeric::Numeric;
@@ -69,6 +69,32 @@ iroha_data_model_derive::model_single! {
     }
 }
 
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Create or replace a sponsor-owned Nexus fee sponsor policy.
+    pub struct UpsertFeeSponsorPolicy {
+        /// Policy to persist.
+        pub policy: FeeSponsorPolicy,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Remove a sponsor-owned Nexus fee sponsor policy.
+    pub struct RemoveFeeSponsorPolicy {
+        /// Policy identifier to remove.
+        pub id: FeeSponsorPolicyId,
+    }
+}
+
 impl PartialOrd for RegisterVerifiedLaneRelay {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -93,9 +119,35 @@ impl Ord for RegisterVerifiedNexusFeeBudget {
     }
 }
 
+impl PartialOrd for UpsertFeeSponsorPolicy {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for UpsertFeeSponsorPolicy {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
+impl PartialOrd for RemoveFeeSponsorPolicy {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RemoveFeeSponsorPolicy {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
 impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
 impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}
 impl crate::seal::Instruction for RegisterVerifiedNexusFeeBudget {}
+impl crate::seal::Instruction for UpsertFeeSponsorPolicy {}
+impl crate::seal::Instruction for RemoveFeeSponsorPolicy {}
 
 fn nexus_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
@@ -225,6 +277,46 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedNexusFeeBudget {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for UpsertFeeSponsorPolicy {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = nexus_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let policy = super::decode_aos_canonical_field::<FeeSponsorPolicy>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { policy }, offset))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RemoveFeeSponsorPolicy {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = nexus_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let id = super::decode_aos_canonical_field::<FeeSponsorPolicyId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { id }, offset))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
@@ -236,7 +328,9 @@ mod tests {
     use super::*;
     use crate::{
         block::{BlockHeader, consensus::LaneBlockCommitment},
-        nexus::LaneId,
+        nexus::{
+            FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
+        },
     };
 
     fn sample_commitment(height: u64) -> LaneBlockCommitment {
@@ -330,6 +424,19 @@ mod tests {
         }
     }
 
+    fn sample_fee_sponsor_policy() -> FeeSponsorPolicy {
+        let policy_id = FeeSponsorPolicyId::new(
+            sponsor_account_id(),
+            "default".parse().expect("policy name"),
+        );
+        FeeSponsorPolicy {
+            id: policy_id,
+            enabled: true,
+            max_fee: Some(Numeric::from(10_u32)),
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        }
+    }
+
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -397,6 +504,11 @@ mod tests {
         assert_slice_roundtrip(sample_emergency_validators_instruction());
         assert_slice_roundtrip(sample_lane_relay_instruction());
         assert_slice_roundtrip(sample_fee_budget_instruction());
+        let policy = sample_fee_sponsor_policy();
+        assert_slice_roundtrip(UpsertFeeSponsorPolicy {
+            policy: policy.clone(),
+        });
+        assert_slice_roundtrip(RemoveFeeSponsorPolicy { id: policy.id });
     }
 
     #[test]
@@ -408,7 +520,9 @@ mod tests {
             .register_with_id_slice::<RegisterVerifiedLaneRelay>("nexus::RegisterVerifiedLaneRelay")
             .register_with_id_slice::<RegisterVerifiedNexusFeeBudget>(
                 "nexus::RegisterVerifiedNexusFeeBudget",
-            );
+            )
+            .register_with_id_slice::<UpsertFeeSponsorPolicy>("nexus::UpsertFeeSponsorPolicy")
+            .register_with_id_slice::<RemoveFeeSponsorPolicy>("nexus::RemoveFeeSponsorPolicy");
 
         assert_registry_decodes(
             &registry,
@@ -424,6 +538,19 @@ mod tests {
             &registry,
             "nexus::RegisterVerifiedNexusFeeBudget",
             sample_fee_budget_instruction(),
+        );
+        let policy = sample_fee_sponsor_policy();
+        assert_registry_decodes(
+            &registry,
+            "nexus::UpsertFeeSponsorPolicy",
+            UpsertFeeSponsorPolicy {
+                policy: policy.clone(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::RemoveFeeSponsorPolicy",
+            RemoveFeeSponsorPolicy { id: policy.id },
         );
     }
 }

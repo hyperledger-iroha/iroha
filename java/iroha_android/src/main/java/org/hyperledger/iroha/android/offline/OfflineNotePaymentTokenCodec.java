@@ -12,8 +12,8 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 /**
- * Archived classic Offline Note payment-token codec retained for compatibility
- * fixtures; production offline payments use Kagemusha.
+ * Archived classic Offline Note payment-token codec kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
  */
 public final class OfflineNotePaymentTokenCodec {
   public static final String TYPE = "offline_payment_token";

@@ -375,7 +375,7 @@ KnownSelectedRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncKnownSelectedRosterExactness ==
-  KnownSelectedRosterMatchesSpec
+  /\ KnownSelectedRosterMatchesSpec
 
 BlockSyncKnownSelectedRosterCorrectnessEnvelope ==
   /\ TypeInvariant

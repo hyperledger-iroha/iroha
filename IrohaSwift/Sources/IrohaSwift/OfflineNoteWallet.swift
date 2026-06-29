@@ -4,8 +4,8 @@ import CryptoKit
 import Security
 #endif
 
-/// Archived classic Offline Note wallet/model helpers retained for compatibility
-/// fixtures; production offline payments use Kagemusha.
+/// Archived classic Offline Note wallet/model helpers kept as fixture-only
+/// inputs; production offline payments use Kagemusha.
 public enum OfflineNoteWalletNoteState: String, Sendable {
     case spendable
     case receivePending
@@ -556,8 +556,8 @@ public enum OfflineNoteReceiveRequestCodecError: Error, LocalizedError, Equatabl
     }
 }
 
-/// Archived classic Offline Note receive-request codec retained for
-/// compatibility fixtures; production offline payments use Kagemusha.
+/// Archived classic Offline Note receive-request codec kept for fixture-only
+/// decoding; production offline payments use Kagemusha.
 public enum OfflineNoteReceiveRequestCodec {
     public static let type = "offline_receive_request"
     public static let textPrefix = "wallet-offline-bearer-cash-receive:"
@@ -790,8 +790,8 @@ public enum OfflineNotePaymentTokenCodecError: Error, LocalizedError, Equatable 
     }
 }
 
-/// Archived classic Offline Note payment-token codec retained for compatibility
-/// fixtures; production offline payments use Kagemusha.
+/// Archived classic Offline Note payment-token codec kept as fixture-only
+/// inputs; production offline payments use Kagemusha.
 public enum OfflineNotePaymentTokenCodec {
     public static let type = "offline_payment_token"
     public static let textPrefix = "wallet-offline-bearer-cash-payment:"
@@ -1273,9 +1273,8 @@ public protocol OfflineNoteOutcomeProvider {
     func listOutcomes() async throws -> [OfflineNoteExplorerInstructionOutcome]
 }
 
-/// Retired classic Offline Note outcome names retained for historical
-/// compatibility fixture indexing; production offline payments use Kagemusha
-/// flows.
+/// Retired classic Offline Note outcome names kept for historical fixture-only
+/// indexing; production offline payments use Kagemusha flows.
 public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
     public static let kindIssue = "IssueOfflineNote"
     public static let kindRedeem = "RedeemOfflineNote"

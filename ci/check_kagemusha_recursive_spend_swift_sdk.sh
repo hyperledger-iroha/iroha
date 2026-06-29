@@ -44,6 +44,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Sources/IrohaSwift/TxBuilder.swift \
   IrohaSwift/Sources/IrohaSwift/ToriiClient.swift \
   IrohaSwift/Sources/IrohaSwift/ToriiCanonicalRequest.swift \
+  IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineCashLifecycle.swift \
   IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift \
@@ -104,6 +105,7 @@ cd "${ROOT_DIR}"
   IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ToriiCanonicalRequestTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/OfflineIssuerPublicKeyTests.swift \

@@ -4801,6 +4801,64 @@ impl Actor {
         replayed
     }
 
+    pub(super) fn broadcast_certified_commit_proof_for_pending_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        commit_qc: &crate::sumeragi::consensus::Qc,
+        targets: &[PeerId],
+        trigger: &'static str,
+    ) -> usize {
+        let Some(block) = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .filter(|pending| pending.height == height && pending.view == view)
+            .map(|pending| pending.block.clone())
+        else {
+            return 0;
+        };
+        self.broadcast_certified_commit_proof_to_targets(&block, commit_qc, targets, trigger)
+    }
+
+    pub(super) fn broadcast_certified_commit_proof_to_targets(
+        &mut self,
+        block: &SignedBlock,
+        commit_qc: &crate::sumeragi::consensus::Qc,
+        targets: &[PeerId],
+        trigger: &'static str,
+    ) -> usize {
+        let Some(response) =
+            self.certified_block_fetch_response_for_block_with_qc(block, commit_qc.clone())
+        else {
+            debug!(
+                height = block.header().height().get(),
+                view = block.header().view_change_index(),
+                block = %block.hash(),
+                trigger,
+                "skipping certified commit proof broadcast: response unavailable"
+            );
+            return 0;
+        };
+        let local_peer_id = self.common_config.peer.id().clone();
+        let mut targets = targets
+            .iter()
+            .filter(|peer| *peer != &local_peer_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
+
+        let mut replayed = 0usize;
+        for peer in targets {
+            if self.dispatch_certified_block_fetch_proof(peer, &response, trigger) {
+                replayed = replayed.saturating_add(1);
+            }
+        }
+        replayed
+    }
+
     pub(super) fn maybe_replay_known_block_commit_evidence(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -4875,7 +4933,11 @@ impl Actor {
             return false;
         }
 
+        let mut certified_proofs = 0usize;
         let replayed = if let Some(commit_qc) = commit_qc {
+            certified_proofs = self.broadcast_certified_commit_proof_for_pending_block(
+                block_hash, height, view, &commit_qc, &targets, trigger,
+            );
             self.broadcast_cached_commit_qc_to_targets_with_backpressure(
                 commit_qc, &targets, true, trigger,
             )
@@ -4890,7 +4952,7 @@ impl Actor {
                 trigger,
             )
         };
-        if replayed == 0 {
+        if replayed == 0 && certified_proofs == 0 {
             return false;
         }
         let rebroadcasted_block = self.maybe_rebroadcast_known_frontier_block_for_commit_evidence(
@@ -4908,6 +4970,7 @@ impl Actor {
             view,
             block = %block_hash,
             replayed,
+            certified_proofs,
             has_commit_qc,
             rebroadcasted_block,
             trigger,
@@ -5661,19 +5724,20 @@ impl Actor {
         }
         if self.latest_committed_qc().is_some_and(|highest_qc| {
             lock.as_ref().is_some_and(|lock| {
-                self.new_view_qc_supersedes_same_height_vote_lock(
+                self.new_view_qc_supersedes_noncommit_same_height_vote_lock(
                     request.height,
                     candidate_view,
                     highest_qc,
                     lock,
                 )
             }) || (local_commit_vote
-                && self.new_view_qc_supersedes_same_height_vote_conflict(
+                && self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                     request.height,
                     candidate_view,
                     highest_qc,
                     block_hash,
                     request.view,
+                    crate::sumeragi::consensus::Phase::Commit,
                 ))
         }) {
             return None;
@@ -6534,24 +6598,24 @@ impl Actor {
         }
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
+            let now = Instant::now();
             let new_view_qc_supersedes = self
                 .proposal_or_new_view_highest_qc_for_slot(height, view)
                 .is_some_and(|highest_qc| {
-                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                    self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                         height,
                         view,
                         highest_qc,
                         conflict.block_hash,
                         conflict.view,
-                    )
+                        conflict.phase,
+                    ) || self
+                        .new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
+                            height, view, highest_qc, &conflict, now,
+                        )
                 });
-            let stale_vote_can_rotate = !self.local_same_height_vote_blocks_fresh_proposal(
-                height,
-                view,
-                &conflict,
-                Instant::now(),
-                true,
-            );
+            let stale_vote_can_rotate = !self
+                .local_same_height_vote_blocks_fresh_proposal(height, view, &conflict, now, true);
             let conflict_has_recoverable_qc = self.same_height_block_has_recoverable_qc(
                 conflict.block_hash,
                 height,

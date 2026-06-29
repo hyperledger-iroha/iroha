@@ -904,9 +904,15 @@ pub mod network {
     /// Chosen conservatively to avoid IP fragmentation on typical Internet paths.
     pub const QUIC_DATAGRAM_MAX_PAYLOAD_BYTES: NonZeroUsize = nonzero!(1200_usize);
     /// Total receive buffer reserved for QUIC datagrams (bytes).
-    pub const QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES: NonZeroUsize = nonzero!(64 * 1024 * 1024_usize);
+    ///
+    /// This stays near the datagram payload scale because large per-endpoint
+    /// reserves multiply across localnet peers and can dominate RSS.
+    pub const QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES: NonZeroUsize = nonzero!(1024 * 1024_usize);
     /// Total send buffer reserved for QUIC datagrams (bytes).
-    pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(64 * 1024 * 1024_usize);
+    ///
+    /// Operators can raise this together with the receive buffer for
+    /// datagram-heavy deployments.
+    pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(1024 * 1024_usize);
 
     /// Enable SCION-guided outbound peer dialing.
     ///
@@ -2431,47 +2437,14 @@ pub mod nexus {
         pub const CANONICAL_SPONSOR_ACCOUNT_ID: Option<&str> = None;
         /// First block height whose lane commitments include Nexus fee receipts.
         pub const FEE_RECEIPTS_ACTIVATION_HEIGHT: u64 = u64::MAX;
-        /// Unix timestamp in milliseconds from which Nexus fees are burned.
-        ///
-        /// The default keeps legacy transfer/self-fee behavior until an
-        /// operator explicitly activates burning at a block timestamp.
-        pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = u64::MAX;
+        /// Direct Nexus fees burn immediately.
+        pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = 0;
         /// Default Nexus fee settlement mode.
         pub const SETTLEMENT_MODE: &str = "direct";
-        /// Default DPN application contract alias eligible for sponsored DPN operations.
-        pub const DPN_SPONSORED_CONTRACT_ALIAS: &str = "dpn_suite::dpn";
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
             super::super::canonical_asset_definition_literal("universal.universal", "xor")
-        }
-
-        /// Default DPN application contract entrypoints eligible for sponsored operation fees.
-        pub fn dpn_sponsored_contract_entrypoints() -> Vec<String> {
-            [
-                "configure",
-                "register_ed25519_key",
-                "record_issued_dpn",
-                "sync_nft_metadata",
-                "request_factored_invoice_issue",
-                "approve_factored_invoice_counterparty",
-                "finalize_factored_invoice_dpn",
-                "request_reverse_factored_invoice_issue",
-                "approve_reverse_factored_invoice_counterparty",
-                "finalize_reverse_factored_invoice_dpn",
-                "request_factoring",
-                "approve_factoring",
-                "mark_factoring_funds_sent",
-                "confirm_factoring_funds_received",
-                "finalize_factoring",
-                "transfer_dpn",
-                "mark_pending_settlement",
-                "freeze_dpn",
-                "unfreeze_dpn",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
         }
     }
 
@@ -2666,7 +2639,7 @@ pub mod pipeline {
     pub const ACCESS_SET_CACHE_ENABLED: bool = true;
     /// Enable parallel overlay construction.
     pub const PARALLEL_OVERLAY: bool = true;
-    /// Number of worker threads for stateless/overlay pipeline stages (0 = auto).
+    /// Number of worker threads for stateless/overlay pipeline stages (0 = bounded auto).
     pub const WORKERS: usize = 0;
     /// Capacity for the stateless validation cache (0 = disabled).
     pub const STATELESS_CACHE_CAP: usize = 4_096;
@@ -2780,6 +2753,12 @@ pub mod concurrency {
     pub const SCHEDULER_STACK_BYTES: usize = 32 * 1024 * 1024;
     /// Default stack size (bytes) for prover worker threads.
     pub const PROVER_STACK_BYTES: usize = 32 * 1024 * 1024;
+    /// Default stack size (bytes) for Sumeragi helper threads.
+    pub const SUMERAGI_STACK_BYTES: usize = 32 * 1024 * 1024;
+    /// Minimum allowed Sumeragi helper-thread stack size.
+    pub const SUMERAGI_STACK_BYTES_MIN: usize = 8 * 1024 * 1024;
+    /// Maximum allowed Sumeragi helper-thread stack size.
+    pub const SUMERAGI_STACK_BYTES_MAX: usize = 64 * 1024 * 1024;
     /// Default guest stack size (bytes) for IVM instances.
     pub const GUEST_STACK_BYTES: u64 = 4 * 1024 * 1024;
     /// Maximum guest stack size (bytes) allowed by config (guard runaway reservations).
@@ -2860,7 +2839,7 @@ pub mod zk {
         pub const VERIFIER_BUDGET_MS: u64 = 20; // soft budget
         /// Maximum batch size processed in a single verification call.
         pub const VERIFIER_MAX_BATCH: u32 = 16;
-        /// Number of ZK lane verifier worker threads (0 = auto by available parallelism).
+        /// Number of ZK lane verifier worker threads (0 = bounded auto).
         pub const VERIFIER_WORKER_THREADS: usize = 0;
         /// Capacity of the ZK lane verifier ingress queue (0 = auto-derived).
         pub const VERIFIER_QUEUE_CAP: usize = 0;
@@ -2992,7 +2971,7 @@ pub mod sumeragi {
     pub const WORKER_TICK_WORK_BUDGET_CAP_MS: u64 = 500;
     /// Enable per-queue parallel ingress workers for the Sumeragi loop.
     pub const WORKER_PARALLEL_INGRESS: bool = true;
-    /// Validation worker threads for pre-vote checks (0 = auto).
+    /// Validation worker threads for pre-vote checks (0 = bounded auto).
     pub const VALIDATION_WORKER_THREADS: usize = 0;
     /// Validation worker work-queue capacity per worker (0 = auto).
     pub const VALIDATION_WORK_QUEUE_CAP: usize = 0;
@@ -3012,7 +2991,7 @@ pub mod sumeragi {
     pub const VALIDATION_STALL_NON_DA_CAP_MS: u64 = 15_000;
     /// DA cap for validation worker stall timeout (milliseconds).
     pub const VALIDATION_STALL_DA_CAP_MS: u64 = 90_000;
-    /// QC verify worker threads (0 = auto).
+    /// QC verify worker threads (0 = bounded auto).
     pub const QC_VERIFY_WORKER_THREADS: usize = 0;
     /// QC verify work queue capacity per worker (0 = auto).
     pub const QC_VERIFY_WORK_QUEUE_CAP: usize = 0;

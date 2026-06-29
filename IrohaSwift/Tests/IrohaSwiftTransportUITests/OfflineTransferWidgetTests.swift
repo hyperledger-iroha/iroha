@@ -1571,7 +1571,7 @@ final class OfflineTransferWidgetTests: XCTestCase {
 
     private static func validReceiveRequestTextPayload() throws -> String {
         try OfflineNoteTransferTextPayloadCodec.encodeReceiveRequest(
-            OfflineReceiveRequestPayload(
+            try OfflineReceiveRequestPayload(
                 invoiceId: "invoice-1",
                 accountId: "recipient@pob.cbsi",
                 assetDefinitionId: "sbd",

@@ -87,7 +87,7 @@ public final class ToriiWebSocketOptions {
 
     public Builder addSubprotocol(final String value) {
       Objects.requireNonNull(value, "value");
-      if (!value.isBlank()) {
+      if (!value.trim().isEmpty()) {
         subprotocols.add(value);
       }
       return this;

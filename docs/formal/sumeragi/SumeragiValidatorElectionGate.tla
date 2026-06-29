@@ -364,8 +364,15 @@ ValidatorElectionCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-NoBugInvariant == ValidatorElectionCoreSafety
+ValidatorElectionExactness ==
+  /\ ValidatorElectionCoreSafety
 
-Safety == ValidatorElectionCoreSafety
+ValidatorElectionCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidatorElectionExactness
+
+NoBugInvariant == ValidatorElectionExactness
+
+Safety == ValidatorElectionExactness
 
 ====

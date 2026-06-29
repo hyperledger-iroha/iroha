@@ -94,6 +94,42 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert plan["external_evidence"]["release_archive"] == [
         str(tmp_path / "payloads" / "release-archive.json")
     ]
+    assert plan["evidence_contract"]["release_archive"]["schema"] == (
+        "sorafs.reference_sdk.release_archive_canary.v1"
+    )
+    assert (
+        "release_manifest_digest_hex"
+        in plan["evidence_contract"]["release_archive"]["required_payload_fields"]
+    )
+    assert plan["evidence_contract"]["signed_manifest"]["schema"] == (
+        "sorafs.reference_sdk.signed_manifest_canary.v1"
+    )
+    assert (
+        "private_key_absent"
+        in plan["evidence_contract"]["signed_manifest"]["required_payload_fields"]
+    )
+    assert (
+        "validation_outcome_contract_verified"
+        in plan["evidence_contract"]["downstream_bindings"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "raw_smoke_outputs_included"
+        in plan["evidence_contract"]["cookbook_smoke"]["required_payload_fields"]
+    )
+    assert (
+        "ffi_contract_digest_hex"
+        in plan["evidence_contract"]["ffi_header_contract"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "governance_source"
+        in plan["evidence_contract"]["governance_approval"][
+            "required_payload_fields"
+        ]
+    )
     assert [step["label"] for step in plan["steps"]] == ["release_evidence_gate"]
     verifier = plan["steps"][0]["command"]
     assert "check_sorafs_reference_sdk_release_evidence.py" in verifier[1]
@@ -116,6 +152,7 @@ def test_response_file_dry_run_prints_complete_reference_sdk_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["steps"][0]["label"] == "release_evidence_gate"
     assert plan["external_evidence"]["release_archive"]
+    assert "evidence_contract" in plan
 
 
 def test_split_response_file_dry_run_prints_complete_reference_sdk_plan(
@@ -132,6 +169,7 @@ def test_split_response_file_dry_run_prints_complete_reference_sdk_plan(
     plan = json.loads(capsys.readouterr().out)
     assert plan["schema"] == "sorafs.reference_sdk.release_evidence_collection_plan.v1"
     assert plan["steps"][0]["label"] == "release_evidence_gate"
+    assert "cookbook_smoke" in plan["evidence_contract"]
 
 
 def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -178,6 +216,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["release_archive"]
+    assert list(plan["evidence_contract"]) == ["release_archive"]
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "release_archive" in verifier

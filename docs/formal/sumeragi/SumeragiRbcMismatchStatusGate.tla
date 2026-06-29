@@ -312,10 +312,14 @@ SafetyAnchors ==
   /\ SnapshotAnchors
   /\ SaturationAnchors
 
+RbcMismatchStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 RbcMismatchStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ RbcMismatchStatusExactness
 
 =============================================================================
 ====

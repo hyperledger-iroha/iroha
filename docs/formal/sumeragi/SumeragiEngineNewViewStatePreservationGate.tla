@@ -351,7 +351,7 @@ ValuesStayInDomain ==
     /\ InitialReconfiguration(candidate) \in ReconfigurationValues
     /\ ImplementationReconfiguration(candidate) \in ReconfigurationValues
 
-Safety ==
+EngineNewViewStatePreservationExactness ==
   /\ AcceptedPreservesLockedQc
   /\ AcceptedPreservesPrepareVoteCache
   /\ AcceptedPreservesCommittedRecords
@@ -366,5 +366,14 @@ Safety ==
   /\ RejectedPreservesReconfiguration
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineNewViewStatePreservationExactness
+
+EngineNewViewStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineNewViewStatePreservationExactness
+
+SafetyFast == EngineNewViewStatePreservationExactness
 
 ====

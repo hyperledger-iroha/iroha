@@ -1065,7 +1065,6 @@ function probeKagemushaRecursiveSpendNative(native) {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
@@ -1144,8 +1143,8 @@ export function isKagemushaRecursiveCompactUnavailable(error) {
 }
 
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable,
   recursiveCompactAvailable,
+  recursiveSpendAvailable,
 ) {
   if (arguments.length === 0) {
     return preferredKagemushaOfflineSpendModeForCapabilities(
@@ -1153,8 +1152,13 @@ export function preferredKagemushaOfflineSpendMode(
       isKagemushaRecursiveSpendNativeAvailable(),
     );
   }
+  if (arguments.length !== 2) {
+    throw new TypeError(
+      "preferredKagemushaOfflineSpendMode requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable",
+    );
+  }
   return preferredKagemushaOfflineSpendModeForCapabilities(
-    arguments.length >= 2 ? recursiveCompactAvailable : false,
+    recursiveCompactAvailable,
     recursiveSpendAvailable,
   );
 }
@@ -1169,7 +1173,7 @@ export function preferredKagemushaOfflineSpendModeForCapabilities(
   if (recursiveSpendAvailable) {
     return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
   }
-  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+  return null;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
@@ -1191,10 +1195,7 @@ export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
 }
 
 export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProofCircuitId) {
-  return (
-    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
-    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
-  );
+  return outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
 }
 
 export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
@@ -1617,10 +1618,7 @@ export function canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCo
 
 export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
   if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
-    return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
-  }
-  if (outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
-    return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+    return "";
   }
   return outputProofCircuitId;
 }
@@ -2046,10 +2044,6 @@ export function encodeKagemushaRecursiveSpendAppendRequest(request) {
   const normalizedOutput = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
     normalized.outputProofCircuitId,
   );
-  const outputWire =
-    normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-      ? ""
-      : normalizedOutput;
   const previousRecordPayload =
     normalized.previousLineageVerifierRecord === null
       ? null
@@ -2079,7 +2073,7 @@ export function encodeKagemushaRecursiveSpendAppendRequest(request) {
     ),
     kagemushaField(kagemushaBytesVec(normalized.pallasOpenEnvelopes)),
     kagemushaField(kagemushaSpendableNotePayload(normalized.currentNote)),
-    kagemushaField(kagemushaString(outputWire)),
+    kagemushaField(kagemushaString(normalizedOutput)),
     kagemushaField(kagemushaOptionRaw(previousRecordPayload)),
     kagemushaField(
       kagemushaBytesVec(normalized.previousProofOpenEnvelopes ?? Buffer.alloc(0)),
@@ -2236,7 +2230,7 @@ export function decodeKagemushaRecursiveSpendVerifyResult(archive) {
   );
   const chainAdmissionReason = result;
   let witnesslessRedeemSupported = false;
-  let lineageWitnessRequired = false;
+  let lineageWitnessRequiredForRedeem = false;
   if (offset < payload.length) {
     [witnesslessRedeemSupported, offset] = kagemushaReadFieldValue(
       payload,
@@ -2247,11 +2241,11 @@ export function decodeKagemushaRecursiveSpendVerifyResult(archive) {
     );
   }
   if (offset < payload.length) {
-    [lineageWitnessRequired, offset] = kagemushaReadFieldValue(
+    [lineageWitnessRequiredForRedeem, offset] = kagemushaReadFieldValue(
       payload,
       offset,
       flags,
-      "verifyResult.lineageWitnessRequired",
+      "verifyResult.lineageWitnessRequiredForRedeem",
       kagemushaReadBoolPayload,
     );
   }
@@ -2271,10 +2265,8 @@ export function decodeKagemushaRecursiveSpendVerifyResult(archive) {
     chain_admission_reason: chainAdmissionReason,
     witnesslessRedeemSupported,
     witnessless_redeem_supported: witnesslessRedeemSupported,
-    lineageWitnessRequired,
-    lineage_witness_required: lineageWitnessRequired,
-    lineageWitnessRequiredForRedeem: lineageWitnessRequired,
-    lineage_witness_required_for_redeem: lineageWitnessRequired,
+    lineageWitnessRequiredForRedeem,
+    lineage_witness_required_for_redeem: lineageWitnessRequiredForRedeem,
   });
 }
 

@@ -500,7 +500,7 @@ SelectedQcMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncSelectedQcExactness ==
-  SelectedQcMatchesSpec
+  /\ SelectedQcMatchesSpec
 
 BlockSyncSelectedQcCorrectnessEnvelope ==
   /\ TypeInvariant

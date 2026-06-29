@@ -225,8 +225,12 @@ LocalPayloadAvailabilityCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 LocalPayloadAvailabilityExactness ==
-  LocalPayloadAvailabilityCoreSafety
-
+  /\ ActionsMatchSpec
+  /\ PendingEntriesAlwaysCountAsLocalPayload
+  /\ InflightEntriesAlwaysCountAsLocalPayload
+  /\ HashDeferredAndKuraMaterialCountsAsLocalPayload
+  /\ AbsentPayloadDoesNotCount
+  /\ LookupShapeMatchesShortCircuit
 LocalPayloadAvailabilityCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ LocalPayloadAvailabilityExactness

@@ -276,7 +276,7 @@ FutureWindowMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncFutureWindowExactness ==
-  FutureWindowMatchesSpec
+  /\ FutureWindowMatchesSpec
 
 BlockSyncFutureWindowCorrectnessEnvelope ==
   /\ TypeInvariant

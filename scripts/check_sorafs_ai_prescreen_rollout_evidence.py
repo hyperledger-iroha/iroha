@@ -213,6 +213,124 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "runner": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "runner_url",
+        "status_url",
+        "screen_url",
+        "manifest_id_hex",
+        "runner_hash_hex",
+        "subject",
+        "subject_digest_hex",
+        "screened_at_unix",
+        "checked_at_unix",
+        "combined_score_bps",
+        "verdict",
+    ),
+    "committee": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "committee_url",
+        "status_url",
+        "aggregate_url",
+        "manifest_id_hex",
+        "runner_hash_hex",
+        "quorum",
+        "result_count",
+        "aggregation",
+        "subject",
+        "subject_digest_hex",
+        "aggregated_score_bps",
+        "verdict",
+        "checked_at_unix",
+    ),
+    "operator_workflow": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "workflow_digest_hex",
+        "operator_url",
+        "quarantine_id_hex",
+        "generated_at_unix",
+        "payload_bytes_included",
+        "private_payloads_included",
+        "route_count",
+        "routes",
+    ),
+    "notification_transport": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "workflow_digest_hex",
+        "webhook_url",
+        "manifest_body_blake3",
+        "probe_count",
+        "accepted_count",
+        "payload_bytes_included",
+        "private_payloads_included",
+        "probes",
+    ),
+    "commit_reveal_executor": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "workflow_digest_hex",
+        "artifact_count",
+        "passed_artifact_count",
+        "execution_summary_present",
+        "payload_bytes_included",
+        "private_payloads_included",
+        "private_payload_files_copied",
+        "artifacts",
+        "execution_summary",
+    ),
+    "transparency_publication": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "workflow_digest_hex",
+        "probe_count",
+        "passed_probe_count",
+        "source_entry_probe_count",
+        "payload_bytes_included",
+        "private_payloads_included",
+        "response_bodies_included",
+        "probes",
+    ),
+    "governance_dag": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "workflow_digest_hex",
+        "governance_dag_bound",
+        "live_producers_bound",
+        "transparency_source_entries_bound",
+        "screening_ingest_bound",
+        "quarantine_escalation_bound",
+        "role_provisioning_recorded",
+        "config_source",
+        "policy_digest_hex",
+        "producer_count",
+        "edge_count",
+        "producers",
+        "payload_bytes_included",
+        "private_payloads_included",
+    ),
+    "end_to_end_workflow": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "workflow_digest_hex",
+        "workflow_id",
+        "deployed_services",
+        "runner_committee_live",
+        "ingest_quarantine_release_path_passed",
+        "appeal_path_passed",
+        "transparency_publication_passed",
+        "role_gate_checks_passed",
+        "encrypted_object_api_checks_passed",
+        "step_count",
+        "passed_step_count",
+        "steps",
+        "payload_bytes_included",
+        "private_payloads_included",
+    ),
+}
 
 
 

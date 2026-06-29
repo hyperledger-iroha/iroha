@@ -451,11 +451,18 @@ RedriveMatchesSpec ==
   \A c \in RedriveCases:
     ActualRedrive(c) = SpecRedrive(c)
 
-Safety ==
+ValidationStallRedriveExactness ==
   /\ StallMatchesSpec
   /\ FreshMatchesSpec
   /\ InlineMatchesSpec
   /\ RedriveMatchesSpec
+
+Safety ==
+  ValidationStallRedriveExactness
+
+ValidationStallRedriveCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationStallRedriveExactness
 
 BugStallDropsInlineFloor ==
   ActualStallTimeout(BaseInline) = SpecStallTimeout(BaseInline)

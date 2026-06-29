@@ -149,7 +149,7 @@ InvalidQcShapeMatchesSpec ==
   /\ Matches(ValidNonemptyNonzero)
 
 InvalidQcShapeExactness ==
-  InvalidQcShapeMatchesSpec
+  /\ InvalidQcShapeMatchesSpec
 
 InvalidQcShapeCorrectnessEnvelope ==
   /\ TypeInvariant

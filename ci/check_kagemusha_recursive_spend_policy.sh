@@ -79,8 +79,8 @@ SHARED_FIXTURE_COVERAGE = {
         '"RedeemKagemushaRecursive"',
         '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"',
         '"sha256_hex": "60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57"',
-        '"sha256_hex": "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864"',
-        '"sha256_hex": "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e"',
+        '"sha256_hex": "1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d"',
+        '"sha256_hex": "dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85"',
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
         "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
@@ -410,8 +410,8 @@ ADVERSARIAL_COVERAGE = {
                 'field: "append_opening_preflight.current_hop_verifier_witness_batch_digest"',
                 "kagemusha_recursive_previous_proof_open_envelopes_archive_digest",
                 "kagemusha_recursive_spend_transition_profile_append_evidence_with_previous_proof_openings",
-                "legacy evidence-only append profiles omit host opening-archive bytes",
-                "legacy evidence-only append profiles omit append opening preflight bytes",
+                "evidence-only append profiles omit host opening-archive bytes",
+                "evidence-only append profiles omit append opening preflight bytes",
                 "binding append opening preflight bytes must change the transition profile digest",
                 "binding the full append opening preflight contract must change the transition profile digest",
                 "digest_only_semantic_bundle",
@@ -475,8 +475,8 @@ ADVERSARIAL_COVERAGE = {
                 "ZeroProofHash {",
                 "zero_proof_hash.steps[0].proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
                 "zero_proof_hash.proof_hash = Hash::prehashed([0u8; Hash::LENGTH]);",
-                "assert_zero_legacy_compact_hash_rejected(",
-                "zero-prehash legacy compact digest must be rejected",
+                "assert_zero_checked_prefold_compact_hash_rejected(",
+                "zero-prehash checked-prefold compact digest must be rejected",
                 "assert_zero_recursive_compact_hash_rejected(",
                 "zero-prehash recursive compact digest must be rejected",
                 "fn is_zero_prehash_hash(hash: Hash) -> bool",
@@ -891,7 +891,7 @@ ADVERSARIAL_COVERAGE = {
         "fn kagemusha_recursive_spend_lineage_append_availability_enforces_hop_cap",
         "one-hop verifier slice",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV",
-        "fn kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen",
+        "fn kagemusha_recursive_spend_lineage_init_rejects_missing_key_artifacts_before_runtime_keygen",
         "packaged verifier/proving key artifacts",
         "at least 2 hops",
         "output_append_is_currently_provable",
@@ -997,8 +997,8 @@ ADVERSARIAL_COVERAGE = {
         "bridge append profile binds append opening preflight digest",
         "bridge append profile binds full append opening preflight contract",
         "bridge append profile must reject forged current-hop opening metadata",
-        "legacy append profiles must not synthesize append opening preflight bytes",
-        "legacy append profiles must not synthesize append opening preflight contracts",
+        "evidence-only append profiles must not synthesize append opening preflight bytes",
+        "evidence-only append profiles must not synthesize append opening preflight contracts",
         "fn kagemusha_recursive_spend_append_ffi_rejects_forged_previous_proof_opening_metadata",
         '"vk_commitment"',
         '"public_inputs_schema_hash"',
@@ -1106,8 +1106,8 @@ ADVERSARIAL_COVERAGE = {
         "JS host append profile binds append opening preflight digest",
         "JS host append profile binds full append opening preflight contract",
         "JS host append profile must reject forged current-hop opening metadata",
-        "JS host legacy append profiles must not synthesize append opening preflight bytes",
-        "JS host legacy append profiles must not synthesize append opening preflight contracts",
+        "JS host evidence-only append profiles must not synthesize append opening preflight bytes",
+        "JS host evidence-only append profiles must not synthesize append opening preflight contracts",
         "fn kagemusha_recursive_spend_lineage_append_boundary_rejects_duplicate_current_outputs",
         ".push(profile.current_hop_statement.output_commitments[0])",
         "JS host append-boundary helper must reject duplicate current-hop outputs",
@@ -1236,8 +1236,8 @@ ADVERSARIAL_COVERAGE = {
         "Python append profile binds append opening preflight digest",
         "Python append profile binds full append opening preflight contract",
         "Python append profile must reject forged current-hop opening metadata",
-        "Python legacy append profiles must not synthesize append opening preflight bytes",
-        "Python legacy append profiles must not synthesize append opening preflight contracts",
+        "Python evidence-only append profiles must not synthesize append opening preflight bytes",
+        "Python evidence-only append profiles must not synthesize append opening preflight contracts",
         "fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs",
         ".push(profile.current_hop_statement.output_commitments[0])",
         "Python append-boundary helper must reject duplicate current-hop outputs",
@@ -1300,7 +1300,7 @@ SDK_HELPER_EDGE_COVERAGE = {
         "u32::MAX",
         "unknown-kagemusha-recursive-spend-circuit",
         "is_supported_kagemusha_recursive_spend_append_proof_transition",
-        "Reserved-lineage to Reserved-lineage is the enabled structural append transition",
+        "Reserved-lineage to append-specific Reserved-lineage is the enabled structural append transition",
         "semantic previous proofs cannot select Reserved-lineage output",
         "preferred append selector falls back at the witnessless hop cap",
     ),
@@ -2008,7 +2008,7 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
         "lineage_proving_key_archive_helpers_reject_profile_mismatch_and_malformed_inputs",
         "lineage_vk_record_from_box_canonicalizes_profiles_without_keygen",
-        "kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen",
+        "kagemusha_recursive_spend_lineage_init_rejects_missing_key_artifacts_before_runtime_keygen",
         "fn kagemusha_recursive_fixed_window_shared_table_manifest_digest_rejects_layout_splices",
         "kagemusha_recursive_fixed_window_shared_table_manifest_digest_from_parts",
         "manifest schedule digest splice must change digest",
@@ -2187,6 +2187,9 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "scripts/sign_android_device_lab_evidence.py",
     "scripts/tests/check_android_device_lab_slot_test.py",
     "scripts/tests/kagemusha_production_readiness_test.py",
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
     "IrohaSwift/README.md",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
@@ -2302,6 +2305,13 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "crates/iroha_data_model/src/proof.rs",
     "crates/iroha_torii/src/offline_issuer.rs",
     "crates/iroha_torii/src/lib.rs",
+    "csharp/README.md",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineCashLifecycleTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/VerifyingKeyBackendTagTests.cs",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/IrohaOfflineNoteTransactionSubmitter.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJsonParser.java",
@@ -2313,6 +2323,7 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/ToriiOfflineNoteIssuerClient.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineV2Readiness.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/Java8CompatibilitySurfaceTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/OfflineToriiClientTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineCashLifecycleTest.java",
@@ -2363,6 +2374,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ROOTS = (
     "kotlin",
     "javascript/iroha_js",
     "python/iroha_python",
+    "csharp",
     "docs/source",
 )
 ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_DISCOVERY_ROOTS = (
@@ -2381,8 +2393,10 @@ ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_DISCOVERY_ROOTS = (
     "javascript/iroha_js/test",
     "python/iroha_python/src",
     "python/iroha_python/tests",
+    "csharp",
 )
 ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_SUFFIXES = (
+    ".cs",
     ".java",
     ".js",
     ".kt",
@@ -2450,8 +2464,8 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "required_kagemusha_redeem_archive_string",
         "optional_kagemusha_echo_string",
         "parse_kagemusha_amount_echo",
-        "reject_kagemusha_legacy_redeem_fields",
-        "reject_kagemusha_legacy_redeem_fields(&request.value)?;",
+        "reject_kagemusha_retired_redeem_fields",
+        "reject_kagemusha_retired_redeem_fields(&request.value)?;",
         "reject_kagemusha_auxiliary_redeem_fields",
         "reject_kagemusha_auxiliary_redeem_fields(&request.value)?;",
         "if encoded != encoded.trim() {",
@@ -2460,7 +2474,7 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "must be a canonical base64 string",
         "must use canonical Numeric text",
         "ignored auxiliary field",
-        "legacy Offline Note V2 field",
+        "retired Offline Note V2 field",
         "must not contain surrounding whitespace",
         "redeem_request_norito_base64",
         "compact_payment_token_norito_base64",
@@ -2473,9 +2487,9 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH",
         "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
         "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+        "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
         "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
-        "fn reject_kagemusha_legacy_redeem_fields(value: &Value) -> Result<(), Error> {\n"
+        "fn reject_kagemusha_retired_redeem_fields(value: &Value) -> Result<(), Error> {\n"
         "    for field in [\n"
         '        "redemption",\n'
         '        "input_nullifiers",\n'
@@ -2485,8 +2499,8 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "Value::Null, Value::Array(Vec::new())",
         "offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request",
         "offline_v2_notes_redeem_rejects_compact_token_without_recursive_redeem_request",
-        "offline_v2_notes_redeem_rejects_legacy_redemption_smuggled_with_kagemusha_marker",
-        "offline_v2_notes_redeem_rejects_legacy_fields_with_kagemusha_archive",
+        "offline_v2_notes_redeem_rejects_retired_redemption_smuggled_with_kagemusha_marker",
+        "offline_v2_notes_redeem_rejects_retired_fields_with_kagemusha_archive",
         "offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive",
         "offline_v2_notes_redeem_rejects_present_but_malformed_kagemusha_fields",
         "offline_v2_notes_redeem_rejects_malformed_kagemusha_archive",
@@ -2495,6 +2509,7 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "offline_v2_notes_redeem_rejects_kagemusha_public_binding_tamper",
     ),
     "crates/iroha_torii/src/openapi.rs": (
+        "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
         "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
         "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
@@ -2504,12 +2519,14 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         'assert!(redeem_description.contains("ignored auxiliary fields"));',
     ),
     "docs/portal/static/openapi/torii.json": (
+        "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
         "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
         "Optional amount and source_note_commitment echo fields",
         "compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields",
     ),
     "docs/portal/static/openapi/versions/current/torii.json": (
+        "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
         "Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive",
         "Optional amount and source_note_commitment echo fields",
@@ -2529,7 +2546,7 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "required_kagemusha_redeem_archive_string",
         "optional_kagemusha_echo_string",
         "parse_kagemusha_amount_echo",
-        "reject_kagemusha_legacy_redeem_fields",
+        "reject_kagemusha_retired_redeem_fields",
         "reject_kagemusha_auxiliary_redeem_fields",
         "must be a canonical base64 string",
         "must use canonical Numeric text",
@@ -2538,15 +2555,120 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH",
         "OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH",
         "OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH",
-        "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+        "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
         "OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD",
         "let auxiliary_field_values =",
         "Value::Null, Value::Array(Vec::new())",
         "OFFLINE_KAGEMUSHA_REDEEM_INVALID",
         "offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes",
-        "offline_v2_notes_redeem_rejects_legacy_redemption_smuggled_with_kagemusha_marker",
-        "offline_v2_notes_redeem_rejects_legacy_fields_with_kagemusha_archive",
+        "offline_v2_notes_redeem_rejects_retired_redemption_smuggled_with_kagemusha_marker",
+        "offline_v2_notes_redeem_rejects_retired_fields_with_kagemusha_archive",
         "offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive",
+    ),
+}
+TORII_OFFLINE_V2_RETIRED_REDEEM_ALIAS_COVERAGE = {
+    "crates/iroha_torii/src/offline_v2_issuer.rs": (
+        'const REDEMPTION_FIELDS: &[&str] = &[\n'
+        '    "source_note_commitment",\n'
+        '    "input_nullifiers",\n'
+        '    "sender_key_certificate",\n'
+        '    "recipient_account_id",\n'
+        '    "asset_definition_id",\n'
+        '    "amount",\n'
+        '    "recursive_proof",\n'
+        "];",
+        'const RECURSIVE_PROOF_FIELDS: &[&str] = &[\n'
+        '    "backend",\n'
+        '    "verifier_key_id",\n'
+        '    "public_inputs_hash_hex",\n'
+        '    "proof_bytes_base64",\n'
+        "];",
+        'let certificate = value.get("sender_key_certificate").ok_or_else(|| {',
+        "if version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {",
+        'let public_inputs_hash = parse_hash_field(value, "public_inputs_hash_hex")?;',
+        "fn parse_recursive_proof_backend(value: &Value) -> Result<&str, Error> {\n"
+        "    required_exact_protocol_string(\n"
+        "        value,\n"
+        '        "backend",',
+        "redeem_route_rejects_structured_redemption_retired_aliases",
+        "redeem_route_rejects_structured_recursive_proof_retired_backend_aliases",
+        "redeem_route_rejects_structured_recursive_proof_missing_backend",
+        "redeem_route_rejects_structured_certificate_retired_alias",
+        "redeem_route_rejects_structured_recursive_proof_retired_verifier_alias",
+        "redeem_route_rejects_structured_recursive_proof_retired_backend_alias_mismatch",
+        "redeem_route_rejects_structured_recursive_proof_retired_public_input_alias",
+        "redeem_route_rejects_retired_structured_certificate_json_version_two",
+    ),
+    "docs/source/offline_kagemusha.md": (
+        "Retired structured Offline Note V2 redeem JSON is first-release strict",
+        "routed to the retired structured parser",
+        "`sender_key_certificate`, `backend`, `verifier_key_id`, and",
+        "`public_inputs_hash_hex` fields",
+        "`key_certificate`, `verifier_key_name`, `public_inputs_hash`,",
+        "`verifier_key_backend`, and `proof_backend`",
+    ),
+}
+TORII_OFFLINE_V2_ATTESTATION_PROFILE_COVERAGE = {
+    "crates/iroha_torii/src/offline_v2_issuer.rs": (
+        '"ios-appattest" => {',
+        '"apple-appattest-counter-v1"',
+        '"app-attest-p256"',
+        "fn attestation_receipt_rejects_signed_retired_ios_app_attest_profile()",
+        'insert_field(&mut receipt, "platform", string_value("ios-app-attest"));',
+        'string_value("apple-app-attest-v1")',
+        'string_value("ecdsa-p256-sha256")',
+        'platform: "ios-appattest".to_string(),',
+        'assertion_scheme: "apple-appattest-counter-v1".to_string(),',
+        'assertion_key_algorithm: "app-attest-p256".to_string(),',
+        "reject_retired_assertion_public_key_aliases(request)?;",
+        "fn reject_retired_assertion_public_key_aliases(\n"
+        "    request: &ParsedOfflineRequest,\n"
+        ") -> Result<(), Error> {",
+        'for field in ["app_attest_public_key_base64", "device_public_key"] {',
+        "device_binding retired assertion public key alias",
+        "fn attestation_receipt_rejects_retired_assertion_public_key_aliases()",
+    ),
+    "docs/source/offline_note_v2_attestation.md": (
+        "First-release receipts accept only the canonical",
+        "the retired middleware iOS spelling `ios-app-attest` is\n  rejected.",
+        "Retired\n  request-side aliases `app_attest_public_key_base64` and `device_public_key`\n  are rejected inside `device_binding`.",
+        "They reject the retired middleware-issued iOS tuple",
+        "This rejects retired middleware iOS certificates",
+        "Retired compatibility\naliases are rejected",
+    ),
+}
+TORII_OFFLINE_ATTESTATION_PROFILE_COVERAGE = {
+    "crates/iroha_torii/src/offline_issuer.rs": (
+        "reject_retired_assertion_public_key_aliases(request)?;",
+        "fn reject_retired_assertion_public_key_aliases(\n"
+        "    request: &ParsedOfflineRequest,\n"
+        ") -> Result<(), Error> {",
+        'for field in ["app_attest_public_key_base64", "device_public_key"] {',
+        "device_binding retired assertion public key alias",
+        'for field in ["assertion_public_key"] {',
+        "fn attestation_receipt_rejects_retired_assertion_public_key_aliases()",
+    ),
+}
+OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE = {
+    "crates/iroha_data_model/src/bin/offline_v2_vectors.rs": (
+        "match platform {",
+        '"android-keymint" => (',
+        '"ios-appattest" => (',
+        "unsupported => {",
+        "unsupported Offline V2 fixture certificate platform",
+        "fn signed_certificate_rejects_noncanonical_platform_aliases()",
+        'for platform in ["android", "ios-app-attest", "browser-webauthn"]',
+    ),
+}
+OFFLINE_VECTOR_ATTESTATION_PROFILE_COVERAGE = {
+    "crates/iroha_data_model/src/bin/offline_vectors.rs": (
+        "match platform {",
+        '"android-keymint" => (',
+        '"ios-appattest" => (',
+        "unsupported => {",
+        "unsupported Offline fixture certificate platform",
+        "fn signed_certificate_rejects_noncanonical_platform_aliases()",
+        'for platform in ["android", "ios-app-attest", "browser-webauthn"]',
     ),
 }
 READINESS_SECTION_CONSISTENCY_COVERAGE = {
@@ -2687,6 +2809,11 @@ WORKFLOW_REQUIRED_PATHS = (
     *RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE.keys(),
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
     *TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE.keys(),
+    *TORII_OFFLINE_V2_RETIRED_REDEEM_ALIAS_COVERAGE.keys(),
+    *TORII_OFFLINE_V2_ATTESTATION_PROFILE_COVERAGE.keys(),
+    *TORII_OFFLINE_ATTESTATION_PROFILE_COVERAGE.keys(),
+    *OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
+    *OFFLINE_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
     *READINESS_SECTION_CONSISTENCY_COVERAGE.keys(),
 )
 WORKFLOW_MAIN_GUARD_COMMANDS = (
@@ -2769,6 +2896,14 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-archive-fixture",
     ),
     (
+        "request archive required-fields negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-request-archive-required-fields",
+    ),
+    (
+        "first-release archive required-fields negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-first-release-archive-required-fields",
+    ),
+    (
         "shared ABI-7 fixture manifest negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-abi7-fixture-manifest",
     ),
@@ -2841,6 +2976,54 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-recursive-compact-constructor-binding",
     ),
     (
+        "core recursive compact first-release public surface negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-unanchored-prover-surface",
+    ),
+    (
+        "core Reserved-lineage circuit id first-release wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-reserved-lineage-circuit-id-wording",
+    ),
+    (
+        "core recursive compact key-package wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-key-package-wording",
+    ),
+    (
+        "core Kagemusha folded-path first-release wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-folded-path-wording",
+    ),
+    (
+        "core Offline/Kagemusha first-release test wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-offline-first-release-test-wording",
+    ),
+    (
+        "core retired backend profile wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-retired-backend-profile-wording",
+    ),
+    (
+        "core Offline Note V2 retired iOS App Attest profile negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-offline-note-v2-retired-ios-app-attest-profile",
+    ),
+    (
+        "Torii offline-v2 retired iOS App Attest profile negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-retired-ios-app-attest-profile",
+    ),
+    (
+        "Torii offline-v2 retired assertion key alias negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-retired-assertion-key-aliases",
+    ),
+    (
+        "Offline V2 vector platform alias negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-offline-v2-vector-platform-aliases",
+    ),
+    (
+        "Torii offline retired assertion key alias negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-retired-assertion-key-aliases",
+    ),
+    (
+        "Offline vector platform alias negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-offline-vector-platform-aliases",
+    ),
+    (
         "Torii offline-v2 Kagemusha redeem ingress negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem",
     ),
@@ -2853,8 +3036,12 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-archive-field-shape",
     ),
     (
-        "Torii offline-v2 Kagemusha legacy-field negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-legacy-fields",
+        "Torii offline-v2 Kagemusha retired-field negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-retired-fields",
+    ),
+    (
+        "Torii offline-v2 retired structured redeem alias negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-retired-redeem-aliases",
     ),
     (
         "Torii offline-v2 Kagemusha auxiliary-field negative control",
@@ -2869,20 +3056,20 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke",
     ),
     (
-        "active non-C# TODO scan negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo",
+        "active Kagemusha TODO scan negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-kagemusha-todo",
     ),
     (
-        "active non-C# TODO scan inventory negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-scan-inventory",
+        "active Kagemusha TODO scan inventory negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-kagemusha-todo-scan-inventory",
     ),
     (
-        "active non-C# TODO content scan inventory negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-content-scan-inventory",
+        "active Kagemusha TODO content scan inventory negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-kagemusha-todo-content-scan-inventory",
     ),
     (
-        "active non-C# TODO runner-input content scan inventory negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-noncsharp-todo-runner-input-content-scan-inventory",
+        "active Kagemusha TODO runner-input content scan inventory negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-active-kagemusha-todo-runner-input-content-scan-inventory",
     ),
     (
         "production-readiness section-consistency negative control",
@@ -3289,6 +3476,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-abi-entry-count",
     ),
     (
+        "documentation retired-mode wording negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-retired-wording",
+    ),
+    (
         "roadmap ABI-6 complete-surface negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-abi-surface",
     ),
@@ -3663,6 +3854,29 @@ def check_core_redeem_execution_order():
         cursor = index + len(needle)
 
 
+def check_core_offline_first_release_test_wording():
+    rust = read("crates/iroha_core/src/smartcontracts/isi/offline.rs")
+    for forbidden in (
+        "leg" "acy tree root",
+        "leg" "acy transcript payload",
+        "leg" "acy transcript bytes",
+        "valid fallback",
+    ):
+        if forbidden in rust:
+            fail(f"core Offline/Kagemusha tests contain stale first-release wording: {forbidden}")
+    for needle in (
+        "let mut v1_root_state = ZkAssetState::default();",
+        "let v1_root = v1_root_state.push_commitment(change, 8);",
+        "partial recursive redeem change output must not record the retired v1 tree root",
+        'proof.proof.bytes = b"non-zk1 transcript payload".to_vec();',
+        "non-ZK1 transcript bytes must not decode as OpenVerifyEnvelope",
+        "fn issuer_signed_certificate_authorization_works_without_attestation_marker()",
+        "issuer signature should authorize without attestation marker",
+    ):
+        if needle not in rust:
+            fail(f"core Offline/Kagemusha tests missing first-release wording marker: {needle}")
+
+
 def check_rust_reserved_lineage_policy():
     rust = read("crates/iroha_data_model/src/offline/mod.rs")
     max_hops = re.search(
@@ -4035,15 +4249,15 @@ def check_kagemusha_hash_zero_sentinel_guards():
         fail(
             "fold-step proof-hash zero-prehash validation must not convert Hash digests to bytes before zero checks"
         )
-    legacy_compact_context = source_window(
+    checked_prefold_compact_context = source_window(
         data_model,
         "pub fn validate_supported_context(&self) -> Result<(), KagemushaFoldError> {",
         "    /// Validate the reserved recursive compact-token public-input context.",
-        "legacy compact zero-prehash Hash validation",
+        "checked-prefold compact zero-prehash Hash validation",
     )
     require_ordered_needles(
-        legacy_compact_context,
-        "legacy compact zero-prehash Hash validation",
+        checked_prefold_compact_context,
+        "checked-prefold compact zero-prehash Hash validation",
         (
             '("nullifier_digest", self.nullifier_digest)',
             '("output_commitment_digest", self.output_commitment_digest)',
@@ -4053,9 +4267,9 @@ def check_kagemusha_hash_zero_sentinel_guards():
             'field: "aggregation_transcript_digest"',
         ),
     )
-    if "hash_bytes_from_hash(self.nullifier_digest)" in legacy_compact_context:
+    if "hash_bytes_from_hash(self.nullifier_digest)" in checked_prefold_compact_context:
         fail(
-            "legacy compact zero-prehash Hash validation must not convert Hash digests to bytes before zero checks"
+            "checked-prefold compact zero-prehash Hash validation must not convert Hash digests to bytes before zero checks"
         )
     recursive_compact_context = source_window(
         data_model,
@@ -4697,6 +4911,98 @@ def check_recursive_compact_record_envelope_preflight_order():
     )
 
 
+def check_recursive_compact_first_release_public_surface():
+    relative = "crates/iroha_core/src/zk.rs"
+    core = read(relative)
+    for required in (
+        "/// Canonical Reserved-lineage circuit-family identifier for recursive spend lineage proofs.",
+        "one_hop_proving_key_bytes: Option<&[u8]>",
+        "This overload is for developer key-artifact plumbing that supplies an",
+        "key-package overload so verifier and proving key material is fully packaged.",
+        "non_zk1_inner_lineage_bundle",
+        "fn prove_kagemusha_compact_payment_token_rejects_recursive_mode_on_folded_path()",
+        "is_retired_unqualified_vote_bool_backend_profile",
+        "is_retired_unqualified_anon_transfer_backend_profile",
+        "retired unqualified profile roots",
+    ):
+        if required not in core:
+            fail(
+                f"{relative} is missing Reserved-lineage adversarial coverage: "
+                + required
+            )
+    for forbidden in (
+        "KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED",
+        "pub fn prove_verified_kagemusha_compact_payment_token(",
+        "pub fn prove_verified_kagemusha_compact_payment_token_from_bundle(",
+    ):
+        if forbidden in core:
+            fail(
+                f"{relative} exposes retired unanchored compact-token prover surface: "
+                + forbidden
+            )
+    for forbidden in (
+        "compatibility inline verifier key",
+        "retained for older internal callers",
+        "Legacy diagnostic retained",
+        "This ABI is retained",
+        "older package-missing callers",
+        "Legacy Reserved-lineage circuit-family identifier",
+        "one_hop_fallback_proving_key_bytes",
+        "runtime proving-key cache when",
+        "key-package overload so runtime key generation is not required",
+        "legacy_inner_lineage_bundle",
+        "prove_kagemusha_compact_payment_token_rejects_recursive_mode_on_leg"
+        "acy_path",
+        "is_legacy_vote_bool_backend_profile",
+        "is_legacy_anon_transfer_backend_profile",
+    ):
+        if forbidden in core:
+            fail(
+                f"{relative} contains stale recursive compact first-release wording: "
+                + forbidden
+            )
+
+
+def check_core_offline_note_v2_retired_ios_app_attest_profile():
+    relative = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+    source = read(relative)
+    for forbidden in (
+        "OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST_LEGACY",
+        "OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_SCHEME",
+        "OFFLINE_ATTESTATION_IOS_LEGACY_ASSERTION_ALGORITHM",
+        "legacy iOS App Attest",
+    ):
+        if forbidden in source:
+            fail(
+                f"{relative} contains retired Offline Note V2 iOS App Attest certificate profile: "
+                + forbidden
+            )
+    for required in (
+        '"retired ios app attest spelling"',
+        'certificate.platform = "ios-app-attest".to_owned();',
+        'certificate.assertion_scheme = "apple-app-attest-v1".to_owned();',
+        'certificate.assertion_key_algorithm = "ecdsa-p256-sha256".to_owned();',
+        "unsupported hardware assertion profile must reject",
+    ):
+        if required not in source:
+            fail(
+                f"{relative} is missing retired Offline Note V2 iOS App Attest profile rejection coverage: "
+                + required
+            )
+    telemetry_relative = "crates/iroha_telemetry/src/metrics.rs"
+    telemetry = read(telemetry_relative)
+    for forbidden in (
+        "offline_app_attest_signature_compat",
+        "iOS App Attest assertions accepted through the compatibility signature path",
+        "SHA256(clientDataHash) compatibility path",
+    ):
+        if forbidden in telemetry:
+            fail(
+                f"{telemetry_relative} contains retired Offline Note V2 iOS App Attest compatibility telemetry: "
+                + forbidden
+            )
+
+
 def check_docs_reserved_lineage_policy():
     forbidden = [
         re.compile(
@@ -4739,6 +5045,25 @@ def check_docs_reserved_lineage_policy():
     offline_doc = re.sub(r"\s+", " ", read("docs/source/offline_kagemusha.md"))
     if "All eight entry points accept" in offline_doc:
         fail("docs/source/offline_kagemusha.md contains stale ABI-6 eight-entry wording")
+    for forbidden in (
+        "runtime legacy bearer-audit fallback",
+        "legacy Halo2 proof-envelope",
+        "legacy Offline recursive proof admission",
+        "classic payment construction",
+        "classic parser",
+        "classic note issue",
+    ):
+        if forbidden in offline_doc:
+            fail(f"docs/source/offline_kagemusha.md contains stale retired-mode wording: {forbidden}")
+    for needle in (
+        "runtime bearer-audit dispatch is not available",
+        "pre-existing Halo2 proof-envelope wrappers remain scoped to semantic v1 preverification",
+        "zero cannot act as a wildcard during Offline recursive proof admission either",
+        "Torii issue/redeem endpoints reject retired payment construction",
+        "routed to the retired structured parser",
+    ):
+        if needle not in offline_doc:
+            fail(f"docs/source/offline_kagemusha.md is missing retired-mode first-release wording: {needle}")
     for needle in (
         "Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production recursive spendable-cash entry points:",
         "`connect_norito_kagemusha_recursive_spend_lineage_append_boundary`",
@@ -4757,7 +5082,7 @@ def check_docs_reserved_lineage_policy():
         "`KagemushaRecursiveSpendLineageAppendOpeningPreflightV1` Norito contract",
         "contract must hash back to the digest and match the previous accumulator digest",
         "SDKs should treat the contract as opaque native verifier metadata",
-        "legacy evidence-only helpers omit it for compatibility",
+        "digest-only transition-profile helpers omit it, while request-backed append profiles bind it",
         "The archive-aware Rust helper validates non-empty previous-proof opening archive metadata against the exact previous bundle before hashing it",
         "append transition profiles are built through the archive-aware helper with metadata-bound previous-proof opening archives",
         'In this context, "one-hop Reserved-lineage" means',
@@ -4810,10 +5135,271 @@ def require_normalized_needles(coverage, missing_message):
                 fail(f"{relative} {missing_message}: {needle}")
 
 
+def extract_rust_const_str_array_body(source, name, label):
+    pattern = (
+        r"const\s+"
+        + re.escape(name)
+        + r"\s*:\s*&\[\s*&str\s*\]\s*=\s*&\[(?P<body>[\s\S]*?)\];"
+    )
+    match = re.search(pattern, source)
+    if match is None:
+        fail(f"missing {label}")
+    return match.group("body")
+
+
 def check_torii_offline_v2_kagemusha_redeem_coverage():
     require_needles(
         TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE,
         "is missing Torii offline-v2 Kagemusha redeem ingress coverage",
+    )
+    for relative in (
+        "crates/iroha_torii/src/openapi.rs",
+        "docs/portal/static/openapi/torii.json",
+        "docs/portal/static/openapi/versions/current/torii.json",
+    ):
+        if "Legacy X-Iroha-* app-auth headers are rejected" in read(relative):
+            fail(
+                f"{relative} contains stale Offline V2 X-Iroha header wording: "
+                "Legacy X-Iroha-* app-auth headers"
+            )
+
+
+def check_torii_offline_v2_retired_redeem_alias_coverage():
+    relative = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    source = read(relative)
+    if "ensure_exclusive_json_fields" in source:
+        fail(
+            f"{relative} contains retired structured redemption alias helper: "
+            "ensure_exclusive_json_fields"
+        )
+
+    redemption_fields = extract_rust_const_str_array_body(
+        source,
+        "REDEMPTION_FIELDS",
+        "Offline Notes V2 redemption field allow-list",
+    )
+    for forbidden in ('"key_certificate"',):
+        if forbidden in redemption_fields:
+            fail(
+                f"{relative} contains retired structured redemption alias allow-list entry: "
+                + forbidden
+            )
+
+    recursive_proof_fields = extract_rust_const_str_array_body(
+        source,
+        "RECURSIVE_PROOF_FIELDS",
+        "Offline Notes V2 recursive proof field allow-list",
+    )
+    for forbidden in (
+        '"verifier_key_backend"',
+        '"proof_backend"',
+        '"verifier_key_name"',
+        '"public_inputs_hash"',
+    ):
+        if forbidden in recursive_proof_fields:
+            fail(
+                f"{relative} contains retired structured recursive proof alias allow-list entry: "
+                + forbidden
+            )
+
+    redemption_parser = extract_rust_function_body(
+        source,
+        "fn parse_redemption_object(",
+        "Offline Notes V2 redemption parser",
+    )
+    for forbidden in (
+        'value.get("key_certificate")',
+        '.or_else(|| value.get("key_certificate"))',
+    ):
+        if forbidden in redemption_parser:
+            fail(
+                f"{relative} contains retired structured redemption fallback: "
+                + forbidden
+            )
+
+    certificate_parser = extract_rust_function_body(
+        source,
+        "fn parse_key_certificate(",
+        "Offline Notes V2 key certificate parser",
+    )
+    if "version != 2" in certificate_parser:
+        fail(
+            f"{relative} contains retired structured key certificate version fallback: "
+            "version != 2"
+        )
+
+    recursive_proof_parser = extract_rust_function_body(
+        source,
+        "fn parse_recursive_proof(",
+        "Offline Notes V2 recursive proof parser",
+    )
+    for forbidden in (
+        '"verifier_key_backend"',
+        '"proof_backend"',
+        '"verifier_key_name"',
+        '"public_inputs_hash"',
+    ):
+        if forbidden in recursive_proof_parser:
+            fail(
+                f"{relative} contains retired structured recursive proof alias parser entry: "
+                + forbidden
+            )
+
+    recursive_backend_parser = extract_rust_function_body(
+        source,
+        "fn parse_recursive_proof_backend(",
+        "Offline Notes V2 recursive proof backend parser",
+    )
+    for forbidden in (
+        'unwrap_or("halo2/ipa")',
+        '"verifier_key_backend"',
+        '"proof_backend"',
+    ):
+        if forbidden in recursive_backend_parser:
+            fail(
+                f"{relative} contains retired structured recursive proof backend fallback: "
+                + forbidden
+            )
+
+    require_needles(
+        TORII_OFFLINE_V2_RETIRED_REDEEM_ALIAS_COVERAGE,
+        "is missing Torii offline-v2 retired structured redeem alias coverage",
+    )
+
+
+def check_torii_offline_v2_attestation_profile_coverage():
+    relative = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    source = read(relative)
+    profile_body = extract_rust_function_body(
+        source,
+        "fn verify_attestation_receipt_profile(",
+        "Offline Notes V2 attestation receipt profile parser",
+    )
+    for forbidden in (
+        '"ios-app-attest" => {',
+        '"apple-app-attest-v1"',
+        "Offline Notes V2 iOS App Attest receipt uses an unsupported assertion profile.",
+    ):
+        if forbidden in profile_body:
+            fail(
+                f"{relative} contains retired Torii Offline Note V2 iOS App Attest receipt profile: "
+                + forbidden
+            )
+
+    fixture_body = extract_rust_function_body(
+        source,
+        "fn signed_attestation_receipt_with_validity(",
+        "Offline Notes V2 signed attestation receipt fixture",
+    )
+    for forbidden in ('"ios-app-attest"', '"apple-app-attest-v1"'):
+        if forbidden in fixture_body:
+            fail(
+                f"{relative} contains retired Torii Offline Note V2 iOS App Attest fixture default: "
+                + forbidden
+            )
+
+    assertion_key_body = extract_rust_function_body(
+        source,
+        "fn verify_optional_assertion_public_key(",
+        "Offline Notes V2 assertion public key binding parser",
+    )
+    for forbidden in (
+        '"app_attest_public_key_base64"',
+        '"device_public_key"',
+    ):
+        if forbidden in assertion_key_body:
+            fail(
+                f"{relative} contains retired Torii Offline Note V2 assertion public key alias parser entry: "
+                + forbidden
+            )
+
+    docs_relative = "docs/source/offline_note_v2_attestation.md"
+    docs = read(docs_relative)
+    for forbidden in (
+        "First-release receipts accept the legacy",
+        "the retired middleware iOS spelling `ios-app-attest` is\n  accepted.",
+        "It must match any request `assertion_public_key`,",
+        "supplies `assertion_public_key`, `app_attest_public_key_base64`,",
+        "Request-side aliases `app_attest_public_key_base64` and `device_public_key`\n  remain accepted inside `device_binding`.",
+        "They can still read legacy middleware-issued iOS certificates",
+        "This preserves legacy middleware iOS certificates",
+        "Compatibility aliases\nremain accepted",
+        "Recursive proof\nbackend aliases `verifier_key_backend` and `proof_backend` are accepted",
+    ):
+        if forbidden in docs:
+            fail(
+                f"{docs_relative} contains stale Offline Note V2 attestation profile wording: "
+                + forbidden
+            )
+
+    require_needles(
+        TORII_OFFLINE_V2_ATTESTATION_PROFILE_COVERAGE,
+        "is missing Torii offline-v2 attestation profile coverage",
+    )
+
+
+def check_offline_v2_vector_attestation_profile_coverage():
+    relative = "crates/iroha_data_model/src/bin/offline_v2_vectors.rs"
+    source = read(relative)
+    for forbidden in (
+        'platform == "android-keymint" || platform == "android"',
+        '"android-keymint" | "android" => (',
+        '_ => (',
+    ):
+        if forbidden in source:
+            fail(
+                f"{relative} contains retired Offline V2 vector certificate platform fallback: "
+                + forbidden
+            )
+
+    require_needles(
+        OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE,
+        "is missing Offline V2 vector attestation profile coverage",
+    )
+
+
+def check_torii_offline_attestation_profile_coverage():
+    relative = "crates/iroha_torii/src/offline_issuer.rs"
+    source = read(relative)
+
+    assertion_key_body = extract_rust_function_body(
+        source,
+        "fn verify_optional_assertion_public_key(",
+        "Offline Notes assertion public key binding parser",
+    )
+    for forbidden in (
+        '"app_attest_public_key_base64"',
+        '"device_public_key"',
+    ):
+        if forbidden in assertion_key_body:
+            fail(
+                f"{relative} contains retired Torii Offline Note assertion public key alias parser entry: "
+                + forbidden
+            )
+
+    require_needles(
+        TORII_OFFLINE_ATTESTATION_PROFILE_COVERAGE,
+        "is missing Torii offline attestation profile coverage",
+    )
+
+
+def check_offline_vector_attestation_profile_coverage():
+    relative = "crates/iroha_data_model/src/bin/offline_vectors.rs"
+    source = read(relative)
+    for forbidden in (
+        'platform == "android-keymint" || platform == "android"',
+        '"android-keymint" | "android" => (',
+        '_ => (',
+    ):
+        if forbidden in source:
+            fail(
+                f"{relative} contains retired Offline vector certificate platform fallback: "
+                + forbidden
+            )
+
+    require_needles(
+        OFFLINE_VECTOR_ATTESTATION_PROFILE_COVERAGE,
+        "is missing Offline vector attestation profile coverage",
     )
 
 
@@ -5025,6 +5611,110 @@ def check_shared_archive_fixture_manifest():
         if sha256_hex != hashlib.sha256(payload).hexdigest():
             fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} sha256 for {name} does not match bytes")
 
+    request_archive_fields = manifest.get("request_archive_fields")
+    if not isinstance(request_archive_fields, list):
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} must contain request_archive_fields")
+    expected_request_fields = {
+        "KagemushaRecursiveSpendInitRequestV1": (
+            "record_bundle",
+            "pallas_open_envelopes_archive",
+            "current_note",
+            "lineage_verifier_key",
+            "lineage_proving_key_archive",
+            "block_height",
+        ),
+        "KagemushaRecursiveSpendAppendRequestV1": (
+            "previous_bundle",
+            "record_bundle",
+            "pallas_open_envelopes_archive",
+            "current_note",
+            "output_proof_circuit_id",
+            "previous_lineage_verifier_record",
+            "previous_recursive_proof_open_envelopes_archive",
+            "lineage_verifier_key",
+            "lineage_proving_key_archive",
+            "block_height",
+        ),
+        "KagemushaRecursiveSpendVerifyRequestV1": (
+            "bundle",
+            "lineage_verifier_record",
+            "block_height",
+        ),
+        "KagemushaRecursiveSpendRedeemRequestV1": (
+            "bundle",
+            "recipient",
+            "public_amount",
+            "redeem_proof",
+            "lineage_witness",
+            "change_output",
+            "lineage_verifier_record",
+            "block_height",
+            "lineage_verifier_records",
+        ),
+    }
+    field_rows_by_type = {
+        row.get("norito_type"): row.get("fields")
+        for row in request_archive_fields
+        if isinstance(row, dict)
+    }
+    if set(field_rows_by_type) != set(expected_request_fields):
+        fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} request archive type inventory drifted")
+    for request_type, expected_fields in expected_request_fields.items():
+        field_rows = field_rows_by_type.get(request_type)
+        if not isinstance(field_rows, list):
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} {request_type} fields must be an array")
+        names = tuple(
+            field.get("name")
+            for field in field_rows
+            if isinstance(field, dict)
+        )
+        if names != expected_fields:
+            fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} {request_type} request field order drifted")
+        for field in field_rows:
+            if not isinstance(field, dict) or "name" not in field:
+                fail(f"{SHARED_ARCHIVE_FIXTURE_PATH} {request_type} field metadata is malformed")
+            if field.get("norito_default") is not False:
+                fail(
+                    f"{SHARED_ARCHIVE_FIXTURE_PATH} request archive field "
+                    f"{request_type}.{field.get('name')} must advertise norito_default false"
+                )
+
+    offline_model = read("crates/iroha_data_model/src/offline/mod.rs")
+    for struct_name in (
+        "KagemushaRecursiveSpendInitRequestV1",
+        "KagemushaRecursiveSpendAppendRequestV1",
+        "KagemushaRecursiveSpendVerifyRequestV1",
+        "KagemushaRecursiveSpendVerifyResultV1",
+        "KagemushaRecursiveSpendRedeemRequestV1",
+    ):
+        match = re.search(
+            rf"pub struct {struct_name} \{{(?P<body>[\s\S]*?)\n    \}}",
+            offline_model,
+        )
+        if match is None:
+            fail(f"crates/iroha_data_model/src/offline/mod.rs is missing {struct_name}")
+        if "#[norito(default)]" in match.group("body"):
+            fail(
+                "recursive spend request/result archive fields must not use #[norito(default)]"
+            )
+    for struct_name in (
+        "KagemushaRecursiveAggregationProofPublicInputs",
+        "KagemushaRecursiveSpendAccumulatorV1",
+        "KagemushaRecursiveSpendTransitionProfileV1",
+        "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+    ):
+        match = re.search(
+            rf"pub struct {struct_name} \{{(?P<body>[\s\S]*?)\n    \}}",
+            offline_model,
+        )
+        if match is None:
+            fail(f"crates/iroha_data_model/src/offline/mod.rs is missing {struct_name}")
+        if "#[norito(default)]" in match.group("body"):
+            fail(
+                f"{struct_name} first-release recursive spend archive fields must not use "
+                "#[norito(default)]"
+            )
+
 
 def check_shared_abi7_fixture_manifest():
     manifest = shared_abi7_fixture_manifest()
@@ -5215,7 +5905,6 @@ def check_payload_benchmark_source_coverage():
 
 TODO_MARKER_RE = re.compile(r"\b(?:TODO|FIXME|XXX|TBD)\b")
 KAGEMUSHA_CONTENT_RE = re.compile(r"kagemusha", re.IGNORECASE)
-ALLOWED_ROADMAP_CSHARP_TODO_RE = re.compile(r"TODO\(C# Windows\)|Windows-machine TODOs?")
 CURRENT_ROADMAP_PROFILE_NEEDLES = (
     "`64x4` profile source",
     "`64x4` binary through `--iroha-bin`",
@@ -5227,7 +5916,7 @@ STALE_ROADMAP_PROFILE_MARKERS = (
 )
 
 
-def iter_active_noncsharp_kagemusha_todo_discovery_candidates(discovery_roots):
+def iter_active_kagemusha_todo_discovery_candidates(discovery_roots):
     for relative_root in discovery_roots:
         search_root = root / relative_root
         if not search_root.exists():
@@ -5251,9 +5940,9 @@ def iter_active_noncsharp_kagemusha_todo_discovery_candidates(discovery_roots):
             yield candidate, relative
 
 
-def discover_active_noncsharp_kagemusha_todo_scan_paths():
+def discover_active_kagemusha_todo_scan_paths():
     discovered = set()
-    for candidate, relative in iter_active_noncsharp_kagemusha_todo_discovery_candidates(
+    for candidate, relative in iter_active_kagemusha_todo_discovery_candidates(
         ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ROOTS
     ):
         if "kagemusha" not in relative.lower():
@@ -5262,9 +5951,9 @@ def discover_active_noncsharp_kagemusha_todo_scan_paths():
     return discovered
 
 
-def discover_active_noncsharp_kagemusha_todo_content_scan_paths():
+def discover_active_kagemusha_todo_content_scan_paths():
     discovered = set()
-    for _, relative in iter_active_noncsharp_kagemusha_todo_discovery_candidates(
+    for _, relative in iter_active_kagemusha_todo_discovery_candidates(
         ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_DISCOVERY_ROOTS
     ):
         if KAGEMUSHA_CONTENT_RE.search(read(relative)):
@@ -5272,7 +5961,7 @@ def discover_active_noncsharp_kagemusha_todo_content_scan_paths():
     return discovered
 
 
-def check_active_noncsharp_kagemusha_todo_scan_inventory():
+def check_active_kagemusha_todo_scan_inventory():
     filename_scanned = set(ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS)
     content_scanned = filename_scanned | set(ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS)
     runner_input_missing = sorted(
@@ -5282,47 +5971,47 @@ def check_active_noncsharp_kagemusha_todo_scan_inventory():
     )
     if runner_input_missing:
         fail(
-            "active non-C# Kagemusha TODO content scan does not cover runner input path(s): "
+            "active Kagemusha TODO content scan does not cover runner input path(s): "
             + ", ".join(runner_input_missing)
         )
     filename_missing = sorted(
         discovered
-        for discovered in discover_active_noncsharp_kagemusha_todo_scan_paths()
+        for discovered in discover_active_kagemusha_todo_scan_paths()
         if discovered not in filename_scanned
         and discovered not in ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ALLOWLIST
     )
     if filename_missing:
         fail(
-            "active non-C# Kagemusha TODO scan does not cover source-like Kagemusha path(s): "
+            "active Kagemusha TODO scan does not cover source-like Kagemusha path(s): "
             + ", ".join(filename_missing)
         )
     content_missing = sorted(
         discovered
-        for discovered in discover_active_noncsharp_kagemusha_todo_content_scan_paths()
+        for discovered in discover_active_kagemusha_todo_content_scan_paths()
         if discovered not in content_scanned
         and discovered not in ACTIVE_KAGEMUSHA_TODO_SCAN_DISCOVERY_ALLOWLIST
     )
     if content_missing:
         fail(
-            "active non-C# Kagemusha TODO content scan does not cover content-bearing source path(s): "
+            "active Kagemusha TODO content scan does not cover content-bearing source path(s): "
             + ", ".join(content_missing)
         )
 
 
-def check_active_noncsharp_kagemusha_todos_closed():
-    check_active_noncsharp_kagemusha_todo_scan_inventory()
+def check_active_kagemusha_todos_closed():
+    check_active_kagemusha_todo_scan_inventory()
     for relative in ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS:
         for line_number, line in enumerate(read(relative).splitlines(), 1):
             if TODO_MARKER_RE.search(line):
                 fail(
-                    f"{relative}:{line_number} has active non-C# Kagemusha TODO/FIXME marker: "
+                    f"{relative}:{line_number} has active Kagemusha TODO/FIXME marker: "
                     + line.strip()
                 )
     for relative in ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS:
         for line_number, line in enumerate(read(relative).splitlines(), 1):
             if TODO_MARKER_RE.search(line) and KAGEMUSHA_CONTENT_RE.search(line):
                 fail(
-                    f"{relative}:{line_number} has active non-C# Kagemusha TODO/FIXME marker: "
+                    f"{relative}:{line_number} has active Kagemusha TODO/FIXME marker: "
                     + line.strip()
                 )
 
@@ -5331,9 +6020,9 @@ def check_active_noncsharp_kagemusha_todos_closed():
         roadmap_lines,
         1,
     ):
-        if TODO_MARKER_RE.search(line) and ALLOWED_ROADMAP_CSHARP_TODO_RE.search(line) is None:
+        if TODO_MARKER_RE.search(line):
             fail(
-                f"roadmap.md:{line_number} has active non-C# Kagemusha TODO/FIXME marker: "
+                f"roadmap.md:{line_number} has active Kagemusha TODO/FIXME marker: "
                 + line.strip()
             )
 
@@ -5363,6 +6052,7 @@ def run_checks():
     check_workflow_runs_payload_reducer_controls()
     check_workflow_runs_policy_negative_controls()
     check_core_redeem_execution_order()
+    check_core_offline_first_release_test_wording()
     check_rust_reserved_lineage_policy()
     check_checked_fold_public_input_preverification_order()
     check_append_digest_helpers_are_checked()
@@ -5375,6 +6065,8 @@ def run_checks():
     check_recursive_spend_proof_public_input_circuit_binding()
     check_recursive_spend_previous_proof_field_binding()
     check_recursive_compact_record_envelope_preflight_order()
+    check_recursive_compact_first_release_public_surface()
+    check_core_offline_note_v2_retired_ios_app_attest_profile()
     check_docs_reserved_lineage_policy()
     check_shared_fixture_manifest()
     check_shared_archive_fixture_manifest()
@@ -5389,8 +6081,13 @@ def run_checks():
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
     check_torii_offline_v2_kagemusha_redeem_coverage()
+    check_torii_offline_v2_retired_redeem_alias_coverage()
+    check_torii_offline_v2_attestation_profile_coverage()
+    check_offline_v2_vector_attestation_profile_coverage()
+    check_torii_offline_attestation_profile_coverage()
+    check_offline_vector_attestation_profile_coverage()
     check_readiness_section_consistency_coverage()
-    check_active_noncsharp_kagemusha_todos_closed()
+    check_active_kagemusha_todos_closed()
 
 
 if mode == "--negative-control":
@@ -5906,6 +6603,87 @@ if mode == "--negative-control-shared-archive-fixture":
         raise SystemExit(0)
     raise SystemExit("negative control failed: shared archive fixture drift was not detected")
 
+if mode == "--negative-control-request-archive-required-fields":
+    cases = (
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "        pub lineage_verifier_key: Option<VerifyingKeyBox>,",
+            "        #[norito(default)]\n        pub lineage_verifier_key: Option<VerifyingKeyBox>,",
+            "recursive spend request/result archive fields must not use #[norito(default)]",
+        ),
+        (
+            SHARED_ARCHIVE_FIXTURE_PATH,
+            '{"name": "lineage_verifier_key", "type": "Option<VerifyingKeyBox>", "norito_default": false}',
+            '{"name": "lineage_verifier_key", "type": "Option<VerifyingKeyBox>", "norito_default": true}',
+            (
+                f"{SHARED_ARCHIVE_FIXTURE_PATH} request archive field "
+                "KagemushaRecursiveSpendInitRequestV1.lineage_verifier_key must advertise norito_default false"
+            ),
+        ),
+    )
+    first_message = None
+    for target, before, after, label in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate recursive spend request archive required-fields guard in "
+                + target
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if label not in message:
+                raise SystemExit(
+                    "negative control failed: request archive required-fields drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: request archive required-fields drift was not detected for "
+            + target
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: request archive required-fields drift was not detected")
+    print("negative control rejected recursive spend request archive required-fields drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-first-release-archive-required-fields":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    before = "        pub transition_profile_binding_digest: [u8; 32],"
+    after = "        #[norito(default)]\n        pub transition_profile_binding_digest: [u8; 32],"
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit(
+            "negative control failed: unable to mutate first-release recursive spend archive field guard"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = "KagemushaRecursiveAggregationProofPublicInputs first-release recursive spend archive fields must not use #[norito(default)]"
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: first-release archive required-fields drift was "
+                "rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected recursive spend first-release archive required-fields drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: first-release archive required-fields drift was not detected"
+    )
+
 if mode == "--negative-control-shared-abi7-fixture-manifest":
     target = SHARED_ABI7_FIXTURE_PATH
     source = read(target)
@@ -6175,9 +6953,9 @@ if mode == "--negative-control-data-model-self-consistent-boundary":
             "zero-prehash recursive compact digest must be rejected",
         ),
         (
-            "zero-prehash legacy compact digest must be rejected",
-            "zero-prehash legacy compact digest may pass",
-            "zero-prehash legacy compact digest must be rejected",
+            "zero-prehash checked-prefold compact digest must be rejected",
+            "zero-prehash checked-prefold compact digest may pass",
+            "zero-prehash checked-prefold compact digest must be rejected",
         ),
         (
             "zero_accumulator_nullifier_digest.nullifier_digest =",
@@ -7115,6 +7893,618 @@ if mode == "--negative-control-data-model-recursive-compact-constructor-binding"
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
+if mode == "--negative-control-core-recursive-compact-unanchored-prover-surface":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    injected = (
+        "\n#[cfg(feature = \"zk-halo2-ipa\")]\n"
+        "pub fn prove_verified_kagemusha_compact_payment_token(\n"
+        "    _chain_id: &iroha_data_model::ChainId,\n"
+        ") {}\n"
+    )
+    mutated = source + injected
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} exposes retired unanchored compact-token prover surface: "
+            "pub fn prove_verified_kagemusha_compact_payment_token("
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: recursive compact unanchored prover surface drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected recursive compact unanchored prover surface drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    finally:
+        text_overrides.pop(target, None)
+    raise SystemExit(
+        "negative control failed: recursive compact unanchored prover surface drift was not detected"
+    )
+
+if mode == "--negative-control-core-reserved-lineage-circuit-id-wording":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    before = "/// Canonical Reserved-lineage circuit-family identifier for recursive spend lineage proofs."
+    after = "/// Legacy Reserved-lineage circuit-family identifier for recursive spend lineage proofs."
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit(
+            "negative control failed: unable to inject Reserved-lineage circuit id wording drift"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            + before
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Reserved-lineage circuit id wording drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected Reserved-lineage circuit id wording drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    finally:
+        text_overrides.pop(target, None)
+    raise SystemExit("negative control failed: Reserved-lineage circuit id wording drift was not detected")
+
+if mode == "--negative-control-core-recursive-compact-key-package-wording":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    before = "one_hop_proving_key_bytes: Option<&[u8]>"
+    after = "one_hop_fallback_proving_key_bytes: Option<&[u8]>"
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit(
+            "negative control failed: unable to inject recursive compact key-package wording drift"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            + before
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: recursive compact key-package wording drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected recursive compact key-package wording drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    finally:
+        text_overrides.pop(target, None)
+    raise SystemExit("negative control failed: recursive compact key-package wording drift was not detected")
+
+if mode == "--negative-control-core-folded-path-wording":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    before = "fn prove_kagemusha_compact_payment_token_rejects_recursive_mode_on_folded_path()"
+    after = "fn prove_kagemusha_compact_payment_token_rejects_recursive_mode_on_retired_path()"
+    mutated = source.replace(before, after, 1)
+    if mutated == source:
+        raise SystemExit(
+            "negative control failed: unable to inject Kagemusha folded-path wording drift"
+        )
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        message = str(error)
+        expected = (
+            f"{target} is missing Reserved-lineage adversarial coverage: "
+            + before
+        )
+        if expected not in message:
+            raise SystemExit(
+                "negative control failed: Kagemusha folded-path wording drift was rejected for the wrong reason: "
+                + message.splitlines()[0]
+            )
+        print("negative control rejected Kagemusha folded-path wording drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    finally:
+        text_overrides.pop(target, None)
+    raise SystemExit("negative control failed: Kagemusha folded-path wording drift was not detected")
+
+if mode == "--negative-control-core-offline-first-release-test-wording":
+    target = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+    cases = (
+        (
+            "partial recursive redeem change output must not record the retired v1 tree root",
+            "partial recursive redeem change output must not record the leg"
+            "acy tree root",
+            "core Offline/Kagemusha tests contain stale first-release wording: leg"
+            "acy tree root",
+        ),
+        (
+            'proof.proof.bytes = b"non-zk1 transcript payload".to_vec();',
+            'proof.proof.bytes = b"leg'
+            'acy transcript payload".to_vec();',
+            "core Offline/Kagemusha tests contain stale first-release wording: leg"
+            "acy transcript payload",
+        ),
+        (
+            "issuer signature should authorize without attestation marker",
+            "middleware issuer signature should remain a valid fallback",
+            "core Offline/Kagemusha tests contain stale first-release wording: valid fallback",
+        ),
+    )
+    first_message = None
+    for before, after, expected in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject core Offline/Kagemusha test wording drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: core Offline/Kagemusha test wording drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: core Offline/Kagemusha test wording drift was not detected for "
+            + expected
+        )
+    if first_message is None:
+        raise SystemExit(
+            "negative control failed: core Offline/Kagemusha test wording drift was not detected"
+        )
+    print("negative control rejected core Offline/Kagemusha test wording drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-core-retired-backend-profile-wording":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    replacements = (
+        (
+            "is_retired_unqualified_vote_bool_backend_profile",
+            "is_legacy_vote_bool_backend_profile",
+        ),
+        (
+            "is_retired_unqualified_anon_transfer_backend_profile",
+            "is_legacy_anon_transfer_backend_profile",
+        ),
+        (
+            "retired unqualified profile roots",
+            "legacy profile roots",
+        ),
+    )
+    first_message = None
+    for before, after in replacements:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject retired backend profile wording drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = f"{target} contains stale recursive compact first-release wording: "
+            if expected not in message and (
+                f"{target} is missing Reserved-lineage adversarial coverage: " not in message
+            ):
+                raise SystemExit(
+                    "negative control failed: retired backend profile wording drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: retired backend profile wording drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: retired backend profile wording drift was not detected")
+    print("negative control rejected retired backend profile wording drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-core-offline-note-v2-retired-ios-app-attest-profile":
+    target = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+    mutations = (
+        (
+            target,
+            '    const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST: &str = "ios-appattest";',
+            '    const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST_LEGACY: &str = "ios-app-attest";\n'
+            '    const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST: &str = "ios-appattest";',
+            "contains retired Offline Note V2 iOS App Attest certificate profile",
+        ),
+        (
+            target,
+            '"retired ios app attest spelling"',
+            '"accepted retired ios app attest spelling"',
+            "is missing retired Offline Note V2 iOS App Attest profile rejection coverage",
+        ),
+        (
+            "crates/iroha_telemetry/src/metrics.rs",
+            "    /// Offline attestation tokens processed grouped by integrity policy.\n"
+            "    pub offline_attestation_policy_total: IntCounterVec,",
+            "    /// Offline attestation tokens processed grouped by integrity policy.\n"
+            "    pub offline_attestation_policy_total: IntCounterVec,\n"
+            "    /// iOS App Attest assertions accepted through the compatibility signature path.\n"
+            "    pub offline_app_attest_signature_compat_total: IntCounter,",
+            "contains retired Offline Note V2 iOS App Attest compatibility telemetry",
+        ),
+    )
+    detected_messages = []
+    for target, before, after, expected in mutations:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject Offline Note V2 retired iOS App Attest profile drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Offline Note V2 retired iOS App Attest profile drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Offline Note V2 retired iOS App Attest profile drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Offline Note V2 retired iOS App Attest profile drift was not detected"
+        )
+    print("negative control rejected Offline Note V2 retired iOS App Attest profile drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-torii-offline-v2-retired-ios-app-attest-profile":
+    target = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    docs_target = "docs/source/offline_note_v2_attestation.md"
+    mutations = (
+        (
+            target,
+            '        "ios-appattest" => {\n'
+            '            if assertion_scheme == "apple-appattest-counter-v1"',
+            '        "ios-app-attest" => {\n'
+            '            if assertion_scheme == "apple-app-attest-v1"\n'
+            '                && assertion_key_algorithm == "ecdsa-p256-sha256"\n'
+            '                && usage_limit.is_none()\n'
+            "            {\n"
+            "                Ok(())\n"
+            "            } else {\n"
+            "                Err(validation(\n"
+            '                    "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",\n'
+            '                    "Offline Notes V2 iOS App Attest receipt uses an unsupported assertion profile.",\n'
+            "                ))\n"
+            "            }\n"
+            "        }\n"
+            '        "ios-appattest" => {\n'
+            '            if assertion_scheme == "apple-appattest-counter-v1"',
+            "contains retired Torii Offline Note V2 iOS App Attest receipt profile",
+        ),
+        (
+            target,
+            '("platform", string_value("ios-appattest")),',
+            '("platform", string_value("ios-app-attest")),',
+            "contains retired Torii Offline Note V2 iOS App Attest fixture default",
+        ),
+        (
+            target,
+            "fn attestation_receipt_rejects_signed_retired_ios_app_attest_profile()",
+            "fn attestation_receipt_accepts_signed_retired_ios_app_attest_profile()",
+            "is missing Torii offline-v2 attestation profile coverage",
+        ),
+        (
+            docs_target,
+            "the retired middleware iOS spelling `ios-app-attest` is\n  rejected.",
+            "the retired middleware iOS spelling `ios-app-attest` is\n  accepted.",
+            "contains stale Offline Note V2 attestation profile wording",
+        ),
+        (
+            docs_target,
+            "Retired compatibility\naliases are rejected",
+            "Compatibility aliases\nremain accepted",
+            "contains stale Offline Note V2 attestation profile wording",
+        ),
+    )
+    detected_messages = []
+    for target, before, after, expected in mutations:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject Torii Offline Note V2 retired iOS App Attest profile drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii Offline Note V2 retired iOS App Attest profile drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii Offline Note V2 retired iOS App Attest profile drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Torii Offline Note V2 retired iOS App Attest profile drift was not detected"
+        )
+    print("negative control rejected Torii Offline Note V2 retired iOS App Attest profile drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-torii-offline-v2-retired-assertion-key-aliases":
+    target = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    docs_target = "docs/source/offline_note_v2_attestation.md"
+    mutations = (
+        (
+            target,
+            "    reject_retired_assertion_public_key_aliases(request)?;\n",
+            "",
+            "is missing Torii offline-v2 attestation profile coverage",
+        ),
+        (
+            target,
+            '"assertion_public_key",\n        "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",',
+            '"app_attest_public_key_base64",\n        "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",',
+            "contains retired Torii Offline Note V2 assertion public key alias parser entry",
+        ),
+        (
+            target,
+            "fn attestation_receipt_rejects_retired_assertion_public_key_aliases()",
+            "fn attestation_receipt_accepts_retired_assertion_public_key_aliases()",
+            "is missing Torii offline-v2 attestation profile coverage",
+        ),
+        (
+            docs_target,
+            "Retired\n  request-side aliases `app_attest_public_key_base64` and `device_public_key`\n  are rejected inside `device_binding`.",
+            "Request-side aliases `app_attest_public_key_base64` and `device_public_key`\n  remain accepted inside `device_binding`.",
+            "contains stale Offline Note V2 attestation profile wording",
+        ),
+    )
+    detected_messages = []
+    for target, before, after, expected in mutations:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject Torii Offline Note V2 retired assertion key alias drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii Offline Note V2 retired assertion key alias drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii Offline Note V2 retired assertion key alias drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Torii Offline Note V2 retired assertion key alias drift was not detected"
+        )
+    print("negative control rejected Torii Offline Note V2 retired assertion key alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-offline-v2-vector-platform-aliases":
+    target = "crates/iroha_data_model/src/bin/offline_v2_vectors.rs"
+    mutations = (
+        (
+            '"android-keymint" => (',
+            '"android-keymint" | "android" => (',
+            "contains retired Offline V2 vector certificate platform fallback",
+        ),
+        (
+            '"ios-appattest" => (',
+            '_ => (',
+            "contains retired Offline V2 vector certificate platform fallback",
+        ),
+        (
+            'for platform in ["android", "ios-app-attest", "browser-webauthn"]',
+            'for platform in ["browser-webauthn"]',
+            "is missing Offline V2 vector attestation profile coverage",
+        ),
+    )
+    detected_messages = []
+    for before, after, expected in mutations:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject Offline V2 vector platform alias drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Offline V2 vector platform alias drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Offline V2 vector platform alias drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Offline V2 vector platform alias drift was not detected"
+        )
+    print("negative control rejected Offline V2 vector platform alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-torii-offline-retired-assertion-key-aliases":
+    target = "crates/iroha_torii/src/offline_issuer.rs"
+    mutations = (
+        (
+            target,
+            'for field in ["assertion_public_key"] {',
+            'for field in [\n        "assertion_public_key",\n        "app_attest_public_key_base64",\n        "device_public_key",\n    ] {',
+            "contains retired Torii Offline Note assertion public key alias parser entry",
+        ),
+        (
+            target,
+            "reject_retired_assertion_public_key_aliases(request)?;",
+            "",
+            "is missing Torii offline attestation profile coverage",
+        ),
+        (
+            target,
+            "fn attestation_receipt_rejects_retired_assertion_public_key_aliases()",
+            "fn attestation_receipt_accepts_retired_assertion_public_key_aliases()",
+            "is missing Torii offline attestation profile coverage",
+        ),
+    )
+    detected_messages = []
+    for target, before, after, expected in mutations:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject Torii Offline retired assertion key alias drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Torii Offline retired assertion key alias drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii Offline retired assertion key alias drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Torii Offline retired assertion key alias drift was not detected"
+        )
+    print("negative control rejected Torii Offline retired assertion key alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-offline-vector-platform-aliases":
+    target = "crates/iroha_data_model/src/bin/offline_vectors.rs"
+    mutations = (
+        (
+            '"android-keymint" => (',
+            '"android-keymint" | "android" => (',
+            "contains retired Offline vector certificate platform fallback",
+        ),
+        (
+            '"ios-appattest" => (',
+            '_ => (',
+            "contains retired Offline vector certificate platform fallback",
+        ),
+        (
+            'for platform in ["android", "ios-app-attest", "browser-webauthn"]',
+            'for platform in ["browser-webauthn"]',
+            "is missing Offline vector attestation profile coverage",
+        ),
+    )
+    detected_messages = []
+    for before, after, expected in mutations:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to inject Offline vector platform alias drift"
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: Offline vector platform alias drift was rejected "
+                    "for the wrong reason: " + message.splitlines()[0]
+                )
+            detected_messages.append(message.splitlines()[0])
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Offline vector platform alias drift was not detected for "
+            + before
+        )
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: Offline vector platform alias drift was not detected"
+        )
+    print("negative control rejected Offline vector platform alias drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
@@ -7258,11 +8648,11 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-archive-field-shape":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-legacy-fields":
+if mode == "--negative-control-torii-offline-v2-kagemusha-retired-fields":
     target = "crates/iroha_torii/src/offline_v2_issuer.rs"
     source = read(target)
-    legacy_field_block = (
-        "fn reject_kagemusha_legacy_redeem_fields(value: &Value) -> Result<(), Error> {\n"
+    retired_field_block = (
+        "fn reject_kagemusha_retired_redeem_fields(value: &Value) -> Result<(), Error> {\n"
         "    for field in [\n"
         '        "redemption",\n'
         '        "input_nullifiers",\n'
@@ -7271,33 +8661,33 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-legacy-fields":
     )
     cases = (
         (
-            "reject_kagemusha_legacy_redeem_fields",
-            "allow_kagemusha_legacy_redeem_fields",
-            "reject_kagemusha_legacy_redeem_fields",
+            "reject_kagemusha_retired_redeem_fields",
+            "allow_kagemusha_retired_redeem_fields",
+            "reject_kagemusha_retired_redeem_fields",
             True,
         ),
         (
-            "    reject_kagemusha_legacy_redeem_fields(&request.value)?;\n",
+            "    reject_kagemusha_retired_redeem_fields(&request.value)?;\n",
             "",
-            "reject_kagemusha_legacy_redeem_fields(&request.value)?;",
+            "reject_kagemusha_retired_redeem_fields(&request.value)?;",
             False,
         ),
         (
-            "legacy Offline Note V2 field",
-            "legacy Offline Note V2 payload",
-            "legacy Offline Note V2 field",
+            "retired Offline Note V2 field",
+            "retired Offline Note V2 payload",
+            "retired Offline Note V2 field",
             False,
         ),
         (
-            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
-            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_ACCEPTED",
-            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
+            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_ACCEPTED",
+            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
             True,
         ),
         (
-            legacy_field_block,
-            legacy_field_block.replace('        "input_nullifiers",\n', ""),
-            legacy_field_block,
+            retired_field_block,
+            retired_field_block.replace('        "input_nullifiers",\n', ""),
+            retired_field_block,
             False,
         )
     )
@@ -7306,7 +8696,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-legacy-fields":
         mutated = source.replace(before, after) if replace_all else source.replace(before, after, 1)
         if mutated == source:
             raise SystemExit(
-                "negative control failed: unable to mutate Torii offline-v2 Kagemusha legacy-field rejection: "
+                "negative control failed: unable to mutate Torii offline-v2 Kagemusha retired-field rejection: "
                 + before
             )
         text_overrides[target] = mutated
@@ -7320,7 +8710,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-legacy-fields":
             )
             if expected not in message:
                 raise SystemExit(
-                    "negative control failed: Torii offline-v2 Kagemusha legacy-field drift was rejected for the wrong reason: "
+                    "negative control failed: Torii offline-v2 Kagemusha retired-field drift was rejected for the wrong reason: "
                     + message.splitlines()[0]
                 )
             if first_message is None:
@@ -7329,12 +8719,131 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-legacy-fields":
         finally:
             text_overrides.pop(target, None)
         raise SystemExit(
-            "negative control failed: Torii offline-v2 Kagemusha legacy-field drift was not detected for "
+            "negative control failed: Torii offline-v2 Kagemusha retired-field drift was not detected for "
             + before
         )
     if first_message is None:
-        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha legacy-field drift was not detected")
-    print("negative control rejected Torii offline-v2 Kagemusha legacy-field drift")
+        raise SystemExit("negative control failed: Torii offline-v2 Kagemusha retired-field drift was not detected")
+    print("negative control rejected Torii offline-v2 Kagemusha retired-field drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
+
+if mode == "--negative-control-torii-offline-v2-retired-redeem-aliases":
+    target = "crates/iroha_torii/src/offline_v2_issuer.rs"
+    cases = (
+        (
+            'const REDEMPTION_FIELDS: &[&str] = &[\n'
+            '    "source_note_commitment",\n'
+            '    "input_nullifiers",\n'
+            '    "sender_key_certificate",\n'
+            '    "recipient_account_id",\n'
+            '    "asset_definition_id",\n'
+            '    "amount",\n'
+            '    "recursive_proof",\n'
+            "];",
+            'const REDEMPTION_FIELDS: &[&str] = &[\n'
+            '    "source_note_commitment",\n'
+            '    "input_nullifiers",\n'
+            '    "sender_key_certificate",\n'
+            '    "key_certificate",\n'
+            '    "recipient_account_id",\n'
+            '    "asset_definition_id",\n'
+            '    "amount",\n'
+            '    "recursive_proof",\n'
+            "];",
+            'retired structured redemption alias allow-list entry: "key_certificate"',
+        ),
+        (
+            'const RECURSIVE_PROOF_FIELDS: &[&str] = &[\n'
+            '    "backend",\n'
+            '    "verifier_key_id",\n'
+            '    "public_inputs_hash_hex",\n'
+            '    "proof_bytes_base64",\n'
+            "];",
+            'const RECURSIVE_PROOF_FIELDS: &[&str] = &[\n'
+            '    "backend",\n'
+            '    "proof_backend",\n'
+            '    "verifier_key_id",\n'
+            '    "public_inputs_hash_hex",\n'
+            '    "proof_bytes_base64",\n'
+            "];",
+            'retired structured recursive proof alias allow-list entry: "proof_backend"',
+        ),
+        (
+            'let certificate = value.get("sender_key_certificate").ok_or_else(|| {',
+            "let certificate = value\n"
+            '        .get("sender_key_certificate")\n'
+            '        .or_else(|| value.get("key_certificate"))\n'
+            "        .ok_or_else(|| {",
+            'retired structured redemption fallback: value.get("key_certificate")',
+        ),
+        (
+            "if version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {",
+            "if version != 2 && version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {",
+            "retired structured key certificate version fallback: version != 2",
+        ),
+        (
+            '        "verifier_key_id",',
+            '        "verifier_key_name",',
+            'retired structured recursive proof alias parser entry: "verifier_key_name"',
+        ),
+        (
+            'let public_inputs_hash = parse_hash_field(value, "public_inputs_hash_hex")?;',
+            'let public_inputs_hash = parse_hash_field(value, "public_inputs_hash")?;',
+            'retired structured recursive proof alias parser entry: "public_inputs_hash"',
+        ),
+        (
+            "fn parse_recursive_proof_backend(value: &Value) -> Result<&str, Error> {\n"
+            "    required_exact_protocol_string(\n"
+            "        value,\n"
+            '        "backend",\n'
+            '        "OFFLINE_V2_REDEMPTION_INVALID",\n'
+            '        "Offline Notes V2 recursive proof",\n'
+            "    )\n"
+            "}",
+            "fn parse_recursive_proof_backend(value: &Value) -> Result<&str, Error> {\n"
+            "    Ok(optional_exact_protocol_string(\n"
+            "        value,\n"
+            '        "backend",\n'
+            '        "OFFLINE_V2_REDEMPTION_INVALID",\n'
+            '        "Offline Notes V2 recursive proof",\n'
+            "    )?\n"
+            '    .unwrap_or("halo2/ipa"))\n'
+            "}",
+            'retired structured recursive proof backend fallback: unwrap_or("halo2/ipa")',
+        ),
+    )
+    first_message = None
+    for before, after, expected_marker in cases:
+        source = read(target)
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate Torii offline-v2 retired structured redeem alias guard: "
+                + before
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected_marker not in message:
+                raise SystemExit(
+                    "negative control failed: Torii offline-v2 retired structured redeem alias drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: Torii offline-v2 retired structured redeem alias drift was not detected for "
+            + before
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: Torii offline-v2 retired structured redeem alias drift was not detected")
+    print("negative control rejected Torii offline-v2 retired structured redeem alias drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
@@ -7420,6 +8929,12 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
     cases = (
         (
             "crates/iroha_torii/src/openapi.rs",
+            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
+            "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
+            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
+        ),
+        (
+            "crates/iroha_torii/src/openapi.rs",
             "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
             "Kagemusha recursive redemption uses an archive field",
             "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
@@ -7444,6 +8959,12 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
         ),
         (
             "docs/portal/static/openapi/torii.json",
+            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
+            "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
+            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
+        ),
+        (
+            "docs/portal/static/openapi/torii.json",
             "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
             "Kagemusha recursive redemption uses an archive field",
             "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
@@ -7453,6 +8974,12 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
             "Optional amount and source_note_commitment echo fields",
             "Optional amount echo fields",
             "Optional amount and source_note_commitment echo fields",
+        ),
+        (
+            "docs/portal/static/openapi/versions/current/torii.json",
+            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
+            "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
+            "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
         ),
         (
             "docs/portal/static/openapi/versions/current/torii.json",
@@ -7483,10 +9010,16 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
             run_checks()
         except PolicyError as error:
             message = str(error)
-            expected = (
-                f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
-                + expected_marker
-            )
+            if expected_marker == "Retired X-Iroha-* app-auth headers are rejected on this endpoint":
+                expected = (
+                    f"{target} contains stale Offline V2 X-Iroha header wording: "
+                    "Legacy X-Iroha-* app-auth headers"
+                )
+            else:
+                expected = (
+                    f"{target} is missing Torii offline-v2 Kagemusha redeem ingress coverage: "
+                    + expected_marker
+                )
             if expected not in message:
                 raise SystemExit(
                     "negative control failed: Torii offline-v2 Kagemusha OpenAPI drift was rejected for the wrong reason: "
@@ -7539,9 +9072,9 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
             "parse_kagemusha_amount_echo",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_legacy_redeem_fields"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("allow_kagemusha_legacy_redeem_fields"));',
-            "reject_kagemusha_legacy_redeem_fields",
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_retired_redeem_fields"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("allow_kagemusha_retired_redeem_fields"));',
+            "reject_kagemusha_retired_redeem_fields",
         ),
         (
             'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_auxiliary_redeem_fields"));',
@@ -7554,9 +9087,9 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
             "OFFLINE_KAGEMUSHA_REDEEM_CHAIN_MISMATCH",
         ),
         (
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD"));',
-            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_LEGACY_ACCEPTED"));',
-            "OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD",
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD"));',
+            'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_RETIRED_ACCEPTED"));',
+            "OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD",
         ),
         (
             'assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD"));',
@@ -7611,7 +9144,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-active-noncsharp-todo":
+if mode == "--negative-control-active-kagemusha-todo":
     cases = (
         (
             "crates/iroha_core/src/tx.rs",
@@ -7678,14 +9211,16 @@ if mode == "--negative-control-active-noncsharp-todo":
         ),
         (
             "roadmap.md",
-            "TODO(C# Windows): certify matching exact C# verify-result",
-            "TODO(non-C#): certify matching exact C# verify-result",
+            "The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path",
+            "TODO: bypass Kagemusha C# SDK matrix request-path certification\n"
+            "  The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path",
             "roadmap C# handoff scope",
         ),
         (
             "roadmap.md",
-            "TODO(C# Windows): certify matching exact C# native-output diagnostics on a",
-            "TODO(non-C#): certify matching exact C# native-output diagnostics on a",
+            "The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output",
+            "TODO: bypass Kagemusha C# SDK matrix native-output certification\n"
+            "  The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output",
             "roadmap late C# handoff scope",
         ),
         (
@@ -7738,6 +9273,27 @@ if mode == "--negative-control-active-noncsharp-todo":
             "payload benchmark active marker",
         ),
         (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "internal static class KagemushaArchiveBytes",
+            "// TODO: bypass Kagemusha C# recursive spend review\n"
+            "internal static class KagemushaArchiveBytes",
+            "C# recursive spend active marker",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
+            "using System.Buffers.Binary;",
+            "// TODO: bypass Kagemusha C# instruction archive review\n"
+            "using System.Buffers.Binary;",
+            "C# instruction archive active marker",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+            "using System.Collections.Generic;",
+            "// TODO: bypass Kagemusha C# native tests review\n"
+            "using System.Collections.Generic;",
+            "C# native test active marker",
+        ),
+        (
             "python/iroha_python/src/iroha_python/offline_cash.py",
             '"""Headless offline-cash lifecycle and transport helpers."""',
             "# TODO: bypass Kagemusha Python offline-cash coverage\n"
@@ -7750,7 +9306,7 @@ if mode == "--negative-control-active-noncsharp-todo":
         source = read(target)
         mutated = source.replace(before, after, 1)
         if mutated == source:
-            raise SystemExit(f"negative control failed: unable to inject active non-C# Kagemusha TODO: {label}")
+            raise SystemExit(f"negative control failed: unable to inject active Kagemusha TODO: {label}")
         text_overrides[target] = mutated
         try:
             run_checks()
@@ -7759,10 +9315,10 @@ if mode == "--negative-control-active-noncsharp-todo":
             expected = f"{target}:"
             if (
                 expected not in message
-                or "active non-C# Kagemusha TODO/FIXME marker" not in message
+                or "active Kagemusha TODO/FIXME marker" not in message
             ):
                 raise SystemExit(
-                    "negative control failed: active non-C# TODO was rejected for the wrong reason: "
+                    "negative control failed: active Kagemusha TODO was rejected for the wrong reason: "
                     + message.splitlines()[0]
                 )
             if first_message is None:
@@ -7771,17 +9327,17 @@ if mode == "--negative-control-active-noncsharp-todo":
         finally:
             text_overrides.pop(target, None)
         raise SystemExit(
-            "negative control failed: active non-C# Kagemusha TODO drift was not detected for "
+            "negative control failed: active Kagemusha TODO drift was not detected for "
             + label
         )
     if first_message is None:
-        raise SystemExit("negative control failed: active non-C# Kagemusha TODO drift was not detected")
-    print("negative control rejected active non-C# Kagemusha TODO drift")
+        raise SystemExit("negative control failed: active Kagemusha TODO drift was not detected")
+    print("negative control rejected active Kagemusha TODO drift")
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-active-noncsharp-todo-scan-inventory":
-    target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
+if mode == "--negative-control-active-kagemusha-todo-scan-inventory":
+    target = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
     ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = tuple(
         path for path in ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS if path != target
     )
@@ -7790,23 +9346,23 @@ if mode == "--negative-control-active-noncsharp-todo-scan-inventory":
     except PolicyError as error:
         message = str(error)
         expected = (
-            "active non-C# Kagemusha TODO scan does not cover source-like "
+            "active Kagemusha TODO scan does not cover source-like "
             f"Kagemusha path(s): {target}"
         )
         if expected not in message:
             raise SystemExit(
-                "negative control failed: active non-C# TODO scan inventory drift was rejected for the wrong reason: "
+                "negative control failed: active Kagemusha TODO scan inventory drift was rejected for the wrong reason: "
                 + message.splitlines()[0]
             )
-        print("negative control rejected active non-C# Kagemusha TODO scan inventory drift")
+        print("negative control rejected active Kagemusha TODO scan inventory drift")
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
-        "negative control failed: active non-C# Kagemusha TODO scan inventory drift was not detected"
+        "negative control failed: active Kagemusha TODO scan inventory drift was not detected"
     )
 
-if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":
-    target = "python/iroha_python/src/iroha_python/offline_cash.py"
+if mode == "--negative-control-active-kagemusha-todo-content-scan-inventory":
+    target = "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
     ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = tuple(
         path for path in ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS if path != target
     )
@@ -7815,22 +9371,22 @@ if mode == "--negative-control-active-noncsharp-todo-content-scan-inventory":
     except PolicyError as error:
         message = str(error)
         expected = (
-            "active non-C# Kagemusha TODO content scan does not cover "
+            "active Kagemusha TODO content scan does not cover "
             f"content-bearing source path(s): {target}"
         )
         if expected not in message:
             raise SystemExit(
-                "negative control failed: active non-C# TODO content scan inventory drift was rejected for the wrong reason: "
+                "negative control failed: active Kagemusha TODO content scan inventory drift was rejected for the wrong reason: "
                 + message.splitlines()[0]
             )
-        print("negative control rejected active non-C# Kagemusha TODO content scan inventory drift")
+        print("negative control rejected active Kagemusha TODO content scan inventory drift")
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
-        "negative control failed: active non-C# Kagemusha TODO content scan inventory drift was not detected"
+        "negative control failed: active Kagemusha TODO content scan inventory drift was not detected"
     )
 
-if mode == "--negative-control-active-noncsharp-todo-runner-input-content-scan-inventory":
+if mode == "--negative-control-active-kagemusha-todo-runner-input-content-scan-inventory":
     target = "javascript/iroha_js/scripts/build-native.mjs"
     ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = tuple(
         path for path in ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS if path != target
@@ -7840,19 +9396,19 @@ if mode == "--negative-control-active-noncsharp-todo-runner-input-content-scan-i
     except PolicyError as error:
         message = str(error)
         expected = (
-            "active non-C# Kagemusha TODO content scan does not cover "
+            "active Kagemusha TODO content scan does not cover "
             f"runner input path(s): {target}"
         )
         if expected not in message:
             raise SystemExit(
-                "negative control failed: active non-C# TODO runner-input content scan inventory drift was rejected for the wrong reason: "
+                "negative control failed: active Kagemusha TODO runner-input content scan inventory drift was rejected for the wrong reason: "
                 + message.splitlines()[0]
             )
-        print("negative control rejected active non-C# Kagemusha TODO runner-input content scan inventory drift")
+        print("negative control rejected active Kagemusha TODO runner-input content scan inventory drift")
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit(
-        "negative control failed: active non-C# Kagemusha TODO runner-input content scan inventory drift was not detected"
+        "negative control failed: active Kagemusha TODO runner-input content scan inventory drift was not detected"
     )
 
 if mode == "--negative-control-readiness-section-consistency":
@@ -11783,6 +13339,79 @@ if mode == "--negative-control-doc-abi-entry-count":
         print(message.splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: documented ABI-6 entry-count drift was not detected")
+
+if mode == "--negative-control-doc-retired-wording":
+    target = "docs/source/offline_kagemusha.md"
+    source = read(target)
+    cases = (
+        (
+            "runtime bearer-audit dispatch is not available",
+            "there is no runtime legacy bearer-audit fallback",
+            "runtime legacy bearer-audit fallback",
+        ),
+        (
+            "pre-existing Halo2\nproof-envelope wrappers remain scoped to semantic v1 preverification",
+            "legacy Halo2 proof-envelope wrappers remain accepted only for semantic v1 preverification",
+            "legacy Halo2 proof-envelope",
+        ),
+        (
+            "wildcard during Offline recursive proof admission either",
+            "wildcard in legacy Offline recursive proof admission either",
+            "legacy Offline recursive proof admission",
+        ),
+        (
+            "Torii issue/redeem endpoints reject retired payment\nconstruction",
+            "Torii issue/redeem endpoints reject classic payment\nconstruction",
+            "classic payment construction",
+        ),
+        (
+            "routed to the retired structured parser",
+            "routed to the classic parser",
+            "classic parser",
+        ),
+        (
+            "clients reject retired note issue locally",
+            "clients reject classic note issue locally",
+            "classic note issue",
+        ),
+    )
+    first_message = None
+    for before, after, label in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit(
+                "negative control failed: unable to mutate documented retired-mode wording for "
+                + label
+            )
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            expected = (
+                "docs/source/offline_kagemusha.md contains stale retired-mode wording: "
+                + label
+            )
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: documented retired-mode wording drift was rejected "
+                    "for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit(
+            "negative control failed: documented retired-mode wording drift was not detected for "
+            + label
+        )
+    if first_message is None:
+        raise SystemExit("negative control failed: documented retired-mode wording drift was not detected")
+    print("negative control rejected documented retired-mode wording drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-roadmap-abi-surface":
     target = "roadmap.md"

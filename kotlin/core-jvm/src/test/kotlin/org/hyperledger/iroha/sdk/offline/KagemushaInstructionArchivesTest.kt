@@ -48,7 +48,7 @@ class KagemushaInstructionArchivesTest {
             metadata = mapOf(
                 "mode" to "kagemusha\n\"quoted\"",
                 "typed" to JsonValue.string("kagemusha"),
-                "legacy" to "string metadata",
+                "fixture" to "string metadata",
                 "enabled" to true,
                 "attempt" to 3,
             ),
@@ -63,7 +63,7 @@ class KagemushaInstructionArchivesTest {
         assertContentEquals(expectedArchive, wire.payloadBytes)
         assertEquals(JsonValue.string("kagemusha\n\"quoted\""), payload.metadata["mode"])
         assertEquals(JsonValue.string("kagemusha"), payload.metadata["typed"])
-        assertEquals(JsonValue.string("string metadata"), payload.metadata["legacy"])
+        assertEquals(JsonValue.string("string metadata"), payload.metadata["fixture"])
         assertEquals(JsonValue.bool(true), payload.metadata["enabled"])
         assertEquals(JsonValue.raw("3"), payload.metadata["attempt"])
 

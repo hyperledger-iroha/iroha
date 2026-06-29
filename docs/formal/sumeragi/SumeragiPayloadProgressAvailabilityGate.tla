@@ -223,8 +223,12 @@ PayloadProgressAvailabilityCoreSafety ==
   /\ InvalidOwnersDoNotFallThroughToFallbackStores
 
 PayloadProgressAvailabilityExactness ==
-  PayloadProgressAvailabilityCoreSafety
-
+  /\ ActionsMatchSpec
+  /\ PendingPayloadOwnersGateProgress
+  /\ InflightPayloadOwnersGateProgress
+  /\ FallbackPayloadStoresGateProgress
+  /\ HashOnlyAndAbsentPayloadsDoNotGateProgress
+  /\ InvalidOwnersDoNotFallThroughToFallbackStores
 PayloadProgressAvailabilityCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ PayloadProgressAvailabilityExactness

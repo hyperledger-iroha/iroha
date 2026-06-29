@@ -227,5 +227,26 @@ BugGcZeroCooldownUsesZero ==
   ImplementationActions(GcZeroCooldownUsesOneSecond) =
     SpecActions(GcZeroCooldownUsesOneSecond)
 
+ProposalDeferWarningThrottleExactness ==
+  /\ BugFirstSuppressed
+  /\ BugWithinCooldownLogs
+  /\ BugCooldownBoundarySuppressed
+  /\ BugSuppressedCountLost
+  /\ BugDifferentKindCollides
+  /\ BugDifferentHashCollides
+  /\ BugDifferentHeightCollides
+  /\ BugRegularViewNormalized
+  /\ BugEmptyProposalViewNotNormalized
+  /\ BugEmptyFinalizeViewNotNormalized
+  /\ BugEmptyTopologyKindsCollide
+  /\ BugZeroCooldownSuppresses
+  /\ BugGcBoundaryPruned
+  /\ BugGcExpiredRetained
+  /\ BugGcZeroCooldownUsesZero
+
+ProposalDeferWarningThrottleCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ProposalDeferWarningThrottleExactness
+
 =============================================================================
 ====

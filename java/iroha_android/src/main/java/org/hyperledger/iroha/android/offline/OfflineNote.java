@@ -28,8 +28,8 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 /**
- * Archived classic Offline Note model/codec helpers retained for compatibility
- * fixtures; production offline payments use Kagemusha.
+ * Archived classic Offline Note model/codec helpers kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
  */
 public final class OfflineNote {
   public static final String KEY_CERTIFICATE_PAYLOAD_DOMAIN =
@@ -86,8 +86,8 @@ public final class OfflineNote {
   private static final String PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimage";
   /**
-   * Historical classic Offline Note instruction wire names retained only for
-   * compatibility fixture decoding; production offline payments use Kagemusha flows.
+   * Historical classic Offline Note instruction wire names kept only for
+   * fixture-only decoding; production offline payments use Kagemusha flows.
    */
   public static final String ISSUE_INSTRUCTION_SCHEMA =
       "iroha_data_model::isi::offline::IssueOfflineNote";

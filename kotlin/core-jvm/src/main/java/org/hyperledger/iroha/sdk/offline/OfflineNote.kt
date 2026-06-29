@@ -19,8 +19,8 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /**
- * Archived classic Offline Note model/codec helpers retained for compatibility
- * fixtures; production offline payments use Kagemusha.
+ * Archived classic Offline Note model/codec helpers kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
  */
 object OfflineNote {
     const val KEY_CERTIFICATE_PAYLOAD_DOMAIN: String =
@@ -78,8 +78,8 @@ object OfflineNote {
     private const val PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimage"
     /**
-     * Historical classic Offline Note instruction wire names retained only for
-     * compatibility fixture decoding; production offline payments use Kagemusha
+     * Historical classic Offline Note instruction wire names kept only for
+     * fixture-only decoding; production offline payments use Kagemusha
      * flows.
      */
     const val ISSUE_INSTRUCTION_SCHEMA: String =

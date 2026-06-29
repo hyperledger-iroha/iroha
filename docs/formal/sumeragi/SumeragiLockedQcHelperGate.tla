@@ -255,7 +255,7 @@ LockedQcHelperCoreSafety ==
     ImplementationActions(c) = SpecActions(c)
 
 LockedQcHelperExactness ==
-  LockedQcHelperCoreSafety
+  /\ LockedQcHelperCoreSafety
 
 LockedQcHelperCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -225,4 +225,23 @@ UnsafeProposalsRejected ==
 ConflictingLockOverwritesRejected ==
   ~unsafeLockOverwrite
 
+ViewChangeSafetyAggregate ==
+  /\ CurrentViewNeverRewinds
+  /\ StaleNewViewCertificatesRejected
+  /\ HighestQcDominatesAcceptedEvidence
+  /\ HighestQcNeverRegresses
+  /\ UnsafeProposalsRejected
+  /\ ConflictingLockOverwritesRejected
+
+ViewChangeSafetyExactness ==
+  /\ ViewChangeSafetyAggregate
+
+ViewChangeSafetyCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ViewChangeSafetyExactness
+
+NoBugInvariant == ViewChangeSafetyAggregate
+
+Safety == ViewChangeSafetyAggregate
+
 ====

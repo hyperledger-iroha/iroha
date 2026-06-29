@@ -326,9 +326,13 @@ SafetyAnchors ==
   /\ SnapshotProjectionAnchors
   /\ ResetAnchors
 
+ViewChangeProofStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 ViewChangeProofStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ ViewChangeProofStatusExactness
 
 ====

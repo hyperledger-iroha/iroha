@@ -217,9 +217,12 @@ Next ==
 TypeInvariant ==
   checked \in 0..19
 
-BlockSyncWarningThrottleExactness ==
+BlockSyncWarningThrottleActionsMatchSpec ==
   \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+BlockSyncWarningThrottleExactness ==
+  /\ BlockSyncWarningThrottleActionsMatchSpec
 
 BlockSyncWarningThrottleCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -328,8 +328,11 @@ NoBugInvariant == RosterRecoveryFsmCoreSafety
 
 SafetyFast == RosterRecoveryFsmCoreSafety
 
+RosterRecoveryFsmExactness ==
+  /\ RosterRecoveryFsmCoreSafety
+
 RosterRecoveryFsmCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ RosterRecoveryFsmCoreSafety
+  /\ RosterRecoveryFsmExactness
 
 ====

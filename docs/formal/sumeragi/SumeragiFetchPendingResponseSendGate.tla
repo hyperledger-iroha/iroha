@@ -291,7 +291,7 @@ FetchPendingResponseSendMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 FetchPendingResponseSendExactness ==
-  FetchPendingResponseSendMatchesSpec
+  /\ FetchPendingResponseSendMatchesSpec
 
 FetchPendingResponseSendCorrectnessEnvelope ==
   /\ TypeInvariant

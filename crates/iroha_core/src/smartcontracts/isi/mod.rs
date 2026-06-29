@@ -300,6 +300,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
     dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>,
     dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::RemoveFeeSponsorPolicy>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,

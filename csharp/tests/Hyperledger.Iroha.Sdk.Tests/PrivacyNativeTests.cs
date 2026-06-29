@@ -7,6 +7,8 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class PrivacyNativeTests
 {
+    private const int ConfidentialProofMaxBytes = 32 * 1024 * 1024;
+
     private static readonly IReadOnlyList<(string Label, Func<byte[], PrivacyProofResultArchive> Helper)>
         PrivacyProofArchiveHelpers = new List<(string, Func<byte[], PrivacyProofResultArchive>)>
         {
@@ -160,10 +162,10 @@ public sealed class PrivacyNativeTests
         var maxPaddedCapabilities =
             new PrivacyCapabilitiesArchive(PrivacyNoritoFrameWithPadding(0x50, 64));
         Assert.Equal(PrivacyNoritoFrameWithPadding(0x50, 64), maxPaddedCapabilities.NoritoBytes);
-        var capabilitiesSchemaError = Assert.Throws<ArgumentException>(() =>
-            new PrivacyCapabilitiesArchive(PrivacyNoritoFrameWithPayload(0x42)));
-        Assert.Contains("expected privacy result schema", capabilitiesSchemaError.Message);
-        Assert.Equal("noritoBytes", capabilitiesSchemaError.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must use the expected privacy result schema.",
+            "noritoBytes",
+            () => new PrivacyCapabilitiesArchive(PrivacyNoritoFrameWithPayload(0x42)));
 
         var proofBytes = PrivacyNoritoFrameWithPayload(0x42);
         var proof = new PrivacyProofResultArchive(proofBytes);
@@ -175,10 +177,10 @@ public sealed class PrivacyNativeTests
         Assert.Equal(PrivacyNoritoFrameWithPayload(0x42), proof.NoritoBytes);
         var verifyProof = new PrivacyProofResultArchive(PrivacyNoritoFrameWithPayload(0x56));
         Assert.Equal(PrivacyNoritoFrameWithPayload(0x56), verifyProof.NoritoBytes);
-        var proofSchemaError = Assert.Throws<ArgumentException>(() =>
-            new PrivacyProofResultArchive(PrivacyNoritoFrameWithPayload(0x50)));
-        Assert.Contains("expected privacy result schema", proofSchemaError.Message);
-        Assert.Equal("noritoBytes", proofSchemaError.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must use the expected privacy result schema.",
+            "noritoBytes",
+            () => new PrivacyProofResultArchive(PrivacyNoritoFrameWithPayload(0x50)));
 
         var requestBytes = PrivacyNoritoFrameWithPayload(0x52);
         var request = new PrivacyProofRequestArchive(requestBytes);
@@ -188,10 +190,10 @@ public sealed class PrivacyNativeTests
         Assert.Equal(PrivacyNoritoFrameWithPayload(0x52), firstRequestRead);
         firstRequestRead[3] = 0x7f;
         Assert.Equal(PrivacyNoritoFrameWithPayload(0x52), request.NoritoBytes);
-        var requestSchemaError = Assert.Throws<ArgumentException>(() =>
-            new PrivacyProofRequestArchive(PrivacyNoritoFrameWithPayload(0x42)));
-        Assert.Contains("expected privacy result schema", requestSchemaError.Message);
-        Assert.Equal("noritoBytes", requestSchemaError.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must use the expected privacy result schema.",
+            "noritoBytes",
+            () => new PrivacyProofRequestArchive(PrivacyNoritoFrameWithPayload(0x42)));
     }
 
     [Fact]
@@ -208,49 +210,74 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeArchiveWrappersRejectUnsafeNoritoBytes()
     {
-        var capabilitiesError = Assert.Throws<ArgumentException>(() =>
-            new PrivacyCapabilitiesArchive(Array.Empty<byte>()));
-        Assert.Contains("must not be empty", capabilitiesError.Message);
-        Assert.Equal("noritoBytes", capabilitiesError.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must not be empty.",
+            "noritoBytes",
+            () => new PrivacyCapabilitiesArchive(Array.Empty<byte>()));
 
-        var proofError = Assert.Throws<ArgumentException>(() =>
-            new PrivacyProofResultArchive(Array.Empty<byte>()));
-        Assert.Contains("must not be empty", proofError.Message);
-        Assert.Equal("noritoBytes", proofError.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must not be empty.",
+            "noritoBytes",
+            () => new PrivacyProofResultArchive(Array.Empty<byte>()));
 
-        var emptyPayloadCapabilities = Assert.Throws<ArgumentException>(() =>
-            new PrivacyCapabilitiesArchive(PrivacyNoritoFrame(0x50)));
-        Assert.Contains("non-empty privacy result payload", emptyPayloadCapabilities.Message);
-        Assert.Equal("noritoBytes", emptyPayloadCapabilities.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must not be empty.",
+            "noritoBytes",
+            () => new PrivacyProofRequestArchive(Array.Empty<byte>()));
 
-        var emptyPayloadBuildProof = Assert.Throws<ArgumentException>(() =>
-            new PrivacyProofResultArchive(PrivacyNoritoFrame(0x42)));
-        Assert.Contains("non-empty privacy result payload", emptyPayloadBuildProof.Message);
-        Assert.Equal("noritoBytes", emptyPayloadBuildProof.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must contain a non-empty privacy result payload.",
+            "noritoBytes",
+            () => new PrivacyCapabilitiesArchive(PrivacyNoritoFrame(0x50)));
 
-        var emptyPayloadVerifyProof = Assert.Throws<ArgumentException>(() =>
-            new PrivacyProofResultArchive(PrivacyNoritoFrame(0x56)));
-        Assert.Contains("non-empty privacy result payload", emptyPayloadVerifyProof.Message);
-        Assert.Equal("noritoBytes", emptyPayloadVerifyProof.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must contain a non-empty privacy result payload.",
+            "noritoBytes",
+            () => new PrivacyProofResultArchive(PrivacyNoritoFrame(0x42)));
+
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must contain a non-empty privacy result payload.",
+            "noritoBytes",
+            () => new PrivacyProofResultArchive(PrivacyNoritoFrame(0x56)));
+
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must contain a non-empty privacy result payload.",
+            "noritoBytes",
+            () => new PrivacyProofRequestArchive(PrivacyNoritoFrame(0x52)));
 
         foreach (var malformed in InvalidPrivacyRequestArchives())
         {
-            var malformedCapabilities = Assert.Throws<ArgumentException>(() =>
-                new PrivacyCapabilitiesArchive(malformed));
-            Assert.Contains("valid Norito V1 archive", malformedCapabilities.Message);
-            Assert.Equal("noritoBytes", malformedCapabilities.ParamName);
+            AssertArgumentDiagnostic(
+                "Norito V1 archive must be a valid Norito V1 archive.",
+                "noritoBytes",
+                () => new PrivacyCapabilitiesArchive(malformed));
 
-            var malformedProof = Assert.Throws<ArgumentException>(() =>
-                new PrivacyProofResultArchive(malformed));
-            Assert.Contains("valid Norito V1 archive", malformedProof.Message);
-            Assert.Equal("noritoBytes", malformedProof.ParamName);
+            AssertArgumentDiagnostic(
+                "Norito V1 archive must be a valid Norito V1 archive.",
+                "noritoBytes",
+                () => new PrivacyProofResultArchive(malformed));
+
+            AssertArgumentDiagnostic(
+                "Norito V1 archive must be a valid Norito V1 archive.",
+                "noritoBytes",
+                () => new PrivacyProofRequestArchive(malformed));
         }
 
         var oversized = new byte[PrivacyNative.PrivacyNativeArchiveMaxBytes + 1];
-        var oversizedCapabilities = Assert.Throws<ArgumentException>(() =>
-            new PrivacyCapabilitiesArchive(oversized));
-        Assert.Contains("must not exceed", oversizedCapabilities.Message);
-        Assert.Equal("noritoBytes", oversizedCapabilities.ParamName);
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must not exceed 67108864 bytes.",
+            "noritoBytes",
+            () => new PrivacyCapabilitiesArchive(oversized));
+
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must not exceed 67108864 bytes.",
+            "noritoBytes",
+            () => new PrivacyProofResultArchive(oversized));
+
+        AssertArgumentDiagnostic(
+            "Norito V1 archive must not exceed 67108864 bytes.",
+            "noritoBytes",
+            () => new PrivacyProofRequestArchive(oversized));
     }
 
     [Fact]
@@ -258,13 +285,15 @@ public sealed class PrivacyNativeTests
     {
         foreach (var (_, helper) in PrivacyProofArchiveHelpers)
         {
-            Assert.Throws<ArgumentException>(
+            AssertArgumentDiagnostic(
+                "Request archive must not be empty.",
+                "requestArchive",
                 () => helper(Array.Empty<byte>()));
 
-            var emptyPayload = Assert.Throws<ArgumentException>(
+            AssertArgumentDiagnostic(
+                "Request archive must contain a non-empty privacy request payload.",
+                "requestArchive",
                 () => helper(PrivacyNoritoFrame(0x52)));
-            Assert.Contains("non-empty privacy request payload", emptyPayload.Message);
-            Assert.Equal("requestArchive", emptyPayload.ParamName);
         }
     }
 
@@ -275,9 +304,10 @@ public sealed class PrivacyNativeTests
 
         foreach (var (_, helper) in PrivacyProofArchiveHelpers)
         {
-            var error = Assert.Throws<ArgumentException>(() => helper(oversized));
-            Assert.Contains("must not exceed", error.Message);
-            Assert.Equal("requestArchive", error.ParamName);
+            AssertArgumentDiagnostic(
+                "Request archive must not exceed 67108864 bytes.",
+                "requestArchive",
+                () => helper(oversized));
         }
     }
 
@@ -409,8 +439,10 @@ public sealed class PrivacyNativeTests
     public void PrivacyNativeRejectsInvalidProofRequestArchivesBeforeNativeDispatch()
     {
         var emptyPayloadRequest = PrivacyNoritoFrame(0x52);
-        var emptyBuildPayloadError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.CallProof(
+        AssertArgumentDiagnostic(
+            "Request archive must contain a non-empty privacy request payload.",
+            "requestArchive",
+            () => PrivacyNative.CallProof(
                 emptyPayloadRequest,
                 "iroha_privacy_build_proof_v1",
                 (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -419,8 +451,10 @@ public sealed class PrivacyNativeTests
                         "empty-payload build request reached native dispatch");
                 },
                 requireAbi: false));
-        var emptyVerifyPayloadError = Assert.Throws<ArgumentException>(() =>
-            PrivacyNative.CallProof(
+        AssertArgumentDiagnostic(
+            "Request archive must contain a non-empty privacy request payload.",
+            "requestArchive",
+            () => PrivacyNative.CallProof(
                 emptyPayloadRequest,
                 "iroha_privacy_verify_proof_v1",
                 (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -430,19 +464,12 @@ public sealed class PrivacyNativeTests
                 },
                 requireAbi: false));
 
-        Assert.Contains(
-            "non-empty privacy request payload",
-            emptyBuildPayloadError.Message);
-        Assert.Contains(
-            "non-empty privacy request payload",
-            emptyVerifyPayloadError.Message);
-        Assert.Equal("requestArchive", emptyBuildPayloadError.ParamName);
-        Assert.Equal("requestArchive", emptyVerifyPayloadError.ParamName);
-
         foreach (var malformed in InvalidPrivacyRequestArchives())
         {
-            var buildError = Assert.Throws<ArgumentException>(() =>
-                PrivacyNative.CallProof(
+            AssertArgumentDiagnostic(
+                "Request archive must be a valid Norito V1 archive.",
+                "requestArchive",
+                () => PrivacyNative.CallProof(
                     malformed,
                     "iroha_privacy_build_proof_v1",
                     (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -451,8 +478,10 @@ public sealed class PrivacyNativeTests
                             "invalid build request reached native dispatch");
                     },
                     requireAbi: false));
-            var verifyError = Assert.Throws<ArgumentException>(() =>
-                PrivacyNative.CallProof(
+            AssertArgumentDiagnostic(
+                "Request archive must be a valid Norito V1 archive.",
+                "requestArchive",
+                () => PrivacyNative.CallProof(
                     malformed,
                     "iroha_privacy_verify_proof_v1",
                     (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -461,11 +490,6 @@ public sealed class PrivacyNativeTests
                             "invalid verify request reached native dispatch");
                     },
                     requireAbi: false));
-
-            Assert.Contains("valid Norito V1 archive", buildError.Message);
-            Assert.Contains("valid Norito V1 archive", verifyError.Message);
-            Assert.Equal("requestArchive", buildError.ParamName);
-            Assert.Equal("requestArchive", verifyError.ParamName);
         }
     }
 
@@ -474,8 +498,10 @@ public sealed class PrivacyNativeTests
     {
         foreach (var forgedRequest in WrongSchemaPrivacyRequestArchives())
         {
-            var buildError = Assert.Throws<ArgumentException>(() =>
-                PrivacyNative.CallProof(
+            AssertArgumentDiagnostic(
+                "Request archive must use the privacy request schema.",
+                "requestArchive",
+                () => PrivacyNative.CallProof(
                     forgedRequest,
                     "iroha_privacy_build_proof_v1",
                     (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -484,8 +510,10 @@ public sealed class PrivacyNativeTests
                             "wrong-schema build request reached native dispatch");
                     },
                     requireAbi: false));
-            var verifyError = Assert.Throws<ArgumentException>(() =>
-                PrivacyNative.CallProof(
+            AssertArgumentDiagnostic(
+                "Request archive must use the privacy request schema.",
+                "requestArchive",
+                () => PrivacyNative.CallProof(
                     forgedRequest,
                     "iroha_privacy_verify_proof_v1",
                     (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -494,11 +522,6 @@ public sealed class PrivacyNativeTests
                             "wrong-schema verify request reached native dispatch");
                     },
                     requireAbi: false));
-
-            Assert.Contains("privacy request schema", buildError.Message);
-            Assert.Contains("privacy request schema", verifyError.Message);
-            Assert.Equal("requestArchive", buildError.ParamName);
-            Assert.Equal("requestArchive", verifyError.ParamName);
         }
     }
 
@@ -556,17 +579,15 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeReadOutputPropagatesBridgeErrors()
     {
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.ReadPrivacyOutput(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_verify_proof_v1 failed with bridge error code -311.",
+            () => PrivacyNative.ReadPrivacyOutput(
                 "iroha_privacy_verify_proof_v1",
                 -311,
                 IntPtr.Zero,
                 UIntPtr.Zero,
                 _ => { },
                 PrivacyNative.PrivacyVerifyProofResultSchemaByte));
-
-        Assert.Contains("iroha_privacy_verify_proof_v1", error.Message);
-        Assert.Contains("-311", error.Message);
     }
 
     [Fact]
@@ -575,8 +596,9 @@ public sealed class PrivacyNativeTests
         var freed = false;
         var pointer = new IntPtr(1);
 
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.ReadPrivacyOutput(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_verify_proof_v1 failed with bridge error code -311.",
+            () => PrivacyNative.ReadPrivacyOutput(
                 "iroha_privacy_verify_proof_v1",
                 -311,
                 pointer,
@@ -589,22 +611,20 @@ public sealed class PrivacyNativeTests
                 PrivacyNative.PrivacyVerifyProofResultSchemaByte));
 
         Assert.True(freed);
-        Assert.Contains("-311", error.Message);
     }
 
     [Fact]
     public void PrivacyNativeReadOutputRejectsNullSuccessPointer()
     {
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.ReadPrivacyOutput(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_build_proof_v1 returned a null output pointer.",
+            () => PrivacyNative.ReadPrivacyOutput(
                 "iroha_privacy_build_proof_v1",
                 0,
                 IntPtr.Zero,
                 UIntPtr.Zero,
                 _ => { },
                 PrivacyNative.PrivacyBuildProofResultSchemaByte));
-
-        Assert.Contains("null output pointer", error.Message);
     }
 
     [Fact]
@@ -613,8 +633,9 @@ public sealed class PrivacyNativeTests
         var freed = false;
         var pointer = new IntPtr(1);
 
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.ReadPrivacyOutput(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_capabilities_v1 returned empty output.",
+            () => PrivacyNative.ReadPrivacyOutput(
                 "iroha_privacy_capabilities_v1",
                 0,
                 pointer,
@@ -627,7 +648,6 @@ public sealed class PrivacyNativeTests
                 PrivacyNative.PrivacyCapabilitiesResultSchemaByte));
 
         Assert.True(freed);
-        Assert.Contains("empty output", error.Message);
     }
 
     [Fact]
@@ -648,22 +668,22 @@ public sealed class PrivacyNativeTests
         {
             Marshal.Copy(bytes, 0, pointer, bytes.Length);
 
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                PrivacyNative.ReadPrivacyOutput(
-                    symbol,
-                    0,
-                    pointer,
-                    (UIntPtr)bytes.Length,
-                    ptr =>
-                    {
-                        Assert.Equal(pointer, ptr);
-                        Marshal.FreeHGlobal(ptr);
-                        freed = true;
-                    },
-                    schemaByte));
+            AssertInvalidOperationDiagnostic(
+                $"{symbol} returned empty privacy result payload.",
+                () => PrivacyNative.ReadPrivacyOutput(
+                        symbol,
+                        0,
+                        pointer,
+                        (UIntPtr)bytes.Length,
+                        ptr =>
+                        {
+                            Assert.Equal(pointer, ptr);
+                            Marshal.FreeHGlobal(ptr);
+                            freed = true;
+                        },
+                        schemaByte));
 
             Assert.True(freed);
-            Assert.Contains("empty privacy result payload", error.Message);
             pointer = IntPtr.Zero;
         }
         finally
@@ -682,8 +702,9 @@ public sealed class PrivacyNativeTests
         var pointer = new IntPtr(1);
         var oversizedLength = (UIntPtr)((ulong)PrivacyNative.PrivacyNativeArchiveMaxBytes + 1UL);
 
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.ReadPrivacyOutput(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_capabilities_v1 returned oversized output.",
+            () => PrivacyNative.ReadPrivacyOutput(
                 "iroha_privacy_capabilities_v1",
                 0,
                 pointer,
@@ -696,7 +717,6 @@ public sealed class PrivacyNativeTests
                 PrivacyNative.PrivacyCapabilitiesResultSchemaByte));
 
         Assert.True(freed);
-        Assert.Contains("oversized output", error.Message);
     }
 
     [Fact]
@@ -785,24 +805,24 @@ public sealed class PrivacyNativeTests
             {
                 Marshal.Copy(bytes, 0, pointer, bytes.Length);
 
-                var error = Assert.Throws<InvalidOperationException>(() =>
-                    PrivacyNative.ReadPrivacyOutput(
-                        "iroha_privacy_capabilities_v1",
-                        0,
-                        pointer,
-                        (UIntPtr)bytes.Length,
-                        ptr =>
-                        {
-                            Assert.Equal(pointer, ptr);
-                            AssertPointerZeroed(ptr, bytes.Length);
-                            Marshal.FreeHGlobal(ptr);
-                            pointer = IntPtr.Zero;
-                            freed = true;
-                        },
-                        PrivacyNative.PrivacyCapabilitiesResultSchemaByte));
+                AssertInvalidOperationDiagnostic(
+                    "iroha_privacy_capabilities_v1 returned invalid Norito V1 archive.",
+                    () => PrivacyNative.ReadPrivacyOutput(
+                            "iroha_privacy_capabilities_v1",
+                            0,
+                            pointer,
+                            (UIntPtr)bytes.Length,
+                            ptr =>
+                            {
+                                Assert.Equal(pointer, ptr);
+                                AssertPointerZeroed(ptr, bytes.Length);
+                                Marshal.FreeHGlobal(ptr);
+                                pointer = IntPtr.Zero;
+                                freed = true;
+                            },
+                            PrivacyNative.PrivacyCapabilitiesResultSchemaByte));
 
                 Assert.True(freed);
-                Assert.Contains("invalid Norito V1 archive", error.Message);
             }
             finally
             {
@@ -841,22 +861,22 @@ public sealed class PrivacyNativeTests
         {
             Marshal.Copy(bytes, 0, pointer, bytes.Length);
 
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                PrivacyNative.ReadPrivacyOutput(
-                    "iroha_privacy_capabilities_v1",
-                    0,
-                    pointer,
-                    (UIntPtr)bytes.Length,
-                    ptr =>
-                    {
-                        Assert.Equal(pointer, ptr);
-                        Marshal.FreeHGlobal(ptr);
-                        pointer = IntPtr.Zero;
-                        freed = true;
-                    }));
+            AssertInvalidOperationDiagnostic(
+                "iroha_privacy_capabilities_v1 requires explicit privacy result schemas.",
+                () => PrivacyNative.ReadPrivacyOutput(
+                        "iroha_privacy_capabilities_v1",
+                        0,
+                        pointer,
+                        (UIntPtr)bytes.Length,
+                        ptr =>
+                        {
+                            Assert.Equal(pointer, ptr);
+                            Marshal.FreeHGlobal(ptr);
+                            pointer = IntPtr.Zero;
+                            freed = true;
+                        }));
 
             Assert.True(freed);
-            Assert.Contains("requires explicit privacy result schemas", error.Message);
         }
         finally
         {
@@ -877,25 +897,23 @@ public sealed class PrivacyNativeTests
         {
             Marshal.Copy(bytes, 0, pointer, bytes.Length);
 
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                PrivacyNative.ReadPrivacyOutput(
-                    "iroha_privacy_verify_proof_v1",
-                    0,
-                    pointer,
-                    (UIntPtr)bytes.Length,
-                    ptr =>
-                    {
-                        Assert.Equal(pointer, ptr);
-                        Marshal.FreeHGlobal(ptr);
-                        pointer = IntPtr.Zero;
-                        freed = true;
-                    },
-                    PrivacyNative.PrivacyBuildProofResultSchemaByte));
+            AssertInvalidOperationDiagnostic(
+                "iroha_privacy_verify_proof_v1 expected privacy result schemas do not match the supported operation.",
+                () => PrivacyNative.ReadPrivacyOutput(
+                        "iroha_privacy_verify_proof_v1",
+                        0,
+                        pointer,
+                        (UIntPtr)bytes.Length,
+                        ptr =>
+                        {
+                            Assert.Equal(pointer, ptr);
+                            Marshal.FreeHGlobal(ptr);
+                            pointer = IntPtr.Zero;
+                            freed = true;
+                        },
+                        PrivacyNative.PrivacyBuildProofResultSchemaByte));
 
             Assert.True(freed);
-            Assert.Contains(
-                "expected privacy result schemas do not match",
-                error.Message);
         }
         finally
         {
@@ -915,8 +933,9 @@ public sealed class PrivacyNativeTests
             PrivacyNative.PrivacyCapabilitiesResultSchemaByte);
 
         var invoked = false;
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.CallProof(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_forged_operation_v1 is not a supported privacy native operation.",
+            () => PrivacyNative.CallProof(
                 PrivacyNoritoFrameWithPayload(0x52),
                 "iroha_privacy_forged_operation_v1",
                 (byte[] request, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -930,7 +949,6 @@ public sealed class PrivacyNativeTests
                 free: _ => { }));
 
         Assert.False(invoked);
-        Assert.Contains("not a supported privacy native operation", error.Message);
     }
 
     [Fact]
@@ -1006,8 +1024,9 @@ public sealed class PrivacyNativeTests
         var requestArchive = PrivacyNoritoFrameWithPayload(0x52);
         byte[]? capturedRequest = null;
 
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            PrivacyNative.CallProof(
+        AssertInvalidOperationDiagnostic(
+            "iroha_privacy_build_proof_v1 failed with bridge error code -311.",
+            () => PrivacyNative.CallProof(
                 requestArchive,
                 "iroha_privacy_build_proof_v1",
                 (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
@@ -1020,7 +1039,6 @@ public sealed class PrivacyNativeTests
                 },
                 requireAbi: false));
 
-        Assert.Contains("-311", error.Message);
         Assert.NotNull(capturedRequest);
         Assert.True(Array.TrueForAll(capturedRequest!, value => value == 0));
         Assert.Equal(PrivacyNoritoFrameWithPayload(0x52), requestArchive);
@@ -1078,29 +1096,127 @@ public sealed class PrivacyNativeTests
     }
 
     [Fact]
+    public void PrivacyNativeProofRequestComponentsReportParameterSpecificDiagnosticsBeforeNativeDispatch()
+    {
+        AssertArgumentDiagnostic(
+            "publicInputs must not be empty.",
+            "publicInputs",
+            () => PrivacyNative.CallProofRequest(
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                "halo2-ipa-pasta:confidential_transfer_v2",
+                ReadOnlySpan<byte>.Empty,
+                ReadOnlySpan<byte>.Empty,
+                ReadOnlySpan<byte>.Empty,
+                ProofRequestNativeCallThatMustNotRun,
+                requireAbi: false));
+
+        var oversizedWitness = new byte[ConfidentialProofMaxBytes + 1];
+        AssertArgumentDiagnostic(
+            "witness must not exceed 33554432 bytes.",
+            "witness",
+            () => PrivacyNative.CallProofRequest(
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                "halo2-ipa-pasta:confidential_transfer_v2",
+                new byte[] { 0x54 },
+                oversizedWitness,
+                ReadOnlySpan<byte>.Empty,
+                ProofRequestNativeCallThatMustNotRun,
+                requireAbi: false));
+
+        var oversizedProof = new byte[ConfidentialProofMaxBytes + 1];
+        AssertArgumentDiagnostic(
+            "proof must not exceed 33554432 bytes.",
+            "proof",
+            () => PrivacyNative.CallProofRequest(
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                "halo2-ipa-pasta:confidential_transfer_v2",
+                new byte[] { 0x54 },
+                ReadOnlySpan<byte>.Empty,
+                oversizedProof,
+                ProofRequestNativeCallThatMustNotRun,
+                requireAbi: false));
+    }
+
+    [Fact]
+    public void PrivacyNativeConfidentialVerifyRequestsRejectOversizedProofBeforeNativeDispatch()
+    {
+        foreach (var (algorithmId, entrypoint, vkRef, publicInputSchema) in new[]
+                 {
+                     (
+                         "confidential-transfer-v2",
+                         "buildConfidentialTransferProofV2",
+                         "halo2-ipa-pasta:confidential_transfer_v2",
+                         new byte[] { 0x54 }),
+                     (
+                         "unshield",
+                         "buildConfidentialUnshieldProofV3",
+                         "halo2-ipa-pasta:confidential_unshield_v3",
+                         new byte[] { 0x55 }),
+                 })
+        {
+            var oversizedProof = new byte[ConfidentialProofMaxBytes + 1];
+
+            AssertArgumentDiagnostic(
+                "proof must not exceed 33554432 bytes.",
+                "proof",
+                () => PrivacyNative.CallProofRequest(
+                    algorithmId,
+                    entrypoint,
+                    vkRef,
+                    publicInputSchema,
+                    ReadOnlySpan<byte>.Empty,
+                    oversizedProof,
+                    ProofRequestNativeCallThatMustNotRun,
+                    requireAbi: false));
+        }
+    }
+
+    [Fact]
     public void PrivacyNativeRejectsMalformedProofRequestsBeforeLoadingNativeBridge()
     {
         var emptyPayloadRequest = PrivacyNoritoFrame(0x52);
         foreach (var (_, helper) in PrivacyProofArchiveHelpers)
         {
-            var emptyPayloadError = Assert.Throws<ArgumentException>(() =>
-                helper(emptyPayloadRequest));
-            Assert.Contains(
-                "non-empty privacy request payload",
-                emptyPayloadError.Message);
-            Assert.Equal("requestArchive", emptyPayloadError.ParamName);
+            AssertArgumentDiagnostic(
+                "Request archive must contain a non-empty privacy request payload.",
+                "requestArchive",
+                () => helper(emptyPayloadRequest));
         }
 
         foreach (var malformed in InvalidPrivacyRequestArchives())
         {
             foreach (var (_, helper) in PrivacyProofArchiveHelpers)
             {
-                var error = Assert.Throws<ArgumentException>(() =>
-                    helper(malformed));
-                Assert.Contains("valid Norito V1 archive", error.Message);
-                Assert.Equal("requestArchive", error.ParamName);
+                AssertArgumentDiagnostic(
+                    "Request archive must be a valid Norito V1 archive.",
+                    "requestArchive",
+                    () => helper(malformed));
             }
         }
+    }
+
+    private static int ProofRequestNativeCallThatMustNotRun(
+        byte[] algorithmIdPtr,
+        UIntPtr algorithmIdLen,
+        byte[] entrypointPtr,
+        UIntPtr entrypointLen,
+        byte[] vkRefPtr,
+        UIntPtr vkRefLen,
+        byte[] publicInputsPtr,
+        UIntPtr publicInputsLen,
+        byte[] witnessPtr,
+        UIntPtr witnessLen,
+        byte[] proofPtr,
+        UIntPtr proofLen,
+        out IntPtr outPtr,
+        out UIntPtr outLen)
+    {
+        outPtr = IntPtr.Zero;
+        outLen = UIntPtr.Zero;
+        throw new InvalidOperationException("invalid privacy request reached native dispatch");
     }
 
     private static void AssertFailClosedProductionGate(PrivacyCapabilities capabilities)
@@ -1163,6 +1279,30 @@ public sealed class PrivacyNativeTests
             capabilities.ProductionGate.Missing);
     }
 
+    private static void AssertArgumentDiagnostic(
+        string expectedMessage,
+        string expectedParameterName,
+        Action action)
+    {
+        var error = Assert.Throws<ArgumentException>(action);
+        Assert.Equal(expectedParameterName, error.ParamName);
+        Assert.True(
+            error.Message.Length >= expectedMessage.Length
+            && (error.Message.Length == expectedMessage.Length
+                || error.Message[expectedMessage.Length] == ' '),
+            $"unexpected diagnostic suffix: {error.Message}");
+        Assert.Equal(expectedMessage, error.Message[..expectedMessage.Length]);
+    }
+
+    private static InvalidOperationException AssertInvalidOperationDiagnostic(
+        string expectedMessage,
+        Action action)
+    {
+        var error = Assert.Throws<InvalidOperationException>(action);
+        Assert.Equal(expectedMessage, error.Message);
+        return error;
+    }
+
     private static void AssertSanitizedNativeFailure(
         InvalidOperationException error,
         string message,
@@ -1205,23 +1345,23 @@ public sealed class PrivacyNativeTests
         {
             Marshal.Copy(output, 0, pointer, output.Length);
 
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                PrivacyNative.ReadPrivacyOutput(
-                    symbol,
-                    0,
-                    pointer,
-                    (UIntPtr)output.Length,
-                    ptr =>
-                    {
-                        Assert.Equal(pointer, ptr);
-                        Marshal.FreeHGlobal(ptr);
-                        pointer = IntPtr.Zero;
-                        freed = true;
-                    },
-                    expectedSchemaByte));
+            AssertInvalidOperationDiagnostic(
+                $"{symbol} returned unexpected privacy result schema.",
+                () => PrivacyNative.ReadPrivacyOutput(
+                        symbol,
+                        0,
+                        pointer,
+                        (UIntPtr)output.Length,
+                        ptr =>
+                        {
+                            Assert.Equal(pointer, ptr);
+                            Marshal.FreeHGlobal(ptr);
+                            pointer = IntPtr.Zero;
+                            freed = true;
+                        },
+                        expectedSchemaByte));
 
             Assert.True(freed);
-            Assert.Contains("unexpected privacy result schema", error.Message);
         }
         finally
         {
@@ -1250,23 +1390,23 @@ public sealed class PrivacyNativeTests
         {
             Marshal.Copy(output, 0, pointer, output.Length);
 
-            var error = Assert.Throws<InvalidOperationException>(() =>
-                PrivacyNative.ReadPrivacyOutput(
-                    symbol,
-                    0,
-                    pointer,
-                    (UIntPtr)output.Length,
-                    ptr =>
-                    {
-                        Assert.Equal(pointer, ptr);
-                        Marshal.FreeHGlobal(ptr);
-                        pointer = IntPtr.Zero;
-                        freed = true;
-                    },
-                    expectedSchemaByte));
+            AssertInvalidOperationDiagnostic(
+                $"{symbol} is not a supported privacy native operation.",
+                () => PrivacyNative.ReadPrivacyOutput(
+                        symbol,
+                        0,
+                        pointer,
+                        (UIntPtr)output.Length,
+                        ptr =>
+                        {
+                            Assert.Equal(pointer, ptr);
+                            Marshal.FreeHGlobal(ptr);
+                            pointer = IntPtr.Zero;
+                            freed = true;
+                        },
+                        expectedSchemaByte));
 
             Assert.True(freed);
-            Assert.Contains("not a supported privacy native operation", error.Message);
         }
         finally
         {

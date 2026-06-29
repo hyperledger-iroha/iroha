@@ -400,4 +400,12 @@ MissingQcStallRangePullSafetyAnchors ==
 Safety ==
   MissingQcStallRangePullSafetyAnchors
 
+MissingQcStallRangePullExactness ==
+  /\ MissingQcStallRangePullCoreSafety
+  /\ MissingQcStallRangePullSafetyAnchors
+
+MissingQcStallRangePullCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ MissingQcStallRangePullExactness
+
 ====

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_existing_files,
     require_runner_positive_int,
     render_runner_plan,
+    validate_runner_input_parent_chain,
     validate_runner_preflight,
     write_runner_plan,
 )
@@ -245,6 +247,48 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
     }
 
 
+def deployment_context_write_open_flags() -> int:
+    """Return descriptor flags for rewriting generated evidence artifacts."""
+
+    flags = os.O_WRONLY | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+
+def write_deployment_context_artifact(path: Path, payload: dict[str, object]) -> list[str]:
+    """Rewrite a generated artifact after stamping reviewed deployment context."""
+
+    errors: list[str] = []
+    if not validate_runner_input_parent_chain(
+        path,
+        errors,
+        label="deployment-context artifact",
+    ):
+        return errors
+    path_label = path_diagnostic_label(path)
+    fd = -1
+    try:
+        rendered = render_runner_plan(payload)
+        fd = os.open(path, deployment_context_write_open_flags())
+        handle = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with handle:
+            handle.write(rendered)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        return [
+            "failed to write deployment context into `{}`: {}".format(
+                path_label,
+                error_diagnostic_label(error, path_label=path_label),
+            )
+        ]
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return []
+
+
 def annotate_evidence_artifact(
     path: Path,
     *,
@@ -295,17 +339,7 @@ def annotate_evidence_artifact(
             ]
         payload[field] = value
 
-    try:
-        path.write_text(render_runner_plan(payload), encoding="utf-8")
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
-        path_label = path_diagnostic_label(path)
-        return [
-            "failed to write deployment context into `{}`: {}".format(
-                path_label,
-                error_diagnostic_label(error, path_label=path_label),
-            )
-        ]
-    return []
+    return write_deployment_context_artifact(path, payload)
 
 
 def annotate_evidence_artifacts(

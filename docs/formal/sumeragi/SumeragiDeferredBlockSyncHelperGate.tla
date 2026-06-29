@@ -340,7 +340,7 @@ DeferredHelperMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 DeferredBlockSyncHelperExactness ==
-  DeferredHelperMatchesSpec
+  /\ DeferredHelperMatchesSpec
 
 DeferredBlockSyncHelperCorrectnessEnvelope ==
   /\ TypeInvariant

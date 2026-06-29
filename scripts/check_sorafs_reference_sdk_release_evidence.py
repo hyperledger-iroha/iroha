@@ -155,6 +155,91 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS}
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schema",
+    "status",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
+EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "release_archive": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "packaging_helper_used",
+        "deterministic_archive_verified",
+        "archive_checksums_published",
+        "binary_checksums_published",
+        "dist_gitkeep_only_tracked",
+        "target_count",
+        "targets",
+        "archive_index_digest_hex",
+        "release_manifest_digest_hex",
+        "raw_archives_included",
+    ),
+    "signed_manifest": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "manifest_signed",
+        "manifest_signature_verified",
+        "manifest_sha256_published",
+        "governed_release_key_used",
+        "public_key_fingerprint_recorded",
+        "private_key_absent",
+        "signature_algorithm",
+        "manifest_digest_hex",
+        "public_key_fingerprint_hex",
+        "raw_manifest_included",
+    ),
+    "downstream_bindings": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "packages",
+        "package_count",
+        "sdk_exports_verified",
+        "validation_outcome_contract_verified",
+        "version_alignment_verified",
+        "native_bridge_header_bound",
+        "published_package_digests_recorded",
+        "release_manifest_digest_hex",
+        "package_index_digest_hex",
+        "raw_packages_included",
+    ),
+    "cookbook_smoke": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "published_archive_smoke_passed",
+        "cookbook_replay_passed",
+        "fixture_bundle_validation_passed",
+        "manifest_car_replay_passed",
+        "validation_outcomes_emitted",
+        "smoke_duration_seconds",
+        "release_manifest_digest_hex",
+        "smoke_output_digest_hex",
+        "raw_smoke_outputs_included",
+    ),
+    "ffi_header_contract": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "ci_guard_passed",
+        "rust_exports_match_header",
+        "selector_constants_match",
+        "c_signatures_match",
+        "bridge_bindings_verified",
+        "release_manifest_digest_hex",
+        "header_digest_hex",
+        "ffi_contract_digest_hex",
+        "raw_header_included",
+    ),
+    "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "approved",
+        "governance_vote_recorded",
+        "release_key_roster_bound",
+        "release_targets_bound",
+        "downstream_packages_bound",
+        "smoke_evidence_bound",
+        "governance_source",
+        "release_manifest_digest_hex",
+        "policy_digest_hex",
+    ),
+}
 
 
 @dataclass(frozen=True)

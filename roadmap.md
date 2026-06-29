@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -10,6 +10,111 @@ and completed history lives in [`status.md`](./status.md).
 ## Release and Stabilization
 
 **Status:** active.
+
+- Keep mobile Kagemusha offline compatibility and issuer-refill entrypoints
+  fail-closed for first release: Swift external certificate JSON and
+  Kotlin/JVM plus Java Android Torii issuer refill certificates must resolve to
+  canonical platform assertion profiles, canonical base64 public/assertion keys,
+  a canonical base64 issuer signature, and exact first-release platform names
+  (`ios-appattest` or `android-keymint`) instead of substring-normalized
+  platform aliases; Kotlin/JVM compact wallet
+  certificate state must also use those exact first-release platform names and
+  reject explicit retired assertion-profile
+  spellings instead of preserving them, and Kotlin/JVM offline wallet amount
+  normalization must reject malformed values instead of coercing them to zero;
+  Kotlin/JVM and Swift payment-token input claims must validate fixed hash
+  fields as exact lowercase 32-byte hex text, canonical asset IDs, amount
+  strings, and optional `claim_hash` values through the canonical issued-claim
+  hash path instead of remaining passive or permissive DTO fields;
+  Swift and Java Android wallet-note JSON decoders must reject retired
+  `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
+  state spellings instead of migrating them, with Kotlin docs mirroring the
+  same first-release storage contract;
+  mobile QR stream tests must describe the rejected `iroha:qr-old:` prefix as a
+  retired versioned prefix, and mobile route/scheme comments and diagnostics
+  must use retired terminology;
+  retired recursive proof JSON must carry
+  canonical base64 `proof_bytes_base64`; Swift compatibility text payload
+  amounts, including nested payment-token input claims decoded from JSON, must
+  reject malformed amount strings instead of preserving them, and input-claim
+  `claim_hash` values must match the canonical issued-claim hash; Swift
+  compatibility certificates must reject retired assertion-key aliases such as
+  `app_attest_public_key_base64` and require canonical
+  `assertion_public_key`; Swift, Kotlin/JVM, and Java Android raw Torii
+  issuer-device-binding inputs must reject retired `device_public_key` and
+  `app_attest_public_key_base64` assertion-key aliases before building refill
+  request bodies;
+  key-refill requests must use only
+  `attestation_key_id` and must strip retired `X-Iroha-*` canonical-auth
+  headers before body signing, with Swift issuer tests using retired
+  canonical-auth header wording; Swift Offline Cash issuer-route constants and
+  key-refill tests must pin retired route and retired attestation-alias wording;
+  device-attestation registration must expose `keyCertificatePayload()` instead
+  of synthesizing unsigned all-zero-signature certificates, and the SDK parity
+  guard's
+  `--negative-control-swift-offline-note-compatibility-certificate-fail-closed`
+  plus
+  `--negative-control-swift-offline-note-v2-registration-certificate-payload`
+  plus `--negative-control-swift-key-refill-attestation-alias` plus
+  `--negative-control-mobile-retired-offline-note-issuers` plus
+  `--negative-control-mobile-retired-qr-prefix-wording` plus
+  `--negative-control-mobile-wallet-note-retired-state-migration` plus
+  `--negative-control-kotlin-offline-wallet-compact-certificate-profile` plus
+  `--negative-control-kotlin-offline-wallet-amount-normalization` plus
+  `--negative-control-kotlin-offline-wallet-input-claim-strictness` modes
+  prove that
+  zero-signature synthesis, non-canonical base64 aliases, retired
+  assertion-profile spellings, malformed wallet amount zero-coercion, passive
+  Kotlin/JVM input-claim amount/hash drift, retired wallet-note state
+  migrations, retired QR prefix wording drift, substring platform matching,
+  fake registration certificates, old Swift canonical-auth test naming, and
+  `app_attest_key_id` or retired issuer-device-binding assertion-key aliases
+  cannot return.
+
+- Keep Torii Offline V2 Kagemusha OpenAPI endpoint descriptions in
+  first-release terminology: Torii source plus both checked-in portal OpenAPI
+  snapshots must describe rejected `X-Iroha-*` app-auth headers as retired, and
+  the policy guard's `--negative-control-torii-offline-v2-kagemusha-openapi`
+  mode proves stale legacy wording cannot return.
+
+- Keep Torii Offline V2 middleware attestation and structured redemption
+  parsing first-release strict: receipt and key-certificate profile validation
+  must accept only canonical `ios-appattest` and `android-keymint` triples,
+  retired `ios-app-attest` / `apple-app-attest-v1` iOS profile material must
+  reject, request-side `device_binding` assertion-key aliases
+  `app_attest_public_key_base64` and `device_public_key` must reject, and
+  `offline_v2_vectors` must reject noncanonical fixture platform aliases
+  instead of mapping them to canonical profiles. The
+  `docs/source/offline_note_v2_attestation.md` contract must describe
+  structured redemption aliases as rejected. The policy guard's
+  `--negative-control-torii-offline-v2-retired-ios-app-attest-profile` and
+  `--negative-control-torii-offline-v2-retired-assertion-key-aliases` plus
+  `--negative-control-offline-v2-vector-platform-aliases` modes prove the
+  retired Torii profile, request-alias, vector-alias, and stale doc wording
+  paths cannot return.
+
+- Keep classic Torii Offline middleware attestation and fixture generation on
+  the same first-release contract: request-side `device_binding`
+  assertion-key aliases `app_attest_public_key_base64` and `device_public_key`
+  must reject, and `offline_vectors` must reject noncanonical fixture platform
+  aliases instead of mapping them to canonical profiles. The policy guard's
+  `--negative-control-torii-offline-retired-assertion-key-aliases` and
+  `--negative-control-offline-vector-platform-aliases` modes prove those
+  retired request-alias and vector-alias paths cannot return.
+
+- Keep active Core verifier-profile filters in first-release terminology:
+  retired unqualified vote and anonymous-transfer profile roots must stay
+  rejected through the native Halo2/Pasta production backend classifier, and
+  the policy guard's
+  `--negative-control-core-retired-backend-profile-wording` mode proves the
+  old `is_legacy_*_backend_profile` helper names cannot return.
+
+- Keep SDK recursive compact unavailable docs in first-release terminology:
+  SDK READMEs must describe `isRecursiveCompactUnavailable(error)`-style
+  helpers as classifiers for current reserved ABI-7 compact-surface
+  diagnostics, and the SDK parity guard's
+  `--negative-control-sdk-readme-recursive-compact-unavailable` mode proves
+  stale retained-helper wording cannot return.
 
 - Keep the guarded 100,000 transaction localnet memory repro as a release gate
   for transaction ingress backpressure. Queue admission and requeue now cap
@@ -25,10 +130,58 @@ and completed history lives in [`status.md`](./status.md).
   `1,563,443,200` bytes largest peer), dropped to `3,639,918,592` bytes total
   RSS during post-load sampling, and flattened across the final samples, with
   queue-full responses treated as expected node-side backpressure rather than
-  harness failure. Tune the
-  retained-byte default, Torii admission shedding, or the per-peer P2P outbound
-  frame queue caps only if future release-gate reports show real operator
-  backpressure needs different limits. Deferred P2P outbound frames held while a peer session is
+  harness failure. The follow-up three-run 100,000-transaction attempted-burst
+  guard at
+  `/tmp/iroha-oom-repro-20260628-3x100k-queue4096/memory_guard_report.json`
+  completed under 8 GiB with bounded 10k perf-profile queue capacity
+  (`7,633,567,744` bytes peak total RSS, queue retained bytes capped at
+  `134,170,800`, max queue size `1020`). The localnet perf profile now keeps
+  the queue capacity at 4096, the deploy helper can hold Kura's in-memory block
+  window to 16, Sumeragi stack reservations are config-driven with a bounded
+  32 MiB default, and auto consensus/validation/zk verifier worker pools clamp
+  to small 2..8 ranges unless explicitly configured. P2P frame buffers now
+  shrink empty oversized buffers and avoid returning oversized frames to the
+  reusable pool, while settled committed RBC sessions are cleaned as soon as
+  delivery/commit confirms the authoritative payload. The follow-up 1x100k
+  post-load guard against the rebuilt `target/release/irohad` at
+  `/tmp/iroha-oom-repro-20260628-1x100k-rbc-cleanup/memory_guard_report.json`
+  passed under 8 GiB (`6,660,243,456` bytes peak total peer RSS,
+  `2,119,286,784` bytes largest peer, final queue size `0`, max queue retained
+  bytes `134,170,800`, max RBC store bytes `7,680,526`). Compare future
+  release-gate reports against both this result and the
+  `/tmp/iroha-oom-repro-20260628-1x100k-p2p-retention/memory_guard_report.json`
+  baseline before raising any retained-byte or worker defaults. A refreshed
+  generated-localnet run with localnet-specific 4 MiB P2P frame caps and a
+  runtime proposal cap of 256 transactions at
+  `/tmp/iroha-oom-repro-20260629-1x100k-localnet-caps-post180/memory_guard_report.json`
+  stayed under the 8 GiB guard for 180 seconds post-load (`6,830,080,000`
+  bytes peak total RSS, `1,983,856,640` bytes largest peer), with queue
+  retained bytes capped at `134,170,800`, max RBC store bytes `1,278,214`, and
+  final queue size `1020`. A later replay-cap probe at
+  `/tmp/iroha-oom-repro-20260629-1x100k-replay-cap/memory_guard_report.json`
+  reduced cached proposal body rebroadcasts but still crossed the 8 GiB
+  post-load guard at `8,590,131,200` bytes total RSS while logs shifted to
+  repeated targeted RBC READY repair. Repeated targeted READY repair is now
+  paced with a 1s-floor per-session cooldown, and the fresh release guard at
+  `/tmp/iroha-oom-repro-20260629-1x100k-ready-throttle/memory_guard_report.json`
+  passed the 180-second post-load window under 8 GiB (`5,892,980,736` bytes
+  peak total RSS, `1,645,428,736` bytes largest peer, final queue retained
+  bytes `134,170,800`, final RBC store bytes below `425 KiB` per peer).
+  Follow-up queue-aware recovery throttling now slows repeated cached proposal
+  body replay and repeated targeted RBC body/READY repair to the commit-QC
+  recovery cadence whenever the transaction queue is saturated by count or
+  retained bytes, while still allowing the first targeted recovery send. The
+  current guarded release baseline at
+  `/tmp/iroha-oom-repro-20260629-1x100k-targeted-rbc-tx-slow/memory_guard_report.json`
+  passed with `5,772,558,336` bytes peak total RSS, `1,584,234,496` bytes
+  largest peer RSS, and `101,548,032` bytes of post-load RSS growth across the
+  180-second sampling window. The final queue still saturated at `1020`
+  transactions / `134,170,800` retained bytes, so remaining work should focus
+  on admission throughput and queue-full operator behavior rather than relaxing
+  consensus recovery memory bounds. Tune the retained-byte default, Torii
+  admission shedding, or the per-peer P2P outbound frame queue caps only if
+  future release-gate reports show real operator backpressure needs different
+  limits. Deferred P2P outbound frames held while a peer session is
   missing are now capped by per-peer encoded-byte budget in addition to the
   existing count and TTL limits. The transaction routing metadata ledger is now
   bounded by queue capacity, and Sumeragi's known-block/deferred-roster QC work
@@ -88,24 +241,76 @@ and completed history lives in [`status.md`](./status.md).
   same memory report before changing recovery pruning semantics.
 - Kagemusha is now the only active chain implementation for offline payments.
   Bridge, Swift, Kotlin/JVM, and Java Android payment builders, issuer clients,
-  or submitters for legacy Offline Note issue/audit/redeem paths now fail
-  closed. The SDK parity guard now pins the retired Swift, Kotlin/JVM, and Java
-  Android issuer and submitter source/test boundaries, plus the Swift classic
-  transaction-builder entrypoints and bridge C ABI retired transaction-builder
-  exports/header declarations, so classic issue and audit/redeem/defund cannot
-  silently re-enter Offline Note submission or disappear from the public bridge
-  header. The classic mobile instruction wire-name helpers are now explicitly
-  labeled and guarded as historical compatibility fixtures. The legacy mobile
-  Offline Note wallet draft-proof flows are also pinned so
+  submitters, and bridge proof generators for retired Offline Note
+  issue/audit/redeem paths now fail closed. The SDK parity guard now pins the
+  retired Swift, Kotlin/JVM, and Java Android issuer and submitter source/test
+  boundaries, plus the Swift retired transaction-builder entrypoints and bridge
+  C ABI retired proof-generator and transaction-builder exports/header
+  declarations, so retired issue and audit/redeem/defund cannot silently
+  re-enter Offline Note submission, proof generation, or disappear from the
+  public bridge header. The retired mobile instruction wire-name helpers are
+  now explicitly
+  labeled and guarded as historical fixture-only decoding inputs. The archived
+  mobile Offline Note wallet draft-proof flows are also pinned so
   `offline-note/draft-placeholder` proofs remain draft-only material and
   audit/redeem flows must replace, binding-validate, and recursively verify the
   prover output before use. Swift, Kotlin/JVM, and Android Java wallet runtime
   tests now also force audit/redeem verifier rejection and assert no spend,
   redeem reservation, or defund submission is recorded after rejection.
   Historical mobile model/codec helpers that remain for fixture and local-record
-  compatibility are now archived with explicit Kagemusha-production labels, and
-  the SDK parity guard plus workflow path filter pin those labels so classic
-  Offline Note helpers cannot be mistaken for active payment surfaces.
+  decoding are now archived with explicit Kagemusha-production fixture-only
+  labels, and the SDK parity guard plus workflow path filter pin those labels so
+  retired Offline Note helpers cannot be mistaken for active payment surfaces.
+  Torii's retired structured Offline Note V2 redeem parser is also first-release
+  strict: retired structured aliases such as `key_certificate`,
+  `verifier_key_name`, `public_inputs_hash`, `verifier_key_backend`, and
+  `proof_backend`, plus version-2 key-certificate envelopes, are rejected by the
+  parser and pinned by the Kagemusha policy guard. Torii Offline Notes and
+  Offline Notes V2 issuer body-auth tests now name rejected `X-Iroha` canonical
+  auth headers directly instead of treating them as a legacy compatibility path.
+  SDK bundle-summary asset validation now describes lowercase `hex:` plus
+  exactly 16 bytes as raw non-UUID asset bytes, not a fallback path, while
+  Python append request fixtures pass the explicit aggregation output selector.
+  Reserved-lineage key-artifact diagnostics and docs now describe runtime
+  verifier-slice key generation as developer-only artifact generation behind an
+  explicit override, not a production path controlled by a default-off runtime
+  switch. Offline Kagemusha docs now keep retired-mode wording on explicit
+  rejection guarantees rather than active first-release paths, including the
+  unavailable runtime bearer-audit dispatch path, pre-existing Halo2
+  proof-envelope scope, and zero-hash Offline recursive proof-admission
+  wildcard rejection; the policy guard rejects stale legacy/fallback wording,
+  and the SDK README parity guard rejects stale legacy/source-compatibility
+  wording plus old classic note/proof-generation wording around retired Offline
+  Note APIs across Swift, Kotlin/JVM, Android Java, and Python README surfaces.
+  The production-readiness script now describes device-lab root handling as
+  preserving the configured default, and the readiness guard rejects stale
+  old-default wording through a dedicated negative control. Its ABI-6 manifest
+  recursive-unavailable blocker code now names the first-release invariant
+  directly and is pinned by a readiness negative control. The release-bundle
+  Android root helper now uses the same configured-default wording and guard.
+  The core Reserved-lineage circuit-family identifier comment is pinned as
+  canonical first-release wording by the recursive-spend policy guard. The
+  record-backed recursive compact no-package overload now describes developer
+  key-artifact plumbing and the internal one-hop proving-key parameter without
+  fallback wording. Core tests now name non-ZK1 lineage-envelope rejection,
+  retired v1 tree-root exclusion, non-ZK1 proof-envelope byte rejection, and
+  folded-token recursive-mode rejection without old-path wording, with
+  `--negative-control-core-offline-first-release-test-wording` pinning the core
+  Offline/Kagemusha test wording. Python recursive redeem malformed-archive
+  tests now name the retired lengthless public-key layout directly, and
+  `--negative-control-python-retired-public-key-layout-wording` pins that SDK
+  test wording. Kotlin `KagemushaInstructionArchivesTest` uses a neutral
+  `fixture` metadata key for string-metadata coercion, with the JavaScript
+  Kagemusha JVM meta-test rejecting old-path metadata key names. Swift Offline
+  Note keychain tests now describe unrevisioned collections directly, and the
+  issuer 404 test names retired issuer-route retries; the SDK parity guard's
+  `--negative-control-swift-offline-note-retired-route-wording` mode pins those
+  Swift test names and diagnostics.
+  Preferred Kagemusha spend-mode selectors must also stay first-release strict:
+  choose ABI-7 recursive compact when available, otherwise ABI-6 recursive spend
+  when available, and otherwise return no preferred production mode. Do not
+  reintroduce checked-prefold spend-mode exports, checked-prefold fallbacks, or
+  single-argument capability fallbacks.
 - Snapshot-backed node restarts now target hash-journal validation for
   historical blocks, keeping full Kura block-body loads only for suffix replay
   and the existing latest-tip rollback repair path.
@@ -128,7 +333,21 @@ and completed history lives in [`status.md`](./status.md).
   the no-policy default. Swift, Kotlin/JVM, and Java Android SDK parity now
   carries the registration model, canonical challenge-preimage hash, and
   `RegisterOfflineDeviceAttestation` instruction bytes through the shared
-  Offline Note V2 interop fixture.
+  Offline Note V2 interop fixture. Core and the mobile SDKs also reject the
+  retired certificate-only `ios-app-attest` /
+  `apple-app-attest-v1` / `ecdsa-p256-sha256` spelling; the Kagemusha policy
+  and SDK parity guards pin that rejection with negative controls so only the
+  canonical first-release App Attest profile remains accepted. Swift,
+  Kotlin/JVM, and Java Android Offline Note V2 instruction decoders are now
+  canonical-only for issue/audit/redeem wrappers as well: retired
+  `IssueOfflineNoteV2`, `RedeemOfflineNoteV2`, and `AuditOfflineNoteV2` wire
+  aliases are rejected both directly and inside explorer-style envelopes, with
+  `--negative-control-mobile-offline-note-v2-retired-instruction-aliases`
+  pinning the source and rejection-test coverage.
+  Telemetry must also stay first-release strict: the retired iOS App Attest
+  compatibility-signature counter is removed, and the Kagemusha policy guard's
+  retired App Attest negative control rejects reintroducing that metric or
+  compatibility-path wording.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
 - Nexus public-lane validator state now treats `(lane_id, validator)` storage
@@ -392,12 +611,13 @@ and completed history lives in [`status.md`](./status.md).
   and gate-evidence contract that runtime descriptors return.
   The Kagemusha SDK parity guard pins those source/dist/test/declaration and
   package-root runtime surfaces plus the focused JS/Python runner coverage and
-  zero/repeated hash/signature negative controls. The active non-C# Kagemusha
+  zero/repeated hash/signature negative controls. The active Kagemusha
   marker/content scan must cover those workflow-backed runner and package
-  inputs too, including the root Cargo manifest, JS native build/copy scripts,
-  source/dist native verifier helpers, Python Norito metadata/source modules,
-  and Java Norito source classes, with a routed negative control requiring an
-  exact missing-runner-input diagnostic when any path drifts out of the scan.
+  inputs too, plus C# Kagemusha source/test surfaces, including the root Cargo
+  manifest, JS native build/copy scripts, source/dist native verifier helpers,
+  Python Norito metadata/source modules, and Java Norito source classes. Routed
+  negative controls require exact missing-source, missing-content, and
+  missing-runner-input diagnostics when any path drifts out of the scan.
 - ZK asset light-client readiness now has a Torii `POST /v1/zk/merkle-path`
   endpoint for current confidential-v2 commitment inclusion paths, and the
   Kotlin/JVM plus Android Java Torii Merkle providers call it directly.
@@ -443,7 +663,25 @@ and completed history lives in [`status.md`](./status.md).
   so broad recursive-compact archive validation cannot hide missing projection
   fail-closed cases; their plain recursive compact verifier tests also require
   the exact `compactTokenArchive must not be empty` marker for empty token
-  inputs. Python compact-projection tests now also pin
+  inputs. C# recursive compact verifier/projection tests now pin exact
+  diagnostic prefixes and parameter names for malformed compact-token,
+  verifier-key, verifier-record, projection bundle, and projection verifier
+  archives through `AssertArgumentDiagnostic`; the standalone projection
+  verifier also pins the empty compact-token preflight. The parity guard and
+  workflow-routed negative control require those helper call sites. C# native
+  bridge output tests now also assert exact managed exception messages for
+  recursive-spend, recursive-compact unavailable, and Pallas builder malformed,
+  empty, null, oversized, and native-error outputs, with a workflow-routed
+  negative control preventing substring-only regressions. C# archive-wrapper
+  constructor tests now assert exact `Kagemusha Norito archive` diagnostics and
+  `noritoBytes` parameter names for empty, oversized, malformed, compressed,
+  unsupported-flag, invalid-field-bitset, padded-header, and empty-payload
+  archive inputs across every recursive Kagemusha wrapper class, with a
+  workflow-routed negative control preventing substring-only regressions. The
+  C# recursive compact verifier output-normalization test also pins exact
+  symbol-prefixed invalid-boolean, bridge-error, and unavailable diagnostics
+  with its own workflow-routed negative control. Python
+  compact-projection tests now also pin
   empty, malformed, empty-payload, and oversized bundle/compact-token/verifier
   record preflight before native dispatch, permissive malformed-probe
   rejection, copied mutable archive dispatch, unsafe native projection output
@@ -459,7 +697,7 @@ and completed history lives in [`status.md`](./status.md).
   probes and requires only the ABI-7 compact projection symbol.
   The SDK parity guard and workflow-routed negative controls must continue pinning those surfaces. Production-readiness negative controls also mutate the
   Rust data-model, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#
-  selectors back to the legacy recursive-spend fallback, so ABI-7 compact
+  selectors back to the retired recursive-spend fallback, so ABI-7 compact
   availability remains the protected production default for editable SDKs. The
   production-readiness guard self-audits its
   negative-control handler list against the PR workflow and workflow
@@ -515,8 +753,7 @@ and completed history lives in [`status.md`](./status.md).
   current-note field shapes for nested note commitments and spend nullifiers;
   editable non-C# decoders report those shape failures with full
   `bundle.accumulator.current_note.*` labels, and the C# mirrors are covered by
-  the managed decoder tests and parity guard, with Windows host execution still
-  tracked below.
+  the managed decoder tests, parity guard, and Ubuntu/Windows matrix lane.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# now also reject
   raw accumulator `chain_id` string payloads and require the ABI fixture's
   nested Norito string shape. Editable non-C# bundle decoders and the JS
@@ -611,12 +848,11 @@ and completed history lives in [`status.md`](./status.md).
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# verify-result
   decoders now also pin an ABI-7 archive with an extra field after
   `witnessless_redeem_supported` and `lineage_witness_required_for_redeem`;
-  non-C# SDKs expose both the full redeem-scoped alias and the earlier
-  shortened `lineage_witness_required` / `lineageWitnessRequired` forms. The
-  verify-result redeem alias negative control now mutates each JavaScript,
-  Python, Swift, Kotlin/JVM, and Android Java source/test alias independently,
-  restores each surface, and prints exact diagnostics for every rejected alias
-  drift.
+  SDKs expose only the redeem-specific names in this first release. The
+  verify-result redeem-field negative control now reintroduces shortened aliases
+  across JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# source/test
+  surfaces independently, restores each surface, and prints exact diagnostics for
+  every rejected alias drift.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# lineage-witness
   decoders now also pin trailing-field vectors for the top-level witness,
   previous-recursive-proof sequence, individual previous proof, and nested
@@ -631,25 +867,32 @@ and completed history lives in [`status.md`](./status.md).
   Swift, Kotlin/JVM, and Android Java source/test marker independently,
   restores every surface, and prints exact diagnostics for malformed witness
   schema and redeem proof drift.
-  Kotlin/JVM and Android Java tests now assert exact verify-result,
+  Kotlin/JVM, Android Java, and C# tests now assert exact verify-result,
   lineage-witness, and nested proof-metadata trailing-byte diagnostics for
   those vectors; the SDK parity guard and trailing-field negative controls
   mutate those exact assertion markers so broad substring checks cannot return
-  silently.
-  TODO(C# Windows): certify matching exact C# verify-result, lineage-witness,
-  and nested proof-metadata trailing-field diagnostics on a Windows host.
-  TODO(C# Windows): certify matching exact C# bundle-summary current-note and
-  accumulator diagnostics on a Windows host, including malformed numeric
-  payloads, fixed32 field lengths, domain/checksum failures, raw chain-id
-  payloads, hop-count bounds, and trailing-field rejections.
-  TODO(C# Windows): certify matching exact C# bundle proof-metadata diagnostics
-  on a Windows host, including unsupported circuit ids, verifier/proof-box
-  backend failures, empty proof bytes, empty proof public inputs, zero
-  public-input hashes, and public-input hash mismatches.
-  TODO(C# Windows): certify matching exact C# bundle and lineage-witness
-  previous-proof public-input-hash diagnostics for malformed fixed-array
-  encodings on a Windows host, including short, count-prefixed, and long
-  hash payloads.
+  silently. C# assertions pin the exact diagnostic prefix plus the
+  `bundleArchive` parameter name so .NET's localized parameter suffix cannot
+  mask a field-diagnostic regression. The C# verify-result and
+  lineage-witness trailing-field diagnostics are now covered by platform-stable
+  .NET tests that assert the invariant prefix and `bundleArchive` parameter
+  separately, so this item no longer depends on a Windows-local message suffix
+  certification.
+  C# bundle-summary tests now assert exact diagnostic prefixes plus the
+  `bundleArchive` parameter name for proof metadata, current-note invariants,
+  accumulator domain/field-length/hop-count failures, compact-layout drift,
+  and nested trailing-field rejections. The SDK parity guard pins the full C#
+  diagnostic strings and includes a C# exact-diagnostic negative control so
+  broad substring checks cannot silently return. The paired C# bundle-summary
+  tests now certify the current-note, accumulator, proof metadata,
+  compact-layout, and nested trailing-field diagnostics through the same
+  platform-stable prefix plus `bundleArchive` parameter-name contract.
+  C# now rejects short, count-prefixed, and long recursive-proof
+  public-input-hash fixed-array encodings for both bundle summaries and
+  lineage-witness previous proofs before native dispatch. The lineage-witness
+  managed decoder validates previous-proof public inputs, public-input hash, and
+  proof-box metadata through the same context-scoped recursive-proof decoder as
+  bundle summaries.
   JavaScript, Python, Swift, Kotlin/JVM, Android Java, and C# current-note
   amount decoders also pin a nested `Numeric` payload with a valid
   mantissa/scale plus an extra trailing field. Editable non-C# bundle
@@ -679,7 +922,13 @@ and completed history lives in [`status.md`](./status.md).
   whole-note redeem. The shared recursive-spend archive fixtures and every SDK
   fixture-surface guard must keep pinning the `change_output` field metadata
   plus the current redeem request/instruction archive hashes. The SDK parity
-  guard now also pins short/all-zero `changeOutput` preflight vectors plus
+  guard and recursive-spend policy guard must also keep every ABI-6 request
+  archive field pinned as explicitly encoded (`norito_default: false`) and
+  reject any reintroduced request/result `#[norito(default)]` drift. The
+  recursive public-input, accumulator, transition-profile, and append-boundary
+  archive structs must likewise stay required-field-only because this first
+  release has no missing-field archive contract. The SDK
+  parity guard now also pins short/all-zero `changeOutput` preflight vectors plus
   redeem change-output relationship tests with workflow-wired negative
   controls; the fixed32 negative control mutates the short-length and all-zero
   vector sets independently across Swift, JavaScript, Python, Kotlin/JVM,
@@ -693,7 +942,9 @@ and completed history lives in [`status.md`](./status.md).
   overloads for callers that have decoded the change commitment. Those C#
   preflight paths reject short, all-zero, partial-without-change, over-amount,
   and change-present invalid requests before native request parsing or builder
-  mutation.
+  mutation, with C# tests now pinning the exact diagnostic prefix and
+  `ParamName` for lineage, relationship, fixed32, and decimal-vector rejects
+  through the shared `AssertArgumentDiagnostic` helper.
   The non-C# redeem change-output reserved-collision guard now mutates each
   JavaScript source/dist/declaration, package-dist, Python, Swift, Kotlin/JVM,
   and Android Java marker independently, restoring every surface and printing
@@ -740,17 +991,23 @@ and completed history lives in [`status.md`](./status.md).
   restore every target snapshot, and print exact first-line diagnostics for
   lineage key-copy, accumulator deny-list/material, bundle proof/current-note,
   verify-result, lineage-witness, redeem lineage, cross-SDK helper,
-  preferred-mode, and recursive compact verifier/key-package drift. Duplicate
+  preferred-mode, and recursive compact verifier/key-package drift. Preferred
+  mode drift now includes forbidden one-argument selector reintroductions in
+  addition to compact-first branch drift, so the first-release
+  SDK API remains either zero-argument probing or explicit two-boolean
+  compact-first selection. Duplicate
   markers that could previously mask drift are pinned with exact markers or
   occurrence-aware mutation, including package-dist proof-public-input hash
   vectors, Python redeem lineage `verifier_key_id` cases, and the Rust
-  C/JNI recursive compact Pallas helper surfaces. C# source remains deferred
-  to the Windows TODOs above; the parity guard only validates existing C#
-  markers from this host.
+  C/JNI recursive compact Pallas helper surfaces. C# source is covered by the
+  Ubuntu/Windows C# SDK matrix; the parity guard validates existing C# markers
+  from this host and requires the Windows leg in the workflow.
   Kotlin/JVM and Android Java register-device-attestation instruction
   builders now emit the canonical Rust `RegisterOfflineDeviceAttestation`
-  one-field ISI envelope instead of the generic model-payload wrapper, while
-  the decoders still accept the older wrapper form for SDK compatibility.
+  one-field ISI envelope instead of the generic model-payload wrapper. The
+  decoders now reject the older generic wrapper form directly and when it is
+  nested inside an explorer-style instruction envelope, with SDK parity
+  negative controls pinning that first-release rejection.
   The JVM/Android guard also pins valid cached issuer public-key material in
   transaction-builder lifecycle tests so issuer-key validation cannot be
   bypassed by placeholder text.
@@ -761,7 +1018,10 @@ and completed history lives in [`status.md`](./status.md).
   negative tests reject both missing and extra record cases before native
   dispatch. C# exposes the same rule through
   `ValidateVerifyLineagePreflight(...)` and metadata-bound `Verify(...)`
-  overloads for callers that already decoded final bundle metadata. The parity
+  overloads for callers that already decoded final bundle metadata, with C#
+  tests pinning exact missing/dangling verifier-record diagnostics and the
+  `hasLineageVerifierRecord` parameter name through
+  `AssertArgumentDiagnostic`. The parity
   guard tracks the source and test markers plus a workflow-wired negative
   control so SDK-created archives cannot drift from native verifier selection;
   the control reports first-line diagnostics for every mutated
@@ -816,25 +1076,83 @@ and completed history lives in [`status.md`](./status.md).
   also runs lineage admission before `redeem_proof` archive validation, so
   malformed proof bytes cannot mask the missing-witness or missing-verifier
   record errors for semantic and Reserved-lineage final bundles.
-  TODO(C# Windows): confirm the C# redeem metadata-bound request path has
-  matching semantic lineage-witness summary negatives and previous recursive
-  proof count-prefix over-limit rejection on a Windows host.
-  TODO(C# Windows): add and certify the matching C# typed init/append
-  record-bundle `steps` count-prefix over-limit rejection on a Windows host, so
-  raw count-prefix-only fold-step archives fail before truncated step parsing.
-  TODO(C# Windows): certify the matching C# typed init/append top-up anchor
-  precedence vectors on a Windows host, including malformed proof bytes and
-  trailing accumulator fields that must not mask invalid zero top-up anchor
-  nullifiers.
-  TODO(C# Windows): add and certify the matching C# typed init/append Pallas
-  open-envelope vector preflight on a Windows host, including wrong schema,
-  count mismatch, missing metadata, stale fixed-array metadata, trailing
+  C# redeem metadata-bound transaction builder overloads now carry the same
+  semantic lineage-witness and lineage-verifier-record preflight negatives,
+  including plural verifier-record counts, before malformed request archives are
+  decoded. The managed C# lineage-witness decoder now also rejects
+  previous-recursive-proof count-prefix payloads above `CompactTokenMaxHops`
+  before attempting nested proof parsing.
+  C# raw init/append and transition-profile native wrappers now preflight the
+  embedded `KagemushaVerifiedFoldRecordBundle` payload, and the direct
+  record-backed compact-token, recursive-aggregation, recursive-compact, and
+  current-hop Pallas builder helpers preflight full record-bundle archives, so
+  raw count-prefix-only over-limit `steps` payloads fail before native dispatch
+  or truncated step parsing. The C# tests now also assert exact
+  `AssertArgumentDiagnostic` prefixes and parameter names for malformed and
+  empty-payload record-bundle, Pallas open-envelope, recursive compact
+  key-artifact, and previous recursive proof archives, and the SDK parity guard
+  plus workflow-wired negative controls require those exact helper markers. The
+  generic native archive preflight tests now use the same exact helper for
+  empty, oversized, malformed, and empty-payload request, bundle,
+  previous-witness, record-bundle, Pallas open-envelope, recursive compact
+  verifier/key-artifact, compact projection, and previous recursive proof
+  bundle inputs. Verify lineage-record and redeem change-output ordering tests
+  also assert exact request-archive diagnostics after semantic preflight passes.
+  The dedicated negative control mutates the shared helper, oversized helper,
+  verify-ordering assertions, and change-output ordering assertion
+  independently, rejecting substring-only drift for each label. The
+  C# tests assert the exact step-count diagnostic prefix plus the expected
+  parameter name, and the SDK parity guard now mutates the C# decoder and C#
+  over-limit vectors alongside the other SDKs.
+  C# raw init/append and transition-profile wrappers plus the direct
+  record-backed recursive-aggregation/recursive-compact prover helpers now also
+  reject supplied Pallas open-envelope archives with the wrong top-level vector
+  schema or a vector count that differs from the folded record-bundle hop
+  count; the C# tests assert the exact envelope-count diagnostic prefix plus the
+  expected parameter name, and the parity guard mutates the C# source and
+  mismatch tests for that boundary.
+  C# direct record-backed recursive-aggregation/recursive-compact prover
+  helpers now also decode supplied Pallas `OpenVerifyEnvelope` payloads far
+  enough to reject missing metadata, stale fixed-array metadata, trailing
   metadata-option bytes, declared metadata-option lengths that exceed the
   supplied payload, unknown metadata-option tags, raw count-prefix-only
-  `params.g`/`params.h` and proof `l`/`r` sequence-count mismatches with no
-  sequence elements, previous-proof count negatives, and misplaced
-  previous-proof opening and previous-lineage-record rejection on aggregation
-  append outputs.
+  `params.g` and proof `l` sequence mismatches, empty or over-limit transcript
+  labels, and trailing envelope bytes before native dispatch. The SDK parity
+  guard and workflow inventory include a C# inner-envelope negative control
+  that mutates the managed decoder and focused tests.
+  C# typed init/append request tests now also route malformed current-hop
+  Pallas archives through `Init`, `TransitionProfileInit`, `Append`, and
+  `TransitionProfileAppend`, pinning the same managed preflight before any
+  native bridge dispatch. The request-path coverage rejects missing
+  `domain_tag`, invalid metadata option tags, and count-prefix-only `params.g`
+  sequence payloads with exact diagnostic prefixes plus `requestArchive`, and
+  the parity guard and workflow inventory include a request-path negative
+  control for those markers.
+  C# record-bundle `steps` count-prefix preflight is now covered for raw
+  init/append request wrappers and direct record-backed/Pallas helper surfaces;
+  over-limit count-prefix-only payloads reject before native dispatch and are
+  pinned by the SDK record-bundle count-prefix negative control.
+  C# bundle summary decoding now parses and exposes accumulator top-up anchor
+  nullifiers, rejects empty, over-limit, all-zero, duplicate, descending, and
+  current-note-reused anchor sets before proof validation, and validates invalid
+  anchors before accumulator trailing-field diagnostics. The xUnit vectors cover
+  malformed proof bytes plus trailing accumulator fields so those errors cannot
+  mask invalid zero top-up anchors; the SDK top-up anchor negative control now
+  mutates the C# source and test markers too.
+  C# typed init/append Pallas open-envelope vector preflight is covered for
+  request archives and record-backed prover surfaces: count mismatches,
+  malformed metadata options, transcript labels, and sequence count-prefix
+  splices reject before native dispatch, and the C# Pallas negative controls pin
+  those source/test markers. The lineage-witness previous-proof count-prefix
+  guard is now SDK-wide too, including the C# count cap and vector.
+  C# raw append and transition-profile append request preflight now decodes the
+  embedded previous bundle after the current-hop record/Pallas checks, rejects
+  invalid aggregation-to-Reserved-lineage output selection, rejects supplied
+  previous-lineage verifier records for aggregation previous bundles, and
+  rejects previous-proof openings on aggregation append outputs before native
+  dispatch. The xUnit vectors use the ABI-7 aggregation append fixture, and the
+  SDK append output/previous-material negative controls mutate the C# markers
+  alongside the other SDK surfaces.
   Swift, Kotlin/JVM, and Android Java typed init/verifier request constructors
   now also assert exact diagnostics for missing init lineage verifier keys,
   wrong-schema record bundles, and wrong-schema verifier-record archives before
@@ -847,9 +1165,9 @@ and completed history lives in [`status.md`](./status.md).
   `Unexpected end of data` diagnostic for synthetic truncated Reserved-lineage
   witness archives, so malformed-witness vectors cannot fall back to broad
   exception assertions.
-  TODO(C# Windows): confirm the C# typed init/verifier request path carries the
-  same exact missing-lineage-key and wrong-schema archive diagnostics on a
-  Windows host.
+  The Ubuntu/Windows C# SDK matrix must keep the typed init/verifier request path
+  carrying the same exact missing-lineage-key and wrong-schema archive
+  diagnostics.
   Init and lineage-append requests must also keep lineage verifier/proving-key
   artifacts bound to the expected one-hop or append circuit and verifier-key
   commitment before serialization; wallet-facing constructors should prefer
@@ -870,9 +1188,10 @@ and completed history lives in [`status.md`](./status.md).
   independently, restores every surface, and prints exact diagnostics for
   raw-key, typed-artifact, and wrong-output lineage key drift.
   The append output-selection preflight guard now mutates each JavaScript,
-  Python, Swift, Kotlin/JVM, and Android Java constructor/test marker
-  independently, restoring every surface and printing exact diagnostics so
-  lineage-key validation cannot run before invalid append output selection.
+  Python, Swift, Kotlin/JVM, and Android Java constructor/test marker plus the
+  C# raw append preflight marker independently, restoring every surface and
+  printing exact diagnostics so lineage-key validation cannot run before invalid
+  append output selection.
   JavaScript package-dist raw lineage key vectors are now pinned independently:
   each malformed test message and request-object marker is mutated alone, and
   the init proving-only scanner is anchored to the `currentNote` object shape so
@@ -882,9 +1201,9 @@ and completed history lives in [`status.md`](./status.md).
   Android Java, and Python helper/test marker independently, restores every
   surface, and prints exact diagnostics for raw-key and typed-artifact
   preflight ordering before auto Pallas generation.
-  TODO(C# Windows): confirm the C# init/append helper overloads enforce the
-  same lineage key and typed-artifact preflight before any auto Pallas builder
-  path on a Windows host.
+  The Ubuntu/Windows C# SDK matrix must keep the C# init/append helper overloads
+  enforcing the same lineage key and typed-artifact preflight before any auto
+  Pallas builder path.
   Kotlin/JVM and Android Java append constructors now branch-select lineage key
   material before validating the nested `lineageProvingKeyArchive`, so
   malformed proving-key bytes on aggregation append outputs cannot mask the
@@ -901,11 +1220,36 @@ and completed history lives in [`status.md`](./status.md).
   wrong envelope count, and missing `domain_tag`, and the verify-lineage/Pallas
   negative control mutates those Python markers alongside the existing
   Kotlin/JVM and Android Java Pallas diagnostics.
-  TODO(C# Windows): add and certify the matching exact C# diagnostics for
-  init/append raw lineage-key mismatches, wrong-profile typed artifacts,
-  malformed verifier/proving-key inputs, auto-Pallas helper wrong-profile
-  artifacts, current-hop Pallas count mismatches, and missing Reserved-lineage
-  append previous-proof openings on a Windows host.
+  C# portable lineage key artifact tests now assert exact diagnostics for
+  wrong-profile raw verifier keys, verifier/proving-key mismatches, malformed
+  verifier keys, duplicate or padded `CID1` metadata, forged proving-key
+  circuit/commitment payloads, and malformed proving-key archives. Public
+  lineage-key artifact validators also pin exact diagnostic prefixes plus the
+  `artifacts` parameter for null artifacts, invalid circuit IDs, unsupported
+  opening lengths, invalid verifier-key backends, empty verifier keys, and
+  empty proving-key archives. The SDK parity guard and workflow inventory
+  include a C# exact-diagnostic negative control that weakens those assertions
+  back to substring checks and requires the drift to be rejected.
+  C# raw append and transition-profile append preflight now also reject supplied
+  lineage verifier/proving-key material on aggregation outputs before previous
+  lineage-record or previous-proof-opening validation, and the SDK append
+  lineage-key material-selection negative control mutates the C# source/test
+  markers alongside Swift, Kotlin/JVM, and Android Java.
+  Public Python/JavaScript README, source SDK, and portal SDK docs no longer
+  publish the removed `offline_kagemusha_abi7` readiness alias; they point
+  callers at `offline_kagemusha_recursive_compact_available`, and the SDK parity
+  workflow now scans README/source/portal markdown plus a negative control that
+  reintroduces the removed alias in each doc surface.
+  SDK READMEs and the offline Kagemusha design doc now describe
+  `lineage_verifier_record` as the current single-record field rather than a
+  legacy compatibility path; the README and offline-doc negative controls
+  reintroduce the stale wording and require the guard to reject it.
+  The Ubuntu/Windows C# SDK matrix must keep the matching exact C#
+  request/helper-path diagnostics for init raw lineage-key mismatches, append lineage-key
+  required/profile mismatches on Reserved-lineage outputs, wrong-profile typed
+  artifacts, auto-Pallas helper wrong-profile artifacts, and full current-hop
+  Pallas inner-envelope metadata mismatches beyond the pinned missing
+  `domain_tag` request path.
   Swift, Kotlin/JVM, and Android Java append constructors now also reject an
   unselectable `outputProofCircuitId` before applying optional lineage-key
   material selection, matching JavaScript and Python constructor ordering. The
@@ -918,9 +1262,9 @@ and completed history lives in [`status.md`](./status.md).
   and selection controls, must keep reporting first-line diagnostics for every
   mutated SDK/package-dist surface. The previous-proof opening negative
   control must mutate both misplaced supplied openings and missing required
-  openings across JavaScript source/package-dist, Python, Swift, Kotlin/JVM,
-  and Android Java, including the exact Python, Kotlin/JVM, and Android Java
-  missing-opening diagnostics. Python append request tests now also pin the
+  openings across JavaScript source/package-dist, Python, C#, Swift,
+  Kotlin/JVM, and Android Java, including the exact Python, C#, Kotlin/JVM, and
+  Android Java missing-opening diagnostics. Python append request tests now also pin the
   exact `previous_proof_open_envelopes requires exactly 1 envelope\(s\)`
   count-mismatch diagnostic, and the previous-proof-opening negative control
   mutates that exact Python marker alongside the existing Kotlin/JVM and
@@ -930,8 +1274,8 @@ and completed history lives in [`status.md`](./status.md).
   independently with snapshot restoration and exact first-line diagnostics, so
   one retained previous-proof or Pallas archive assertion cannot mask another
   SDK surface drifting. The append previous-lineage-record preflight guard now
-  also mutates every JavaScript, Python, Swift, Kotlin/JVM, Android Java, and
-  JVM/Android auto previous-openings helper marker independently, restoring
+  also mutates every JavaScript, Python, C#, Swift, Kotlin/JVM, Android Java,
+  and JVM/Android auto previous-openings helper marker independently, restoring
   each target between checks so missing-record validation cannot be masked by
   retained proof-opening generation coverage. The append previous-lineage-record
   parse-preflight guard now independently mutates JavaScript source/dist,
@@ -939,8 +1283,8 @@ and completed history lives in [`status.md`](./status.md).
   malformed lineage-record parsing cannot silently move behind previous-proof
   opening validation. The append previous-lineage-record selection guard now
   mutates every JavaScript source/dist, JavaScript test/package-dist, Python,
-  Swift, Kotlin/JVM, and Android Java source/test marker independently, while
-  preserving replace-all mutation for repeated Kotlin/JVM and Android Java
+  C#, Swift, Kotlin/JVM, and Android Java source/test marker independently,
+  while preserving replace-all mutation for repeated Kotlin/JVM and Android Java
   constructor diagnostics. The Swift append previous-lineage selection guard
   must pin the `append_bundle` regression block specifically, so an earlier
   duplicate `previousLineageVerifierRecord` marker cannot mask drift.
@@ -960,9 +1304,29 @@ and completed history lives in [`status.md`](./status.md).
   broad field-name match.
   Offline Note V2 SDK parity guards now run JVM decoder placeholder removal,
   JVM instruction wrapper, JVM instruction decoder, canonical instruction
-  wire-name, and Swift instruction decoder mutations independently per SDK
-  surface or Swift API marker, restoring each target before the next check so
-  one retained Offline Note V2 instruction diagnostic cannot mask another.
+  wire-name, retired instruction alias rejection, and Swift instruction decoder
+  mutations independently per SDK surface or Swift API marker, restoring each
+  target before the next check so one retained Offline Note V2 instruction
+  diagnostic cannot mask another.
+  Android Java Kagemusha, Offline Note V2, offline production helper code,
+  Torii offline/confidential response-error classes, central
+  `HttpClientTransport` request/status handling, `ClientConfig`/Norito RPC
+  setup/request options, subscription clients, WebSocket clients, SSE clients,
+  identifier/RAM-LFE/account-alias/contract parser and list-response helpers,
+  pipeline-status options, receipt-verifier helpers, public-key codecs,
+  key-management/signing/export-store helpers, keystore attestation helpers,
+  privacy witness list material, identifier BFV public parameters, and the
+  verifier backend tag classifier, Sora VPN/Soracloud private uploaded-model
+  parsers, and fake HTTP test transport used by the Kagemusha parity harness,
+  plus the
+  shared model/client/transport primitives used by the offline
+  submission path must also stay Java 8 API-compatible; the SDK parity guard's
+  `--negative-control-android-java-kagemusha-jdk8-api-surface` mode pins the
+  active replacements for Java 9+ `List.of`, `Map.of`, `Set.of`,
+  `List.copyOf`, `Arrays.compareUnsigned`, and try-with-resources shorthand,
+  plus Java 9 `CompletableFuture.failedFuture`, Java 10 URL encoder/decoder
+  overloads, and Java 11 `Files.readString`, `String.isBlank`, and
+  `Optional.isEmpty`.
   The Rust recursive compact unavailable classifier guard now mutates the C
   bridge, Node host, and Python PyO3 host classifiers independently with exact
   missing-pattern diagnostics, so one retained host classifier cannot mask
@@ -973,7 +1337,7 @@ and completed history lives in [`status.md`](./status.md).
   The recursive compact projection surface guard now mutates JavaScript,
   Python, Swift, Kotlin/JVM, and Android Java projection availability markers
   independently, keeping compact projection SDK surfaces fail-closed across
-  non-C# SDKs while C# remains queued for Windows validation.
+  SDKs while the C# side stays covered by the Ubuntu/Windows matrix lane.
   The JavaScript source compact projection invalid-archive guard now mutates the
   oversized and missing archive vectors independently while still requiring both
   direct and at-height coverage diagnostics for each vector.
@@ -1074,9 +1438,9 @@ and completed history lives in [`status.md`](./status.md).
   negative control now mutates each Kotlin and Android Java marker
   independently, restores each test snapshot, and prints the exact diagnostic
   for every rejected shape/binding drift.
-  TODO(C# Windows): certify matching C# exact indexed hop-evidence diagnostics
-  for transfer public-input shape, same-root rejection, multi-hop continuity,
-  chain-id mismatch, and asset mismatch on a Windows host.
+  The Ubuntu/Windows C# SDK matrix must keep matching C# exact indexed
+  hop-evidence diagnostics for transfer public-input shape, same-root rejection,
+  multi-hop continuity, chain-id mismatch, and asset mismatch.
 - Kagemusha Offline/Offline V2 readiness parsers must reject the removed
   `offline_kagemusha_abi7*` key family outright. First-release readiness uses
   only the `offline_kagemusha_recursive_compact_*` key family, and every
@@ -1102,8 +1466,9 @@ and completed history lives in [`status.md`](./status.md).
   `kagemusha_force_legacy` configuration field must stay absent from readiness
   source and response bodies. The SDK parity guard now tracks the Torii handler
   source, the Torii Offline/Offline V2 readiness smoke files, and their
-  workflow paths; the mobile offline-readiness negative control injects removed
-  gate and smoke-assertion drift to prove the guard rejects both. Torii
+  workflow paths with removed-field absence labels; the mobile
+  offline-readiness negative control injects removed gate and smoke-assertion
+  drift to prove the guard rejects both. Torii
   readiness must also keep mobile artifact archive availability false: Torii
   reports native runtime readiness, while Core API serves and gates mobile
   artifacts. JavaScript, Python, Swift, Kotlin/JVM, and Android Java canonical
@@ -1112,9 +1477,8 @@ and completed history lives in [`status.md`](./status.md).
   parity artifact-contract negative control mutates those fixtures and Torii
   smoke assertions back to artifact-true to prove drift is rejected. Swift's
   `hasKagemushaRecursiveCompactMetadata` helper must remain independent from
-  artifact archive availability. TODO(C# Windows): certify the same
-  artifact-false Torii readiness contract in the C# SDK on a Windows host
-  without changing it from this non-C# pass.
+  artifact archive availability. The Ubuntu/Windows C# SDK matrix must keep the
+  same artifact-false Torii readiness contract in the C# SDK.
 - Confidential-v2 JVM/Android proof assembly now has typed transfer and
   unshield witness/request codecs for the production native bridge. Keep wallet
   integrations on these builders instead of raw witness bytes so canonical
@@ -1136,10 +1500,15 @@ and completed history lives in [`status.md`](./status.md).
   rejection, and transfer/unshield verifier-ref separation, and the privacy JVM
   runner compiles these Android privacy harnesses from the Android plus Norito
   sourcepath so codec dependencies cannot fall out of direct `javac`
-  verification.
-  TODO(C# Windows): certify matching C# confidential transfer/unshield verify
-  request proof-size prechecks for `proof must not exceed 33554432 bytes` on a
-  Windows host.
+  verification. C# now emits parameter-specific managed proof-request
+  diagnostics before native dispatch, including `proof must not exceed 33554432
+  bytes` for confidential transfer/unshield verifier requests. The C# privacy
+  proof-request archive tests now also pin exact `requestArchive` diagnostics
+  for empty, oversized, malformed, wrong-schema, and empty-payload request
+  archives before native dispatch. The SDK parity guard mutates the C# source,
+  test, request-archive diagnostics, and component diagnostic markers.
+  The Ubuntu/Windows C# SDK matrix must keep the same C# confidential
+  transfer/unshield verify request proof-size prechecks.
 - Kagemusha C# SDK validation now passes on this macOS host with .NET SDK
   8.0.128 through `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, including
   a freshly built `connect_norito_bridge` native library and 721 focused SDK
@@ -1158,125 +1527,50 @@ and completed history lives in [`status.md`](./status.md).
   `payload`/`attestation` receipt envelope while rejecting mixed legacy/nested
   envelopes, missing nested objects, malformed signed/proof attestation
   combinations, invalid proof base64, and non-exact receipt execution fields
-  before callers consume receipt data.
-  Windows remains a separate host-certification follow-up so the same C# lane
-  is proven against `connect_norito_bridge.dll`, Windows loader paths, RID, and
-  architecture. The Windows pass must also pin the C# negative controls for
-  malformed Norito input/output headers, caller archive-copy immutability,
-  verifier-unavailable status mapping, transaction-builder schema and wire-name
-  drift, and package/evidence parity. After the Windows run passes, update
-  `status.md` with the Windows C# SDK evidence and rerun the Kagemusha SDK
-  parity or production readiness guards needed to clear the Windows-only row.
-  Windows-machine TODOs:
-  - Run this certification on a Windows machine. macOS or Linux `.NET 8`
-    transcript evidence, even when locally green, must not clear the
-    Windows-only SCCP row because the release gate must prove
-    `connect_norito_bridge.dll`, Windows loader paths, RID, and architecture.
-  - Select a stable .NET 8.0.x SDK and capture `dotnet --version` in the run log;
-    preview/prerelease SDK version strings or zero-padded numeric segments are
-    not release evidence. The `SCCP .NET SDK version:` marker must appear after
-    `dotnet --version`; earlier version markers are forged evidence. The phase
-    commands must run in `dotnet --version`, `dotnet --info`,
-    `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict
-    `dotnet test` order; reordered command transcripts are forged.
-  - Capture the Windows `dotnet --info` output, including OS name, OS platform,
-    RID, and architecture, so the native C# pass is tied to the host that loaded
-    the bridge. The corridor runner now requires exactly one `OS Name:`, one
-    `OS Platform:`, one `RID:`, and either one `OS Architecture:` field or, when
-    that field is absent, one Host `Architecture:` field from that output; both
-    OS fields must be exactly `Windows`, the RID must be canonical lower-case
-    Windows, and the RID architecture segment must agree with the architecture
-    marker. The `SCCP .NET SDK OS:`, `RID:`, and `Architecture:` markers must
-    appear after `dotnet --info`; duplicate or missing
-    `OS Name:`/`OS Platform:` fields, including missing `OS Name:`, duplicate
-    `OS Name:`, missing `OS Platform:`, and duplicate `OS Platform:` cases,
-    missing or duplicate RID fields, duplicate `OS Architecture:`, missing or
-    duplicate Host `Architecture:` when `OS Architecture:` is absent,
-    uppercase, foreign-platform, or alias-architecture RID values, mismatched
-    RID/architecture pairs, architecture alias values such as `amd64`,
-    `x86_64`, or `aarch64`, colon-injected metadata values, or host markers
-    printed earlier fail before bridge build, restore, or test execution and
-    remain forged evidence.
-  - Keep the Windows `.NET 8` SCCP phase transcript free of restore/build
-    diagnostics: `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero
-    `Error(s)` counts, `Failed to restore`, and restore/build failed markers
-    are not-ready evidence even when later VSTest success and TRX markers are
-    present.
-  - Keep traced `.NET` phase commands shell-parseable; readiness and strict
-    bundle verification now reject malformed command quoting with a fixed
-    transcript blocker before non-canonical setup/test commands can be hidden
-    beside the strict SCCP command sequence. Shell xtrace command extraction
-    also normalizes hidden format/control characters before `.NET` command
-    validation, so an obfuscated `+ dotnet ...` line cannot bypass the
-    canonical setup/test command checks. Parser normalization removes only the
-    runner's outer `(cd ... && ...)` wrapper parentheses, not parentheses inside
-    `.NET` command arguments such as the TRX logger value, and non-runner
-    parenthesized command groups such as `(dotnet test ...)` are fixed
-    transcript blockers instead of being normalized into canonical commands.
-    Runner `cd` wrappers for SDK commands must also match the phase-owned SDK
-    directory basename, so `.NET` commands traced from a non-`csharp` directory
-    fail with category-only diagnostics before forged local paths can leak.
-    Traced `.NET` `env` prefixes may only carry the runner-owned
-    `DOTNET_ROOT`, `DOTNET_CLI_TELEMETRY_OPTOUT=1`,
-    `DOTNET_CLI_UI_LANGUAGE=en`, and optional `PATH` assignments; extra or
-    drifted environment knobs are fixed transcript blockers. When a traced
-    `.NET` command invokes a directory-qualified `dotnet` binary, its
-    `DOTNET_ROOT` prefix must also match that binary directory; env-prefixed
-    bare `dotnet` commands and directory mismatches use the same fixed
-    transcript blocker. Traced restore/test `PATH` prefixes, when present, must
-    start with the freshly built `connect_norito_bridge.dll` directory printed
-    by the bridge marker, so a copied transcript cannot load a different native
-    bridge through `PATH`, and empty path-list segments such as trailing,
-    leading-after-prefix, or interior doubled separators remain fixed transcript
-    blockers. The native bridge
-    `cargo build` trace may carry only the runner-owned `CARGO_TARGET_DIR` env
-    assignment; extra bridge-build env knobs are fixed transcript blockers.
-  - Require the Windows `.NET 8` SCCP VSTest summary to report `Skipped: 0`;
-    a `Passed!` line with skipped SCCP tests is not production-certifying
-    evidence even when `Failed: 0` and the total count is internally consistent,
-    and a noncanonical `Skipped: 00` summary is also rejected as forged evidence.
-  - Require the VSTest summary duration to be a numeric unit duration such as
-    `1 s` or `65 ms`; free-form duration text is not release evidence.
-  - Require the VSTest summary to keep label/value and number/unit separators
-    present and to use only ordinary spaces for VSTest padding;
-    collapsed spacing or tab/control-whitespace splices in the success line are
-    forged evidence.
-  - Require the VSTest summary line to end with
-    `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)`, so copied pass counts from a
-    different test assembly cannot certify the SCCP `.NET` phase.
-  - Require the direct `sccp-dotnet-sdk.trx` XML to be VSTest-shaped: the root
-    must be `TestRun`, `UnitTestResult` rows must be direct children of
-    `Results`, and `UnitTest` definitions must be direct children of
-    `TestDefinitions` before the runner may publish `SCCP .NET SDK TRX:` or
-    TRX byte-count evidence. When a `UnitTestResult` carries `testName`, it
-    must match the SCCP definition bound by `testId` or `executionId` and carry
-    an exact `Sccp...` token itself. SCCP TRX definition/result names used for
-    binding must also be unpadded and control-character-free.
-  - Run `ci/check_kagemusha_recursive_spend_csharp_sdk.sh`, or the equivalent
-    direct `dotnet test` command with the same native bridge path setup.
-  - Confirm the Windows runner log prints `connect_norito_bridge native bridge:`
-    and `connect_norito_bridge native bridge sha256:` for the freshly built
-    `connect_norito_bridge.dll` before the P/Invoke tests start.
-  - Update and certify the C# shared ABI-6 archive fixture assertions for the
-    regenerated append request hash
+  before callers consume receipt data. The C# Kagemusha recursive-redeem
+  transaction-builder metadata overloads now also pin exact managed diagnostic
+  prefixes and parameter names for amount, change-output, lineage, and
+  request-archive preflight failures, with the parity guard mutating those
+  message/parameter pairs in the recursive-redeem builder metadata negative
+  control. The C# Kagemusha instruction-archive transaction wrapper now also
+  pins exact `instructionArchive` diagnostics for empty, malformed,
+  wrong-schema, empty-payload, compressed, unsupported-flag,
+  invalid-field-bitset, and padded-header archives, with the instruction
+  transaction-builder negative control mutating one of those exact pairs.
+  The Kagemusha C# SDK workflow now runs this lane through the same
+  `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` script on Ubuntu and
+  Windows. The matrix builds a fresh `connect_norito_bridge` native library,
+  records the path and lowercase SHA-256, configures the loader path before
+  P/Invoke, and runs the .NET 8 test filter for
+  `KagemushaRecursiveSpendNativeTests`, `PrivacyNativeTests`,
+  `TransactionBuilderTests`, `CanonicalRequestTests`, `ToriiClientTests`,
+  `SignedQueryBuilderTests`, `SignedIterableQueryBuilderTests`,
+  `VerifyingKeyBackendTagTests`, and `ToriiIdentifierReceiptTests`. The SDK
+  parity guard rejects removal of the Windows leg, bash shell, 40-minute
+  timeout, job dependency, or required script ordering. SCCP Windows release
+  evidence remains tracked separately in the SCCP production-corridor sections.
+  - The C# matrix must keep the native bridge markers
+    `connect_norito_bridge native bridge:` and
+    `connect_norito_bridge native bridge sha256:` before the P/Invoke tests
+    start, with Windows proving the `.dll` loader path and Ubuntu proving the
+    Linux shared-object path.
+  - The C# shared ABI-6 archive fixture assertions remain pinned to the current
+    append request hash
     `60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57`,
     transition-profile init hash
     `a4862fe9dfa034755c292d8e92449589d9b499e2a20c1b27519261c4ab2136d5`,
     transition-profile append hash
     `8152ec1d4df4fe8df290d3b049108260f57d9014b8f551065073c17f6523fb7e`,
     redeem request hash
-    `703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864`,
+    `1fe949217c8bbe26957cf2a2510d79894e15b20fc5143dee2c3a1ff8678d3a5d`,
     and redeem instruction hash
-    `e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e`,
-    then rerun the C# SDK gate on Windows.
-  - TODO(C# Windows): add typed redeem request support for the trailing
-    defaulted `lineage_verifier_records: Vec<VerifyingKeyRecord>` field,
-    keep the legacy `lineage_verifier_record` single-record path working,
-    and certify multi-profile record-backed lineage-witness redeem cases on
-    the Windows .NET runner.
-  - Update and certify the C# shared ABI-7 archive fixture assertions for the
-    regenerated current `64x4` profile hashes on the Windows host:
-    append-bundle
+    `dd7bcb5ab602696be67028e03578933a93e9396057a5decefe8cc9058662bf85`.
+    The same lane must keep the trailing
+    `lineage_verifier_records: Vec<VerifyingKeyRecord>` field and the
+    metadata-bound redeem preflight overloads that treat single-record and
+    plural Reserved-lineage verifier-record evidence equivalently.
+  - The C# shared ABI-7 archive fixture assertions remain pinned to the
+    regenerated current `64x4` profile hashes: append-bundle
     `107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5`,
     verify-request
     `ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d`,
@@ -1286,218 +1580,40 @@ and completed history lives in [`status.md`](./status.md).
     `f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250`,
     and redeem-instruction
     `d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838`.
-  - Confirm the pass includes `KagemushaRecursiveSpendNativeTests`,
-    `PrivacyNativeTests`, `TransactionBuilderTests`, `CanonicalRequestTests`,
-    `ToriiClientTests`, `SignedQueryBuilderTests`, and
-    `SignedIterableQueryBuilderTests`, and `VerifyingKeyBackendTagTests`.
-  - Confirm `KagemushaRecursiveSpendNativeTests` exercises
-    `KagemushaOverlongCompactLength`,
-    `KagemushaOversizedTerminalCompactLength`,
-    `KagemushaHugeCanonicalCompactLength`,
-    `overlongVersionLengthArchive`, `oversizedTerminalCompactLengthArchive`,
-    `hugeCanonicalCompactLengthArchive`, `overlongCircuitStringArchive`, and
-    `invalidUtf8CircuitArchive` so the C# parser rejects non-canonical,
-    address-space oversized, u64-overflowing compact lengths and invalid UTF-8
-    lineage archive circuit fields on Windows.
-  - Confirm the Windows C# pass includes the managed bundle-summary decoder
-    mirrors already covered on macOS: unsupported proof circuit
-    `kagemusha-recursive-spend-lineage-badhop-v1`, unsupported proof backend
-    `halo2/kzg`, empty recursive proof `ProofBox.bytes`, invalid accumulator
-    domains, malformed fixed-size accumulator asset/root fields, invalid
-    accumulator `hop_count` vectors, missing recursive-proof public inputs,
-    all-zero 32-byte public-input hashes, and public-input hash mismatches all
-    reject before native dispatch.
-  - Confirm the Windows C# pass includes managed bundle-summary decoder
-    malformed fixed-array vectors for the core accumulator corridor digests:
-    `aggregation_transcript_digest`, `nullifier_digest`,
-    `output_commitment_digest`, `fold_digest`,
-    `recursive_proof_chain_digest`, and
-    `transition_profile_binding_digest`; short, count-prefixed, and long
-    payload encodings must all reject with field-scoped diagnostics before
-    native dispatch.
-  - Confirm the Windows C# pass includes managed bundle-summary decoder
-    malformed fixed-array vectors for `append_opening_preflight_digest`,
-    `append_boundary_digest`, `verifier_params_fingerprint`,
-    `fixed_window_table_schedule_digest`,
-    `fixed_window_shared_table_manifest_digest`,
-    `fixed_window_table_base_digest`, and `verifier_witness_batch_digest`;
-    short, count-prefixed, and long payload encodings must all reject with
-    field-scoped diagnostics before native dispatch.
-  - Add the C# SDK README/native-material alias parity follow-up on the Windows
-    machine: document generic proof-state, recursive/lineage proof-state,
-    aggregation-transcript, fixed-window table schedule/shared-manifest/base,
-    verifier-witness batch, transition-profile binding, append-opening
-    preflight, recursive verifier scalar-projection, and previous/resulting
-    accumulator aliases as native-owned C# material, then add the matching C#
-    branch to the SDK README native-material negative control.
-  - Confirm the Windows C# pass includes the managed bundle-summary decoder
-    vector that replaces accumulator field index 1 with a raw `chain_id`
-    string payload and rejects it before native dispatch.
-  - Confirm the Windows C# pass includes the managed bundle-summary decoder
-    vector that mutates only nested `ProofBox.backend` to `halo2/kzg` while
-    leaving verifier metadata unchanged, and rejects it before native dispatch.
-  - Confirm the Windows C# pass includes the managed bundle-summary decoder
-    trailing-field vectors already covered on macOS: extra top-level bundle,
-    accumulator-summary, current-note, current-note amount, recursive-proof,
-    verifier-key-id, and proof-box fields all reject before native dispatch.
-  - Confirm the Windows C# pass includes the managed verify-result and
-    lineage-witness trailing-field vectors already covered on macOS: extra
-    ABI-7 verify-result, top-level lineage-witness,
-    previous-recursive-proof-sequence, individual previous-proof, and nested
-    previous-proof verifier-key-id fields all reject before wallet preflight
-    trusts decoded summaries.
-  - Confirm the Windows C# pass includes the managed bundle and lineage-witness
-    previous-proof public-input-hash malformed fixed-array vectors already
-    covered on macOS: short, count-prefixed, and long hash payloads all reject
-    with field-scoped diagnostics before native dispatch.
-  - Confirm the Windows C# pass includes the same managed bundle current-note
-    malformed vectors already covered on macOS: all-zero note commitment,
-    all-zero spend nullifier, note/nullifier aliasing, zero amount, and the
-    short/long fixed-array note-commitment and spend-nullifier payload vectors
-    so they reject before native dispatch or wallet-facing summary metadata.
-  - Confirm the Windows C# pass includes typed verify request negatives already
-    covered on macOS for a missing `lineage_verifier_record` on a
-    Reserved-lineage final bundle and an extra `lineage_verifier_record` on a
-    semantic final bundle, matching the SDK preflight rule before P/Invoke
-    dispatch.
-  - Confirm the Windows C# pass includes typed redeem request negatives for
-    semantic final bundles with a missing `lineage_verifier_record` when the
-    lineage witness contains a prior Reserved-lineage proof, and with an extra
-    semantic `lineage_verifier_record` when the lineage witness is absent or
-    init-only, matching the non-C# SDK lineage-witness summary preflight before
-    P/Invoke dispatch.
-  - Confirm the Windows C# pass includes typed redeem `changeOutput` fixed32
-    negatives already covered on macOS: a 31-byte present change commitment and
-    an all-zero 32-byte present change commitment both reject before P/Invoke
-    dispatch or transaction-builder mutation.
-  - Confirm the Windows C# pass includes typed redeem `changeOutput`
-    reserved-collision negatives already covered on macOS for non-C# SDKs:
-    reusing the current note commitment, the current note spend nullifier, or
-    a top-up anchor nullifier must reject before P/Invoke dispatch or
-    transaction-builder mutation.
-  - Confirm the Windows C# pass labels and pins the typed accumulator top-up
-    anchor nullifier decode negatives already enumerated on macOS for non-C#
-    SDKs: empty list, zero nullifier, over-limit count, duplicate nullifier,
-    descending order, current-note commitment reuse, and current-note spend
-    nullifier reuse, plus the raw over-limit count-prefix-only case that carries
-    no sequence elements. The active non-C# SDKs now also pin the exact
-    diagnostic split for those cases: count out of range, zero nullifier,
-    non-strict sorted/unique order, and current-note material reuse.
-  - Confirm the Windows C# pass validates accumulator top-up anchor nullifiers
-    before recursive-proof parsing, so malformed proof bytes cannot mask an
-    invalid top-up anchor set or change the expected field-scoped diagnostic.
-    The active non-C# SDK tests now all pin that accumulator-before-proof
-    precedence with malformed-proof adversarial bundles through the SDK parity
-    guard.
-  - Confirm the Windows C# pass covers append transition profiles carrying the
-    previous accumulator's top-up anchors, including missing/zero previous
-    anchors and rejected append outputs or current-note fields that reuse a
-    carried previous anchor before native dispatch.
-  - Confirm the C# ABI-7 Pallas open-envelope archive builders on Windows,
-    matching the source-level wrappers and macOS-focused tests for current-hop
-    record bundles and previous recursive proof bundles. The Windows pass should
-    pin malformed input archives, stale/missing native symbols, and malformed
-    native output archive rejection before those helpers are marked supported on
-    that host.
-  - Confirm the Windows C# typed Pallas open-envelope preflight rejects raw
-    count-prefix-only `params.g`/`params.h` and proof `l`/`r` sequence-count
-    mismatches for current-hop and previous-proof openings before element
-    parsing can mask them as truncated vectors.
-  - Confirm the Windows C# pass includes the negative that a
-    whitespace-padded `CID1` circuit id in the lineage verifier key rejects as
-    `lineage_verifier_key` before native bridge dispatch, even when the
-    proving-key archive commits to that padded verifier key.
-  - Confirm whether the C# SDK has or adds an Offline Note V1/V2 canonical
-    model/decoder surface; if so, mirror the Swift/Kotlin/Android exact-domain
-    negatives for key-certificate payload, issued-claim, redeem-public-inputs,
-    and audit-public-inputs domains, including padded-domain rejection.
-  - Confirm whether the C# SDK has or adds an Offline Note receipt ACK
-    model/codec surface; if so, mirror the Swift/Kotlin/Android exactness
-    negatives for `chain_id`, `payment_request_id`, `recipient_account_id`,
-    and positive `accepted_at_ms` validation at construction and decode
-    boundaries.
-  - Confirm whether the C# SDK has or adds an Offline Note wallet-note
-    persistence surface; if so, mirror the Swift/Kotlin/Android exactness
-    negatives for persisted `chain_id`, `account_id`, and optional
-    `spent_payment_request_id`, rejecting padded or blank values instead of
-    normalizing them across account-scope or replay-prevention boundaries.
-  - Confirm whether the C# SDK has or adds an Offline Note wallet draft-proof
-    flow; if so, mirror the Swift/Kotlin/Android guard that
-    `offline-note/draft-placeholder` proofs are draft-only, then replaced,
-    binding-validated, and recursively verified for audit/redeem before use.
-  - Confirm the Windows C# pass includes identifier receipt attestation
-    selector exactness: Torii JSON receipt parsing now rejects padded,
-    control-character, or mixed-case attestation `kind` tags before selecting
-    signed/proof behavior. If C# canonical attestation builders are added
-    later, mirror the same selector checks there too.
-  - Confirm the Windows C# pass includes identifier receipt proof-attestation
-    exactness: Torii JSON receipt parsing now rejects missing, padded, or
-    malformed proof-attestation `proof_b64` before base64 decoding or proof
-    behavior selection. If C# canonical attestation builders are added later,
-    mirror the same proof checks there too.
-  - C# Torii identifier-resolve JSON parsing now rejects padded response
-    `signature`, `signature_payload_hex`, exposed `payload.opening.signature`,
-    and signed-attestation `signature` fields before callers can decode or
-    verify receipt bytes. The focused .NET 8 Torii tests cover these source-level
-    negatives; if C# canonical payload/attestation builders or verifier inputs
-    are added later, mirror the same padded opening-signature and
-    signed-attestation signature vectors there too.
-  - Confirm the Windows C# pass includes identifier receipt policy-id
-    exactness: `ResolveIdentifierAsync` now rejects non-exact request
-    `policy_id`, top-level response `policy_id`, and
-    `signature_payload.policy_id` / `signature_payload.payload.policy_id`
-    values with padded, control-character, or malformed `kind#rule`
-    components before HTTP dispatch or receipt verification. If a C#
-    canonical receipt payload builder is added later, mirror the same
-    policy-id checks there too.
-  - Confirm the Windows C# pass includes identifier receipt program-id
-    exactness: Torii JSON receipt parsing now rejects padded or
-    control-character `signature_payload.payload.execution.program_id` and
-    `signature_payload.payload.opening.payload.program_id` values before
-    receipt verification. If a C# canonical receipt payload builder is added
-    later, mirror the same program-id checks there too.
-  - Confirm the Windows C# pass includes identifier receipt account-id
-    exactness: Torii JSON receipt parsing now rejects padded or
-    control-character `signature_payload.payload.account_id` values before
-    receipt verification. If a C# canonical receipt payload builder is added
-    later, mirror the same account-id checks there too.
-  - Confirm the Windows C# pass includes identifier receipt hash-field
-    exactness: Torii JSON receipt parsing now rejects padded or
-    control-character `signature_payload.payload.opaque_id`,
-    `signature_payload.payload.receipt_hash`,
-    `signature_payload.payload.uaid`, execution digest fields, and opening
-    payload digest fields before receipt verification. If a C# canonical
-    receipt payload builder is added later, mirror the same digest-field checks
-    there too.
-  - Confirm the Windows C# pass includes identifier receipt timestamp
-    exactness: Torii JSON receipt parsing now rejects padded numeric-string
-    receipt times for `signature_payload.payload.execution.executed_at_ms`,
-    `signature_payload.payload.execution.expires_at_ms`,
-    `signature_payload.payload.opening.payload.opened_at_ms`, and
-    `signature_payload.payload.opening.payload.expires_at_ms`, and rejects
-    negative receipt times before receipt verification. If a C# canonical
-    receipt payload builder is added later, mirror the same u64 checks there
-    too.
-  - Confirm the Windows C# `TransactionBuilder`/`TransactionEncodingContext`
-    pass includes the new focused negatives for padded constructor,
-    instruction, metadata, and common encoder fields. Chain ids,
-    authority/account ids, asset/domain ids, metadata keys, numeric strings,
-    optional strings, NFT/trigger labels, and label-like fields now reject
-    surrounding whitespace or control characters before Norito transaction bytes
-    are encoded or signed instead of normalizing with `Trim()`.
-  - Confirm the Windows C# canonical request auth pass includes the new
-    `CanonicalRequestTests` and `ToriiClientTests` negatives for padded or
-    explicitly blank account ids, caller-provided nonces, methods, and paths;
-    the implementation now rejects those values before signing or header
-    emission instead of accepting `ArgumentException.ThrowIfNullOrWhiteSpace`
-    or generating a fresh nonce for caller-supplied blank values.
-  - Confirm the Windows C# SDK lane includes `PrivacyNativeTests`, whose
-    cross-platform .NET 8 pass now covers the public VeRange V1 aliases
-    `BuildVeRangeProofV1`, `buildVeRangeProofV1`, `VerifyVeRangeProofV1`, and
-    `verifyVeRangeProofV1` alongside the generic `BuildProofV1` and
-    `VerifyProofV1` archive paths.
-  - Re-run `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after recording
-    the Windows evidence so C# SDK parity status can be cleared explicitly.
+  - The matrix must keep the C# managed decoder and typed preflight coverage for
+    non-canonical compact lengths, invalid UTF-8 circuit ids, unsupported proof
+    circuit/backend values, empty proof bytes, invalid accumulator domains and
+    hop counts, fixed32 digest/current-note vectors, raw accumulator `chain_id`
+    string payloads, proof-box backend drift, trailing Norito fields,
+    verify-result and lineage-witness trailing fields, previous-proof
+    public-input hash shapes, public-input hash mismatches, lineage verifier
+    record selection, change-output fixed32 and reserved-collision cases,
+    top-up anchor nullifiers, transition-profile previous-anchor reuse,
+    ABI-7 Pallas open-envelope builder inputs/native outputs, sequence-count
+    preflight, and padded `CID1` lineage-key rejection before native dispatch.
+  - The C# README/native-material boundary is current: generic proof-state,
+    recursive/lineage proof-state, aggregation-transcript, fixed-window
+    table-schedule/shared-manifest/base, verifier-witness batch,
+    transition-profile binding, append-opening preflight, recursive verifier
+    scalar-projection, and previous/resulting accumulator aliases are documented
+    as native-owned C# material. The recursive compact unavailable boundary
+    must describe bridge error `-312` as reserved ABI-7 state, not legacy
+    state; the SDK README guard rejects both removing that boundary and
+    reintroducing stale legacy wording across every SDK README.
+  - If C# adds Offline Note V1/V2 canonical model/decoder, receipt ACK,
+    wallet-note persistence, or wallet draft-proof surfaces later, mirror the
+    Swift/Kotlin/Android exact-domain, exact-identifier, positive timestamp,
+    and draft-proof replacement/binding negatives before exposing those surfaces.
+  - The C# matrix must keep Torii identifier receipt exactness,
+    `TransactionBuilder`/`TransactionEncodingContext` exactness, canonical
+    request auth exactness, and `PrivacyNativeTests` coverage for VeRange V1
+    public aliases, Norito archive argument diagnostics, privacy output-reader
+    diagnostics, bridge errors, native-output schema drift, and unknown privacy
+    operation symbols.
+  - Re-run `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` and
+    `ci/check_kagemusha_recursive_spend_sdk_parity.sh` after C# Kagemusha,
+    identifier receipt, transaction-builder, canonical auth, or privacy native
+    surface changes.
 - Kagemusha JVM SDK validation must keep the focused runner aligned with the
   parity inventory: Kotlin/JVM runs recursive spend, canonical request auth,
   Torii confidential asset clients, Offline Torii readiness clients,
@@ -1809,8 +1925,9 @@ and completed history lives in [`status.md`](./status.md).
   and TypeScript declarations, so the scanner proves those material families
   stay native-owned outside the package-declaration test too. Non-C# SDK
   READMEs must document the same native-owned alias boundary, with a dedicated
-  negative control that mutates the Swift, Kotlin/JVM, Android Java,
-  JavaScript/TypeScript, and Python docs while leaving C# for the Windows pass.
+  negative control that mutates the Swift, Kotlin/JVM, Android Java, C#,
+  JavaScript/TypeScript, and Python docs through the same workflow-backed SDK
+  guard.
   That control must require exact diagnostics for every alias marker in every
   mutated README so a single generic proof-state marker cannot mask narrower
   documentation drift, and it must separately pin each SDK's "not request
@@ -1873,8 +1990,8 @@ and completed history lives in [`status.md`](./status.md).
   negative control mutates JavaScript source/dist implementation exports,
   browser helpers, source/dist re-exports, TypeScript declarations, Python
   wrapper/package re-exports, JavaScript source/package-dist and Python helper
-  edge-case vectors, and Swift/Kotlin/Android witnessless helper bounds, with
-  C# helper certification left to the Windows follow-up.
+  edge-case vectors, Swift/Kotlin/Android witnessless helper bounds, and C#
+  helper coverage through the Ubuntu/Windows SDK matrix.
   SDK parity workflow checks must continue rejecting missing, commented,
   replaced, or reordered parity commands for the exact command or ordering
   label, so unrelated workflow failures cannot mask a missing negative-control
@@ -2042,10 +2159,15 @@ and completed history lives in [`status.md`](./status.md).
   negative control now mutates that same full family list across Kotlin/JVM
   and Android Java, with exact labels for both Android u128 overflow rows, so
   redeem-only vector drift cannot hide behind the broader note-amount control.
-  TODO(C# Windows): confirm the C# spendable-note request path reports the same
-  exact digest length, zero-value, and repeated-material diagnostics on a
-  Windows host, and confirm its amount/publicAmount invalid-value vectors carry
-  the same field-specific diagnostics.
+  C# redeem change-output preflight now pins the same invalid decimal family
+  for `publicAmount` and `currentNoteAmount`, including empty, zero, leading
+  zero, signed, decimal/exponent, whitespace, newline/tab, and both u128
+  overflow representatives with exact field-specific diagnostics; the SDK
+  parity guard also requires the exact C# helper call sites for those amount
+  vectors. The Ubuntu/Windows C# SDK matrix must keep the C# spendable-note
+  request path reporting the same exact digest
+  length, zero-value, repeated-material, and amount/publicAmount diagnostics on
+  both runner families.
   Kotlin/JVM and Android Java typed verify request tests must also pin the
   exact `blockHeight must be non-negative` diagnostic for signed negative
   `Long` inputs, with the verify-lineage preflight negative control mutating
@@ -2076,8 +2198,8 @@ and completed history lives in [`status.md`](./status.md).
   invalid curve id, missing metadata, trailing bytes, and truncated payload
   failures; the verify-lineage and append previous-proof-opening negative
   controls mutate those exact table markers.
-  TODO(C# Windows): confirm the C# typed init/Pallas archive path reports the
-  same structured checksum and malformed archive diagnostics on a Windows host.
+  The Ubuntu/Windows C# SDK matrix must keep the C# typed init/Pallas archive
+  path reporting the same structured checksum and malformed archive diagnostics.
   Kotlin/JVM and Android Java proof-output-only and evidence-builder tests must
   also keep exact diagnostics for empty hop lists, proof-only recursive spend
   helper rejection, rejected privacy build results, inactive unshield verifier
@@ -2087,9 +2209,9 @@ and completed history lives in [`status.md`](./status.md).
   call sites, alongside the rejected-proof, inactive-record, and unshield-hop
   message markers, so helper rejections cannot collapse to variable-presence
   checks or broad message containment.
-  TODO(C# Windows): confirm the C# proof-output/evidence-helper path carries
-  the same rejected privacy result and inactive verifier-record diagnostics on
-  a Windows host.
+  The Ubuntu/Windows C# SDK matrix must keep the C# proof-output/evidence-helper
+  path carrying the same rejected privacy result and inactive verifier-record
+  diagnostics.
 - Kagemusha SDK README parity must keep the ABI-7 Pallas open-envelope builder
   helpers documented across Swift, Kotlin/JVM, Android Java, JavaScript/Node,
   Python, and C#. Those READMEs should name the current-hop record-bundle
@@ -2109,9 +2231,9 @@ and completed history lives in [`status.md`](./status.md).
   with exact diagnostics for missing, empty, oversized, malformed, and
   empty-payload native outputs,
   and C# tests pin the same native-output labels through the shared P/Invoke
-  output reader before the Windows host-certification follow-up above.
-  TODO(C# Windows): certify matching exact C# native-output diagnostics on a
-  Windows host for recursive-spend redeem output, Pallas open-envelope builder
+  output reader in the Ubuntu/Windows matrix lane.
+  The Ubuntu/Windows C# SDK matrix must keep matching exact C# native-output
+  diagnostics for recursive-spend redeem output, Pallas open-envelope builder
   output, previous-proof builder output, and compact projection output.
 - Kagemusha Swift SDK validation must keep the macOS parse runner aligned with
   the parity inventory by parsing every Kagemusha/Offline Note source and test
@@ -2272,9 +2394,10 @@ and completed history lives in [`status.md`](./status.md).
   control must report the package-dist marker alongside the source JS and Python
   diagnostics.
   Cross-SDK witnessless Reserved-lineage helper-body checks and preferred mode
-  fallback checks must keep reporting first-line diagnostics for every mutated
-  SDK surface, including the C# labels that remain Windows-certified, so
-  helper/fallback drift is not hidden behind the first failing platform.
+  selector checks must keep reporting first-line diagnostics for every mutated
+  SDK surface, including forbidden one-argument selector reintroductions and the
+  C# labels that remain Windows-certified, so helper/selector drift is not
+  hidden behind the first failing platform.
   Offline Note V2 decoder-placeholder, instruction wrapper/decoder, and
   canonical instruction wire-name controls must also keep first-line
   diagnostics for every mutated Swift, Kotlin/JVM, and Android Java surface, so
@@ -3305,7 +3428,28 @@ and completed history lives in [`status.md`](./status.md).
   circuit-material, evaluator-artifact-set, and concrete artifact-bundle
   digests to encoded self-describing Norito material under their dedicated
   governance digest domains, and pin proof-key pair/material commitments to
-  their explicit domain-separated proof-profile and key-material transcripts;
+  their explicit domain-separated proof-profile and key-material transcripts,
+  with proof public-input schema artifacts now rejecting compressed or otherwise
+  noncanonical Norito schema-payload framing, arithmetic AIR artifacts rejecting
+  compressed or otherwise noncanonical typed AIR payload framing, proof-key
+  artifacts rejecting compressed or otherwise noncanonical prover/verifier key
+  payload framing, artifact-derived proof-key commitment helpers rejecting the
+  same noncanonical proof-key artifact payload framing, typed evaluator
+  artifacts rejecting compressed or otherwise noncanonical linear-transform,
+  blind-rotation, accumulator, and sample-extraction payload framing, governed
+  artifact envelopes rejecting compressed or otherwise noncanonical envelope
+  framing before bundle validation, evaluator-set digesting, or artifact-derived
+  proof-key commitment derivation, native proof-key material rejecting compressed
+  or otherwise noncanonical framing around canonical native payloads, generated
+  circuit-body validation rejecting compressed or otherwise noncanonical body
+  and embedded-AIR framing, proof-key
+  material envelopes rejecting compressed or otherwise noncanonical framing
+  before key-material commitments can hash them, and individual material
+  commitments decoding the canonical proof-key material envelope before hashing
+  so opaque or noncanonical key bytes cannot mint governed commitments, while
+  release-audit evidence, signoff, record, manifest, and package byte admission
+  rejects compressed or otherwise noncanonical framing before caller-pinned
+  audit bytes are hashed;
   the material/execution Soracloud public schemas now advertise their statement
   digest domains, those proof-key commitment domains, and the circuit-material,
   evaluator-artifact-set, and artifact-bundle digest domains bound by
@@ -3364,7 +3508,8 @@ and completed history lives in [`status.md`](./status.md).
 		  error, and preflights caller-supplied reviewer id/key inputs, including malformed or
 	  all-zero reviewer public-key payloads, before package or artifact validation
 	  can mask malformed trust configuration. Shared execution-policy validation
-	  now also recomputes embedded release package digests and rejects stale,
+	  now also recomputes embedded release package digests, rejects
+	  post-signature reviewed report/archive byte mutations, and rejects stale,
 	  placeholder, or leading-whitespace delayed-placeholder pinned digests plus
 	  record/manifest digest aliases before runtime policy context can be
 	  admitted, and Core's runtime release-audit context pins the same
@@ -3747,80 +3892,83 @@ and completed history lives in [`status.md`](./status.md).
 				  Release-prover input regressions now also pin all-zero
 				  arithmetic trace material and arithmetic AIR contract digest
 				  sentinel rejection before stale digest comparisons.
-				  Remaining BFV full-bootstrap
-				  production work is the audited arithmetic proof-producing backend plus
-	  externally audited generated prover/verifier artifacts and report/archive
-	  production with canonical v1 headers and externally audited nonzero
-	  generated-circuit bodies,
-			  not the
-						  artifact/material/schema/native-envelope/audited-wrapper binding corridor,
-									  Core native verifier AIR-digest drift rejection,
-									  Core native envelope binary-decorated placeholder preflight,
-										  data-model native envelope placeholder preflight,
-										  Torii signed job-run native envelope placeholder preflight,
-										  canonical generated release-audit package-builder path,
-									  canonical release-audit package-plus-digest builder path,
-									  native prover/verifier payload generated-circuit body bytes,
-									  raw native proof-key payload/material placeholder preflight,
-										  generated-body artifact-replay obligation flags, and
-										  generated-body embedded AIR material preflight, and
-											  release-audit body-digest binding with matched stale digest and
-										  generated-body SHA-256 placeholder evidence rejection and
-										  generated-body SHA-256 placeholder digest preflight plus release-audit placeholder-scan first-byte prefilter,
-											  release-audit report release-evidence/generated-body/proof-key-pair commitment and evidence-archive artifact-bundle/evaluator-artifact-set/centered-source-chain/arithmetic-trace-profile/arithmetic-AIR/generated-body/native-fingerprint/proof-key-pair/prover-key/verifier-key containment,
-											  release-audit evidence-archive generated-body byte-length,
-											  canonical generated-body hex, native prover/verifier payload hex and native payload archive hex syntax preflight,
-											  governed evaluator-key, accumulator, proof-schema,
-											  arithmetic-AIR, and prover/verifier artifact hex evidence, plus
-											  artifact-aware exact governed artifact-byte archive matching,
-												  duplicate generated/native/proof-key archive hex label rejection,
-												  canonical report/archive byte-pair production,
-												  canonical generated release-audit package-builder path,
-												  canonical release-audit package-plus-digest builder path,
-												  production-pinned byte-leading lowercase external-review marker with non-empty statement plus whitespace-prefixed/uppercase/empty-statement marker rejection and literal/separator-obfuscated machine-generated audit-body rejection,
-													  policy-visible signed reviewer-id-labelled marker validation, lowercase/case-drifted reviewer-label rejection, and copied report/archive external-review statement rejection,
-											  same-field lowercase label/hex-text signed-digest containment with raw-byte and colon-separator rejection, separator-delimited label-token-bound and standalone-value-token release-audit report/archive commitment containment,
-										  native circuit-fingerprint placeholder rejection,
-									  circuit-material registered-profile digest placeholder preflight,
-									  release-audit registered-profile digest placeholder preflight,
-									  artifact-envelope registered-profile digest placeholder preflight,
-									  artifact envelope/inner-payload binary-decorated placeholder preflight,
-									  release-audit metadata binary-decorated placeholder preflight,
-									  proof-key/native metadata binary-decorated placeholder preflight,
-									  bootstrap key-id binary-decorated placeholder preflight,
-									  circuit/AIR metadata binary-decorated placeholder preflight,
-									  proof-key material-envelope registered-profile digest preflight,
-								  internal evaluator-artifact transient material and transient execution
-								  witness digest rejection,
-								  all-zero generated-body adversarial coverage,
-									  including role-bound schema/proof-key/release-audit-profile advertised
-									  native-envelope Merkle/FRI replay binding and
-								  transcript-derived canonical AIR opening schedule/public-padding
-							  replay validation with Core trace-material digest pinning,
-							  AIR contract/public-schema and
-								  generated-circuit/fingerprint binding plus native generated-body
-									  proof public-input schema-payload digest binding and
-									  typed decode plus placeholder/circuit-id/profile/digest/layout/obligation
-									  retarget preflight,
-								  limits-aware Core native AIR opening-root and FRI query-shape replay,
-								  artifact-aware full-bootstrap claim Galois-key-set digest
-								  preflight before ciphertext/bound metadata use,
-								  strict witness-backed claim digest sentinel preflight before trace replay,
-								  crypto-canonical execution native-AIR domain tags with canonical
-					  base transcript labels, Core release-prover native AIR synthesis
-				  routed through the shared BFV `zk_stark` wrapper,
-				  or the policy-pinned Core/Torii
-				  release-audit runtime gate.
+				  Core BFV-native public-padding verification now also rejects
+				  auxiliary generic composition sidecars before treating an AIR
+				  envelope as a canonical public verifier proof, and malformed
+				  proof/AIR metadata, opening-path/sample drift, parameter-profile
+				  drift, and caller limit regressions now pin the same public-padding
+				  rejection boundary. Crypto-side public-opening schedule tests also
+				  reject zero trace-material digests, direct/delayed/separator-spelled
+				  placeholders, binary-framed `0xff` placeholder trace digests,
+				  placeholder statement hashes, missing next-row openings, and stale
+				  caller slot/bound-mode context before Core verifier use. Core
+				  BFV-native governed AIR verification
+				  now also requires a verifier-owned expected trace-material digest in
+				  the public-padding context, so missing or mismatched digest pins fail
+				  before governed trace row replay or preverify-cache use. The
+				  execution prover-input package now carries the trace-bound
+				  public-opening material plus digest, so stale or trace-retargeted
+				  opening packages fail inside typed release-prover validation, and
+				  Core's artifact-bound BFV AIR verifier compares decoded native AIR
+				  openings against that typed package before accepting the envelope.
+				  The canonical crypto proof public-input schema now advertises the same
+				  verifier-owned trace-material digest obligation and rejects schema
+				  downgrades before generated proof-key artifacts can bind stale
+				  schema bytes. Proof-key metadata, proof-key material envelopes,
+				  native generated circuit bodies, and native proof-circuit fingerprints
+				  now also bind the typed public-opening material validation obligation
+				  before proof-key material or generated native payloads are admitted.
+				  Release-audit key evidence now also rederives canonical role-specific
+				  native prover/verifier payload digests from the audited circuit id
+				  before evidence, signoff, record, or package validation can accept
+				  signed native payload commitments. Signed release-audit payloads and
+				  manifests now also repeat those canonical native prover/verifier
+				  payload digests so reviewer signoffs and published manifests expose the
+				  payload commitments directly. Release-audit evidence archives now also
+				  repeat the signed canonical prover/verifier native payload digests so
+				  externally reviewed archive bodies cannot omit or drift those payload
+				  commitments while still carrying canonical payload hex, and raw
+				  native payload admission now requires exact canonical uncompressed v1
+				  encoder bytes before those commitments are accepted. Soracloud
+				  material/execution proof public-input schemas now mirror the same
+				  release-audit contract with signoff payload count `18`, manifest count
+				  `23`, and evidence-archive native payload digest requirements.
+				  Release-audit archive field-index tests
+				  now also require native prover/verifier payload hex and generated
+				  circuit body hex labels/values plus generic governed artifact hex
+				  labels/values to be canonical lowercase, rejecting raw
+				  native/generated/governed artifact bytes, separator-delimited byte
+				  text, and duplicate governed artifact aliases before package-level
+				  validation; generated/native payload archive validators now reuse
+				  the governed artifact hex decoder before comparing decoded bytes.
+				  Release-audit artifact placeholder scanning now also prefilters
+				  bodies by possible marker-leading bytes before running the broader
+				  case-insensitive and separator-spelled marker scans.
+					  Remaining BFV full-bootstrap production work is the
+					  audited arithmetic proof-producing backend plus externally
+					  audited generated prover/verifier artifacts and report/archive
+					  production with canonical v1 headers and externally audited
+					  nonzero generated-circuit bodies. The Core verifier,
+					  proof-key/schema/native-envelope corridors, release-audit
+					  package builders, reviewed-byte tamper preflights,
+					  external-review marker gates, native generated-body and
+					  circuit-fingerprint binding, public-opening/native AIR replay,
+					  artifact-byte archive matching, and policy-pinned Core/Torii
+					  release-audit runtime gate are already shipped.
 				  Soracloud public refresh-transcript metadata also rejects all-zero
 					  rotation/bootstrap seeds before crypto refresh-key recomputation can mask
 					  malformed inventory behind unrelated bundle-shape diagnostics, and the
 					  bootstrap-key zero-refresh public-input schema advertises that rejection
 					  under its refreshed pinned schema hash. Scalar/RNS exact and
+					  bounded-noise refresh-only bootstrap key constructors reject inert
+					  all-zero public-key material before deriving encrypted-zero refresh
+					  masks, the same public-key preflight is advertised in the
+					  bootstrap-key zero-refresh schema, and scalar/RNS exact and
 					  bounded-noise outer-slot rotation, refresh-only bootstrap execution,
-					  and residual-bound diagnostic helpers now also reject inert
-					  all-zero refresh masks, `zero_refresh` drift from `round_refreshes[0]`,
-					  plus duplicate or all-zero per-round refresh ciphertexts before
-					  applying or summarizing public refresh material.
+					  and residual-bound diagnostic helpers now also reject inert all-zero
+					  refresh masks, `zero_refresh` drift from `round_refreshes[0]`, plus
+					  duplicate or all-zero per-round refresh ciphertexts before applying
+					  or summarizing public refresh material.
 					  Core audited release-package
 					  wrappers also preserve field-level transcript diagnostics through exact/bounded
 					  fallback and reject all-zero rotation transcript seeds before native proof
@@ -3837,8 +3985,10 @@ and completed history lives in [`status.md`](./status.md).
   `scripts/check_sf1_vectors.mjs` compares generated TypeScript, Rust, and Go
   bindings against `sf1_profile_v1.json`, checks manifest metadata/file sizes,
   and verifies the recorded Ed25519 manifest signatures. The helper runs from
-  `ci/check_sorafs_fixtures.sh` when Node is available, closing the SF1
-  determinism report's prior Node-helper gap.
+  `ci/check_sorafs_fixtures.sh` when Node is available, and the fixture gate's
+  canonical-alias JSON probe now reads through no-follow descriptors, closing
+  the SF1 determinism report's prior Node-helper gap without reopening fixture
+  symlink-following in CI.
 - SoraFS reputation V1 now has the deterministic on-chain/off-chain core:
   canonical Norito/JSON schemas, fixed-point provider scoring, fixed-point
   EigenTrust-style trust-edge iteration, degradation flags, snapshot Merkle
@@ -3938,14 +4088,54 @@ and completed history lives in [`status.md`](./status.md).
   entries, padded/control-character kind names, malformed allowed-kind
   registries, and malformed default required-kind sets fail closed before
   character-wise parsing, trim-normalized entries, or unchecked defaults can
-  satisfy a narrowed gate,
-  every checked-in SoraFS argfile example must expand through the shared
-  bounded response parser, with argfile resolve, stat, read, UTF-8, parse,
-  recursion, size, depth, and expansion-limit failures reported as stable
-  operator diagnostics instead of tracebacks, and argfile stat/read/UTF-8 plus
-  response-line parser exception text must route through the shared
-  path/error-label sanitizer so malformed multi-line diagnostics cannot leak
-  through reviewed `@ARGFILE` expansion; every collection runner must keep
+  satisfy a narrowed gate, collection runners must derive `required_kinds`
+  inside `parse_args` before validation or dry-run plan construction, and the
+  shared contract now builds each checked-in runner example's dry-run plan and
+  verifies the emitted `evidence_contract` schemas and payload-field lists
+  match the checker constants for the selected required kinds, while
+  `external_evidence`, verifier `--evidence` arguments, and verifier
+  `--require-kind` arguments must all match the parser-derived inputs, and
+  generated-canary runners must keep every planned artifact under the reviewed
+  output directory consumed by the verifier `--evidence-dir`, while every
+  explicit verifier `--evidence` file argument must be visible in dry-run
+  `external_evidence` for operator review, dry-run `external_evidence` values
+  must be well-shaped, unique, distinct from every planned output, and backed
+  by matching `evidence_contract` entries, typed verifier evidence specs such
+  as `kind=path` must match the same dry-run external evidence key and path,
+  and SFM-3 explicit evidence specs now reject recognized payload schemas that
+  belong to a different evidence kind plus same-path explicit hints that name
+  conflicting evidence kinds, and
+  every rendered dry-run step
+  artifact must match an output argument in the command that produces it, with
+  every dry-run collection-plan schema and verifier summary schema pinned to
+  the imported checker constants, every dry-run `evidence_contract` schema
+  must be a canonical SoraFS v1 identifier, every dry-run plan must use only
+  reviewed top-level keys, any dry-run `deployment_context` must match the
+  parsed deployment id, normalized environment, and reviewed marker, and rendered
+  dry-run `steps` must exactly match the command plan built from the reviewed
+  argfile, with the verifier
+  gate step remaining the final dry-run step and its rendered artifact matching
+  the sole verifier `--summary-out` target while the gate command invokes the
+  parser-selected checker path, and every dry-run threshold value must match
+  the verifier gate command option of the same name,
+	  every checked-in SoraFS argfile example must expand through the shared
+	  bounded response parser, with argfile resolve, stat, read, UTF-8, parse,
+	  recursion, size, depth, and expansion-limit failures reported as stable
+	  operator diagnostics instead of tracebacks, argfile leaves and parent chains
+	  must be symlink-free before parsing, descriptor reads must use no-follow
+	  final-component flags where available, and argfile stat/read/UTF-8 plus
+	  response-line parser exception text must route through the shared
+	  path/error-label sanitizer so malformed multi-line diagnostics cannot leak
+	  through reviewed `@ARGFILE` expansion; checker evidence discovery now removes
+  duplicate or aliased evidence identities from the returned parse list after
+  recording the collision, so ambiguous files cannot still appear as parsed
+  rollout artifacts beside their load errors, and duplicate or aliased reserved
+  output identities now fail before evidence paths are scanned for output
+  conflicts, while operator-supplied evidence directories must be inspectable
+  non-symlink directories before scans and explicit plus directory-discovered
+  JSON evidence candidates must exist as inspectable regular non-symlink files
+  before they can enter the parse list or reserved-output conflict preflight;
+  every collection runner must keep
   a collection-named reviewed argfile example, and every runner example must
   parse through its own runner parser when loaded as the reviewed `@ARGFILE`
   plus `--dry-run`; runner
@@ -3953,11 +4143,14 @@ and completed history lives in [`status.md`](./status.md).
   exit codes for tests and operator wrappers, runner examples must include a
   `--dry-run` review command, runner dry-run plan rendering must reject
   non-object plan shapes before writing stdout and sanitize caught JSON render
-  exceptions before returning plan diagnostics, every runner must preflight its verifier and
+  exceptions before returning plan diagnostics, every runner must preflight its
+  verifier as a non-symlink file under symlink-free parent chains and preflight
   summary/output targets plus runner input files/directories through shared
   helpers before emitting dry-run plans, including precise missing file versus
-  directory diagnostics, existing file and directory ancestors for output paths,
-  symlink output directories and output parent chains, summary-output and
+  directory diagnostics, existing non-symlink input files and directories under
+  symlink-free parent chains, existing file and directory ancestors for output
+  paths, symlink output directories, and symlink-free output parent chains for
+  both missing and pre-existing output targets, summary-output and
   output-directory identity collisions, duplicate or aliased input paths across
   all runner input flags, local directory inputs, malformed input path
   containers or duplicate-identity maps, resolver failures, filesystem
@@ -3972,20 +4165,24 @@ and completed history lives in [`status.md`](./status.md).
   rollout summaries, so raw multi-line exception text cannot be appended to
   gate diagnostics, and transparency runner generated-artifact annotation
   read/write failures must sanitize path and exception labels before returning
-  collected diagnostics;
+  collected diagnostics while rewriting reviewed deployment context through
+  descriptor no-follow opens after a fresh parent-chain check;
   every runner must execute
   plans through the shared command-plan runner so malformed scalar or mapping
   command plans, malformed step labels, non-Path step artifacts, empty command
   lists, empty or non-canonical command executables, embedded-NUL or
   control-character command entries, and non-string command vectors are
   rejected before output-directory creation, and duplicate
-  planned artifacts, malformed or duplicate/aliased reserved-output path
-  containers or entries failing before planned-artifact inspection, planned
+  planned artifacts, malformed, symlinked, symlink-parented, or
+  duplicate/aliased reserved-output path containers or entries failing before
+  planned-artifact inspection, planned
   artifact/output-directory identity collisions, output-directory creation
-  failures, subprocess launch failures, symlink
-  planned artifacts, symlink planned-artifact parent chains, pre-existing
-  planned artifacts, missing expected artifacts, zero-byte expected artifacts,
-  and expected-artifact inspection failures surface as structured errors
+  failures, post-command output-directory swaps/removals, subprocess launch
+  failures, symlink planned artifacts, symlink planned-artifact parent chains,
+  pre-existing
+  planned artifacts, missing expected artifacts, post-command symlink
+  expected-artifact parent chains, zero-byte expected artifacts, and
+  expected-artifact inspection failures surface as structured errors
   instead of tracebacks, with subprocess launch exception text routed through
   the shared diagnostic sanitizer before stderr output so raw multi-line OS
   messages cannot leak through command-plan execution; every checker
@@ -4016,12 +4213,18 @@ and completed history lives in [`status.md`](./status.md).
   evidence validation, every checker must use shared evidence-file discovery
   that rejects reserved output-path reuse, duplicate explicit evidence paths,
   overlapping `--evidence-dir` scans, files provided by both `--evidence`
-  and `--evidence-dir`, and malformed explicit-evidence identity sets, while
+  and `--evidence-dir`, malformed explicit-evidence identity sets, explicit
+  identity sets derived from uninspected or already-rejected evidence paths,
+  and explicit membership checks that try to resolve uninspected candidate
+  files,
+  while
   malformed scalar or mapping evidence/reserved-output path collections or
-  reserved-output entries failing before evidence inspection,
-  diagnostic containers, labels, sanitized evidence directory and conflict
-  path/error labels, evidence directory inspection failures, and JSON scan
-  failures surface as structured errors instead of tracebacks, and every
+  symlinked, symlink-parented, malformed, or duplicate reserved-output entries
+  failing before evidence inspection, symlink-parented evidence
+  files/directories, diagnostic containers, labels, sanitized evidence directory
+  and conflict path/error labels, evidence directory inspection failures, direct
+  JSON scans over uninspected or non-directory paths, and JSON scan failures
+  surface as structured errors instead of tracebacks, and every
   checker must use shared path-identity
   helpers instead of raw `Path.resolve()` calls so resolver failures surface as
   structured gate errors with sanitized malformed path/error labels, and
@@ -4030,18 +4233,24 @@ and completed history lives in [`status.md`](./status.md).
   failures before summary-output or evidence-source validation can leak raw
   path text, checker preflight non-inspection diagnostics for evidence inputs,
   summary/evidence collisions, summary parent creation, and summary writes now
-  use the same sanitized path/error labels, collection-runner preflight
+  use the same sanitized path/error labels and descriptor no-follow output
+  opens, collection-runner preflight
   filesystem inspectors now apply the
   same shared sanitized labels before verifier, input, output-directory,
   summary-output, and planned-artifact validation can leak raw malformed
-  path/error diagnostics, and the remaining non-inspection runner diagnostics
+  path/error diagnostics, runner artifact-size inspection now rejects symlink
+  leaves and symlinked parent chains before measuring size through a no-follow
+  descriptor `fstat`, and the
+  remaining non-inspection runner diagnostics
   for missing inputs, duplicate identities, malformed reserved outputs,
   command-plan artifacts, and output-directory creation now use the same
   sanitized path/error labels, and the hedging fixture-manifest checker now
   applies the same sanitized path/error labels to malformed summary targets,
   manifest inspection/read failures, generated fixture byte reads, generated
   sidecar misses, manifest/generated sidecar bounded JSON decode failures, and
-  generated fixture root scan failures,
+  generated fixture root scan failures, while rejecting symlinked generated
+  fixture roots, symlinked generated fixture root parents, and symlinked
+  generated inventory entries before they can be trusted as fixture evidence,
   shared evidence discovery and bounded JSON loading now delegate all path/error
   diagnostic labels to the same path-identity helper instead of carrying local
   sanitizer copies,
@@ -4056,10 +4265,13 @@ and completed history lives in [`status.md`](./status.md).
   bind to the same bytes that were parsed before required-kind validity is
   reported, and filesystem, runtime, UTF-8, JSON, size, and object-shape
   failures become path-qualified evidence errors instead of tracebacks while
-  malformed bounded-JSON diagnostic containers or existing diagnostic text are
-  rejected before helper-local error recording can raise, bounded byte-reader
-  oversize failures use a typed `ValueError` subclass so checkers do not parse
-  exception text to identify file-size limits, path/error fragments plus
+	  malformed bounded-JSON diagnostic containers or existing diagnostic text are
+	  rejected before helper-local error recording can raise, direct bounded reads
+	  inspect evidence files for symlink leaves, symlinked parent chains, and
+	  non-files before opening them, and use a no-follow descriptor open for the
+	  final path component where the platform exposes it, bounded byte-reader
+	  oversize failures use a typed `ValueError` subclass so checkers do not parse
+	  exception text to identify file-size limits, path/error fragments plus
   duplicate-key diagnostics use sanitized canonical labels for malformed values,
   and malformed summary-error sinks, existing summary-error text,
   validation path labels, or blank/control-character validation messages for
@@ -4116,7 +4328,11 @@ and completed history lives in [`status.md`](./status.md).
   for the gates that need those narrower evidence contracts, sum-count
   zero-total bypasses and string-coverage scalar/trim controls now require
   exact boolean helper options, standard wrapper deployment-context enforcement
-  now rejects malformed helper options, snapshot-bound artifact recording now
+  now rejects malformed helper options, and the shared static contract requires
+  every checker to keep canonical duplicate-free `EVIDENCE_REQUIRED_FIELDS`
+  dry-run contracts while every reviewed-context checker must disclose
+  `deployment_id`, `environment`, and `deployment_context_reviewed` in each
+  default-kind contract, snapshot-bound artifact recording now
   rejects malformed valid flags and malformed kind containers before
   anchor/bound routing, string diagnostic quote switches now require exact
   booleans, default disallowed-string diagnostics no longer hit an undefined
@@ -4551,6 +4767,12 @@ and completed history lives in [`status.md`](./status.md).
   capturing live run evidence that passes this gate, not the scoring, proof,
   local Torii API, cache validators, SSE/WebSocket push, SDK convenience
   clients, operator CLI core, local observability wiring, or evidence verifier.
+  The rollout-gate static contract now pins the live reputation ingest
+  pipeline, scoring engine, snapshot publisher, regional public API/GraphQL
+  gateway, S3/IPFS publication, and production promotion surfaces as unshipped
+  while preserving the local Torii reputation latest/provider/snapshot/weights,
+  event polling, SSE/WebSocket, CLI, SDK, dashboard, and evidence-gate
+  foundations.
 - Soracles provider statistics now expose deterministic inlier-share reputation
   scores in basis points plus clamped governance deltas for off-chain
   scheduling/governance consumers. Current oracle aggregation intentionally
@@ -4595,10 +4817,16 @@ and completed history lives in [`status.md`](./status.md).
   `crates/sorafs_manifest/include/sorafs_reference.h` now provides the checked C
   header for downstream bindings, and
   `ci/check_sorafs_reference_ffi_header.sh` rejects Rust/header export,
-  signature, or selector drift. The release packager stages that header under
-  `include/`, records its SHA256 in the per-target manifest, writes
+  signature, or selector drift while reading the Rust FFI source, C header, and
+  negative-control copies through no-follow descriptors. The release packager
+  stages that header under `include/`, records its SHA256 in the per-target
+  manifest, writes
   metadata-normalized tar/gzip archives with sorted entries and fixed ownership,
-  mode, and mtime, and the local SoraFS release gate runs the header-contract
+  mode, and mtime, rejects symlinked archive-output parents, stage roots,
+  parent chains, and staged entries before archiving, writes archive bytes and
+  reads staged files through no-follow descriptors, and writes the release
+  manifest JSON through a no-follow descriptor,
+  and the local SoraFS release gate runs the header-contract
   guard before Clippy/tests. The JavaScript SDK now exposes the Rust-backed
   orderbook and PDP reference validators from both the package root and
   `@iroha/iroha-js/sorafs`, while the Python SDK exposes the same
@@ -4618,7 +4846,15 @@ and completed history lives in [`status.md`](./status.md).
   `sorafs-validate sign --kind governance` CLI commands. The CLI emits stable
   Norito JSON/table/YAML outcomes, returns code `2` for
   validation/policy/signature/Norito payload failures, and points `docs_url` at
-  the portal error catalogue. Admission validation covers base envelopes,
+  the portal error catalogue. The rollout-gate static contract now also pins
+  the SF-10 proto plan's active fixture-generator/stub commands to binaries
+  that exist in the current crates, so retired generator names cannot re-enter
+  the required fixture-refresh workflow. The same static contract also pins
+  live release-bundle publication, SDK-smoke publication, schema-registry or
+  wire-format service promotion, and any separate `sora-proto` codec surface as
+  unshipped while preserving the Norito-only boundary, committed `.to` fixtures,
+  JSON commentary, `ValidationOutcomeV1`, reference FFI validators,
+  `sorafs-validate bundle`, and the active fixture generators. Admission validation covers base envelopes,
   governed renewals against their previous envelope digest, and governed
   revocations against the envelope digest and council signatures. Bundle
   validation checks known fixture-directory artifacts, validates discovered
@@ -4658,11 +4894,32 @@ and completed history lives in [`status.md`](./status.md).
   dry-run review. PDP remains fail-closed in embedded Torii proof streaming until
   provider transport, live signature/inclusion verification, regenerated
   negative fixture artifacts, governance archival, repair handoff, and deployed
-  evidence that passes the gate land.
+  evidence that passes the gate land. The rollout-gate static contract now pins
+  Torii's early `BAD_REQUEST` rejection and OpenAPI reserved wording for
+  `proof_kind=pdp`, and keeps unshipped `sorafs pdp ...` operator commands
+  warning-only until provider-protocol CLI handlers exist. The same static
+  contract now also pins PDP provider challenge/proof transport, proof
+  generation, provider signature and inclusion-witness verification, Governance
+  DAG archival, repair handoff, operator CLI, and SF-13 promotion routes or
+  subcommands as unshipped while preserving `sorafs_cli proof stream
+  --proof-kind=pdp` for external PDP-capable gateways, `sorafs-validate pdp`,
+  PDP fixture/bundle validation, reserved telemetry labels, the fail-closed
+  rollout evidence gate, and the collection planner.
   `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
   committed fixtures, exercises advert/order/governance signing, checks
   orderbook receipt validation and bundle cross-links, and emits manifest/CAR
-  replay outcomes for SDK and release smoke testing.
+  replay outcomes for SDK and release smoke testing. The docs portal SoraFS
+  packager now reads its generated package-summary rows through no-follow
+  descriptors before emitting the final package summary, so developer-portal
+  CAR/SBOM release metadata is not assembled from a symlinked summary input. The
+  `scripts/release_sorafs_cli.sh` signing wrapper, direct-mode smoke policy
+  probe, and gateway telemetry probe now likewise read generated JSON summaries
+  and policy/report inputs through no-follow descriptors before deriving hashes,
+  persistence paths, or dashboard annotations. The rollout-gate contract now
+  also scans SoraFS operator helpers to reject reintroduced plain
+  `open`/`read_text`/`write_text`/`shutil.copy` paths and unreviewed recursive
+  scans plus raw path resolution outside the shared path-identity boundary
+  before those patterns can return to release tooling.
   `sorafs_car` now exposes `validate_manifest_car_replay` and
   `validate_manifest_car_replay_bytes`, and `soranet_trustless_verifier
   --validation-outcome` emits `ValidationOutcomeV1` for manifest policy plus
@@ -4677,8 +4934,9 @@ and completed history lives in [`status.md`](./status.md).
   matching collection planner accepts reviewed
   release evidence paths, supports
   `@ARGFILE`, forwards age, release-target, downstream-package, and
-  smoke-duration thresholds, and emits a dry-run-visible verifier command plus
-  operator example args. The SF-11 plan now also publishes the operator,
+  smoke-duration thresholds, and emits a dry-run-visible verifier command,
+  selected-kind `evidence_contract`, and operator example args. The SF-11 plan
+  now also publishes the operator,
   metrics, and binding-generation guides for packaging, telemetry extraction,
   C FFI header synchronization, selector parity, and downstream package
   evidence handoff. Remaining SF-11
@@ -4688,7 +4946,21 @@ and completed history lives in [`status.md`](./status.md).
   publisher verification, reference cookbook, manifest/CAR replay coverage, or
   `sorafs-validate` packaging support: the packaging helper now records
   staged-file and smoke output hashes in per-target manifests and can emit
-  detached manifest signatures when supplied governed release keys.
+  detached manifest signatures when supplied governed release keys. The
+  rollout-gate static contract now also pins SF-11 per-target archive
+  publication, signed manifest publication, downstream package publication,
+  published cookbook/live-smoke evidence, and reference-SDK promotion routes or
+  subcommands as unshipped while preserving the local `sorafs-validate`
+  validator/signing commands, `scripts/package_sorafs_validate_release.sh`,
+  FFI/header contract checks, cookbook fixtures, release evidence gate, and
+  collection planner. The
+  rollout-gate static contract now also pins SF-6 CLI/SDK signed distribution,
+  Homebrew/npm/crates.io/Go-module publication, live deployment capture,
+  live-governance runbook capture, and release-promotion routes or subcommands
+  as unshipped while preserving the local `sorafs_cli` command families,
+  `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`,
+  gateway self-cert tooling, SDK parity guards, and release fixture smoke
+  checks.
 - SoraFS SF-9 PoR coordinator runtime integration is wired locally: Torii builds
   `PorCoordinatorRuntime` from `torii.sorafs_por`, starts it when the runtime and
   embedded storage are enabled, records scheduler challenge/forced/failure and
@@ -4714,7 +4986,14 @@ and completed history lives in [`status.md`](./status.md).
   deployment-specific SQL/Parquet archive decision, and governance archive
   handoff evidence, not the local Torii runtime, status/export/report endpoints,
   bounded ingestion readback, explicit manual-trigger retirement route,
-  reference PoR validator command, or local scheduler observability.
+  reference PoR validator command, or local scheduler observability. The
+  rollout-gate static contract now also pins live external drand/VRF/auditor
+  feed deployment, production archive/warehouse handoff, proof-bundle
+  inspection, and SF-9 promotion routes or subcommands as unshipped while
+  preserving the local status/export/report/ingestion routes, capacity PoR
+  challenge/proof/verdict routes, storage PoR sampling, retired manual-trigger
+  route, `sorafs_cli por` commands, `sorafs-validate por`, and scheduler
+  observability.
 - SoraFS SF-14 PoTR-Lite is wired locally for ranged gateway receipt capture,
   embedded-node receipt recording, `sorafs_manifest::potr` receipt validation,
   and `/v1/sorafs/proof/stream` replay with `proof_kind=potr`. The SF-14
@@ -4733,7 +5012,14 @@ and completed history lives in [`status.md`](./status.md).
   example args. Remaining SF-14 work is live multi-provider receipt evidence,
   governed provider ML-DSA key distribution, reputation weighting evidence, and
   governance approval that passes this gate, not local receipt capture,
-  validation, or proof-stream replay.
+  validation, or proof-stream replay. The rollout-gate static contract now also
+  pins live multi-provider probe rollout, governed provider key-distribution,
+  reputation-weight governance, SF-14 approval, and PoTR promotion routes or
+  subcommands as unshipped while preserving ranged gateway receipt capture,
+  `Sora-PoTR-*` headers, embedded-node receipt recording, local receipt
+  validation, proof-stream replay through `/v1/sorafs/proof/stream` with
+  `proof_kind=potr`, `sorafs_cli proof stream --proof-kind=potr`, proof-stream
+  metrics, and deadline-breach alert fixtures.
 - SoraFS provider admission observability now has a checked-in Grafana board
   (`dashboards/grafana/sorafs_provider_admission.json`) plus Prometheus alert
   rules and test vectors for missing admission envelopes, stale admission
@@ -4768,7 +5054,8 @@ and completed history lives in [`status.md`](./status.md).
   base64 or raw manifest-byte aliases and failing closed on duplicate or
   malformed payload aliases before request submission, and the SoraFS
   pin-register SDK guard now pins those manifest payload surfaces across
-  JavaScript, Python, Swift, and C#. The manifest-detail readback endpoint
+  JavaScript, Python, Swift, and C# while reading guard inputs and Swift source
+  probes through no-follow descriptors. The manifest-detail readback endpoint
   `/v1/sorafs/pin/{digest}` now also accepts `limit` (default 50, max 500) for
   embedded alias and replication-order arrays, emits full counts, returned
   counts, and truncation flags, and keeps heavyweight manifest audits on the
@@ -4997,6 +5284,18 @@ and completed history lives in [`status.md`](./status.md).
   committee, operator workflow, notification transport, executor, and
   transparency canaries before invoking the gate with the required external
   Governance DAG and end-to-end workflow evidence files.
+  Its dry-run JSON now exports the SFM-4a `evidence_contract` map so operators
+  can inspect each required schema and payload field before collecting staged
+  screening rollout evidence. The rollout-gate static contract now also keeps
+  unshipped moderation portal commands such as `sorafs moderation jury-accept`
+  and `sorafs moderation open-case` warning-only in SoraFS docs until the
+  corresponding service and CLI handlers exist. It now also pins deployed AI
+  pre-screening workflow promotion surfaces for deployed runner/committee
+  promotion, deployed juror notification transport, deployed commit/reveal
+  executor, end-to-end release workflow, and AI pre-screen promotion as
+  unshipped while preserving the shipped local runner, committee, operator,
+  notification, executor, transparency, Governance DAG, and rollout evidence
+  tooling.
   Remaining rollout work stays focused on captured deployed juror notification
   transport service rollout evidence, captured deployed commit/reveal executor
   job rollout evidence, and a live
@@ -5030,27 +5329,43 @@ and completed history lives in [`status.md`](./status.md).
   or the documented production role-provisioning runbook.
 - SFM-4 gateway compliance now has a payload-free rollout evidence gate:
   `scripts/check_sorafs_gateway_compliance_rollout_evidence.py` validates feed
-  promotion, gateway reload, enforcement probes, honey-audit denial evidence,
-  appeal override, SFM-4c transparency publication, observability, and
-  governance approval artifacts before reporting `ready`. The gate fails closed
-  on stale artifacts, missing multi-gateway acknowledgements, missing denylist
-  reason coverage, oversized route/reload latency, missing honey probes,
-  critical alerts, non-`iroha_config` governance sources, and raw denylist
-  feeds, probe responses, GAR receipts, appeal payloads, signed transactions,
-  tokens, secrets, or response bodies. The gate also requires reload,
-  enforcement, honey-audit, appeal, transparency, observability, and governance
-  evidence to bind back to the valid feed-promotion `bundle_digest_hex` in the
+  promotion, controller runtime, moderation-toggle canaries, gateway reload,
+  enforcement probes, honey-audit denial evidence, appeal override, SFM-4c
+  transparency publication, observability, and governance approval artifacts
+  before reporting `ready`. The gate fails closed on stale artifacts,
+  non-config-backed controller runtime reports, mismatched controller feed
+  counts, non-`iroha_config` moderation-toggle reports, mismatched
+  approved-toggle counts, missing toggle approval workflow, missing toggle
+  expiry/cache-invalidation/audit/rollback checks, missing multi-gateway
+  acknowledgements, missing denylist reason coverage, oversized route/reload
+  latency, missing honey probes, critical alerts, non-`iroha_config`
+  governance sources, and raw denylist feeds, probe responses, GAR receipts,
+  appeal payloads, moderation-toggle payloads, signed transactions, tokens,
+  secrets, or response bodies. The gate also requires controller,
+  moderation-toggle, reload, enforcement, honey-audit, appeal, transparency,
+  observability, and governance evidence to bind back to the valid
+  feed-promotion `bundle_digest_hex` in the
   same evidence bundle, and bundle mismatches mark the offending artifact
   invalid through the shared scalar binding error recorder before required-kind
   validity is reported. The
   matching collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
-  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
-  a dry-run-visible verifier command plus operator example args. Remaining
-  SFM-4 gateway compliance production work is the central compliance controller,
-  persisted production catalog state, moderation toggle/override services,
+	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
+	  a dry-run-visible verifier command, selected-kind `evidence_contract`, and
+	  operator example args. The gateway denylist CI guard now copies sample and
+	  evidence JSON, discovers bundles, and reads generated diff/evidence reports
+	  through symlink-checked no-follow descriptors before those artifacts can feed
+	  promotion checks. Remaining
+	  SFM-4 gateway compliance production work is the always-on compliance
+  controller daemon, persisted production catalog state, moderation
+  toggle/override service deployment,
   deployed SFM-4c receipt publication, and captured staged multi-gateway
-  evidence that passes this gate;
+  evidence that passes this gate. The rollout-gate static contract now pins
+  the compliance controller, moderation-toggle service, appeal override
+  service, production feed sync/ack/history endpoints, and gateway compliance
+  promotion commands as unshipped service surfaces while preserving local
+  denylist bundle tooling, GAR/proof-token helpers, honey-audit evidence, and
+  rollout evidence checkers;
 - SFM-4c transparency ledger V1 data-model payloads are now shipped:
   `iroha_data_model::sorafs::transparency` defines
   `ModerationLedgerEntryV1`, `ModerationLedgerBlockV1`, and
@@ -5119,7 +5434,11 @@ and completed history lives in [`status.md`](./status.md).
   the local verifier throttle and bounded readback arrays, deployed proof-token
   issuance producers/explorer-linking rollout evidence, deployed public receipt
   explorer rollout evidence capture, and live privacy-safe moderation aggregate
-  publisher.
+  publisher. The rollout-gate static contract now also keeps the generic
+  `/v1/transparency/*` and evidence-viewer `/v1/evidence/{session,manifest,log,audit}`
+  route families out of Torii/OpenAPI and warning-only in SoraFS docs until the
+  deployed transparency builder, public explorer, and evidence-viewer
+  authorization services exist.
   Torii now also exposes
   `/v1/sorafs/transparency/tokens/issuances` as a canonical-authenticated local
   proof-token issuance feed; it accepts one URL-safe base64 `SFGT` frame, the
@@ -5190,6 +5509,14 @@ and completed history lives in [`status.md`](./status.md).
   runtime-only client config, and
   `scripts/examples/sorafs_transparency_rollout_evidence.args.example` remains
   the direct verifier argfile for captured payload-free artifacts.
+  The rollout-gate static contract now pins deployed source-entry producers,
+  deployed publisher identities/anchoring, deployed proof API hardening,
+  public receipt explorer rollout, deployed proof-token producer/explorer
+  linking, deployed moderation ledger publication service, generic
+  `/v1/transparency/*` routes, and matching production-service CLI commands as
+  unshipped while preserving the local `/v1/sorafs/transparency/*` readback,
+  source-entry ingest, privacy aggregate, proof-token, explorer, and canary
+  surfaces.
   The remaining rollout gap is captured live deployed evidence that passes that
   gate. The
   data-model foundation for that publisher is now shipped as
@@ -5308,7 +5635,11 @@ and completed history lives in [`status.md`](./status.md).
   thresholds, and emits a dry-run-visible verifier command plus operator
   example args. It now also mirrors the checker's required payload fields in
   dry-run `evidence_contract` output so operators can preflight live orderbook
-  artifact shape before collection,
+  artifact shape before collection. The rollout-gate static contract now pins
+  the on-chain contract, durable matcher, daemonized settlement, escrow-custody,
+  contract-stream, and live-dashboard orderbook service surfaces as unshipped
+  in the SFM-2 plan and rejects matching public routes or operator subcommands
+  until those services exist,
   but still needs the on-chain contract surface, durable matcher service,
   daemonized settlement receipt service with contract/on-chain escrow custody
   mutation,
@@ -5358,11 +5689,20 @@ and completed history lives in [`status.md`](./status.md).
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness and
   latency thresholds, and emits a dry-run-visible verifier command,
   checker-backed `evidence_contract` map for the selected required kinds, plus
-  operator example args. The remaining SFM-4b1 work is the privacy-preserving
-  membership proof backend, issuer/registry services, juror client storage and
-  proof generation, moderation sortition/commit-reveal integration, service
-  CLI/API surfaces, and captured deployed rollout evidence that passes this
-  gate;
+  operator example args. The rollout-gate static contract now also pins the
+  production verifier's fail-closed transcript-digest boundary and scans SoraFS
+  docs so unshipped `sorafs pop sync|status|prove|revoke` commands can appear
+  only as explicit not-shipped warnings until the service CLI/API actually
+  lands. The rollout-gate static contract now also pins the enrollment portal,
+  credential issuer daemon, credential registry service, juror wallet/client,
+  privacy-preserving proof generator, deployed verifier service, and PoP
+  promotion routes or subcommands as unshipped while preserving
+  `sorafs-validate pop`, the local issued-credential bundle helper, reference
+  SDK/bridge validators, and the fail-closed transcript-digest verifier. The
+  remaining SFM-4b1 work is the privacy-preserving membership proof
+  backend, issuer/registry services, juror client storage and proof generation,
+  moderation sortition/commit-reveal integration, service CLI/API surfaces, and
+  captured deployed rollout evidence that passes this gate;
   SFM-4b2 appeal finance now has deterministic orchestrator pricing/settlement
   helpers, CLI quote/settle/disburse commands, read-only Torii config,
   readiness, and quote endpoints for the baseline pricing formula, and
@@ -5430,9 +5770,12 @@ and completed history lives in [`status.md`](./status.md).
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
   latency, settlement-lag, and peer-count thresholds, and emits a dry-run-visible
   verifier command, checker-backed `evidence_contract` map for the selected
-  required kinds, plus operator example args. SFM-4b2 still needs hosted
-  live/public dashboard evidence and multi-peer end-to-end ledger reconciliation
-  evidence that passes this gate;
+  required kinds, plus operator example args. The rollout-gate static contract
+  now pins the standalone pricing daemon, hosted/public appeal-finance
+  dashboard promotion surface, and multi-peer ledger reconciliation promotion
+  surface as unshipped while preserving local quote/deposit/settlement/report
+  APIs. SFM-4b2 still needs hosted live/public dashboard evidence and multi-peer
+  end-to-end ledger reconciliation evidence that passes this gate;
   SFM-4b4 now has SoraFS-specific moderation ballot context/commit/reveal
   payloads in `iroha_data_model::sorafs::moderation` that bind case ids,
   evidence bundle digests, appeal finance config versions, panel roster hashes,
@@ -5466,7 +5809,13 @@ and completed history lives in [`status.md`](./status.md).
   string-tuple binding error recorder so artifact invalidation cannot drift
   from other rollout gates. The moderation-panel gate also requires reviewed
   `deployment_id`/`environment` context on every artifact and blocks mixed
-  reviewed deployment contexts across the same rollout bundle.
+  reviewed deployment contexts across the same rollout bundle. The rollout-gate
+  static contract now also pins the parent SFM-4b appeal intake service,
+  persisted case lifecycle, panel sortition/roster service, decision
+  publication, portal/jury workflow, durable public decision trail, and
+  deployed moderation-panel promotion routes as unshipped while preserving the
+  shipped local `ballots*` lifecycle API and adjacent local operator workflow
+  tooling.
   The evidence-viewer canary now covers SFM-4b3-specific controls for
   role-scoped manifests, short-lived URLs, attested/logged sessions, strict CSP,
   disabled offline mode, watermark overlay/metadata hashing, append-only access
@@ -5476,7 +5825,11 @@ and completed history lives in [`status.md`](./status.md).
   legal-hold receipt, transparency report, and audit digest, and rejection of
   signed URLs, session tokens, watermark secrets, raw evidence, raw access
   logs, legal-hold receipt payloads, transparency report payloads, and response
-  bodies. The commit/reveal canary now covers SFM-4b4-specific controls for
+  bodies. The rollout-gate static contract now pins the SFM-4b3 browser viewer,
+  streaming backend, watermark engine, WebAuthn/session flow, access logger,
+  and transparency exporter as unshipped service work, and rejects matching
+  evidence-viewer routes or operator subcommands until those services exist.
+  The commit/reveal canary now covers SFM-4b4-specific controls for
   commit digest recomputation, duplicate-commit rejection, mismatched-reveal
   rejection, late commit/reveal rejection, missed-quorum detection, no-show
   failover, juror penalty planning, deterministic tally replay, contested
@@ -5484,7 +5837,13 @@ and completed history lives in [`status.md`](./status.md).
   absence of raw commit/reveal payloads. The matching collection planner accepts
   reviewed staged evidence paths,
   supports `@ARGFILE`, forwards freshness/latency/panel/peer thresholds, and
-  emits a dry-run-visible verifier command plus operator example args. SFM-4b4
+  emits a dry-run-visible verifier command, selected-kind `evidence_contract`,
+  and operator example args. The rollout-gate static contract now pins the
+  SFM-4b4 voting contract, durable ballot orchestrator, juror CLI/portal,
+  challenge monitor, contract/ledger recording, and public decision/challenge
+  DAG as unshipped production-service work, and rejects matching routes or
+  operator subcommands while preserving the local `ballots*` API and
+  payload-free executor canary. SFM-4b4
   still needs durable or contract-backed orchestration, on-chain or ledger
   recording, production juror portal flows, public decision/challenge DAG
   rollout, end-to-end panel simulations, and deployed evidence that passes this
@@ -5558,7 +5917,12 @@ and completed history lives in [`status.md`](./status.md).
   bounded basis-point fields, and rejects extra generated `.to` or `.json`
   files that are not pinned by the manifest. The generated positive and
   negative fixture byte suite is now checked in and pinned by the rollout
-  contract so future deletions or unmanifested fixture drift fail closed. SFM-5
+  contract so future deletions or unmanifested fixture drift fail closed. The
+  rollout-gate static contract now also pins the collector, hedging daemon,
+  billing daemon, statement publisher, REST API, service-management CLI,
+  automated hedge execution, and runtime metric-emission service surfaces as
+  unshipped in the SFM-5 plan, and rejects matching Torii/OpenAPI routes or
+  operator subcommands until those services exist. SFM-5
   still needs the collector service, daemonized pricing/exposure engine, billing
   aggregator, statement publisher, signed APIs, runtime CLI helpers, runtime
   service emission of those metric families, released native bridge artifacts,
@@ -5639,7 +6003,12 @@ and completed history lives in [`status.md`](./status.md).
   live chain custody submission and automatic finality polling for signed movement intents,
   live account mutation for local credit-line state, broader downstream
   compliance application of governance source entries, and live provider bake
-  evidence, including scheduled lifecycle canaries, that passes the gate; SF-12 currently
+  evidence, including scheduled lifecycle canaries, that passes the gate. The
+  rollout-gate static contract now pins the live custody submitter, finality
+  polling service, credit-line account mutator, provider-bake service,
+  downstream governance-source application, and reserve promotion surfaces as
+  unshipped while preserving the signed local reserve lifecycle, movement,
+  custody, credit-line, appeal, policy, scheduler, and evidence-gate tooling; SF-12 currently
   ships governance log schemas, reference
   validation/signing, governance DAG block/head reference CLI validation,
   filesystem publishers, PoR publication hooks, Taikai cache bundles, public
@@ -5674,7 +6043,12 @@ and completed history lives in [`status.md`](./status.md).
   and payload-kind thresholds, and emits a dry-run-visible verifier command
   plus operator example args. It now also mirrors the checker's required
   payload fields in dry-run `evidence_contract` output so operators can
-  preflight live publication artifact shape before collection, but SF-12 still needs the always-on ingest/publisher services,
+  preflight live publication artifact shape before collection. The
+  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
+  public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
+  explicitly unshipped, and rejects matching public route families or
+  operator subcommands until those services exist, but SF-12 still needs the
+  always-on ingest/publisher services,
   IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
   live-head/public-checkpoint publication and recovery operator commands,
   runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
@@ -5714,7 +6088,14 @@ and completed history lives in [`status.md`](./status.md).
   verifier command, checker-backed `evidence_contract` map for the selected
   required kinds, plus operator example args. Remaining repair production work
   is live PoR/PoTR failure, repair, escalation, and governance handoff evidence
-  with the deployed auditor roster and coordinator that passes this gate.
+  with the deployed auditor roster and coordinator that passes this gate. The
+  rollout-gate static contract now pins live operator-evidence capture,
+  deployed auditor-roster, SF-9 coordinator runbook, production failure-capture,
+  production handoff, and repair promotion routes or subcommands as unshipped
+  while preserving the signed auditor report/slash endpoints, worker
+  claim/heartbeat/complete/fail endpoints, local status and event-stream
+  routes, `iroha sorafs repair`, `iroha sorafs gc`, `sorafs-validate repair`,
+  local repair telemetry, and the fail-closed SF-8b rollout evidence gate.
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
@@ -5749,7 +6130,10 @@ and completed history lives in [`status.md`](./status.md).
   marker, so scan roots, expected file coverage, translated-pipeline coverage,
   specific/generic no-support notes, active-tree forbidden-token scans, release
   gate wiring, and stale allowlist markers cannot silently degrade to sampled
-  coverage.
+  coverage. The active-tree scan also rejects slash-, colon-, table-, shell-,
+  punctuation-, backslash-, whitespace-, zero-width-, HTML-entity-,
+  URL-percent-, and Unicode-confusable-spliced retired-family names before they
+  can re-enter SCCP code, SDKs, scripts, or docs.
   Translated public bridge-proof launch-scope docs now carry the same generic
   unsupported-family and not-remaining-work boundary, and the retired-network
   surface guard pins those localized files before release evidence can pass.
@@ -5758,8 +6142,9 @@ and completed history lives in [`status.md`](./status.md).
   only in the retired-network scan guard so adversarial verifier fixtures can
   quote those strings without weakening the guard. The active-tree scan now
   also rejects separator-obfuscated retired-network names, including hyphen,
-  underscore, dot, and whitespace-spliced forms, so compatibility wording cannot
-  re-enter public SCCP surfaces by punctuation drift.
+  underscore, dot, whitespace-spliced, zero-width-spliced, HTML entity-hidden,
+  URL-percent-encoded, and Unicode-confusable forms, so compatibility wording
+  cannot re-enter public SCCP surfaces by punctuation or homoglyph drift.
   Generated release-readiness Markdown and verifier-owned release-bundle
   Markdown must also carry that exact sentence in the Required Release Evidence
   section before public artifacts can satisfy readiness.
@@ -5785,6 +6170,21 @@ and completed history lives in [`status.md`](./status.md).
   padded headings, inserted, short-indented, Setext-underlined, duplicated, or
   swapped headings cannot preserve marker coverage while changing the public
   artifact structure.
+	  Release-notes artifact paths must also stay decoded before sensitive-marker
+	  checks, and strict artifact-row diagnostics must redact decoded sensitive
+	  marker rows plus decoded control or non-ASCII rows before reporting
+	  unexpected public release-note artifact rows.
+  Release artifact paths, copied evidence/native manifest filenames, phase
+  evidence paths and directories, output paths, native prover manifest paths,
+  manifest artifact paths, and adjacent copied public schema keys must all use
+  decoded sensitive-marker classification before public JSON or Markdown can
+  preserve encoded secret-looking labels.
+  Top-level release-bundle and standalone readiness-report CLI exception
+  redaction must use the same decoded sensitive-marker classification before
+  stderr can preserve helper failure details.
+  They must also apply decoded unsafe-text checks before preserving otherwise
+  safe details, so encoded control characters, non-ASCII/RTL text, pipes, or
+  angle brackets fall back to the fixed generation-failed category.
   The readiness generator must also compare emitted `source_inventory` keys
   against the strict verifier required-gate set so verifier-only gates cannot be
   omitted from generated report JSON.
@@ -5828,7 +6228,40 @@ and completed history lives in [`status.md`](./status.md).
   adversarial blocker cases pinned in readiness and strict-bundle sparse
   regressions, and both public gates must pin the BSC/TRON deploy-script
   blocker keys, canonical route-manifest normalizers, and governed route
-  metadata checks. The TRON runtime route-manifest gate must also pin the Rust
+	  metadata checks. BSC/TRON route-config blocker-list validators must also
+	  decode HTML entities and bounded URL-percent encodings before
+	  sensitive-name matching, including decoded whitespace separators such as
+	  `api token` and `private key`, so encoded secret/token/private-key blockers
+	  fail closed with fixed public diagnostics, and duplicate checks must use the
+	  same decoded/lowercased key so encoded copies cannot repeat operator blocker
+	  text. The same decoded boundary must reject encoded control characters and
+	  non-ASCII/RTL text before route-config diagnostics or generated TOML can
+	  preserve post-deploy blocker text. Standalone all-lanes public-summary
+	  sanitizers must keep the same
+	  decoded sensitive-name treatment for recovery-phrase blockers and copied
+	  nested lane values. Decoded sensitive-name checks must also normalize common
+  Greek/Cyrillic homoglyphs before matching so encoded lookalike secret,
+  token, private-key, or recovery-phrase labels cannot be echoed through
+  all-lanes summaries, readiness reports, release-bundle diagnostics, strict
+  verifier diagnostics, release-note artifact rows, copied public paths, or
+  lane CLI exception details, including double-percent-encoded helper text and
+  double-HTML-entity sensitive/control text.
+  The all-lanes TOML parser must treat mnemonic,
+  recovery-phrase, and seed-phrase duplicate-key or section labels as sensitive
+  category-only diagnostics. Native EVM prover bundle duplicate-key diagnostics
+  must also decode bounded URL/HTML forms before sensitive-name matching in the
+  release-bundle builder, readiness-report helper, and strict verifier, with
+  strict source-inventory pins for the no-leak regressions. Release-bundle,
+  standalone readiness, and strict verifier copied SDK-result, source-inventory,
+  expected-crypto-row, and semantic audit-role mapping traversal must stay on
+  type-only safe key ordering so hostile non-string public keys cannot raise
+  during residual schema checks. Generated all-lanes source-adapter gate
+  hash-role checks must use that same ordering before role-reuse comparison,
+  and the source-material role-validation inventory now pins the generated
+  all-lanes audit-hash ordering marker.
+  The TRON runtime
+  route-manifest
+  gate must also pin the Rust
   parser, post-deploy evidence validator, Base58 normalizer, production metadata
   diagnostics, and adversarial route-manifest regressions in readiness and
   strict-bundle sparse tests. Those sparse tests must remove every uniquely
@@ -5883,7 +6316,24 @@ and completed history lives in [`status.md`](./status.md).
 	  `ArgumentTypeError` and `SystemExit` exits from evidence loading or
 	  validation and collapse sensitive details into the fixed all-lanes
 	  validation failure category before public JSON or stderr can expose
-	  operator paths. All SCCP helper CLI sanitizers must treat caught
+	  operator paths. The all-lanes evidence CLI must keep that top-level
+	  redaction on decoded bounded HTML-entity and URL-percent text too, so
+	  encoded `secret-token`, `private_key`, and `recovery-phrase` loader
+	  failures stay fixed all-lanes validation-failed errors before release
+	  readiness consumes copied summaries. All-lanes and lane-specific SCCP
+	  evidence CLIs must use the same decoded top-level exception boundary and
+	  expanded secret-marker vocabulary across EVM receipt/source/live, ETH/BSC
+	  source bridge, EVM destination, Solana source/destination/live, TON
+	  source/destination/live, and TRON source/live helpers; encoded
+	  `secret-token`, `private_key`, `api key`, `client secret`,
+	  `recovery-phrase`, and `seed phrase` helper failures must remain fixed
+	  collection/rendering categories before stderr or copied summaries can
+	  preserve operator text. Safe top-level CLI details must remain printable
+	  ASCII only: non-ASCII text, newline/tab splices, and DEL/control bytes
+	  must use the fixed fallback category. Lane-specific helpers must also
+	  apply decoded unsafe-text fallback before preserving otherwise safe details,
+	  so encoded newline, RTL/non-ASCII, pipe, or angle-bracket details cannot
+	  survive into stderr. All SCCP helper CLI sanitizers must treat caught
 	  `SystemExit` values as opaque and render the fixed fallback category, not
 	  `str(SystemExit(...))`, so parser/helper exits cannot choose stderr detail
 	  even when the payload omits obvious secret markers.
@@ -6042,6 +6492,17 @@ and completed history lives in [`status.md`](./status.md).
   replay built-in source-material template component hashes, and strict
   release-bundle public JSON validation rejects the same replay in copied
   cryptographic-evidence rows and all-lanes source-adapter gate summaries. The
+  release-bundle builder and generated strict verifier now also reject copied
+  public cryptographic-evidence source-record template replay directly at the
+  row schema boundary, before relying on embedded-lane binding drift, and the
+  standalone readiness-report negative coverage now exercises that replay
+  rejection across every launch-domain row.
+  Standalone release-readiness public cryptographic-evidence validation now
+  rejects copied source-record hashes plus those same source-adapter gate and
+  audit template replays before copied readiness JSON can publish, even when
+  the copied row claims the gate is not required or uses malformed
+  gate-required metadata; its negative coverage now exercises source-gate
+  template replay rejection across every launch-domain row too. The
   copied active-lane validators must keep reporting those template-derived
   source-adapter gate and audit hashes even when an operator-forged public row
   claims the gate is not required, supplies a non-boolean ready flag, or
@@ -6077,10 +6538,39 @@ and completed history lives in [`status.md`](./status.md).
   release readiness can accept the source-material evidence inventory.
   Standalone source-adapter deployment descriptors must also reject built-in
   placeholder ID and hash replay directly across ETH, BSC, Solana, TON, and
-  TRON, and the same role-validation inventory pins those descriptor-level
-  adversarial checks. Core source-material and source-adapter deployment config
-  admission now also rejects noncanonical hex spellings for governed hash and
-  EVM address fields, including uppercase text and repeated `0x` prefixes,
+  TRON. All-lanes deployment admission must also reject template-derived source
+  material hashes replayed into `adapter_verifier_vk_hash` or
+  `deployment_receipt_hash`, and the same role-validation inventory pins those
+  descriptor-level adversarial checks. Route allowlist hash derivation must also
+  reject built-in source-material template hashes supplied as source material,
+  source deployment, or destination binding inputs before placeholder evidence
+  can seed governed route allowlist digests. Route-canary evidence and
+  transcript hashes must also reject built-in source-material template hashes
+  directly, so placeholder source components cannot be relabelled as live
+  canary evidence or message/finality transcript material in raw all-lanes
+  evidence, copied all-lanes public summaries, bundled public
+  `cryptographic_evidence`, or standalone readiness public crypto rows; the
+  standalone readiness CLI must also suppress the forged hash from public JSON
+  when that rejection fires. The same source-material template replay paths
+  must convert template-loader `SystemExit`, `RuntimeError`, `TypeError`, and
+  `ValueError` failures into fixed template-material validation blockers in
+  copied all-lanes summaries, release bundle pre-render checks, strict bundle
+  verification, and standalone readiness public crypto validation, so helper
+  drift cannot leak exception text or skip the fail-closed template gate.
+  Source-adapter gate audit-requirement helper failures must follow the same
+  fixed-blocker rule in copied all-lanes summaries and release-bundle/strict
+  verifier source-gate template checks, so lane audit policy drift cannot leak
+  exception text or suppress template-audit replay validation. Release-bundle
+  and strict-verifier source-gate audit-key lookup failures must also become
+  fixed blockers before copied crypto rows or copied all-lanes gates are
+  validated, so imported audit-key policy drift cannot leak exception text or
+  skip source-gate public-row checks. Source-gate hash-key lookup failures must
+  use the same fixed-blocker path before copied crypto rows or all-lanes gate
+  summaries compare gate hashes to audit roles, so hash-role policy drift cannot
+  leak helper exceptions or silently skip source-gate hash matching. Core
+  source-material and source-adapter deployment config admission now also
+  rejects noncanonical hex spellings for governed hash and EVM address fields,
+  including uppercase text and repeated `0x` prefixes,
   before decoded bytes can satisfy production material matching. User-level
   SCCP route manifests now reject noncanonical BSC/TRON route hashes, BSC EVM
   addresses, chain ids, optional proof/deployment evidence hashes, and BSC
@@ -6147,7 +6637,10 @@ and completed history lives in [`status.md`](./status.md).
   launch-scope network policy is expanded.
   All-lanes source-gate recompute wrappers must also convert
   `TypeError` helper/signature drift into category-only blockers instead of
-  leaking parser details or tracebacks. Copied all-lanes canonical base64
+  leaking parser details or tracebacks. That redaction is now pinned through an
+  aggregate public-summary regression that injects wrong-signature gate helpers
+  for every launch lane and requires fixed, secret-free lane blockers. Copied
+  all-lanes canonical base64
   metadata helpers must likewise convert `SystemExit`, `RuntimeError`,
   `TypeError`, and `ValueError` decoder failures into fixed base64 blockers
   before public readiness output is rendered.
@@ -6260,6 +6753,9 @@ and completed history lives in [`status.md`](./status.md).
   malformed, or Unicode-confusable keys must be category-only blockers. The
   Required Release Evidence invariant must keep the release corridor
   phase-transcript source-inventory row before public bundle readiness can pass.
+  Release-bundle preflight must stage external phase evidence under a temporary
+  bundle root and hand readiness only `corridor/<phase>.log` public paths, so
+  absolute operator source paths never weaken the standalone artifact boundary.
 	  bundle builder must also require the canonical corridor root shape,
 	  classify malformed copied corridor root fields before render, require
 	  canonical corridor blocker lists, reject malformed copied phase-map keys,
@@ -6393,7 +6889,11 @@ and completed history lives in [`status.md`](./status.md).
   diagnostic lane marks the expected route hash as matched. Copied
   route-allowlist recomputation helper failures now fail closed with the same
   fixed recompute blocker, so helper exceptions cannot silently preserve a
-  forged copied route hash or leak parser details into public JSON. No active
+  forged copied route hash or leak parser details into public JSON. Strict
+  bundle verification now also bounds canonical fixed-hex byte parser failures
+  inside template-replay and route-allowlist recompute checks, emitting
+  canonical bytes32 blockers instead of leaking parser detail or skipping
+  replay and recompute validation. No active
   route-allowlist field may disappear from standalone copied summaries or
   pre-render bundle validation even when the copied active lane is marked
   not-ready. Copied
@@ -6443,15 +6943,60 @@ and completed history lives in [`status.md`](./status.md).
   distinct from same-lane governed hashes, same-lane canary roles, other lane
   canary evidence hashes, other lane route-canary transcript hashes, and other
   lane governed hashes, including source-adapter gate hashes and audit hashes,
-  before public output is written.
+  before public output is written. Standalone readiness-report public
+  cryptographic-evidence negatives now exercise same-row route-canary transcript
+  replay rejection across every launch-domain row too.
+  Standalone readiness-report public cryptographic-evidence negatives now also
+  require exact route-canary evidence source and `evidence_bound = true` for
+  every message-proof launch domain, plus nonzero EVM transaction/receipt/root
+  and message identifiers, positive u32 receipt block numbers, and finalized
+  receipt flags for ETH/BSC.
+  Release-bundle pre-render public cryptographic-evidence validation now
+  enforces the same message-proof evidence-source/boundary metadata for ETH,
+  BSC, and TRON copied rows and requires complete EVM receipt identifiers before
+  Markdown or JSON artifacts can be written.
+  Strict published-bundle verification now independently rejects
+  message-proof route-canary evidence-source or `evidence_bound` drift across
+  ETH, BSC, and TRON public crypto rows, including TRON rows that return
+  through the non-active-lane verifier path.
+  Solana/TON snapshot public crypto rows now get the same row-local treatment:
+  standalone readiness, pre-render bundle validation, and strict
+  published-bundle verification all reject snapshot route-canary evidence
+  hashes unless the row uses the exact live-snapshot evidence source and
+  `evidence_bound = true`.
+  All public crypto rows now also reject route-canary source metadata or
+  `evidence_bound = true` when the row has no route-canary evidence hash, so a
+  copied empty canary cannot imply live evidence in readiness JSON, bundle
+  pre-render validation, or strict verification.
+  They also reject copied `route_canary_message_proof_used` booleans when the
+  route-canary evidence hash is absent, so message-proof usage cannot imply a
+  canary that is not present.
+  They also reject copied TRON owner/signature flags when the route-canary
+  evidence hash is absent, so those transaction-owner predicates cannot imply a
+  canary that is not present.
+  They also reject copied scalar proof context, transcript hashes, and TRON
+  block metadata when the route-canary evidence hash is absent, so
+  proof-context fields cannot imply a canary that is not present.
+  They also reject copied EVM receipt/transaction metadata when no
+  route-canary evidence hash is present, so transaction/receipt fields cannot
+  imply a canary that is absent.
+  Non-EVM route-canary rows with Solana, TON, or TRON evidence now also reject
+  copied EVM receipt/transaction metadata, so a live snapshot or TRON message
+  proof cannot be relabelled with EVM receipt context.
+  EVM and snapshot route-canary rows also reject copied TRON block
+  number/timestamp metadata, so TRON DPoS block context cannot be relabelled
+  onto non-TRON evidence.
   The raw all-lanes validator now rejects the same cross-lane source-adapter
   gate/audit and route-canary transcript replay before a forged route-canary
   evidence hash can pass through route summary construction.
   Embedded source-adapter gate audit hashes must also stay distinct from
   same-lane route-canary transcript hashes in raw all-lanes validation,
   release-bundle pre-render validation, and strict published-bundle
-  verification, including route-record fallbacks when a forged source-gate hash
-  causes route-allowlist recomputation to fail.
+  verification. Standalone readiness-report public cryptographic-evidence
+  negatives now exercise source-gate audit replay of source-role hashes and
+  route-canary transcript hashes across every launch-domain row, including
+  route-record fallbacks when a forged source-gate hash causes route-allowlist
+  recomputation to fail.
   The all-lanes route-canary scalar inventory now pins the exact expected
   evidence source for every active launch lane (`eth`, `bsc`, `sol`, `ton`,
   and `tron`) and has readiness/strict-bundle negative tests that remove a
@@ -6525,14 +7070,19 @@ and completed history lives in [`status.md`](./status.md).
 	  `route_canary_log_index`, `route_canary_target_domain` equal to the lane
 	  domain, `route_canary_proof_version = 1`, and
 	  `route_canary_proof_source_domain = SORA`; Solana/TON public rows must keep
-	  those scalar proof-context fields `null`.
+	  those scalar proof-context fields `null`. Standalone readiness-report
+	  negatives now exercise both the ETH/BSC/TRON exactness branch and the
+	  Solana/TON null-policy branch across the full launch scope.
 	  Message-proof public route-canary rows for ETH/BSC/TRON must also expose
 	  exact transcript commitments as non-zero bytes32 fields:
 	  `route_canary_call_data_sha256`, `route_canary_payload_hash`,
 	  `route_canary_statement_hash`, `route_canary_commitment_root`,
 	  `route_canary_finality_height`, and
 	  `route_canary_finality_block_hash`; Solana/TON public rows must keep those
-	  transcript commitment fields `null`, and copied rows must bind them back to
+	  transcript commitment fields `null`. Standalone readiness-report negatives
+	  now exercise both the ETH/BSC/TRON nonzero transcript branch and the
+	  Solana/TON null-policy branch across the full launch scope. Copied rows
+	  must bind them back to
 	  the embedded all-lanes route-canary evidence before readiness JSON, bundle
 	  Markdown, or strict bundle verification can pass.
 	  Release-readiness and strict bundle source inventory must pin the direct
@@ -6675,6 +7225,9 @@ and completed history lives in [`status.md`](./status.md).
 	  blocker arrays must keep canonical non-empty strings, duplicate rejection,
 	  ready-surface empty-blocker checks, and invalid-marker rendering for
 	  malformed blocker containers before published bundle readiness can pass.
+	  Duplicate blocker rejection must compare decoded/lowercased public text,
+	  including HTML entity and bounded URL-percent encoded forms, so encoded
+	  copies cannot evade the repeated operator-text guard.
 	  Corridor `phases` and `evidence_artifacts` roots must also stay
 	  object-shaped before phase-status, phase-artifact closure, and transcript
 	  checks run, with hostile copied root values redacted from strict verifier
@@ -6682,8 +7235,8 @@ and completed history lives in [`status.md`](./status.md).
 	  The bundle builder must
 	  reject malformed, empty, numeric, null, padded, or duplicate root blockers before
   `--allow-not-ready` diagnostics can render or write public artifacts.
-  Sensitive blocker detection now also treats mnemonic, seed-phrase,
-  credential, auth-header, and signing-key phrasing as fixed-category
+  Sensitive blocker detection now also treats mnemonic, recovery-phrase,
+  seed-phrase, credential, auth-header, and signing-key phrasing as fixed-category
   diagnostics in the bundle preflight, readiness renderer, and strict verifier,
   so not-ready diagnostics cannot echo common runtime signing material labels.
   The public blocker-list source inventory must pin those exact adversarial
@@ -6835,7 +7388,9 @@ and completed history lives in [`status.md`](./status.md).
   `route_canary_raw_data_owner_matches_transaction` plus
   `route_canary_signature_recovers_to_owner` for TRON transaction-owner and
   signature-recovery evidence, while Solana/TON snapshot canary rows and EVM
-  rows must keep those TRON-only public fields `null`; copied rows with
+  rows must keep those TRON-only public fields `null`; standalone
+  readiness-report negatives now exercise that non-TRON null policy across
+  every non-TRON launch-domain row. Copied rows with
   missing, false, string, or lane-drifted message-proof, owner-binding, or
   signature-recovery values now fail before public output is emitted. TRON
   route-canary public rows must also keep block numbers as positive u64
@@ -6848,6 +7403,9 @@ and completed history lives in [`status.md`](./status.md).
 	  once, and it rejects contradictory copied source-adapter gate semantics before
 	  JSON or Markdown can publish a row whose required flag, expected audit-key set,
 	  gate hash, or audit hash no longer matches the launch-domain gate policy.
+	  Standalone readiness-report negatives now exercise missing expected audit
+	  keys, unexpected audit keys, and gate-hash/audit mismatch across every
+	  launch-domain row.
 	  Public cryptographic-evidence rows must also keep route-canary evidence
 	  hashes distinct from copied route-canary transcript hashes, so a
 	  message id, receipt block hash, receipts root, or transaction hash cannot
@@ -6908,7 +7466,11 @@ and completed history lives in [`status.md`](./status.md).
   `--allow-not-ready` diagnostics can render or write public artifacts.
   Copied submission rows with `validation_status = blocked` or non-empty
   validation blockers are now rejected directly before Markdown or JSON output is
-  written, even when the row shape is otherwise canonical. Readiness-report and
+  written, even when the row shape is otherwise canonical. Submission-surface
+  validation blockers must also compare decoded/lowercased public text for
+  duplicate rejection and apply the same recovery-phrase sensitive-name policy,
+  so HTML entity or bounded URL-percent encoded copies cannot repeat operator
+  blocker text or publish recovery-phrase labels. Readiness-report and
   strict bundle sparse inventory checks must remove every uniquely detectable
   submission-surface binding marker across verifier recomputation, readiness
   rendering, bundle row schema checks, validation-status/blocker coupling,
@@ -7061,7 +7623,10 @@ and completed history lives in [`status.md`](./status.md).
   nested key/value redaction are checked, and malformed lane payloads are
   suppressed from public JSON output. Readiness and strict-bundle inventories
   pin the public lane helper, missing-domain checks, and adversarial nested
-  secret leak tests. Copied lane sub-objects now also have exact public field
+  secret leak tests. Copied nested lane string values must also run decoded
+  unsafe-text checks so encoded control, non-ASCII/RTL, pipe, or angle-bracket
+  payloads collapse to bounded public blockers before lane roots are emitted.
+  Copied lane sub-objects now also have exact public field
   schemas for `source_record_hashes`, `source_adapter_gate`, source-gate
   `audit_hashes`, `evm_live_metadata`, `destination_binding`,
   `route_allowlist`, and `route_canary`; forged nested operator fields suppress
@@ -7212,6 +7777,11 @@ and completed history lives in [`status.md`](./status.md).
   verification now also pins the public `sccp-release-readiness.md` artifact
   generated from hostile copied source-inventory rows so invalid gate,
   status, and blocker text cannot leak into canonical Markdown.
+  The standalone readiness renderer and strict verifier shared blocker-cell
+  renderers now also apply decoded public blocker-list validation to
+  source-inventory, user-prover, and native EVM prover blocker cells, so encoded
+  sensitive names or raw-plus-encoded duplicates render only as invalid markers
+  and remain pinned by the public Markdown source-inventory gate.
 - SCCP release-readiness Markdown release-checklist rows must stay
   traceback-safe: non-object checklist roots, non-object item rows, malformed
   item ids, and malformed blocker containers must render as object-shape
@@ -7266,7 +7836,11 @@ and completed history lives in [`status.md`](./status.md).
   checklist source inventory pins the helper plus adversarial matrices. The
   missing-container path is now covered as an empty-equivalent in both
   recomputed checklist paths, while the helper default and adversarial blocker
-  matrices remain pinned by source inventory.
+  matrices remain pinned by source inventory. Active-launch top-level evidence
+  blockers and lane blockers now use the same public-safe blocker classifier
+  before the no-unresolved and category checklist items consume them, so control
+  characters, Markdown-unsafe text, non-ASCII confusables, and sensitive-name
+  strings stay category-only and cannot leak through copied readiness metadata.
   The engineering backlog no longer lists the endpoint-redaction,
   all-lanes/readiness public-summary, bounded Markdown row, active checklist,
   native-artifact, manifest, release-notes, phase-transcript, self-verifier,
@@ -7358,35 +7932,56 @@ and completed history lives in [`status.md`](./status.md).
   `Hyperledger.Iroha.Sdk.Tests.dll`, contain at least one passed SCCP
   `UnitTestResult`, and contain no failed, skipped, timed-out, or aborted SCCP
   test results. The runner parses the TRX as XML, requires a VSTest `TestRun`
-  root, and only trusts `UnitTestResult` rows directly under `Results` plus
-  real `UnitTest` definitions directly under `TestDefinitions`. A passed SCCP result
-  must bind by `testId` or `executionId` to a SCCP test definition whose
+  root, rejects forged VSTest local names from arbitrary XML namespaces and
+  mixed-namespace TRX files while accepting only fully unnamespaced TRX or fully
+  VSTest 2010 namespaced TRX, requires exactly one root-level `Results` section
+  and exactly one root-level `TestDefinitions` section, rejects nested section
+  splices, and only trusts `UnitTestResult` rows directly under `Results` plus
+  real `UnitTest` definitions directly under
+  `TestDefinitions`, with exactly one direct `TestMethod` and at most one
+  direct `Execution` per `UnitTest` definition, and every `TestMethod`
+  definition must carry `className` and `name`. A passed SCCP result must bind
+  by `testId` or `executionId` to a SCCP test definition whose
   `codeBase`/`storage` basename is exactly `Hyperledger.Iroha.Sdk.Tests.dll`,
   and if both identifiers are present they must resolve to the same SCCP test
   definition rather than mixing a valid `testId` with a forged or cross-bound
-  `executionId`; when a `UnitTestResult` carries `testName`, that name must
-  match the bound SCCP definition rather than a copied non-SCCP or different
-  SCCP-looking result name, and must carry an exact `Sccp...` token itself,
-  SCCP TRX definition/result names used for binding must be unpadded and
-  control-character-free,
+  `executionId`; every `UnitTestResult` must carry a unique `testName`, that
+  name must match the bound SCCP definition rather than a copied non-SCCP or
+  different SCCP-looking result name, must carry an exact `Sccp...` token itself,
+  and any present `isExecuted` flag must be literal `true`,
+  SCCP TRX definition/result names used for binding must come from the actual
+  `TestMethod className.name` pair rather than only a spoofable outer
+  `UnitTest name`, must share the same expected assembly evidence from that
+  `TestMethod` or its parent `UnitTest`, and must be unpadded, ASCII-only,
+  whitespace-free, and control-character-free,
   every TRX `UnitTestResult` row must bind to that same assembly-backed SCCP
   definition set, and SCCP definitions must expose an exact `Sccp...` test-name
-  token in the actual test name/class rather than an embedded or lowercase
-  substring or runner adapter metadata, TRX `UnitTest` and `Execution` ids must
-  be unique, the TRX `UnitTestResult` count must exactly match the VSTest
-  summary passed count,
+  token in the actual test name/class rather than a bare `Sccp` segment,
+  embedded or lowercase substring, or runner adapter metadata, TRX `UnitTest`
+  and `Execution` ids must be canonical and unique, each present
+  `UnitTestResult` `testId` and `executionId` value must be canonical and
+  unique, every `UnitTest` definition must carry an id, every present
+  `Execution` definition must carry an id, each fallback `testId`/`executionId`
+  binding must be unique,
+  the TRX `UnitTestResult` count must exactly match the VSTest summary passed count,
   and TRX XML is capped at 16777216 bytes with DTD/entity declarations rejected
-  before parsing,
+  before parsing, including NUL-interleaved declarations from UTF-16 TRX files,
   so comment-spoofed assembly names, arbitrary helper attributes,
   single-quoted failed outcomes, non-SCCP passed results, unbound SCCP-looking
   results, wrong-assembly SCCP definitions, embedded `Sccp` substrings,
-  lowercase `sccp` tokens, `adapterTypeName` spoofing, execution-id drift, mixed
+  lowercase `sccp` tokens, bare `Sccp` segment spoofing,
+  `adapterTypeName` spoofing, execution-id drift, mixed
   SCCP plus non-SCCP result sets, mixed mapped and unmapped execution ids,
-  mismatched `UnitTestResult@testName` values,
-  duplicate `UnitTest`/`Execution` ids, forged VSTest summaries,
+  missing, duplicate, or mismatched `UnitTestResult@testName` values,
+  duplicate `UnitTest`/`Execution` ids, path-like or XML-delimiter-punctuated
+  `UnitTest`/`Execution`/`UnitTestResult` identifiers, traversal, URL-style,
+  nested `.dll`, or XML-delimiter-punctuated TRX `TestMethod`/`UnitTest`
+  assembly-reference paths,
+  forged VSTest summaries,
   TRX/count mismatches, oversized TRX files,
-  non-`TestRun` roots, `UnitTestResult` rows outside `Results`, `UnitTest`
-  definitions outside `TestDefinitions`, DTD/entity declarations, and malformed XML remain forged
+  non-`TestRun` roots, forged VSTest namespaces, `UnitTestResult` rows outside
+  `Results`, `UnitTest` definitions outside `TestDefinitions`, DTD/entity
+  declarations, and malformed XML remain forged
   evidence even when the VSTest console summary looks successful. The release corridor
   phase-transcript source inventory now pins the runner's structured TRX XML
   validator and malformed-TRX negative cases so public readiness cannot pass if
@@ -7421,6 +8016,10 @@ and completed history lives in [`status.md`](./status.md).
   non-empty canonical strings with no duplicate values, and scalar, empty,
   padded, duplicate, or non-string entries must remain production blockers
   instead of being collapsed into generic not-ready state.
+  Public blocker validators now also re-run control-character, printable-ASCII,
+  and Markdown-unsafe-character checks after bounded HTML-entity/URL-percent
+  decoding, so encoded newline, RTL/non-ASCII, pipe, or angle-bracket payloads
+  are category-only blockers rather than safe public text.
   Release-readiness and bundle verification now pin that
   governed blocker schema as a required source-inventory gate before governed
   evidence can pass; public sparse tests must keep destination-rollout and
@@ -7681,13 +8280,16 @@ and completed history lives in [`status.md`](./status.md).
   non-negated/non-diagnostic shell-xtrace-free
 	  phase-local ordered completion/success output after each required producing
 	  command and before the next required command or completion in per-phase and
-	  full-corridor logs after terminal-control normalization, dry-run
-	  rejection, terminal-control/Unicode-format-normalized failure marker scans,
-	  forged-block rejection, and full-corridor final-command-only success
-	  regressions pinned before corridor logs can satisfy public bundle
-	  readiness. The release bundle builder also runs those verifier-owned
-	  transcript checks against copied phase artifacts before Markdown rendering or
-	  public JSON writes, so dry-run, missing, unreadable, or forged copied phase
+	  full-corridor logs. Copied success output must match raw marker text and
+	  cannot become valid only after ANSI/control/format stripping or carry hidden
+	  decoration around an otherwise raw marker, while failure marker scans still
+	  normalize terminal controls and hidden format characters.
+	  Dry-run rejection, forged-block rejection, and full-corridor
+	  final-command-only success regressions are pinned before corridor logs can
+	  satisfy public bundle readiness. The release bundle builder also runs those
+	  verifier-owned transcript checks against copied phase artifacts before
+	  Markdown rendering or public JSON writes, so dry-run, missing, unreadable,
+	  or forged copied phase
 	  logs cannot publish before final bundle verification. Malformed phase
 	  artifact rows must now fail closed with category-only transcript blockers
 	  before either the readiness generator or strict verifier opens a transcript
@@ -7755,7 +8357,7 @@ and completed history lives in [`status.md`](./status.md).
   Top-level all-lanes, release-readiness, and release-bundle CLI exception
   handlers must preserve structured validation categories while redacting
   secret-looking, standalone bearer/token, non-ASCII, control-character, empty,
-  and OS-error payloads before stderr.
+  Markdown-unsafe, decoded unsafe-text, and OS-error payloads before stderr.
   Native prover role-reuse diagnostics, copied artifact-integrity diagnostics,
   manifest/report artifact membership diagnostics, and release-notes attachment
   artifact-list diagnostics must stay category-only for untrusted artifact path
@@ -7853,6 +8455,11 @@ and completed history lives in [`status.md`](./status.md).
   marker across bundle rendering, strict verifier invariant checks, manifest
   handoff text, status/blocker rows, pre-write drift tests, renderer-redaction
   tests, and self-inventory rows.
+  Release-notes Blocking Items bullets now also reuse decoded public
+  blocker-list validation in both the bundle builder and strict verifier, so
+  encoded sensitive names or raw-plus-encoded duplicate blockers render only as
+  invalid markers and remain pinned by the release-notes attachment invariant
+  inventory.
 		  Release-readiness and bundle verification now pin exact manifest readiness
 		  flag generation, boolean rejection, manifest/report equality, and all-lanes
 		  readiness recomputation as a required source-inventory gate before published
@@ -7882,7 +8489,11 @@ and completed history lives in [`status.md`](./status.md).
 		  helper `SystemExit` and ordinary exceptions into fixed public blockers
 		  for submission surfaces, native prover bundle summaries, copied evidence,
 		  release checklists, corridor transcripts, Markdown, release notes, and
-		  manifest artifact ordering before writing public artifacts.
+		  manifest artifact ordering before writing public artifacts. Public
+		  Markdown and release-notes invariant helper exits now collapse to fixed
+		  `cannot be checked` blockers before canonical rendering is attempted, so
+		  verifier `SystemExit` or exception payloads cannot abort or leak into
+		  public bundle output.
 		  Strict bundle verification must apply the same category-only
 		  `SystemExit` handling when recomputing manifest artifact order, rendering
 		  readiness Markdown, recomputing copied evidence summaries, checking
@@ -7892,10 +8503,11 @@ and completed history lives in [`status.md`](./status.md).
 		  Public JSON root non-UTF-8, load, parse, and canonical serialization
 		  diagnostics must also stay category-only and avoid echoing local bundle
 		  paths or parser exception payloads.
-		  Strict verifier source-inventory read and UTF-8 decode failures must
-		  likewise stay category-only without appending local source paths or
-		  OS/decoder exception payloads.
-		  Release-readiness source-inventory gate helper failures must stay
+		  Strict verifier source-inventory read and UTF-8 decode failures now stay
+		  category-only without appending local source paths or OS/decoder
+		  exception payloads, and unexpected read helper `RuntimeError`/`SystemExit`
+		  failures collapse to the same fixed read blockers.
+		  Release-readiness source-inventory gate helper failures are pinned as
 		  category-only too, including helper `SystemExit`, without appending helper
 		  exception text or local path payloads to public readiness blockers.
 			  The release bundle builder must also validate artifact closure, copied-file
@@ -7918,7 +8530,12 @@ and completed history lives in [`status.md`](./status.md).
   public release-bundle verifier's
   recomputed active launch checklist must mirror the generator's exact required
   record, governed-deployment, route-allowlist, and route-canary metadata
-  blockers before comparing manifest readiness against the all-lanes summary.
+  blockers before comparing manifest readiness against the all-lanes summary;
+  copied active EVM live metadata, source-record hash, destination-binding,
+  source-adapter gate, route-allowlist, and route-canary scalar roots now retain
+  explicit malformed-container blockers in the generated and verified
+  recomputation paths. Copied active `records` scalar roots now do the same,
+  while absent active records keep the separate missing-summary blocker.
 - SCCP release readiness now treats Ethereum outbound pre-callback coverage as
   a production gate: public SDK regressions must continue rejecting foreign-lane
   outbound requests, forged destination bindings, missing or partial
@@ -8127,6 +8744,26 @@ and completed history lives in [`status.md`](./status.md).
   gate cannot degrade to sampled marker coverage. Strict release-bundle verifier
   inventory now also pins the native canonical-SDK and no-WASM sparse guard
   tests directly.
+  BSC Groth16 material `productionBlockers` must stay public-safe across
+  generated material manifests, proof-self-test, preflight report validation,
+  attestation handoff/request summaries, and finalization/materialization
+  errors: HTML entities and bounded URL-percent encodings are decoded before
+  sensitive-name matching, and encoded secret/private-key blocker text must fail
+  closed with fixed diagnostics. Duplicate blocker rejection must compare the
+	  same decoded/lowercased public text before direct proof-self-test or copied
+	  preflight report diagnostics can echo repeated operator blockers. Direct
+	  proof-self-test manifest blockers must be non-empty canonical printable ASCII
+	  strings without control characters after bounded decoding before preflight
+	  diagnostics can quote any blocker text. Generated SnarkJS self-check blockers
+	  must be canonicalized to single-line printable public text before manifest
+	  writing, while copied blocker arrays keep the stricter fail-closed decoded
+	  boundary. BSC Groth16 attestation request role blockers must enforce the
+	  same printable/no-control/canonical/duplicate boundary in `attestation-status`
+	  and signing/finalization validation before role diagnostics can echo blocker
+	  text; BSC and TRON route-config production blocker lists must enforce the same
+	  printable/no-control boundary after bounded decoding too, so encoded
+	  newline/tab/DEL or non-ASCII/RTL text fails before route-config diagnostics
+	  or generated TOML can preserve post-deploy blocker text.
   Native EVM release bundles must also keep role-specific artifact byte floors:
   64 KiB for proof/proving material, 128 bytes for verifier/support fixtures,
   and 1024 bytes for SDK implementation artifacts. Public Swift, Kotlin,
@@ -9491,9 +10128,21 @@ and completed history lives in [`status.md`](./status.md).
   `iroha_data_model --all-targets` strict clippy gate is green after clearing
   the Kagemusha/ZK-ACE test/bench lint surface, and the touched-package
   all-target gate for `iroha_data_model`, `connect_norito_bridge`,
-  `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
-  with `--no-deps`. The full `soranet-relay` strict clippy gate now reaches and
-  passes relay diagnostics without `--no-deps`.
+	  `iroha_js_host`, `iroha_kagami`, and `sorafs_orchestrator` now also passes
+	  with `--no-deps`. The SoraFS orchestrator fixture regeneration script now
+	  rejects symlinked input/output paths and parent chains, reads and writes
+	  fixture JSON through no-follow descriptors, and derives payload sizes through
+	  descriptor `fstat`. The Android codegen SoraFS fixture replay helper now
+	  applies the same no-follow JSON read/write policy to generated replay
+	  artifacts and validates payload/plan inputs before launching the manifest
+	  stub. The orchestrator adoption CI gate now validates fixture/report/log
+	  inputs through no-follow descriptor opens and writes generated config plus
+	  burn-in notes through no-follow descriptors before promotion evidence is
+	  trusted. The orchestrator SDK parity smoke harness now uses no-follow
+	  descriptor reads/writes/appends for fixture snapshots, results TSV, summary,
+	  and matrix artifacts instead of direct shell redirection, `cp`, or
+	  `Path.write_text`. The full `soranet-relay` strict clippy gate now reaches and
+	  passes relay diagnostics without `--no-deps`.
 - Keep crypto primitives fail-closed at the crypto boundary. The
   secp256k1 recoverable prehash helper now emits canonical low-S signatures and
   rejects high-S malleable recoverable inputs before public-key/EVM-address
@@ -13087,8 +13736,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   readiness Markdown invariants source inventory must pin the
   evidence-input path/bytes/hash, production-corridor phase/status,
   production-corridor artifact/hash, checklist gate/status, checklist
-  blocker-cell, cryptographic row live-EVM, cryptographic row core-hash,
-  cryptographic row route-canary, lane-readiness status,
+	  blocker-cell, cryptographic row live-EVM, cryptographic row core-hash,
+	  cryptographic row route-canary, cryptographic row route-canary source
+	  whitespace suppression, cryptographic row renderer-visible field
+	  diagnostics, lane-readiness status,
   lane-readiness blocker-cell, source-inventory row/status, source-inventory blocker-cell,
   user-prover helper/phase row, user-prover validation-status,
   user-prover blocker-cell, and
@@ -13158,7 +13809,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   cross-checks; the current local TLC slice covers the top-level commit-path
   fast model under the fairness-backed `Spec`, including finality and
   finality latch/phase equivalence, commit-certificate finality equivalence,
-  live commit-gate finality equivalence, NPoS stake-quorum fork-safety via
+  live commit-gate finality equivalence, NPoS stake-quorum fork-safety
+  correctness envelope via
   `fork-npos`,
   live commit-gate RBC evidence binding,
 	  inbound RBC READY/DELIVER key-header-signature evidence binding,
@@ -13594,13 +14246,15 @@ digest-bound pending-XSD source probe summaries for reviewed
   timeout/cooldown derivation semantics, timeout/cooldown derivation
   correctness envelope aggregate, round/view helper semantics, round/view
   helper correctness envelope aggregate,
-  PhaseTracker mutable state semantics, direct failed-commit/block-sync helper
-  semantics, missing-QC timing derivation, missing-QC timing correctness
-  envelope aggregate, idle backlog signal derivation, idle backlog signal
+  PhaseTracker mutable state semantics, failed-commit/block-sync helper
+  correctness envelope, same-height missing-QC height-stall dampening
+  correctness envelope aggregate, missing-QC timing derivation,
+  missing-QC timing correctness envelope aggregate, idle backlog signal derivation,
+  idle backlog signal
   correctness envelope aggregate,
   proposal-liveness state transitions, proposal-liveness correctness envelope
   aggregate, direct actionable vote-backed proposal
-  evidence admission, direct slot proposal evidence no-bug lookup/fall-through,
+  evidence admission, slot proposal evidence correctness-envelope lookup/fall-through,
   direct round-liveness no-bug evidence aggregation,
   round-liveness correctness envelope aggregate, direct
   roster-unavailability recovery FSM no-bug transitions,
@@ -14706,9 +15360,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   another exact-field guard still being present. Its archive-field diagnostic
   guard also mutates the canonical base64, surrounding-whitespace, and canonical
   `Numeric` diagnostic strings independently, so malformed-request diagnostics
-  stay pinned to the public ingress contract. The legacy-field guard now
-  mutates the helper, call site, legacy-field diagnostic, error code, and
-  legacy Offline Note V2 field list independently, so structured legacy
+  stay pinned to the public ingress contract. The retired-field guard now
+  mutates the helper, call site, retired-field diagnostic, error code, and
+  retired Offline Note V2 field list independently, so retired structured
   redemption bodies cannot be smuggled beside recursive Kagemusha archives.
   The auxiliary-field guard now mutates the helper, call site, ignored-field
   diagnostic, error code, and malformed auxiliary-value test vectors
@@ -14731,8 +15385,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   rejection assertion independently, so parser coverage cannot survive by
   retaining only one exactness marker. The Kagemusha ABI probe bounds negative
   control now mutates JavaScript source, JavaScript dist, and Python bounds
-  independently while leaving the Windows-only C# follow-up untouched. The
-  JavaScript package-dist recursive spend partial ABI-6 guard now checks
+  independently while C# bounds stay covered by the Ubuntu/Windows matrix lane.
+  The JavaScript package-dist recursive spend partial ABI-6 guard now checks
   availability, broken/permissive probes, unsafe native outputs, invalid and
   missing request archives, and native semantic rejection markers independently,
   so package-dist coverage cannot pass by retaining only one block-level
@@ -14746,8 +15400,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   so builder package-dist coverage cannot pass by retaining only one
   record-backed or Pallas marker. The Kagemusha probe rejection-shape guard now
   mutates JavaScript source, JavaScript dist, and Python classifier predicates
-  independently while leaving the Windows-only C# follow-up untouched. The JVM
-  recursive compact shape-classifier guard now mutates Kotlin and Android Java
+  independently while C# probe rejection stays covered by the Ubuntu/Windows
+  matrix lane. The JVM recursive compact shape-classifier guard now mutates
+  Kotlin and Android Java
   row-shape and verifier-key mismatch diagnostics independently, so mobile JVM
   compact-verifier coverage cannot pass by retaining only one SDK-side
   classifier marker. The mobile recursive-spend native-output header guard now
@@ -14778,8 +15433,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   one retained confidential note vector cannot hide another mobile SDK test
   drifting. The mobile confidential witness codec guard now mutates each Kotlin
   and Android Java source API, bridge validation helper, test name, and
-  diagnostic string independently, so one retained witness-codec marker cannot
-  hide another mobile validation path drifting. The mobile offline readiness
+  diagnostic string independently, plus the C# proof-request, privacy
+  archive-wrapper, and native output test markers and exact diagnostics, so one
+  retained witness-codec marker cannot hide another mobile validation path
+  drifting.
+  The mobile offline readiness
   guard now mutates each Kotlin parser/client, Android parser/client, Torii
   handler, and Torii smoke-test surface independently, so one retained
   readiness diagnostic cannot hide another ABI-7 readiness surface drifting.
@@ -14848,8 +15506,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   Swift, Kotlin, Android, JavaScript source/package-dist, and Python init and
   append asset vectors independently, so one retained accumulator asset marker
   cannot hide another SDK path drifting. The paired accumulator asset
-  UUID-boundary guard now mutates the Swift UUIDv4 encoder and non-C# fallback
-  asset vectors independently, so one retained fallback-address boundary marker
+  UUID-boundary guard now mutates the Swift UUIDv4 encoder and non-C# raw-hex
+  asset vectors independently, so one retained raw-hex boundary marker
   cannot hide another SDK path drifting. The JVM/Android Pallas
   transcript-label byte-limit guard now mutates Kotlin and Android UTF-8 byte
   count code plus duplicate archive and previous-proof non-ASCII vectors
@@ -14881,8 +15539,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   proof-chain accumulator guard now mutates each non-C# README proof-chain
   accumulator boundary independently, so one retained accumulator document
   marker cannot hide another SDK README drifting. The SDK README native
-  material alias guard now mutates each non-C# README alias/request-field
-  boundary independently and verifies every centralized marker per README, so
+  material alias guard now mutates each SDK README alias/request-field boundary
+  independently and verifies every centralized marker per README, so
   one retained native-material document marker cannot hide another SDK README
   drifting. The offline Kagemusha accumulator documentation guard now mutates
   the native-owned accumulator paragraph and proof-state/material-alias
@@ -14890,10 +15548,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   cannot hide the other drifting. The offline Kagemusha localnet lifecycle
   evidence guard now mutates the release evidence CLI flag and semantic
   evidence paragraph independently, so one retained release-evidence marker
-  cannot hide another drifting. The non-C# lineage-witness count-prefix guard
-  now mutates JavaScript, Python, Swift, Kotlin, and Android decoder prechecks
-  and raw count-prefix vectors independently, so one retained witness-count
-  marker cannot hide another SDK path drifting. The non-C# record-bundle
+  cannot hide another drifting. The SDK lineage-witness count-prefix guard now
+  mutates JavaScript, Python, Swift, Kotlin, Android Java, and C# decoder
+  prechecks plus raw count-prefix vectors independently, so one retained
+  witness-count marker cannot hide another SDK path drifting. The non-C#
+  record-bundle
   fold-step count-prefix guard now mutates the same SDK decoder prechecks and
   raw fold-step count-prefix vectors independently, so one retained fold-step
   marker cannot hide another SDK path drifting. The non-C# Pallas builder input
@@ -15043,17 +15702,20 @@ digest-bound pending-XSD source probe summaries for reviewed
   verification, and recursive final redeem/unshield verifier records apply the
   same namespace/backend/curve, active circuit/version, and canonical inline
   unshield-key gate before the public mint path runs. The older unanchored C
-  symbol and Rust compact-token proving entry points remain present for ABI
-  compatibility but reject even valid `KagemushaVerifiedFoldBundle` input
-  without returning a token.
+  compact-token symbol has been removed for the first release; public bridge
+  compact-token proving is record-backed only, and direct non-record checked fold
+  helpers remain crate-local test/prover plumbing. The Rust crate-level
+  unanchored compact-token prover stubs are also removed, and the Kagemusha
+  policy guard rejects stale stub names or unanchored-surface wording so the
+  first-release Rust surface stays record-backed.
   Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile
   helpers, append-boundary derivation, both lineage-witness assembly helpers,
   `verify`, and `redeem` entry points over raw Norito archives, and the C header
   plus Swift, Kotlin/JVM, Java Android/JNI, JavaScript/Node NAPI, Python/PyO3,
   and C# surfaces mirror them with empty-input and malformed-archive rejection.
   Native bridge tests now also seed stale output pointer/length slots across
-  recursive-spend, lineage-witness, unanchored compact-token, record-backed
-  compact-token, record-backed recursive aggregation, and recursive compact
+  recursive-spend, lineage-witness, record-backed compact-token, record-backed
+  recursive aggregation, and recursive compact
   adversarial paths, so every malformed or semantic rejection must clear
   archive outputs before returning. The C bridge now also routes Kagemusha
   ABI-6/ABI-7 archive inputs through a shared bounded reader, with native
@@ -15122,8 +15784,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   Missing `IPAK`,
   missing `H2VK`, wrong IPA degree, duplicate
   verifier-key `CID1` tags, unexpected verifier-key TLVs, malformed trailing
-  TLV material, truncated fixed-column commitments, and legacy semantic inner
-  proof envelopes now reject as malformed instead of allowing last-tag-wins,
+  TLV material, truncated fixed-column commitments, and semantic inner proof
+  envelopes under the Reserved-lineage id now reject as malformed instead of allowing last-tag-wins,
   prefix-only circuit identity, or cross-profile proof payload replay.
 	  The recursive spend accumulator, append proof-artifact digest, and bridge
 	  redeem request validation now understand both semantic v1 and reserved
@@ -15158,12 +15820,13 @@ digest-bound pending-XSD source probe summaries for reviewed
   core wrapper derives the Pallas open-envelope width from the raw Norito
   archive, selects the matching no-trusted-setup one-hop lineage verifier key,
   and emits bundles whose public scalar-projection digest is bound to the
-  embedded IPA verifier slice. ABI-6 native append now reads the append
-  request's defaulted `output_proof_circuit_id`: missing or semantic selectors
-  preserve the legacy semantic `kagemusha-recursive-aggregation-v1` output, while
-  explicit Reserved-lineage selectors derive the lineage verifier key from the
-  hop's Pallas open-envelope archive and enter the guarded Reserved-lineage
-  output path. This keeps SDK-facing D2D payloads hop-count-independent across
+  embedded IPA verifier slice. Native append now requires the append request's
+  `output_proof_circuit_id` to be explicit: the semantic
+  `kagemusha-recursive-aggregation-v1` id selects semantic output, while the
+  append-specific Reserved-lineage id derives the lineage verifier key from the
+  hop's Pallas open-envelope archive and enters the guarded Reserved-lineage
+  output path. Missing, empty, and Reserved-lineage family selectors reject
+  before proving. This keeps SDK-facing D2D payloads hop-count-independent across
   offline re-spends, and witnessless multi-hop Reserved-lineage output is
   available for supported transitions inside the configured 64-hop cap.
   The same init/append preflight now runs inside record-backed lineage-witness
@@ -15278,8 +15941,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
   expose a common preferred offline spend-mode selector: `recursive_compact_v1`
   when ABI-7 compact prover/verifier support is available, `recursive_spend_v1`
-  when only the ABI-6-or-later recursive spend surface is available, and
-  `checked_prefold_v1` as the compatibility fallback; Kotlin/JVM and Java
+  when only the ABI-6-or-later recursive spend surface is available, and no
+  preferred production mode when neither recursive surface is available;
+  Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and
   JavaScript/Node plus Python probe their native hosts before reporting
@@ -15454,6 +16118,12 @@ operator-provided rollout bundles.
   lane id in `autoscale.min_lanes..autoscale.max_lanes`, so public-profile
   catalogs whose default-route capacity is below `max_lanes` but whose elastic
   id range is full fail closed without recording a transition.
+- Autoscale scale-out now treats either sustained p95 latency pressure or
+  sustained p95 utilization pressure as enough to add managed capacity, while
+  scale-in still requires both latency and utilization to remain cold. The
+  scale-in floor is the base default-route lane rather than the elastic id
+  lower bound, so public-profile base lanes below `autoscale.min_lanes` are
+  preserved while valid managed elastic lanes can still retire.
 - Manual lane additions, full config swaps, and static TOML parsing now reserve
   the enabled autoscale elastic id range for the consensus autoscaler, so
   operator-managed lanes cannot occupy future scale-out ids and silently cap
@@ -18539,13 +19209,14 @@ passed SCCP `UnitTestResult`, and contain no failed, skipped, timed-out, or
 aborted SCCP `UnitTestResult`, and the TRX `UnitTestResult` count must exactly
 match the VSTest summary passed count; the TRX bytes marker must be a positive
 integer, all canonical `.NET` SCCP marker lines must use a single literal
-space after the colon, and all test markers must appear after
-the strict `dotnet test` command. A bare
+space after the colon with no hidden ANSI/control/format characters, and all
+test markers must appear after the strict `dotnet test` command. A bare
 `Passed!` transcript line, forged count summary, skipped-test summary,
 wrong-assembly summary, TRX/count mismatch, placeholder or wrong-assembly TRX, malformed duration
 summary, the old ETH/BSC-mainnet-only
 `.NET` filter, uppercase or mixed-case RID/architecture marker, missing TRX
-marker, zero or malformed TRX byte marker, arbitrary TRX-looking path, host
+marker, zero or malformed TRX byte marker, hidden canonical success marker,
+arbitrary TRX-looking path, host
 markers printed before `dotnet --info`,
 `dotnet --info` before `dotnet --version`, or pre-command test success/TRX
 output is not sufficient release evidence.
@@ -19734,7 +20405,7 @@ or ABI behavior.
   placeholder/canonical drift before those domains can diverge from the
   Soracloud execution schema. Release-audit proof-profile records now mirror
   those release-prover digest-domain and proof-key commitment-domain labels,
-  advertise field count `53`, and reject stale, placeholder, or non-separated
+  advertise field count `58`, and reject stale, placeholder, or non-separated
   domain metadata before release evidence can be digested or accepted.
   Those SDK lanes now
   also validate the shared operation fixture's component-level
@@ -19845,8 +20516,11 @@ or ABI behavior.
 	  sets before key shapes, so malformed profiles cannot reach decomposition
 	  math through direct secret/public/rotation/evaluation/bootstrap key checks,
 	  bootstrap-key validators reject declared round-refresh count mismatches
-	  before inspecting refresh ciphertext shapes, refresh-only bootstrap direct
-	  execution rejects inert public-key digest metadata while
+	  before inspecting refresh ciphertext shapes, exact and bounded refresh-only
+	  bootstrap key constructors reject inert all-zero public-key material before
+	  deriving encrypted-zero refresh masks and advertise the same public-key
+	  preflight in the bootstrap-key zero-refresh schema, refresh-only bootstrap
+	  direct execution rejects inert public-key digest metadata while
 	  transcript/proof-statement validation rejects stale or placeholder
 	  public-key digest metadata, and parameter validation now uses
 	  checked raw/scaled exact-arithmetic products instead of saturating
@@ -20058,7 +20732,11 @@ or ABI behavior.
 							  all-zero public-input metadata before any backend verifier dispatch;
 							  Core STARK verifier-dispatch and preverify coverage now pin those
 							  generic rejections before backend-native proof decoding or dedup/cache
-							  admission. Data-model proof
+							  admission. Core's full-bootstrap material/execution proof gates now
+							  share one statement-bound `OpenVerifyEnvelope` preflight for the
+							  canonical STARK backend, circuit id, public-input schema, wrapper
+							  version, statement-hash public inputs, and native envelope byte
+							  checks, so top-level and backend-time admission cannot drift. Data-model proof
 							  envelopes plus FHE parameter-set, execution-policy, Soracloud
 							  uploaded-model, private-execution, agent-apartment/autonomy,
 							  training metrics, HF source/shared-lease/violation evidence,
@@ -20289,7 +20967,7 @@ or ABI behavior.
 									  binding flag, and proof-key
 								  commitment component, pinning the prover/verifier artifact contract plus
 								  canonical proof schema artifact
-								  (`8eee2fdff5c83ed7797a6c0e0b8f755ec953f16fde4e71df32aff3da884aa70f`),
+								  (`a1354821e8d00ab90629e00a685827151076b813d132cb10e7684a4ab84b556b`),
 								  governed parameter/profile/depth-bound prover/verifier key-material
 									  commitments, and prover-key commitment digests before release-grade keys
 									  are admitted. Data-model
@@ -20310,10 +20988,10 @@ or ABI behavior.
 											  Merkle/FRI verifier replay, AIR-root FRI query binding, and canonical
 											  base transcript-label plus suffixed-label alias rejection.
 											  Release-audit evidence now exposes those replay-policy guarantees in
-											  its proof-profile record with field count 53, including release-prover
+											  its proof-profile record with field count 58, including release-prover
 											  digest domains and proof-key material/pair commitment domains; native
 											  proof-circuit fingerprint material binds the same guarantees with field
-											  count 45, generated circuit bodies carry them with field count 46, and
+											  count 48, generated circuit bodies carry them with field count 49, and
 											  the current release-audit package schema validates proof-profile
 											  field-count/label-obligation/domain markers, generated-body byte length/hex,
 											  evaluator artifact hex for coefficient-to-slot, slot-to-coefficient,
@@ -20335,12 +21013,24 @@ or ABI behavior.
 													  raw-byte, colon-separator, uppercase signed-digest/label, and same-value duplicate signed-commitment rejection, and
 												  machine-generated or separator-obfuscated machine-generated audit-body rejection. Raw native
 											  prover/verifier proof-key payloads now reject
-											  binary-decorated placeholder text before Norito decoding or digest-catalog
-												  fallback. The current
+											  binary-decorated and binary-fragmented placeholder text before Norito decoding or digest-catalog
+												  fallback, and the Core/Torii shared FHE native-envelope preflight now rejects
+												  placeholder text in printable spans split by binary framing before runtime
+												  proof attachment admission while caching collapsed marker variants. The current
+														  placeholder matcher caches collapsed marker material during
+														  mixed-binary artifact scans. Shared full-bootstrap material digest
+														  sentinels also include direct and delayed `0xff`-framed variants of
+														  the known placeholder preimages plus evaluator-artifact-set
+														  domain-scoped `0xff`-framed transient digests, and native payload plus
+														  external audit artifact digest sentinels reject delayed binary-framed
+														  variants too, and Soracloud execution-policy admission rejects direct,
+														  delayed, and leading-whitespace delayed `0xff`-framed caller-pinned
+														  release-audit package digest placeholders before package validation
+														  or digest mismatch can mask policy errors.
 														  material/execution schema hashes are
-															  `8d5cac1304e7b20ad05ebe4c9825af1d1d14231a3422e9d911d5698cf2a07df5`
+															  `fdfe1d3454a0f3fac98684f24af74bbb0286dda732e7d34e1d99677fcbbc5acb`
 															  and
-															  `bcc5709f96a74c5f8606cb3c6b7093abac7f1645422fb1fea2c1a341acb93009`.
+															  `0f8fcf3c6cb5f2889d471dc7b656d8f6174289ce0d1ab40b13076da5fdd5443d`.
 											  Registered bounded-noise compatibility wrappers for multiplication, Galois
 											  switching, outer-slot rotation, packed rotation, and bootstrap refresh now
 											  delegate to the registered target-limb basis-extension corridor, so older
@@ -20355,7 +21045,7 @@ or ABI behavior.
 											  Shared Soracloud operation vectors now install constructor-built
 											  no-refresh `FullBootstrapV1` keys and keep governed full-bootstrap
 											  material pinned to the crypto proof schema artifact digest
-											  `8eee2fdff5c83ed7797a6c0e0b8f755ec953f16fde4e71df32aff3da884aa70f`,
+											  `a1354821e8d00ab90629e00a685827151076b813d132cb10e7684a4ab84b556b`,
 											  with prover-key digest
 											  `a138d4ba7125de0ff8a368d82d13c697986ced91ed8b8b9c468bc3b694a26929`,
 											  prover-key material commitment
@@ -20398,7 +21088,7 @@ or ABI behavior.
 								  fail before Core, Torii, or data-model fixtures admit the governed
 								  proof-key pair. The native proof-key envelope now also carries a
 								  deterministic full-bootstrap proof-circuit fingerprint. Its material has
-								  field count 45 and binds artifact-bound prover-input validation,
+								  field count 48 and binds artifact-bound prover-input validation,
 								  stale Galois-key-set/proof-key artifact replay rejection, and
 								  transcript-derived public-opening policy plus canonical base transcript-label enforcement and suffixed-label alias rejection, so
 								  circuit-shape or replay-policy drift fails before governed proof-key
@@ -20483,9 +21173,10 @@ or ABI behavior.
 								  `BfvFullBootstrapExecutionProverInputMaterialV1` package that binds the
 								  proof input, canonical row-major arithmetic trace material/digest,
 								  canonical AIR contract digest, governed AIR artifact digest,
-								  zero-residual AIR evaluation material/digest, and governed generated
+								  zero-residual AIR evaluation material/digest, trace-bound
+								  public-opening material/digest, and governed generated
 								  prover/verifier proof-key pair before the dedicated prover boundary; the
-								  trace material, AIR evaluation material, and proof-key-bound prover-input
+								  trace material, AIR evaluation material, public-opening material, and proof-key-bound prover-input
 								  package digests are pinned to encoded self-describing Norito material under
 								  their dedicated domains.
 								  Crypto and Core reject stale trace digests, stale AIR
@@ -20518,12 +21209,21 @@ or ABI behavior.
 									  native opening policy, execution proof input package digest domain,
 									  release-prover AIR constraint-system digest/artifact binding, and the
 									  typed crypto schema validates those AIR, release-prover, and execution
-									  proof input package digest-domain
+									  proof input package digest-domain plus exact-residual and bounded-noise
+									  admission proof-input material bindings for public statement hashes,
+									  secret-key witnesses, decrypted plaintext, scaled coefficients, exact
+									  residual multiples or centered-noise polynomials, declared bounds,
+									  nonzero public-key/ciphertext residual/noise witnesses, and
+									  resampled nonzero exact/bounded error/noise generation, plus
+									  role/mode-separated canonical proof-input package digests, with
+									  public-key and input-admission schema regressions parsing those
+									  proof-input sections plus nonzero witness and generation-resampling
+									  obligations against the crypto constants
 									  advertised AIR/release-prover terms directly. The
 											  release-audit proof-profile record advertises those replay-policy
 											  and AIR evaluation material layout/digest/zero-composition terms,
 											  and the native proof-circuit fingerprint material binds the
-											  replay-policy terms with field count 45. The AIR constraint-system
+											  replay-policy terms with field count 48. The AIR constraint-system
 									  digest is also bound through the typed public schema, native
 									  prover/verifier payloads, proof-key material envelope, native
 									  proof-key material, and native proof-circuit fingerprint. The
@@ -20589,19 +21289,22 @@ or ABI behavior.
 											  bodies now reject delayed nested audit report/archive headers anywhere in
 											  the body, while digest-only schema claims stay limited to exact known
 											  nested-header sentinels that do not require inspecting unknown preimages.
-									  Remaining native-AIR
-									  production work is the BFV arithmetic proof-producing backend plus
-									  release-grade generated prover/verifier artifacts and audit evidence,
-										  not hand-built roots, openings, unbound AIR-root FRI query schedules,
-										  release-audit package propagation of those verifier policies, unbound
-										  composition vectors, statement-only composition challenges, or
-									  prefix-truncated composition challenge reduction.
-									  Crypto release tooling can now derive governed full-bootstrap circuit
-									  material directly from concrete artifact bundles by recomputing every
-									  artifact digest, proof-key material commitment, and generated pair
-									  commitment before validating the bundle against the derived material.
-									  Standalone release audit evidence validation also recomputes the
-									  evaluator-artifact-set digest, full artifact-bundle digest, and
+										  Remaining native-AIR production work is the BFV
+										  arithmetic proof-producing backend plus release-grade generated
+										  prover/verifier artifacts and audit evidence. The hand-built-root,
+										  unbound opening/composition, statement-only challenge, and
+										  prefix-truncated challenge gaps are already closed by the shared
+										  typed AIR/native-envelope replay path.
+										  Crypto release tooling can now derive governed full-bootstrap circuit
+										  material directly from concrete artifact bundles by recomputing every
+										  artifact digest, proof-key material commitment, and generated pair
+										  commitment before validating the bundle against the derived material.
+										  Release-audit archive validation indexes label/value fields once per
+										  body before checking signed commitments, proof-profile obligations, and
+										  governed artifact hex, and placeholder-marker scans skip directly
+										  between candidate marker starts.
+										  Standalone release audit evidence validation also recomputes the
+										  evaluator-artifact-set digest, full artifact-bundle digest, and
 									  canonical native proof-circuit fingerprint from its advertised fields,
 									  so stale-but-distinct digest summaries or a matched stale
 									  prover/verifier fingerprint pair cannot pass as shape-valid release
@@ -20645,8 +21348,15 @@ or ABI behavior.
 										  Core's shared FHE STARK native-envelope preflight now rejects blank
 										  text bodies plus case-insensitive placeholder,
 										  non-production, handoff, sample, template, and example sentinels, including
-										  dash/underscore variants, before Norito decoding, so every FHE proof
-										  class fails closed at the raw native-envelope boundary.
+										  dash/underscore variants, before Norito decoding. Data-model material and
+										  execution proof validation plus Core material/execution preflight now pin
+										  binary-fragmented placeholder text as well, so `0xff`-split native-envelope
+										  attachments fail closed at the raw native-envelope boundary. The material
+										  and execution public-input schemas also publish their dedicated native-AIR
+										  envelope contracts, including statement-bound domain tags, governed
+										  trace/composition root replay, query/opening count, Merkle/FRI binding,
+										  auxiliary composition sidecar rejection, verifier-owned trace-material replay
+										  for execution, and the same placeholder native-envelope text gates.
 										  BFV-shaped native AIR envelopes now preflight the canonical
 										  transcript label, statement-bound domain tag, STARK/FRI metadata,
 												  public digest binding, proof/commitment version tags,
@@ -20675,17 +21385,13 @@ or ABI behavior.
 										  independently while `max_refresh_rounds = 0`, confirming artifact-aware
 										  preflight plus exact/bounded direct execution and bound preflights fail
 										  before artifact fallback.
-										  Remaining work is the audited full-bootstrap arithmetic witness
-									  constraint/proof-producing backend plus release-grade generated
-										  proving/verifying artifacts for the actual BFV bootstrap circuit, not
-										  the already-shipped Core verifier, proof-key, public-schema/release-prover
-										  input, release-prover arithmetic digest sentinel rejection,
-										  canonical trace/AIR digest sentinel rejection,
-										  arithmetic-trace, AIR contract material/digest binding,
-										  audited release-package wrapper, release-audit transcript-inventory
-										  preflight, native AIR, attachment-finalization,
-										  statement-recomputation, verifier-record/verifier-artifact admission-floor,
-										  or governed proof-key-pair validation corridors documented above.
+											  Remaining work is the audited full-bootstrap arithmetic witness
+											  constraint/proof-producing backend plus release-grade generated
+											  proving/verifying artifacts for the actual BFV bootstrap circuit.
+											  The Core verifier, proof-key, public-schema/release-prover input,
+											  digest-sentinel rejection, AIR contract material/digest binding,
+											  verifier-record floor, and governed proof-key-pair corridors are
+											  already shipped.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by
@@ -21495,6 +22201,55 @@ validation path.
   state, while invalid digests must remain confined to idle or corrupted repair
   states; the fast/deep/TLC-fast configs must continue checking those obligations alongside the RBC progress-state
   evidence stack.
+- Treat the monolithic Apalache `fast` runner as a `Sumeragi.tla` typecheck
+  smoke until the full `Next` relation can be bounded-checked without heap
+  exhaustion on the pinned local toolchain. Production PR coverage should stay
+  on the decomposed helper `*-fast` bounded checks, with `Sumeragi_fast.cfg`
+  retained as a documented state-safety sentinel and TLC `fast` retained for the
+  top-level temporal commit-path model. Do not promote the monolithic TLC
+  `fast` mode into a short PR gate without fresh measured runtime evidence.
+- Keep the legacy fast exactness-debt allowlist empty: every non-bug fast
+  correctness envelope, including the monolithic `fast` sentinel, must compose
+  `TypeInvariant` with a model-specific `*Exactness` conjunct.
+- Keep non-exactness semantic side conjuncts out of correctness-envelope bodies
+  by default. The only documented exception is the top-level
+  `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope`, whose
+  `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope` and
+  `EventuallyCommit` property conjuncts remain direct for TLC compatibility and
+  must stay covered by the stale-checked temporal allowlist.
+- Keep generic and direct exactness-alias debt retired: direct
+  `NoBugInvariant`, direct `Safety`, direct `SafetyFast`, literal
+  `TRUE`/`FALSE`, mixed generic `Safety*` exactness bodies, and helper-to-helper
+  `*Exactness` aliases or nested `*Exactness` composition are now forbidden and
+  absent from the non-bug fast
+  inventory. Exactness bodies should stay as concrete model-specific predicate
+  bundles; the exactness-body guard rejects any generic
+  `NoBugInvariant`/`Safety`/`SafetyFast` mention and any direct `*Exactness`
+  alias except the stale-checked top-level
+  `SumeragiConsensusCoreAlwaysMatchesExactness ->
+  SumeragiConsensusCoreStateSafetyEnvelope` TLC compatibility alias. Repeated
+  zero-arity conjunct references inside exactness bodies are also forbidden so
+  proof bundles cannot count the same named obligation twice. `TypeInvariant`
+  must stay at the correctness-envelope layer and must not be embedded inside
+  exactness bundles. Named zero-arity conjuncts inside exactness bodies must not
+  hide literal `TRUE`/`FALSE` placeholders, one-hop aliases, bare variables, or
+  undefined labels, and whole-body raw scalar equalities such as
+  `ActualOutput = SpecOutput` plus whole-body negation/disjunction predicates
+  and `ImplementationActions(...) = SpecActions(...)` action quantifiers must
+  be lifted into named concrete predicates before composition. Whole-body
+  `\A ...: Matches(...)` exactness quantifiers must likewise compose the
+  existing concrete matches predicate directly. Checked exactness bodies must
+  not be whole-body quantifiers; name the quantified model predicate first.
+  Direct `ImplementationActions(Case) = SpecActions(Case)` exactness conjuncts
+  must also stay behind named concrete predicates before exactness composition.
+  Direct `Matches(Case)` exactness conjuncts must likewise stay behind named
+  concrete matches predicates before exactness composition.
+  Checked exactness bodies must contain direct named zero-arity conjuncts;
+  formula-only `/\` bundles must be lifted behind named concrete predicates
+  before exactness composition.
+  Correctness envelopes must keep `TypeInvariant`, `*Exactness`, and
+  allowlisted temporal exceptions as direct top-level conjuncts, and must not
+  repeat zero-arity conjunct references.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
   workflow entrypoints, Apalache version pins, README commands,
   conflict-marker-free formal wiring and TLA+/CFG artifact files,
@@ -21518,7 +22273,28 @@ validation path.
   constraint operator binding, zero-arity and
   nontrivial CFG/TLC runner constraints,
   non-type-only CFG checks, generic `NoBugInvariant`/`Safety`/`SafetyFast`-free
-  fast CFG checks, nontrivial CFG-referenced semantic checks,
+  fast CFG checks, model-specific `*CorrectnessEnvelope` coverage for non-bug
+  fast CFG checks, correctness-envelope `TypeInvariant`, generic-free and
+  non-exactness-side-conjunct-free correctness-envelope bodies with the
+  stale-checked top-level temporal exception, direct-top-level and
+  duplicate-zero-arity-conjunct-free correctness-envelope bodies, literal-free,
+  generic-`NoBugInvariant`-free, generic-`Safety`-free,
+  generic-`SafetyFast`-free, and direct-alias-free exactness bodies for both
+  envelope conjuncts and direct fast CFG `*Exactness` checks, with only the
+  stale-checked top-level `SumeragiConsensusCoreAlwaysMatchesExactness`
+  compatibility alias allowed, duplicate-zero-arity-conjunct-free exactness
+  bodies, literal/aliased/undefined-zero-arity-conjunct-free and
+  nested-`*Exactness`-free exactness bodies, raw-scalar-equality-free exactness
+  bodies, whole-body-negation/disjunction-free exactness bodies,
+  whole-body-implementation/spec-action-quantifier-free exactness bodies,
+  whole-body-Matches-quantifier-free exactness bodies,
+  whole-body-quantifier-free exactness bodies,
+  direct-implementation/spec-action-conjunct-free exactness bodies,
+  direct-Matches-conjunct-free exactness bodies,
+  direct-named-zero-arity-conjunct-present exactness bodies,
+  `TypeInvariant`-free exactness bodies, direct fast CFG `*Exactness`
+  checks paired into checked correctness envelopes,
+  shrinking non-legacy `*Exactness` shape checks, nontrivial CFG-referenced semantic checks,
   top-level-only CFG behavior/check detection, indented CFG directive rejection,
   non-empty multi-line CFG check blocks,
   TLC module identifier and module-file reachability,
@@ -21980,7 +22756,8 @@ restart/fault combinations built on the fail-closed session-summary and
 status-counter assertions, peer-gap and DA/RBC tail-latency reductions under
 the broadened rotating-fault evidence, broader formal coverage beyond the current
 commit-path, frontier, TLC-cross-checked fork-safety, TLC-cross-checked
-quorum-policy, TLC-cross-checked RBC deliver-quorum,
+quorum-policy correctness envelope, TLC-cross-checked RBC deliver-quorum
+correctness envelope,
 TLC-cross-checked RBC causality correctness-envelope gate,
 TLC-cross-checked RBC DELIVER acceptance correctness-envelope gate,
 TLC-cross-checked RBC commit-processing correctness-envelope gate,
@@ -22086,21 +22863,21 @@ invalid-signature throttle/penalty helper gate (`invalid-signature-throttle`)
 and correctness envelope aggregate,
 penalty offender-selection helper gate (`penalty-offender-selection`) and
 correctness envelope aggregate,
-TLC-cross-checked direct contiguous-frontier repair view-change suppression helper gate
+TLC-cross-checked contiguous-frontier repair view-change suppression correctness-envelope helper gate
 (`frontier-repair-view-change`),
-TLC-cross-checked direct contiguous-frontier recovery advance state-machine helper gate
+TLC-cross-checked contiguous-frontier recovery advance correctness-envelope helper gate
 (`frontier-recovery-advance`),
-TLC-cross-checked direct same-height no-proposal storm recovery helper gate
+TLC-cross-checked same-height no-proposal storm recovery correctness envelope
 (`same-height-no-proposal-storm`),
-TLC-cross-checked direct VRF commit/reveal admission gate, TLC-cross-checked direct VRF
-epoch-window arithmetic helper gate
-(`vrf-epoch-window`), TLC-cross-checked direct VRF epoch-boundary finalization helper gate
-(`vrf-epoch-boundary`), TLC-cross-checked direct VRF epoch restore/snapshot/observation-merge helper gate
-(`vrf-epoch-restore`), TLC-cross-checked direct local VRF material derivation helper gate
-(`vrf-material-derivation`), TLC-cross-checked direct local VRF emission state helper gate
-(`vrf-local-state`), TLC-cross-checked VRF penalties report store helper gate
-(`vrf-penalties-report`), TLC-cross-checked direct classic inbound vote-admission gate, vote
-TLC-cross-checked duplicate-key helper gate (`vote-duplicate-key`),
+TLC-cross-checked VRF commit/reveal admission correctness envelope, TLC-cross-checked VRF
+epoch-window arithmetic correctness envelope
+(`vrf-epoch-window`), TLC-cross-checked VRF epoch-boundary finalization correctness envelope
+(`vrf-epoch-boundary`), TLC-cross-checked VRF epoch restore/snapshot/observation-merge correctness envelope
+(`vrf-epoch-restore`), TLC-cross-checked local VRF material-derivation correctness envelope
+(`vrf-material-derivation`), TLC-cross-checked local VRF emission state correctness envelope
+(`vrf-local-state`), TLC-cross-checked VRF penalties report store correctness envelope
+(`vrf-penalties-report`), TLC-cross-checked classic inbound vote-admission correctness envelope, vote
+TLC-cross-checked duplicate-key correctness envelope (`vote-duplicate-key`),
 TLC-cross-checked evidence freshness horizon correctness envelope,
 TLC-cross-checked evidence canonicalization/deduplication correctness envelope
 (`evidence-canonicalization`), TLC-cross-checked evidence validation correctness envelope
@@ -22158,7 +22935,7 @@ TLC-cross-checked committed-height BlockSyncUpdate conflict/evidence correctness
 (`block-sync-commit-conflict`),
 TLC-cross-checked block-sync warning throttle correctness envelope
 (`block-sync-warning-throttle`),
-TLC-cross-checked QC-insufficient warning throttle helper gate
+TLC-cross-checked QC-insufficient warning throttle correctness-envelope gate
 (`qc-insufficient-warning`),
 TLC-cross-checked canonical committed fetch/body response deferral correctness envelope
 (`fetch-response-deferral`),
@@ -22190,7 +22967,7 @@ TLC-cross-checked RBC block-body repair admission correctness envelope
 (`block-body-repair`),
 TLC-cross-checked body requester stash-window correctness envelope
 (`block-body-request-stash`),
-TLC-cross-checked direct same-height block-body repair admission gate
+TLC-cross-checked same-height block-body repair admission correctness envelope
 (`same-height-block-body-repair`),
 TLC-cross-checked block-body repair observed epoch source correctness envelope
 (`block-body-repair-epoch`),
@@ -22209,12 +22986,12 @@ TLC-cross-checked invalid-proposal evidence builder correctness envelope
 TLC-cross-checked proposal mismatch helper correctness envelope
 (`proposal-mismatch`),
 TLC-cross-checked proposal cache helper correctness envelope (`proposal-cache`),
-TLC-cross-checked direct proposal-hint admission gate (`proposal-hint`),
-TLC-cross-checked direct stale proposal-hint repair no-bug gate
-(`stale-proposal-hint-repair`), TLC-cross-checked direct stale RBC hint repair no-bug gate
+TLC-cross-checked proposal-hint admission correctness envelope (`proposal-hint`),
+TLC-cross-checked stale proposal-hint repair correctness envelope
+(`stale-proposal-hint-repair`), TLC-cross-checked stale RBC hint repair correctness envelope
 (`stale-rbc-hint-repair`),
-TLC-cross-checked direct proposal metadata admission gate (`proposal-admission`),
-TLC-cross-checked direct peer-admin detection helper gate
+TLC-cross-checked direct proposal metadata admission gate (`proposal-admission`) with correctness envelope,
+TLC-cross-checked direct peer-admin detection helper gate with correctness envelope
 (`peer-admin-detection`), TLC-cross-checked QC signer-bitmap admission
 (`qc-signers`), TLC-cross-checked direct raw QC signer-count helper gate
 (`qc-signer-count`), TLC-cross-checked direct BlockCreated admission aggregate exactness gate
@@ -22224,8 +23001,9 @@ reason helper correctness envelope
 (`missing-block-clear`), TLC-cross-checked proposal budget/cap helper correctness envelope
 (`proposal-budget`), TLC-cross-checked non-RBC payload frame budget helper correctness envelope
 (`non-rbc-payload-budget`), TLC-cross-checked direct proposal backpressure
-classification helper gate (`proposal-backpressure`), TLC-cross-checked
-proposal-defer warning throttle helper gate (`proposal-defer-warning`),
+classification helper gate (`proposal-backpressure`) with correctness envelope, TLC-cross-checked
+proposal-defer warning throttle correctness-envelope gate
+(`proposal-defer-warning`),
 TLC-cross-checked direct proposal batch trim/canonicalization
 correctness-envelope helper gate (`proposal-batch`), TLC-cross-checked canonical proposal payload byte
 correctness envelope (`block-payload-canonicalization`),
@@ -22284,26 +23062,27 @@ TLC-cross-checked direct pending-block Kura retry no-bug helper gate
 (`kura-retry`) with aggregate exactness and a correctness envelope,
 TLC-cross-checked direct commit-pipeline scheduling gate with aggregate exactness
 and a correctness envelope,
-TLC-cross-checked precommit vote-count helper gate (`precommit-vote-count`),
+TLC-cross-checked precommit vote-count helper gate (`precommit-vote-count`)
+with correctness envelope,
 TLC-cross-checked direct precommit vote lock filter correctness-envelope gate
 (`drop-precommit-vote-for-lock`),
 TLC-cross-checked set-based voting signer-count helper gate
 (`voting-signer-count`),
 TLC-cross-checked cached vote-log epoch replay correctness envelope
 (`distinct-vote-epochs`),
-TLC-cross-checked direct NEW_VIEW highest-QC vote-selection helper gate
+TLC-cross-checked direct NEW_VIEW highest-QC vote-selection helper gate with correctness envelope
 (`new-view-highest-qc-votes`),
-TLC-cross-checked direct frontier NEW_VIEW catch-up helper gate
+TLC-cross-checked frontier NEW_VIEW catch-up correctness-envelope helper gate
 (`frontier-new-view-catch-up`),
-TLC-cross-checked direct late NEW_VIEW near-quorum emission helper gate
+TLC-cross-checked late NEW_VIEW near-quorum emission correctness-envelope helper gate
 (`late-new-view-emission`),
-TLC-cross-checked direct near-quorum NEW_VIEW rebroadcast helper gate
+TLC-cross-checked direct near-quorum NEW_VIEW rebroadcast helper gate with correctness envelope
 (`near-quorum-new-view-rebroadcast`), TLC-cross-checked direct precommit-QC
-locked-chain wrapper gate
+locked-chain wrapper gate with correctness envelope
 (`precommit-qc-extends-locked`),
-TLC-cross-checked direct requester roster-proof detection helper gate
+TLC-cross-checked direct requester roster-proof detection helper gate with correctness envelope
 (`requester-roster-proof`),
-TLC-cross-checked direct online-validator and relay counter helper gate
+TLC-cross-checked direct online-validator and relay counter helper gate with correctness envelope
 (`online-validator-relay-counters`),
 TLC-cross-checked direct commit-result drain correctness-envelope gate
 (`commit-result-drain`),
@@ -22317,7 +23096,7 @@ TLC-cross-checked autoscale transition commit correctness envelope
 (`autoscale-transition`),
 TLC-cross-checked commit-QC signer quorum correctness envelope
 (`commit-quorum-signers`),
-TLC-cross-checked direct signature-index recovery helper gate
+TLC-cross-checked direct signature-index recovery helper gate with correctness envelope
 (`signature-index-recovery`),
 TLC-cross-checked direct commit-QC cache/history lookup helper gate
 (`commit-qc-lookup`) with aggregate exactness and correctness envelope,
@@ -22379,8 +23158,8 @@ envelope, idle-view proposal budget gate with aggregate exactness and
 correctness envelope,
 TLC-cross-checked direct pacemaker core state-machine helper gate
 (`pacemaker-core`) with correctness envelope, TLC-cross-checked direct
-pacemaker evaluation component gate,
-TLC-cross-checked direct pacing governor helper gate,
+pacemaker evaluation component gate with correctness envelope,
+TLC-cross-checked direct pacing governor helper gate with correctness envelope,
 cached proposal-slot timeout gate with aggregate exactness and correctness
 envelope,
 pending fast-path timeout helper gate (`pending-fast-path-timeout`) with
@@ -22389,8 +23168,12 @@ stalled pending-block timeout decision gate (`stalled-pending-timeout`) with
 aggregate exactness and correctness envelope,
 stalled pending-frontier timeout helper gate (`stalled-pending-frontier-timeout`)
 with aggregate exactness and correctness envelope,
+same-height missing-QC height-stall dampening helper gate with aggregate
+exactness and correctness envelope,
 missing-QC timing helper gate with aggregate exactness and correctness
 envelope,
+live-frontier idle missing-QC suppression helper gate with aggregate exactness
+and correctness envelope,
 idle backlog signal helper gate (`idle-backlog-signals`) with aggregate
 exactness and correctness envelope,
 proposal-liveness state helper gate (`proposal-liveness`) with aggregate
@@ -22407,13 +23190,13 @@ timeout/cooldown derivation helper gate (`timeout-derivation`) with aggregate
 exactness,
 round/view helper gate (`round-view-helpers`) with aggregate exactness and
 correctness envelope,
-PhaseTracker mutable state helper gate (`phase-tracker`),
+PhaseTracker mutable state helper gate (`phase-tracker`) with correctness envelope,
 TLC-cross-checked round-trace status recorder gate (`round-trace-status`) with correctness envelope,
-direct failed-commit/block-sync helper gate (`failure-recovery-helpers`),
-TLC-cross-checked direct transaction requeue branch helper gate
+failed-commit/block-sync helper correctness-envelope gate (`failure-recovery-helpers`),
+TLC-cross-checked direct transaction requeue branch helper gate with correctness envelope
 (`requeue-transactions`),
-TLC-cross-checked direct tick/deadline scheduling helper gate, direct worker tick-gap helper
-gate (`worker-tick-gap`),
+TLC-cross-checked tick/deadline scheduling helper correctness envelope,
+TLC-cross-checked worker tick-gap correctness envelope (`worker-tick-gap`),
 TLC-cross-checked proposal parent resolution gate with aggregate exactness and
 correctness envelope,
 TLC-cross-checked highest-QC dependency deferral gate with aggregate exactness
@@ -22437,7 +23220,7 @@ with the 2026-06-27 helper closure naming
 `CommitEvidenceReplayCorrectnessEnvelope`,
 `BlockSyncRecoveryCorrectnessEnvelope`, and
 `CertifiedFetchCorrectnessEnvelope`,
-TLC-cross-checked direct missing-block ingress fetch gate, TLC-cross-checked direct payload progress availability gate, TLC-cross-checked direct highest-QC fetch body-known gate, TLC-cross-checked local payload availability correctness envelope, TLC-cross-checked local block-known routing correctness envelope, TLC-cross-checked lock-safety block-known routing correctness envelope, TLC-cross-checked missing locked-QC payload recovery gate (`missing-locked-qc-recovery`), TLC-cross-checked local signed-block materialization correctness envelope, TLC-cross-checked authoritative payload progress correctness envelope, TLC-cross-checked hash-level authoritative block payload correctness envelope, TLC-cross-checked direct pending-block active-for-tip gate, TLC-cross-checked direct pending fast-unblock decision gate, TLC-cross-checked direct blocking pending-block counter gate, TLC-cross-checked direct quorum recovery vote-drain urgency gate, TLC-cross-checked direct frontier body-gap payload-drain urgency gate, TLC-cross-checked direct RBC authoritative payload progress gate, TLC-cross-checked direct slot authoritative payload no-bug gate, TLC-cross-checked missing-block fetch planner with correctness envelope, TLC-cross-checked recovery status counter helper gate (`recovery-status-counters`) with correctness envelope, TLC-cross-checked QC rebuild status counter helper gate (`qc-rebuild-status`) with correctness envelope, TLC-cross-checked direct QC rebuild quorum reachability helper gate (`qc-rebuild-quorum`), TLC-cross-checked collector-targeting status counter helper gate (`collector-targeting-status`) with correctness envelope, TLC-cross-checked deferred recovery status counter helper gate (`deferred-recovery-status`) with correctness envelope, TLC-cross-checked missing-QC liveness status counter helper gate (`missing-qc-liveness-status`) with correctness envelope, naming `RecoveryStatusCountersCorrectnessEnvelope`, `QcRebuildStatusCorrectnessEnvelope`, `CollectorTargetingStatusCorrectnessEnvelope`, `DeferredRecoveryStatusCorrectnessEnvelope`, and `MissingQcLivenessStatusCorrectnessEnvelope`, TLC-cross-checked direct sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked direct deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked direct timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked direct roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper gate (`range-pull-recovery`), TLC-cross-checked direct range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window helper gate (`round-recovery-bundle-window`),
+TLC-cross-checked missing-block ingress fetch correctness envelope, TLC-cross-checked direct payload progress availability gate, TLC-cross-checked direct highest-QC fetch body-known gate, TLC-cross-checked local payload availability correctness envelope, TLC-cross-checked local block-known routing correctness envelope, TLC-cross-checked lock-safety block-known routing correctness envelope, TLC-cross-checked missing locked-QC payload recovery correctness envelope (`missing-locked-qc-recovery`), TLC-cross-checked local signed-block materialization correctness envelope, TLC-cross-checked authoritative payload progress correctness envelope, TLC-cross-checked hash-level authoritative block payload correctness envelope, TLC-cross-checked direct pending-block active-for-tip gate, TLC-cross-checked direct pending fast-unblock decision gate, TLC-cross-checked direct blocking pending-block counter gate, TLC-cross-checked quorum recovery vote-drain urgency correctness envelope, TLC-cross-checked frontier body-gap payload-drain urgency correctness envelope, TLC-cross-checked RBC authoritative payload progress correctness envelope, TLC-cross-checked slot authoritative payload correctness envelope, TLC-cross-checked missing-block fetch planner with correctness envelope, TLC-cross-checked recovery status counter helper gate (`recovery-status-counters`) with correctness envelope, TLC-cross-checked QC rebuild status counter helper gate (`qc-rebuild-status`) with correctness envelope, TLC-cross-checked QC rebuild quorum reachability correctness envelope (`qc-rebuild-quorum`), TLC-cross-checked collector-targeting status counter helper gate (`collector-targeting-status`) with correctness envelope, TLC-cross-checked deferred recovery status counter helper gate (`deferred-recovery-status`) with correctness envelope, TLC-cross-checked missing-QC liveness status counter helper gate (`missing-qc-liveness-status`) with correctness envelope, naming `RecoveryStatusCountersCorrectnessEnvelope`, `QcRebuildStatusCorrectnessEnvelope`, `CollectorTargetingStatusCorrectnessEnvelope`, `DeferredRecoveryStatusCorrectnessEnvelope`, and `MissingQcLivenessStatusCorrectnessEnvelope`, TLC-cross-checked direct sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked direct deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked direct timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked direct roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper correctness envelope (`range-pull-recovery`), TLC-cross-checked direct range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window correctness envelope (`round-recovery-bundle-window`),
 TLC-cross-checked status-counter/queue helper gates with correctness envelopes:
 `IngressStatusCountersCorrectnessEnvelope`,
 `VoteValidationDropStatusCorrectnessEnvelope`,
@@ -22453,43 +23236,42 @@ TLC-cross-checked final status helper gates with correctness envelopes:
 `RosterRecoveryStatusCorrectnessEnvelope`,
 `RangePullStatusCorrectnessEnvelope`, and
 `KuraStoreStatusCorrectnessEnvelope`,
-TLC-cross-checked direct recovery-FSM reason classifier/rank/sort helper gate (`recovery-fsm-reason`),
+TLC-cross-checked recovery-FSM reason classifier/rank/sort correctness envelope (`recovery-fsm-reason`),
 TLC-cross-checked direct committed-edge conflict suppression correctness-envelope gate,
-TLC-cross-checked direct lock-rejected branch sink gate, TLC-cross-checked
+TLC-cross-checked direct lock-rejected branch sink correctness envelope, TLC-cross-checked
 active-height lock-reject recovery correctness-envelope gate,
 TLC-cross-checked missing-block hard-cap recovery gate with correctness envelope,
 TLC-cross-checked missing-block hard-cap cleanup gate with correctness envelope,
-TLC-cross-checked missing-block view-change escalation gate with correctness envelope, TLC-cross-checked precommit vote-emission gate,
+TLC-cross-checked missing-block view-change escalation gate with correctness envelope, TLC-cross-checked precommit vote-emission gate with correctness envelope,
 TLC-cross-checked native AMX attestation gate with correctness envelope,
-TLC-cross-checked native AMX queue-journal replay gate, TLC-cross-checked native AMX routing-plan projection gate with correctness envelope,
-TLC-cross-checked native AMX receipt validation gate, TLC-cross-checked native AMX control-plane ingress with aggregate exactness and correctness envelope,
-TLC-cross-checked direct vNext chain-order component gate, TLC-cross-checked direct vNext stake-weight/quorum helper gate
-(`vnext-stake-weight`), TLC-cross-checked direct vNext re-chain helper gate,
-TLC-cross-checked direct vNext re-chain error label helper gate, TLC-cross-checked
-direct vNext aggregate certificate verification gate, TLC-cross-checked direct vNext signing-preimage gate, TLC-cross-checked direct vNext control-certificate ingress component gate,
-TLC-cross-checked direct vNext slot-lifecycle component gate, TLC-cross-checked direct vNext validation
-ownership component gate, TLC-cross-checked direct vNext deadline/protection helper gate
-(`vnext-deadline-protection`), direct vNext performance-fault config conversion gate
-(`vnext-performance-config`), direct pending-block validation worker config helper gate
-(`validation-worker-config`), TLC-cross-checked direct validation stall/redrive helper gate
-(`validation-stall-redrive`), TLC-cross-checked direct validation redrive reason label/distinctness
-helper gate (`validation-redrive-label`), validation ownership cleanup direct
-exactness helper gate
-(`validation-ownership-cleanup`), TLC-cross-checked direct vote/QC verification cache-key identity helper
-gate (`verify-cache-key`), TLC-cross-checked direct async vote-verification ownership gate,
+TLC-cross-checked native AMX queue-journal replay correctness envelope, TLC-cross-checked native AMX routing-plan projection gate with correctness envelope,
+TLC-cross-checked native AMX receipt validation gate with correctness envelope, TLC-cross-checked native AMX control-plane ingress with aggregate exactness and correctness envelope,
+TLC-cross-checked vNext chain-order correctness envelope (`vnext-chain-order`),
+TLC-cross-checked vNext stake-weight/quorum correctness envelope
+(`vnext-stake-weight`), TLC-cross-checked vNext re-chain helper correctness envelope (`vnext-rechain`),
+TLC-cross-checked vNext re-chain error label correctness envelope (`vnext-rechain-error-label`), TLC-cross-checked
+vNext aggregate certificate verification correctness envelope (`vnext-signature`), TLC-cross-checked vNext signing-preimage correctness envelope (`vnext-signing-preimage`), TLC-cross-checked vNext control-certificate ingress correctness envelope (`vnext-control-ingress`),
+TLC-cross-checked vNext slot-lifecycle correctness envelope (`vnext-slot-lifecycle`), TLC-cross-checked vNext validation ownership correctness envelope (`vnext-validation`), TLC-cross-checked vNext deadline/protection correctness envelope
+(`vnext-deadline-protection`), vNext performance-fault config correctness envelope
+(`vnext-performance-config`), pending-block validation worker config correctness envelope
+(`validation-worker-config`), TLC-cross-checked validation stall/redrive correctness envelope
+(`validation-stall-redrive`), TLC-cross-checked validation redrive reason label correctness envelope
+(`validation-redrive-label`), validation ownership cleanup correctness envelope
+(`validation-ownership-cleanup`), TLC-cross-checked vote/QC verification cache-key identity correctness envelope
+(`verify-cache-key`), TLC-cross-checked async vote-verification ownership correctness envelope,
 direct vote-signature verification worker config helper gate
-(`vote-verify-worker-config`), TLC-cross-checked direct async QC aggregate-verification ownership gate,
+(`vote-verify-worker-config`), TLC-cross-checked async QC aggregate-verification ownership correctness envelope,
 TLC-cross-checked direct QC aggregate-verification worker config helper gate (`qc-verify-worker-config`),
-TLC-cross-checked direct worker-loop drain scheduler component gate,
+TLC-cross-checked worker-loop drain scheduler correctness envelope,
 TLC-cross-checked actor-gate priority/fairness with aggregate exactness and
 correctness envelope,
-TLC-cross-checked direct worker-loop budget/adaptive-cap component gate,
-TLC-cross-checked direct worker ingress routing component gate,
-direct worker-loop stage helper gate, TLC-cross-checked worker-queue status accounting gate with correctness envelope,
+TLC-cross-checked worker-loop budget/adaptive-cap correctness envelope,
+TLC-cross-checked worker ingress routing correctness envelope,
+TLC-cross-checked worker-loop stage correctness envelope, TLC-cross-checked worker-queue status accounting gate with correctness envelope,
 TLC-cross-checked NPoS VRF epoch-seal staging gate with correctness envelope,
 direct commit-anchor QC promotion helper gate (`commit-anchor-qc`),
 direct committed-height QC admission helper gate (`committed-height-qc`),
-TLC-cross-checked proposal assembly gate, TLC-cross-checked Kura durability
+TLC-cross-checked proposal assembly correctness-envelope gate, TLC-cross-checked Kura durability
 commit retry gate, TLC-cross-checked Kura persistence status counter/snapshot helper gate
 (`kura-store-status`) with correctness envelope, Kura writer wake coalescing gate, Kura writer periodic
 fsync fault regression gate, State DA cursor apply fault regression gate, Kura
@@ -22502,44 +23284,53 @@ IVM WSV checkpoint durable-state dedupe/benchmark gate,
 State view generation retry gate, WSV state write lock separation gate,
 WSV state write lock telemetry alias gate, WSV heavy-world state-write-lock benchmark gate,
 TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
-realignment gate, direct frontier block-sync hint/direct-response permit gate,
-TLC-cross-checked direct same-height vote conflict helper gate, direct aggregate same-height vote-lock helper gate,
-TLC-cross-checked direct proposal stale same-height vote helper gate,
-TLC-cross-checked direct same-height vote recovery view-gap helper gate,
-TLC-cross-checked direct tip-extension helper gate,
+realignment gate, direct frontier block-sync hint/direct-response permit correctness envelope gate,
+TLC-cross-checked same-height vote conflict correctness envelope, aggregate same-height vote-lock correctness envelope,
+TLC-cross-checked proposal stale same-height vote correctness envelope,
+TLC-cross-checked same-height vote recovery view-gap correctness envelope,
+TLC-cross-checked tip-extension helper correctness envelope,
 TLC-cross-checked DA gate helper correctness envelope (`da-gate`),
 TLC-cross-checked DA gate status transition semantics helper gate
 (`da-gate-status`) with correctness envelope, naming
 `DaGateStatusCorrectnessEnvelope`,
-TLC-cross-checked direct DA manifest guard helper gate,
+TLC-cross-checked DA manifest guard correctness envelope (`manifest-guard`),
+TLC-cross-checked missing-QC reacquire admission correctness envelope
+(`missing-qc-reacquire-admission`),
+TLC-cross-checked missing-QC reacquire action correctness envelope
+(`missing-qc-reacquire-action`),
+TLC-cross-checked same-height missing-QC stall range-pull correctness envelope
+(`missing-qc-stall-range-pull`),
+TLC-cross-checked missing commit-QC actionable dependency correctness envelope
+(`missing-commit-qc-actionable`),
 TLC-cross-checked direct consensus handshake capability construction
 correctness-envelope gate,
-TLC-cross-checked direct consensus handshake helper gate,
+TLC-cross-checked consensus handshake correctness-envelope helper gate,
 TLC-cross-checked runtime mode flip correctness envelope (`mode-flip`),
 TLC-cross-checked effective consensus-mode correctness envelope (`effective-mode`),
 TLC-cross-checked effective consensus timing correctness envelope (`effective-timing`),
 TLC-cross-checked NEW_VIEW stats correctness envelope (`new-view-stats`),
-TLC-cross-checked direct NEW_VIEW tracker quorum/selection helper gate (`new-view-tracker`),
-TLC-cross-checked direct timing monitor no-bug gate,
-TLC-cross-checked hotspot summary accumulator helper gate (`hotspot-log-summary`),
+TLC-cross-checked NEW_VIEW tracker quorum/selection correctness envelope (`new-view-tracker`),
+TLC-cross-checked timing monitor correctness envelope (`timing-monitor`),
+TLC-cross-checked hotspot summary accumulator correctness-envelope helper gate (`hotspot-log-summary`),
 TLC-cross-checked adaptive observability timing/fanout correctness envelope (`adaptive-observability`),
-TLC-cross-checked direct pacing backpressure helper gate,
+TLC-cross-checked direct pacing backpressure helper gate with correctness envelope,
 TLC-cross-checked counter-driven backpressure cooldown correctness envelope
 (`counter-backpressure-cooldown`),
-TLC-cross-checked direct per-reason pacemaker backpressure tracker gate
+TLC-cross-checked direct per-reason pacemaker backpressure tracker gate with correctness envelope
 (`pacemaker-backpressure-tracker`),
 TLC-cross-checked locked-QC helper correctness envelope,
-TLC-cross-checked direct stake snapshot no-bug gate,
-TLC-cross-checked direct NPoS validator election helper gate (`validator-election`),
+TLC-cross-checked stake snapshot correctness envelope,
+TLC-cross-checked NPoS validator election correctness envelope (`validator-election`),
 TLC-cross-checked topology role/signature filter gate
 (`topology-role-filter`),
-TLC-cross-checked direct live local-vote roster helper gate (`live-vote-roster`),
+TLC-cross-checked live local-vote roster helper correctness envelope
+(`live-vote-roster`),
 TLC-cross-checked canonical contiguous-frontier reanchor correctness envelope
 (`canonical-frontier-reanchor`),
 TLC-cross-checked canonical round-roster correctness envelope
 (`canonical-round-roster`),
-TLC-cross-checked direct block-specific vote-roster selection gate (`vote-roster-selection`),
-TLC-cross-checked direct vote-roster cache/support helper gate (`vote-roster-cache`),
+TLC-cross-checked block-specific vote-roster selection correctness envelope (`vote-roster-selection`),
+TLC-cross-checked vote-roster cache/support correctness envelope (`vote-roster-cache`),
 TLC-cross-checked direct commit-topology state/reset correctness-envelope gate
 (`commit-topology-state`),
 TLC-cross-checked direct roster index projection no-bug gate
@@ -22556,40 +23347,40 @@ TLC-cross-checked consensus-params ingress helper gate
 TLC-cross-checked direct prevalidated commit artifact trust helper gate
 (`prevalidated-commit-artifact`),
 TLC-cross-checked commit-job dispatch gate,
-TLC-cross-checked direct precommit signer-history block-sync fallback gate,
+TLC-cross-checked direct precommit signer-history block-sync fallback gate with correctness envelope,
 TLC-cross-checked pure engine constructor initial-state correctness-envelope gate,
 TLC-cross-checked pure engine read-only accessor correctness-envelope gate,
-TLC-cross-checked pure engine tick gate,
-TLC-cross-checked pure engine tick unrelated-state preservation gate,
-TLC-cross-checked pure engine direct NewView subject projection helper gate, pure engine certificate
+TLC-cross-checked pure engine tick correctness-envelope gate,
+TLC-cross-checked pure engine tick unrelated-state preservation correctness-envelope gate,
+TLC-cross-checked pure engine NewView subject projection correctness-envelope helper gate, pure engine certificate
 prefilter dispatch gate, pure engine certificate prefilter state-handoff gate,
 TLC-cross-checked pure engine certificate prefilter unrelated-state preservation gate,
 TLC-cross-checked pure engine view-advance saturation correctness-envelope gate,
-TLC-cross-checked engine NewView-QC gate,
-TLC-cross-checked pure engine direct exactness NewView-QC highest-QC record gate,
-TLC-cross-checked pure engine NewView-QC unrelated-state preservation gate,
-TLC-cross-checked pure engine direct exactness NewView-QC advance gate,
-TLC-cross-checked pure engine handle-dispatch gate,
-TLC-cross-checked pure engine direct top-level argument-forwarding component gate,
-TLC-cross-checked pure engine direct top-level output relay component gate,
-TLC-cross-checked pure engine proposal-ingress gate,
-TLC-cross-checked pure engine exact proposal output-field gate,
-TLC-cross-checked pure engine direct exactness proposal state-mutation gate,
-TLC-cross-checked pure engine proposal unrelated-state preservation direct component gate,
-TLC-cross-checked pure engine direct exactness proposal validation-owner gate,
-TLC-cross-checked direct exactness proposal-lock helper gate,
-TLC-cross-checked direct QC-round compatibility helper gate,
+TLC-cross-checked engine NewView-QC correctness envelope,
+TLC-cross-checked pure engine NewView-QC highest-QC record correctness envelope,
+TLC-cross-checked pure engine NewView-QC unrelated-state preservation correctness envelope,
+TLC-cross-checked pure engine NewView-QC advance correctness envelope,
+TLC-cross-checked pure engine handle-dispatch correctness envelope,
+TLC-cross-checked pure engine top-level argument-forwarding correctness envelope,
+TLC-cross-checked pure engine top-level output relay correctness envelope,
+TLC-cross-checked pure engine proposal-ingress correctness envelope,
+TLC-cross-checked pure engine exact proposal output-field correctness envelope,
+TLC-cross-checked pure engine proposal state-mutation correctness envelope,
+TLC-cross-checked pure engine proposal unrelated-state preservation correctness envelope,
+TLC-cross-checked pure engine proposal validation-owner correctness envelope,
+TLC-cross-checked proposal-lock helper correctness envelope,
+TLC-cross-checked QC-round compatibility correctness envelope,
 TLC-cross-checked QC reference projection correctness-envelope helper gate,
 TLC-cross-checked QC reference comparator correctness-envelope helper gate,
 TLC-cross-checked highest-QC record correctness-envelope helper gate,
-TLC-cross-checked commit-subject direct component gate,
-TLC-cross-checked direct exactness payload lookup helper gate,
-TLC-cross-checked direct validation-priority helper gate,
-TLC-cross-checked direct vote-backed evidence no-bug gate,
-TLC-cross-checked direct vote payload actionable no-bug gate,
+TLC-cross-checked commit-subject correctness-envelope helper gate,
+TLC-cross-checked payload lookup correctness-envelope helper gate,
+TLC-cross-checked validation-priority correctness envelope,
+TLC-cross-checked vote-backed consensus evidence correctness envelope,
+TLC-cross-checked vote payload actionable correctness-envelope gate,
 TLC-cross-checked direct actionable vote-backed proposal evidence
 correctness-envelope helper gate,
-direct slot proposal evidence no-bug gate,
+slot proposal evidence correctness envelope,
 direct round liveness no-bug gate,
 direct roster recovery FSM no-bug gate and correctness envelope aggregate,
 direct consensus recovery prune helper gate and correctness envelope aggregate,
@@ -22600,6 +23391,7 @@ direct superseded frontier payload retention helper gate
 (`superseded-frontier-payload-retention`) and correctness envelope aggregate,
 direct stale missing-block request prune no-bug gate and correctness envelope aggregate,
 direct stale missing commit-QC request prune no-bug gate and correctness envelope aggregate,
+direct same-height missing-payload fetch-window correctness envelope,
 direct stale RBC session prune no-bug gate and correctness envelope aggregate,
 direct highest-QC defer marker prune helper gate and correctness envelope aggregate,
 fast-finality inline validation helper gate and correctness envelope aggregate,
@@ -22619,33 +23411,36 @@ view-change proof/index status counter component/anchor gate
 (`view-change-proof-status`) and correctness envelope aggregate,
 leader/highest-QC/locked-QC status projection component/anchor gate
 (`qc-status`) and correctness envelope aggregate,
-TLC-cross-checked validation evidence QC selector helper gate (`validation-evidence-qc`),
-TLC-cross-checked pure engine prepare-QC gate,
-TLC-cross-checked pure engine direct exactness Prepare-QC lock/highest-QC record gate,
-TLC-cross-checked pure engine direct exactness Prepare-QC phase-transition gate,
-TLC-cross-checked pure engine Prepare-QC unrelated-state preservation gate,
-TLC-cross-checked pure engine direct exactness prepare-vote cache/output gate,
-TLC-cross-checked pure engine commit-QC gate,
-TLC-cross-checked pure engine direct exactness Commit-QC highest-QC record gate,
-TLC-cross-checked pure engine direct exactness Commit-QC phase-transition gate,
-TLC-cross-checked pure engine Commit-QC unrelated-state preservation gate,
+TLC-cross-checked validation evidence QC selector correctness envelope
+(`validation-evidence-qc`),
+TLC-cross-checked validation callback ownership correctness envelope
+(`validation`),
+TLC-cross-checked pure engine prepare-QC correctness envelope,
+TLC-cross-checked pure engine Prepare-QC lock/highest-QC record correctness envelope,
+TLC-cross-checked pure engine Prepare-QC phase-transition correctness envelope,
+TLC-cross-checked pure engine Prepare-QC unrelated-state preservation correctness envelope,
+TLC-cross-checked pure engine prepare-vote cache/output correctness envelope,
+TLC-cross-checked pure engine commit-QC correctness envelope,
+TLC-cross-checked pure engine Commit-QC highest-QC record correctness envelope,
+TLC-cross-checked pure engine Commit-QC phase-transition correctness envelope,
+TLC-cross-checked pure engine Commit-QC unrelated-state preservation correctness envelope,
 TLC-cross-checked pure engine payload-available Commit-QC finality correctness envelope,
-TLC-cross-checked pure engine direct exactness missing-payload Commit-QC pending/fetch gate,
-TLC-cross-checked pure engine Commit-QC validation cleanup gate,
-TLC-cross-checked pure engine committed-block gate,
-TLC-cross-checked pure engine direct exactness committed-block record gate,
-TLC-cross-checked pure engine reconfiguration staging gate,
-TLC-cross-checked pure engine direct reconfiguration activation-height dedup component gate,
-TLC-cross-checked pure engine committed-block cleanup direct component gate,
-TLC-cross-checked pure engine committed-block unrelated-state preservation direct component gate,
-TLC-cross-checked pure engine direct exactness payload-availability record gate,
-TLC-cross-checked pure engine payload-availability gate,
-TLC-cross-checked pure engine payload-availability unrelated-state preservation direct component gate,
-TLC-cross-checked pure engine validation-result gate,
-TLC-cross-checked pure engine validation-result unrelated-state preservation direct component gate,
-TLC-cross-checked pure engine direct exactness validation-owner cleanup gate,
-TLC-cross-checked pure engine direct exactness invalid-validation round/output advance gate,
-TLC-cross-checked reconfiguration, TLC-cross-checked certified-recovery correctness envelope, TLC-cross-checked view-change, TLC-cross-checked validation-callback,
+TLC-cross-checked pure engine missing-payload Commit-QC pending/fetch correctness envelope,
+TLC-cross-checked pure engine Commit-QC validation cleanup correctness envelope,
+TLC-cross-checked pure engine committed-block correctness envelope,
+TLC-cross-checked pure engine committed-block record correctness envelope,
+TLC-cross-checked pure engine reconfiguration staging correctness envelope,
+TLC-cross-checked pure engine reconfiguration activation-height dedup correctness envelope,
+TLC-cross-checked pure engine committed-block cleanup correctness envelope,
+TLC-cross-checked pure engine committed-block unrelated-state preservation correctness envelope,
+TLC-cross-checked pure engine payload-availability record correctness envelope,
+TLC-cross-checked pure engine payload-availability correctness envelope,
+TLC-cross-checked pure engine payload-availability unrelated-state preservation correctness envelope,
+TLC-cross-checked pure engine validation-result correctness envelope,
+TLC-cross-checked pure engine validation-result unrelated-state preservation correctness envelope,
+TLC-cross-checked pure engine validation-owner cleanup correctness envelope,
+TLC-cross-checked pure engine invalid-validation round/output advance correctness envelope,
+TLC-cross-checked validator-set transition correctness envelope, TLC-cross-checked certified-recovery correctness envelope, TLC-cross-checked view-change correctness envelope, TLC-cross-checked validation-callback,
 TLC-cross-checked certificate-admission correctness-envelope gate, TLC-cross-checked highest-QC selection correctness envelope, TLC-cross-checked optional highest-QC selection-filter correctness envelope,
 TLC-cross-checked certified-fetch with aggregate exactness and correctness envelope, TLC-cross-checked pure-engine certificate
 dispatch with aggregate exactness and correctness envelope, TLC-cross-checked pure-engine certificate prefilter state with aggregate exactness and correctness envelope,
@@ -22654,7 +23449,7 @@ TLC-cross-checked frontier-gap realignment with aggregate exactness and correctn
 TLC-cross-checked missing-block fetch with aggregate exactness and correctness envelope, TLC-cross-checked missing-block hard-cap cleanup with aggregate exactness and correctness envelope,
 TLC-cross-checked missing-block hard-cap with aggregate exactness and correctness envelope, TLC-cross-checked missing-block view-change with aggregate exactness and correctness envelope,
 TLC-cross-checked native AMX attestation with aggregate exactness and correctness envelope, TLC-cross-checked native AMX ingress with aggregate exactness and correctness envelope,
-TLC-cross-checked native AMX receipt validation with aggregate exactness,
+TLC-cross-checked native AMX receipt validation with aggregate exactness and correctness envelope,
 TLC-cross-checked native AMX routing-plan with aggregate exactness and correctness envelope, TLC-cross-checked NPoS VRF epoch seal with aggregate exactness and correctness envelope,
 TLC-cross-checked post-commit cleanup with aggregate exactness and correctness envelope, and TLC-cross-checked restart replay with aggregate exactness and correctness envelope,
 with the 2026-06-27 aggregate-exactness closure naming

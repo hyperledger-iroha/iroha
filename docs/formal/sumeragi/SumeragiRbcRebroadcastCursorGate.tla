@@ -160,7 +160,9 @@ RbcRebroadcastCursorCoreSafety ==
   /\ SelectionExact
   /\ StableSelections
 
-RbcRebroadcastCursorExactness == RbcRebroadcastCursorCoreSafety
+RbcRebroadcastCursorExactness ==
+  /\ SelectionExact
+  /\ StableSelections
 
 RbcRebroadcastCursorCorrectnessEnvelope ==
   /\ TypeInvariant

@@ -353,7 +353,7 @@ NoRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BlockSyncNoRosterExactness ==
-  NoRosterMatchesSpec
+  /\ NoRosterMatchesSpec
 
 BlockSyncNoRosterCorrectnessEnvelope ==
   /\ TypeInvariant

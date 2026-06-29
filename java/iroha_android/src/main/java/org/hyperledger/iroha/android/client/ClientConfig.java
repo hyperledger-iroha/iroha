@@ -68,7 +68,7 @@ public final class ClientConfig {
     if (builder.telemetryOptions.enabled() && instrumentedSink != null) {
       observerList.add(new TelemetryObserver(builder.telemetryOptions, instrumentedSink));
     }
-    this.observers = List.copyOf(observerList);
+    this.observers = Collections.unmodifiableList(new ArrayList<>(observerList));
     this.retryPolicy = builder.retryPolicy;
     this.pendingQueue = builder.pendingQueue;
     final KeystoreTelemetryEmitter keystoreTelemetry =

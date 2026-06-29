@@ -148,17 +148,10 @@ public enum OfflineNoteWalletNoteJsonCodec {
     }
 
     private static func decodeState(_ raw: String) throws -> OfflineNoteWalletNoteState {
-        if let state = OfflineNoteWalletNoteState(rawValue: raw) {
-            return state
-        }
-        switch raw {
-        case "spendPending", "SPEND_PENDING":
-            return .spent
-        case "changePending", "CHANGE_PENDING":
-            return .spendable
-        default:
+        guard let state = OfflineNoteWalletNoteState(rawValue: raw) else {
             throw OfflineNoteWalletNoteJsonCodecError.invalidField("state")
         }
+        return state
     }
 
     private static func dictionary(_ value: Any?, field: String) throws -> [String: Any] {

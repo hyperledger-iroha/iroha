@@ -177,7 +177,7 @@ public final class OfflineJournal implements AutoCloseable {
       entries.sort(
           Comparator.comparing(
               OfflineJournalEntry::txId,
-              (a, b) -> Arrays.compareUnsigned(a, b)));
+              OfflineJournal::compareUnsignedBytes));
       return Collections.unmodifiableList(entries);
     } finally {
       lock.unlock();
@@ -340,6 +340,18 @@ public final class OfflineJournal implements AutoCloseable {
           "offline journal tx_id must be exactly 32 bytes");
     }
     return txId.clone();
+  }
+
+  private static int compareUnsignedBytes(final byte[] left, final byte[] right) {
+    final int sharedLength = Math.min(left.length, right.length);
+    for (int index = 0; index < sharedLength; index++) {
+      final int leftByte = left[index] & 0xFF;
+      final int rightByte = right[index] & 0xFF;
+      if (leftByte != rightByte) {
+        return Integer.compare(leftByte, rightByte);
+      }
+    }
+    return Integer.compare(left.length, right.length);
   }
 
   private static void ensureAvailable(

@@ -315,7 +315,8 @@ RbcStatusHandleMatchesSpec ==
        /\ ActualGlobalSnapshot(c) = SpecGlobalSnapshot(c)
        /\ ActualGlobalActiveCount(c) = SpecGlobalActiveCount(c)
 
-RbcStatusHandleExactness == RbcStatusHandleMatchesSpec
+RbcStatusHandleExactness ==
+  /\ RbcStatusHandleMatchesSpec
 
 RbcStatusHandleCorrectnessEnvelope ==
   /\ TypeInvariant

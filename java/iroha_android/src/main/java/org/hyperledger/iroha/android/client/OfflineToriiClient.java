@@ -18,7 +18,7 @@ import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
 /**
  * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
- * <p>The legacy offline HTTP routes have been
+ * <p>The retired offline HTTP routes have been
  * removed from Torii. This client exposes the maintained offline readiness endpoints.
  */
 public final class OfflineToriiClient {
@@ -38,7 +38,7 @@ public final class OfflineToriiClient {
     this.timeout = builder.timeout;
     this.defaultHeaders =
         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
-    this.observers = List.copyOf(builder.observers);
+    this.observers = java.util.Collections.unmodifiableList(new ArrayList<>(builder.observers));
   }
 
   public static Builder builder() {
@@ -106,7 +106,7 @@ public final class OfflineToriiClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return baseUri;
     }
     if (path.startsWith("http://") || path.startsWith("https://")) {
@@ -212,7 +212,7 @@ public final class OfflineToriiClient {
       return "unknown transport error";
     }
     final String detail = cause.getMessage();
-    if (detail == null || detail.isBlank()) {
+    if (detail == null || detail.trim().isEmpty()) {
       return cause.getClass().getSimpleName();
     }
     return detail;
@@ -226,17 +226,17 @@ public final class OfflineToriiClient {
       final String bodyPreview) {
     final StringBuilder message = new StringBuilder("Offline request failed with HTTP ")
         .append(statusCode);
-    if (statusMessage != null && !statusMessage.isBlank()) {
+    if (statusMessage != null && !statusMessage.trim().isEmpty()) {
       message.append(" (").append(statusMessage).append(")");
     }
     final URI uri = request == null ? null : request.uri();
     if (uri != null) {
       message.append(" on ").append(uri.getPath());
     }
-    if (rejectCode != null && !rejectCode.isBlank()) {
+    if (rejectCode != null && !rejectCode.trim().isEmpty()) {
       message.append(". reject_code=").append(rejectCode);
     }
-    if (bodyPreview != null && !bodyPreview.isBlank()) {
+    if (bodyPreview != null && !bodyPreview.trim().isEmpty()) {
       message.append(". body=").append(bodyPreview);
     }
     return message.toString();
@@ -252,7 +252,7 @@ public final class OfflineToriiClient {
     if (uri != null) {
       message.append(" for ").append(uri.getPath());
     }
-    if (bodyPreview != null && !bodyPreview.isBlank()) {
+    if (bodyPreview != null && !bodyPreview.trim().isEmpty()) {
       message.append(". body=").append(bodyPreview);
     }
     return message.toString();

@@ -314,8 +314,11 @@ NoBugInvariant == StaleMissingCommitQcPruneCoreSafety
 
 SafetyFast == StaleMissingCommitQcPruneCoreSafety
 
+StaleMissingCommitQcPruneExactness ==
+  /\ StaleMissingCommitQcPruneCoreSafety
+
 StaleMissingCommitQcPruneCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ StaleMissingCommitQcPruneCoreSafety
+  /\ StaleMissingCommitQcPruneExactness
 
 ====

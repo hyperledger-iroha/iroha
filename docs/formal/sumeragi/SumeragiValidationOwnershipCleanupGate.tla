@@ -247,4 +247,25 @@ SpecNoEmptyRounds ==
     /\ \A round \in Rounds:
         (\E pair \in vnextSlots: pair[1] = round) => round \in retainedRounds
 
+ValidationOwnershipCleanupExactness ==
+  /\ candidate = "none" \/
+    /\ inflight = SpecInflight(candidate)
+    /\ vnextInflight = SpecVNextInflight(candidate)
+    /\ superseded = SpecSuperseded(candidate)
+    /\ vnextSlots = SpecSlots(candidate)
+    /\ retainedRounds = SpecRounds(candidate)
+  /\ ExactInflightMatchesSpec
+  /\ ExactVNextInflightMatchesSpec
+  /\ ExactSupersededMatchesSpec
+  /\ ExactSlotsMatchSpec
+  /\ ExactRetainedRoundsMatchSpec
+  /\ SpecTargetRemoved
+  /\ SpecUnrelatedOwnershipPreserved
+  /\ SpecRoundProjection
+  /\ SpecNoEmptyRounds
+
+ValidationOwnershipCleanupCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ValidationOwnershipCleanupExactness
+
 ====

@@ -20265,39 +20265,40 @@ mod tests {
         request
             .previous_recursive_proof_open_envelopes_archive
             .clear();
-        let legacy_profile_archive =
-            kagemusha_recursive_spend_transition_profile_append(Uint8Array::from(
+        let evidence_only_profile_archive = kagemusha_recursive_spend_transition_profile_append(
+            Uint8Array::from(
                 norito::to_bytes(&request)
-                    .expect("encode JS host legacy append transition-profile request"),
-            ))
-            .expect("JS host legacy append transition profile without previous proof openings");
-        let legacy_profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
-            norito::decode_from_bytes(legacy_profile_archive.as_ref())
-                .expect("decode JS host legacy append transition profile");
+                    .expect("encode JS host evidence-only append transition-profile request"),
+            ),
+        )
+        .expect("JS host evidence-only append transition profile without previous proof openings");
+        let evidence_only_profile: iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1 =
+            norito::decode_from_bytes(evidence_only_profile_archive.as_ref())
+                .expect("decode JS host evidence-only append transition profile");
         assert_eq!(
-            legacy_profile.append_opening_preflight_digest, None,
-            "JS host legacy append profiles must not synthesize append opening preflight bytes"
+            evidence_only_profile.append_opening_preflight_digest, None,
+            "JS host evidence-only append profiles must not synthesize append opening preflight bytes"
         );
         assert_eq!(
-            legacy_profile.append_opening_preflight, None,
-            "JS host legacy append profiles must not synthesize append opening preflight contracts"
+            evidence_only_profile.append_opening_preflight, None,
+            "JS host evidence-only append profiles must not synthesize append opening preflight contracts"
         );
         assert_eq!(
-            legacy_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
-            "JS host legacy append profiles must not bind absent previous proof opening bytes"
+            evidence_only_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
+            "JS host evidence-only append profiles must not bind absent previous proof opening bytes"
         );
         let profile_digest =
             iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
                 &profile,
             )
             .expect("JS host append opening profile digest");
-        let legacy_profile_digest =
+        let evidence_only_profile_digest =
             iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
-                &legacy_profile,
+                &evidence_only_profile,
             )
-            .expect("JS host legacy append profile digest");
+            .expect("JS host evidence-only append profile digest");
         assert_ne!(
-            profile_digest, legacy_profile_digest,
+            profile_digest, evidence_only_profile_digest,
             "JS host append opening preflight must change the profile digest"
         );
     }

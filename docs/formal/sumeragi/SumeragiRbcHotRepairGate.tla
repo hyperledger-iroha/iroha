@@ -508,9 +508,12 @@ SafetyAnchors ==
   /\ ExemptAnchors
   /\ ProposalBlockingAnchors
 
+RbcHotRepairExactness ==
+  /\ RbcHotRepairMatchesSpec
+  /\ SafetyAnchors
+
 RbcHotRepairCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ SafetyAnchors
+  /\ RbcHotRepairExactness
 
 ====

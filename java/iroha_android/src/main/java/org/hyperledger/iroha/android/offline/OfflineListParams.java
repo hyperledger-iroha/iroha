@@ -57,10 +57,10 @@ public final class OfflineListParams {
   /** Encodes the parameters into a string map suitable for query strings. */
   public Map<String, String> toQueryParameters() {
     final Map<String, String> params = new LinkedHashMap<>();
-    filter().filter(value -> !value.isBlank()).ifPresent(value -> params.put("filter", value));
+    filter().filter(value -> !value.trim().isEmpty()).ifPresent(value -> params.put("filter", value));
     limit().ifPresent(value -> params.put("limit", String.valueOf(value)));
     offset().ifPresent(value -> params.put("offset", String.valueOf(value)));
-    sort().filter(value -> !value.isBlank()).ifPresent(value -> params.put("sort", value));
+    sort().filter(value -> !value.trim().isEmpty()).ifPresent(value -> params.put("sort", value));
     if (assetId != null) {
       params.put("asset_id", requireExactNonEmpty(assetId, "assetId"));
     }
@@ -79,7 +79,7 @@ public final class OfflineListParams {
     if (platformPolicy != null) {
       params.put("platform_policy", platformPolicy.slug());
     }
-    if (verdictIdHex != null && !verdictIdHex.isBlank()) {
+    if (verdictIdHex != null && !verdictIdHex.trim().isEmpty()) {
       params.put("verdict_id_hex", verdictIdHex.toLowerCase());
     }
     if (requireVerdict) {
@@ -211,7 +211,7 @@ public final class OfflineListParams {
         throw new IllegalArgumentException(
             "`requireVerdict` cannot be combined with `onlyMissingVerdict`");
       }
-      if (onlyMissingVerdict && verdictIdHex != null && !verdictIdHex.isBlank()) {
+      if (onlyMissingVerdict && verdictIdHex != null && !verdictIdHex.trim().isEmpty()) {
         throw new IllegalArgumentException(
             "`verdictIdHex` cannot be combined with `onlyMissingVerdict`");
       }

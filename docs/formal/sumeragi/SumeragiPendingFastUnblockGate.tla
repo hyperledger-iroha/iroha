@@ -336,8 +336,15 @@ PendingFastUnblockCoreSafety ==
   /\ LookupShapeMatchesShortCircuit
 
 PendingFastUnblockExactness ==
-  PendingFastUnblockCoreSafety
-
+  /\ ResultMatchesSpec
+  /\ ActionsMatchSpec
+  /\ DueAgeAllowsFastUnblock
+  /\ TimeoutBoundaryIsInclusive
+  /\ ZeroTimeoutDisablesFastUnblock
+  /\ LocalEvidenceShortCircuits
+  /\ ConsensusEvidenceShortCircuits
+  /\ AgeGateRequiresTimeout
+  /\ LookupShapeMatchesShortCircuit
 PendingFastUnblockCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ PendingFastUnblockExactness

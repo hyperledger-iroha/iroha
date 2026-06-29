@@ -151,8 +151,7 @@ DaGateHelperMatchesSpec ==
        ActualManifestLabel(kind) = SpecManifestLabel(kind)
 
 DaGateHelperExactness ==
-  DaGateHelperMatchesSpec
-
+  /\ DaGateHelperMatchesSpec
 DaGateHelperCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ DaGateHelperExactness

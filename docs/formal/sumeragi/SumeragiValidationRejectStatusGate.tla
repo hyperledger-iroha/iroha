@@ -334,10 +334,14 @@ SafetyAnchors ==
   /\ StatusProjectionAnchors
   /\ ResetAfterRecordsClearsAllAnchors
 
+ValidationRejectStatusExactness ==
+  /\ \A candidate \in Candidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ SafetyAnchors
+
 ValidationRejectStatusCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ Safety
-  /\ SafetyAnchors
+  /\ ValidationRejectStatusExactness
 
 =============================================================================
 ====

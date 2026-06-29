@@ -305,9 +305,21 @@ SafetyFast ==
 
 Safety == MessageProjectionSafetyAnchors
 
+MessageProjectionExactness ==
+  /\ TimingPresenceExact
+  /\ TimingLabelsExact
+  /\ TimingHeaderFieldsExact
+  /\ OnlyBlockPayloadsTimed
+  /\ TimedPayloadsPreserveHeaderFields
+  /\ ElapsedMsSaturates
+  /\ ElapsedMaxBoundaryPreserved
+  /\ ControlKindExact
+  /\ NativeAmxLabelsExact
+  /\ NativeAmxRequestVoteAndPhaseLabelsDistinct
+  /\ MessageProjectionSafetyAnchors
+
 MessageProjectionCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ MessageProjectionSafetyAnchors
+  /\ MessageProjectionExactness
 
 ====

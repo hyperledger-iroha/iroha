@@ -237,7 +237,7 @@ BypassMatchesSpec ==
   \A c \in Cases: Matches(c)
 
 BackgroundBypassExactness ==
-  BypassMatchesSpec
+  /\ BypassMatchesSpec
 
 BackgroundBypassCorrectnessEnvelope ==
   /\ TypeInvariant

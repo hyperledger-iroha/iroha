@@ -486,7 +486,7 @@ BudgetExceededSuppressesPostTick ==
     /\ budgetExceeded
     /\ ~postTickAllowed
 
-Safety ==
+WorkerDrainSchedulerExactness ==
   /\ MatchesSpec
   /\ IdleDoesNotSelect
   /\ VotePriorityWithBacklog
@@ -506,6 +506,15 @@ Safety ==
   /\ ResultPollingAlwaysRuns
   /\ TickBusyGapAndBypass
   /\ BudgetExceededSuppressesPostTick
+
+WorkerDrainSchedulerCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ WorkerDrainSchedulerExactness
+
+NoBugInvariant == WorkerDrainSchedulerExactness
+
+Safety ==
+  WorkerDrainSchedulerExactness
 
 =============================================================================
 ====

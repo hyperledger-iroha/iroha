@@ -362,8 +362,7 @@ MatchesSpec ==
   /\ wakeResultIgnored = SpecWakeResultIgnored(candidate)
 
 KnownBlockQcEnqueueExactness ==
-  MatchesSpec
-
+  /\ MatchesSpec
 KnownBlockQcEnqueueCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ KnownBlockQcEnqueueExactness

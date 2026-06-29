@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -68,6 +69,21 @@ class StatusSnapshot:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class DiagnosticArtifact:
+    """One diagnostic artifact captured from a live peer process."""
+
+    timestamp: float
+    phase: str
+    run_index: int
+    peer_index: int
+    pid: int
+    kind: str
+    path: str | None
+    ok: bool
+    error: str | None = None
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -125,6 +141,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not fetch compact /status snapshots alongside RSS samples.",
     )
+    parser.add_argument(
+        "--capture-diagnostics",
+        action="store_true",
+        help="Capture vmmap/heap diagnostic snapshots from live peers before shutdown.",
+    )
+    parser.add_argument(
+        "--diagnostic-timeout-seconds",
+        type=float,
+        default=30.0,
+        help="Timeout for each per-peer diagnostic command.",
+    )
     parser.add_argument("--target-dir", type=Path)
     parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--debug", action="store_true", help="Use debug binaries instead of release.")
@@ -157,6 +184,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--deploy-queue-capacity must be greater than zero")
     if args.kura_blocks_in_memory <= 0:
         parser.error("--kura-blocks-in-memory must be greater than zero")
+    if args.diagnostic_timeout_seconds <= 0:
+        parser.error("--diagnostic-timeout-seconds must be greater than zero")
     return args
 
 
@@ -411,6 +440,115 @@ def sample_statuses(base_api_port: int, peers: int, phase: str, run_index: int) 
     return snapshots
 
 
+def diagnostic_command(kind: str, pid: int) -> list[str]:
+    """Return the command used to capture a diagnostic artifact."""
+    if kind == "vmmap-summary":
+        return ["vmmap", "-summary", str(pid)]
+    if kind == "heap-summary":
+        return ["heap", "-s", str(pid)]
+    raise ValueError(f"unsupported diagnostic kind: {kind}")
+
+
+def diagnostic_artifact_path(
+    out_dir: Path,
+    *,
+    phase: str,
+    run_index: int,
+    peer_index: int,
+    pid: int,
+    kind: str,
+) -> Path:
+    """Return the artifact path for one peer diagnostic command."""
+    safe_phase = re.sub(r"[^A-Za-z0-9_.-]+", "_", phase)
+    return (
+        out_dir
+        / "diagnostics"
+        / f"run{run_index}_{safe_phase}_peer{peer_index}_pid{pid}_{kind}.txt"
+    )
+
+
+def capture_peer_diagnostics(
+    out_dir: Path,
+    processes: Sequence[PeerProcess],
+    *,
+    phase: str,
+    run_index: int,
+    timeout_seconds: float,
+) -> list[DiagnosticArtifact]:
+    """Capture allocator/vmmap summaries for live peers without changing process state."""
+    artifacts: list[DiagnosticArtifact] = []
+    for peer_index, process in enumerate(processes):
+        for kind in ["vmmap-summary", "heap-summary"]:
+            timestamp = time.time()
+            cmd = diagnostic_command(kind, process.pid)
+            if shutil.which(cmd[0]) is None:
+                artifacts.append(
+                    DiagnosticArtifact(
+                        timestamp=timestamp,
+                        phase=phase,
+                        run_index=run_index,
+                        peer_index=peer_index,
+                        pid=process.pid,
+                        kind=kind,
+                        path=None,
+                        ok=False,
+                        error=f"{cmd[0]} not found",
+                    )
+                )
+                continue
+
+            path = diagnostic_artifact_path(
+                out_dir,
+                phase=phase,
+                run_index=run_index,
+                peer_index=peer_index,
+                pid=process.pid,
+                kind=kind,
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout_seconds,
+                )
+                output = completed.stdout or ""
+                path.write_text(output, encoding="utf-8")
+                artifacts.append(
+                    DiagnosticArtifact(
+                        timestamp=timestamp,
+                        phase=phase,
+                        run_index=run_index,
+                        peer_index=peer_index,
+                        pid=process.pid,
+                        kind=kind,
+                        path=str(path),
+                        ok=completed.returncode == 0,
+                        error=None
+                        if completed.returncode == 0
+                        else f"command exited {completed.returncode}",
+                    )
+                )
+            except Exception as exc:  # noqa: PERF203
+                artifacts.append(
+                    DiagnosticArtifact(
+                        timestamp=timestamp,
+                        phase=phase,
+                        run_index=run_index,
+                        peer_index=peer_index,
+                        pid=process.pid,
+                        kind=kind,
+                        path=str(path),
+                        ok=False,
+                        error=str(exc),
+                    )
+                )
+    return artifacts
+
+
 def stop_localnet(out_dir: Path) -> None:
     stop_script = out_dir / "stop.sh"
     if stop_script.exists():
@@ -425,6 +563,7 @@ def write_report(
     memory_limit_bytes: int,
     post_load_sample_seconds: float,
     status_snapshots: Sequence[StatusSnapshot] = (),
+    diagnostic_artifacts: Sequence[DiagnosticArtifact] = (),
     load_runs: int = DEFAULT_LOAD_RUNS,
     tx_returncodes: Sequence[int | None] | None = None,
 ) -> None:
@@ -441,6 +580,7 @@ def write_report(
         "last_peer_rss_bytes": samples[-1].max_peer_rss_bytes if samples else 0,
         "samples": [sample.__dict__ for sample in samples],
         "status_snapshots": [snapshot.__dict__ for snapshot in status_snapshots],
+        "diagnostic_artifacts": [artifact.__dict__ for artifact in diagnostic_artifacts],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -488,6 +628,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     samples: list[MemorySample] = []
     status_snapshots: list[StatusSnapshot] = []
+    diagnostic_artifacts: list[DiagnosticArtifact] = []
     tx_returncodes: list[int | None] = []
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -499,6 +640,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             memory_limit_bytes=limit_bytes,
             post_load_sample_seconds=args.post_load_sample_seconds,
             status_snapshots=status_snapshots,
+            diagnostic_artifacts=diagnostic_artifacts,
             load_runs=args.load_runs,
             tx_returncodes=tx_returncodes,
         )
@@ -539,6 +681,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         if append_guarded_sample("load", run_index):
                             terminate_child(tx_proc)
                             tx_returncodes.append(tx_proc.returncode)
+                            if args.capture_diagnostics:
+                                diagnostic_artifacts.extend(
+                                    capture_peer_diagnostics(
+                                        args.out_dir,
+                                        peer_processes(args.out_dir),
+                                        phase="guard_tripped",
+                                        run_index=run_index,
+                                        timeout_seconds=args.diagnostic_timeout_seconds,
+                                    )
+                                )
                             write_memory_report(tx_proc.returncode)
                             return 3
                         time.sleep(args.poll_interval)
@@ -554,10 +706,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                 deadline = time.monotonic() + args.post_load_sample_seconds
                 while time.monotonic() < deadline:
                     if append_guarded_sample("post_load", run_index):
+                        if args.capture_diagnostics:
+                            diagnostic_artifacts.extend(
+                                capture_peer_diagnostics(
+                                    args.out_dir,
+                                    peer_processes(args.out_dir),
+                                    phase="guard_tripped",
+                                    run_index=run_index,
+                                    timeout_seconds=args.diagnostic_timeout_seconds,
+                                )
+                            )
                         write_memory_report(tx_proc.returncode)
                         return 3
                     time.sleep(args.poll_interval)
 
+        if args.capture_diagnostics:
+            diagnostic_artifacts.extend(
+                capture_peer_diagnostics(
+                    args.out_dir,
+                    peer_processes(args.out_dir),
+                    phase="final",
+                    run_index=args.load_runs,
+                    timeout_seconds=args.diagnostic_timeout_seconds,
+                )
+            )
         write_memory_report(final_returncode)
         return int(final_returncode or 0)
     finally:

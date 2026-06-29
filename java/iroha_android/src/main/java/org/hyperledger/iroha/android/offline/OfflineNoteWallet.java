@@ -18,8 +18,8 @@ import java.util.function.LongSupplier;
 import org.hyperledger.iroha.android.client.ClientResponse;
 
 /**
- * Archived classic Offline Note wallet/model helpers retained for compatibility
- * fixtures; production offline payments use Kagemusha.
+ * Archived classic Offline Note wallet/model helpers kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
  */
 public final class OfflineNoteWallet {
   private static final AtomicInteger LOAD_THREAD_COUNTER = new AtomicInteger();

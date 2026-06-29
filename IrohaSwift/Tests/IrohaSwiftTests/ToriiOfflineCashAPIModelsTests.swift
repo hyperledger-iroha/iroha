@@ -11,8 +11,8 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(ToriiOfflineCashAPI.Endpoint.telemetry.path, "/v1/offline/telemetry")
     }
 
-    func testIssuerEndpointConstantsDoNotRegressToLegacyRoutes() {
-        let legacyRoutes = Set([
+    func testIssuerEndpointConstantsDoNotRegressToRetiredRoutes() {
+        let retiredRoutes = Set([
             "/v1/offline/keys/refill",
             "/v1/offline/notes/issue",
             "/v1/offline/notes/redeem",
@@ -28,7 +28,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(Set(issuerRoutes).count, issuerRoutes.count)
         for route in issuerRoutes {
             XCTAssertTrue(route.hasPrefix("/v1/offline/v2/"))
-            XCTAssertFalse(legacyRoutes.contains(route))
+            XCTAssertFalse(retiredRoutes.contains(route))
         }
     }
 
@@ -45,22 +45,102 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(androidCertificate.assertionScheme, "android-keymint-ecdsa-p256-usage-limit-v1")
         XCTAssertEqual(androidCertificate.assertionKeyAlgorithm, "ecdsa-p256-sha256")
         XCTAssertEqual(androidCertificate.assertionUsageCountLimit, 1)
+    }
 
-        let legacyExplicit = try Self.certificate(
+    func testCompactKeyCertificateRejectsNonCanonicalCompatibilityFields() throws {
+        XCTAssertThrowsError(try Self.certificate(
             platform: "android-keymint",
             assertionScheme: "android-keymint-ecdsa-p256-usage-limit",
             assertionUsageCountLimit: 1
-        ).offlineNoteKeyCertificate()
-        XCTAssertEqual(legacyExplicit.assertionScheme, "android-keymint-ecdsa-p256-usage-limit")
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_scheme"))
+        }
+
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            assertionKeyAlgorithm: "ed25519"
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_key_algorithm"))
+        }
+
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            issuerSignatureBase64: "issuer-signature"
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("issuer_signature_base64"))
+        }
+
+        for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"] {
+            XCTAssertThrowsError(try Self.certificate(
+                platform: invalidPlatform,
+                assertionScheme: "android-keymint-ecdsa-p256-usage-limit-v1",
+                assertionKeyAlgorithm: "ecdsa-p256-sha256",
+                assertionUsageCountLimit: 1
+            ).offlineNoteKeyCertificate()) { error in
+                XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("platform"))
+            }
+        }
     }
 
-    func testKeyRefillRequestEncodesSnakeCaseAndLegacyAttestKeyAliasDecodes() throws {
+    func testCompactKeyCertificateRejectsRetiredAssertionPublicKeyAlias() throws {
+        let retiredAlias = Data(repeating: 3, count: 65).base64EncodedString()
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            assertionPublicKey: nil,
+            appAttestPublicKeyBase64: retiredAlias
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("app_attest_public_key_base64"))
+        }
+
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            assertionPublicKey: nil
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_public_key"))
+        }
+    }
+
+    func testCompactKeyCertificateRejectsNonCanonicalBase64Encodings() throws {
+        let hexPublicKey = Data(repeating: 1, count: 33).map { String(format: "%02x", $0) }.joined()
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            publicKey: hexPublicKey
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("public_key"))
+        }
+
+        let urlSafeAssertionKey = Data(repeating: 0xFF, count: 32)
+            .base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            assertionPublicKey: urlSafeAssertionKey
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("assertion_public_key"))
+        }
+
+        let canonicalSignature = Data(repeating: 2, count: 64).base64EncodedString()
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            issuerSignatureBase64: " \(canonicalSignature)"
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("issuer_signature_base64"))
+        }
+        XCTAssertThrowsError(try Self.certificate(
+            platform: "ios-appattest",
+            issuerSignatureBase64: canonicalSignature.replacingOccurrences(of: "=", with: "")
+        ).offlineNoteKeyCertificate()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("issuer_signature_base64"))
+        }
+    }
+
+    func testKeyRefillRequestEncodesSnakeCaseAndRejectsRetiredAttestKeyAlias() throws {
         let request = ToriiOfflineKeyRefillRequest(
             operationId: "op-refill",
             accountId: "alice@hbl.sbp",
             deviceId: "device-1",
             offlinePublicKey: "offline-public-key",
-            appAttestKeyId: "attest-key",
+            attestationKeyId: "attest-key",
             assetDefinitionId: "pkr#sbp",
             existingLineageId: "lineage-1",
             lineageState: try Self.lineageState(),
@@ -73,7 +153,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(ToriiOfflineCashAPI.idempotencyKey(for: request), "op-refill")
         let json = try Self.jsonObject(ToriiOfflineCashAPI.canonicalBody(request))
         XCTAssertEqual(json["operation_id"] as? String, "op-refill")
-        XCTAssertEqual(json["app_attest_key_id"] as? String, "attest-key")
+        XCTAssertNil(json["app_attest_key_id"])
         XCTAssertEqual(json["attestation_key_id"] as? String, "attest-key")
         let keyCertificateBindings = try XCTUnwrap(json["key_certificate_bindings"] as? [[String: Any]])
         XCTAssertEqual(keyCertificateBindings.count, 1)
@@ -85,13 +165,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(proof["challenge_hash_hex"] as? String, "abc123")
         XCTAssertNil(proof["challengeHashHex"])
 
-        let legacy = """
+        let retiredAliasPayload = """
         {
           "operation_id":"op-refill",
           "account_id":"alice@hbl.sbp",
           "device_id":"device-1",
           "offline_public_key":"offline-public-key",
-          "app_attest_key_id":"legacy-attest-key",
+          "app_attest_key_id":"retired-attest-key",
           "asset_definition_id":"pkr#sbp",
           "local_revision":3,
           "local_state_hash":"state-3",
@@ -99,8 +179,15 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
           "device_proof":\(try Self.jsonString(Self.proof()))
         }
         """
-        let decoded = try JSONDecoder().decode(ToriiOfflineKeyRefillRequest.self, from: Data(legacy.utf8))
-        XCTAssertEqual(decoded.appAttestKeyId, "legacy-attest-key")
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            ToriiOfflineKeyRefillRequest.self,
+            from: Data(retiredAliasPayload.utf8)
+        )) { error in
+            guard case DecodingError.keyNotFound(let key, _) = error else {
+                return XCTFail("expected missing attestation_key_id, got \(error)")
+            }
+            XCTAssertEqual(key.stringValue, "attestation_key_id")
+        }
     }
 
     func testIssueSettlementRequestCarriesLineageState() throws {
@@ -181,6 +268,46 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(recursiveProof["public_inputs_hash_hex"] as? String, Self.hashHex(5))
     }
 
+    func testRecursiveProofRejectsNonCanonicalBase64Encodings() throws {
+        let canonicalProofBytes = Data(repeating: 3, count: 64).base64EncodedString()
+        XCTAssertNoThrow(try OfflineRecursiveProof(
+            publicInputsHashHex: Self.hashHex(7),
+            proofBytesBase64: canonicalProofBytes
+        ).offlineNoteRecursiveProof())
+
+        let hexProofBytes = Data(repeating: 4, count: 33).map { String(format: "%02x", $0) }.joined()
+        XCTAssertThrowsError(try OfflineRecursiveProof(
+            publicInputsHashHex: Self.hashHex(7),
+            proofBytesBase64: hexProofBytes
+        ).offlineNoteRecursiveProof()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+        }
+
+        let urlSafeProofBytes = Data(repeating: 0xFF, count: 64)
+            .base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+        XCTAssertThrowsError(try OfflineRecursiveProof(
+            publicInputsHashHex: Self.hashHex(7),
+            proofBytesBase64: urlSafeProofBytes
+        ).offlineNoteRecursiveProof()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+        }
+
+        XCTAssertThrowsError(try OfflineRecursiveProof(
+            publicInputsHashHex: Self.hashHex(7),
+            proofBytesBase64: " \(canonicalProofBytes)"
+        ).offlineNoteRecursiveProof()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+        }
+
+        XCTAssertThrowsError(try OfflineRecursiveProof(
+            publicInputsHashHex: Self.hashHex(7),
+            proofBytesBase64: canonicalProofBytes.replacingOccurrences(of: "=", with: "")
+        ).offlineNoteRecursiveProof()) { error in
+            XCTAssertEqual(error as? OfflineNoteCompatibilityError, .invalidField("proof_bytes_base64"))
+        }
+    }
+
     func testSettlementResponseDecodesCanonicalAmounts() throws {
         let response = try JSONDecoder().decode(
             ToriiOfflineNoteRedeemSettlementResponse.self,
@@ -242,7 +369,12 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     private static func certificate(
         platform: String = "ios-appattest",
         assertionScheme: String? = nil,
-        assertionUsageCountLimit: Int? = nil
+        assertionKeyAlgorithm: String? = nil,
+        assertionUsageCountLimit: Int? = nil,
+        publicKey: String = Data(repeating: 1, count: 32).base64EncodedString(),
+        assertionPublicKey: String? = Data(repeating: 2, count: 65).base64EncodedString(),
+        appAttestPublicKeyBase64: String? = nil,
+        issuerSignatureBase64: String = Data(repeating: 2, count: 64).base64EncodedString()
     ) throws -> OfflineCompactKeyCertificate {
         let keypair = try Keypair(privateKeyBytes: Data(0..<32))
         return OfflineCompactKeyCertificate(
@@ -250,10 +382,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             keyId: "attest-key",
             deviceId: "device-1",
             accountId: AccountId.make(publicKey: keypair.publicKey),
-            publicKey: Data(repeating: 1, count: 32).base64EncodedString(),
+            publicKey: publicKey,
             assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit,
-            issuerSignatureBase64: Data(repeating: 2, count: 64).base64EncodedString()
+            appAttestPublicKeyBase64: appAttestPublicKeyBase64,
+            issuerSignatureBase64: issuerSignatureBase64
         )
     }
 

@@ -6817,6 +6817,12 @@ impl Actor {
             return Ok(());
         }
         if self.rbc_message_stale(&deliver.block_hash, deliver.height) {
+            if self.authoritative_block_payload_available(deliver.block_hash) {
+                let _ = self.clean_rbc_sessions_for_committed_block_if_settled(
+                    deliver.block_hash,
+                    deliver.height,
+                );
+            }
             debug!(
                 height = deliver.height,
                 view = deliver.view,

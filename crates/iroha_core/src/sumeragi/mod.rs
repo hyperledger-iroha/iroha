@@ -18,7 +18,7 @@ use iroha_config::parameters::{
         Common as CommonConfig, ConsensusMode, Sumeragi as SumeragiConfig, SumeragiNpos,
         SumeragiNposTimeouts,
     },
-    defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+    defaults::{concurrency as concurrency_defaults, sumeragi::EPOCH_LENGTH_BLOCKS},
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
@@ -40,12 +40,8 @@ use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
 };
 
-/// Default stack size reserved for consensus worker threads to handle deep recursion safely.
-const DEFAULT_SUMERAGI_STACK_SIZE_BYTES: usize = 256 * 1024 * 1024;
-/// Refuse overrides below the historical fixed size because the validation path
-/// has already been observed to overflow smaller stacks in production.
-const MIN_SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const SUMERAGI_STACK_SIZE_ENV: &str = "IROHA_SUMERAGI_STACK_SIZE_BYTES";
+static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 const DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_TTL_SECS: u64 = 120;
 const DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING: u8 = 8;
@@ -68,12 +64,35 @@ fn log_sumeragi_startup_trace(stage: &'static str, started_at: Instant) {
     }
 }
 
+fn normalized_sumeragi_stack_size_bytes(bytes: usize) -> Option<usize> {
+    (concurrency_defaults::SUMERAGI_STACK_BYTES_MIN
+        ..=concurrency_defaults::SUMERAGI_STACK_BYTES_MAX)
+        .contains(&bytes)
+        .then_some(bytes)
+}
+
+/// Override the stack size used for Sumeragi helper threads.
+///
+/// `irohad` applies this from the validated `concurrency.sumeragi_stack_bytes`
+/// configuration before spawning consensus workers. The environment fallback
+/// below is kept for tests and embedders that use `iroha_core` directly.
+pub fn set_sumeragi_stack_size_bytes(bytes: usize) {
+    let bytes = normalized_sumeragi_stack_size_bytes(bytes)
+        .unwrap_or(concurrency_defaults::SUMERAGI_STACK_BYTES);
+    CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.store(bytes, Ordering::Relaxed);
+}
+
 fn sumeragi_stack_size_bytes() -> usize {
+    let configured = CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.load(Ordering::Relaxed);
+    if configured != 0 {
+        return configured;
+    }
+
     std::env::var(SUMERAGI_STACK_SIZE_ENV)
         .ok()
         .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .filter(|bytes| *bytes >= MIN_SUMERAGI_STACK_SIZE_BYTES)
-        .unwrap_or(DEFAULT_SUMERAGI_STACK_SIZE_BYTES)
+        .and_then(normalized_sumeragi_stack_size_bytes)
+        .unwrap_or(concurrency_defaults::SUMERAGI_STACK_BYTES)
 }
 
 /// Build a named Sumeragi thread with an explicit stack-size budget.
@@ -94,11 +113,25 @@ pub(crate) fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
 
 #[cfg(test)]
 mod thread_builder_tests {
-    use std::sync::mpsc;
+    use std::sync::{Mutex, atomic::Ordering, mpsc};
 
     use iroha_crypto::KeyPair;
 
-    use super::{Algorithm, is_bls_normal_public_key, sumeragi_thread_builder};
+    use super::{
+        Algorithm, CONFIGURED_SUMERAGI_STACK_SIZE_BYTES, concurrency_defaults,
+        is_bls_normal_public_key, normalized_sumeragi_stack_size_bytes,
+        set_sumeragi_stack_size_bytes, sumeragi_stack_size_bytes, sumeragi_thread_builder,
+    };
+
+    static STACK_CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct RestoreSumeragiStackSize(usize);
+
+    impl Drop for RestoreSumeragiStackSize {
+        fn drop(&mut self) {
+            CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.store(self.0, Ordering::Relaxed);
+        }
+    }
 
     #[test]
     fn sumeragi_thread_builder_applies_requested_thread_name() {
@@ -115,6 +148,49 @@ mod thread_builder_tests {
         let observed = name_rx.recv().expect("thread name message");
         join.join().expect("join test thread");
         assert_eq!(observed, "sumeragi-thread-builder-test");
+    }
+
+    #[test]
+    fn sumeragi_stack_size_is_bounded() {
+        assert_eq!(
+            normalized_sumeragi_stack_size_bytes(concurrency_defaults::SUMERAGI_STACK_BYTES_MIN),
+            Some(concurrency_defaults::SUMERAGI_STACK_BYTES_MIN)
+        );
+        assert_eq!(
+            normalized_sumeragi_stack_size_bytes(concurrency_defaults::SUMERAGI_STACK_BYTES_MAX),
+            Some(concurrency_defaults::SUMERAGI_STACK_BYTES_MAX)
+        );
+        assert_eq!(
+            normalized_sumeragi_stack_size_bytes(
+                concurrency_defaults::SUMERAGI_STACK_BYTES_MIN - 1
+            ),
+            None
+        );
+        assert_eq!(
+            normalized_sumeragi_stack_size_bytes(
+                concurrency_defaults::SUMERAGI_STACK_BYTES_MAX + 1
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn sumeragi_stack_size_uses_configured_value() {
+        let _guard = STACK_CONFIG_TEST_LOCK.lock().expect("stack test lock");
+        let previous = CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.swap(0, Ordering::Relaxed);
+        let _restore = RestoreSumeragiStackSize(previous);
+
+        set_sumeragi_stack_size_bytes(concurrency_defaults::SUMERAGI_STACK_BYTES_MIN);
+        assert_eq!(
+            sumeragi_stack_size_bytes(),
+            concurrency_defaults::SUMERAGI_STACK_BYTES_MIN
+        );
+
+        set_sumeragi_stack_size_bytes(usize::MAX);
+        assert_eq!(
+            sumeragi_stack_size_bytes(),
+            concurrency_defaults::SUMERAGI_STACK_BYTES
+        );
     }
 
     #[test]

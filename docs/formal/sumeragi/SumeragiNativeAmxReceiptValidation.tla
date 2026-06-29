@@ -392,6 +392,10 @@ NativeAmxReceiptValidationExactness ==
   /\ NativeAmxReceiptSignerBitmapExact
   /\ NativeAmxReceiptQuorumSignatureExact
 
+NativeAmxReceiptValidationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ NativeAmxReceiptValidationExactness
+
 Safety ==
   NativeAmxReceiptValidationExactness
 

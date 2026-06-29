@@ -228,17 +228,16 @@ SidecarRetargetHasExactPositiveEvidence ==
   /\ ReacquireCommitCertifiedWithLocalEvidenceAccepted
 
 FrontierSidecarRetargetExactness ==
-  /\ SidecarRetargetRejectsNonExactInputs
-  /\ SidecarRetargetHasExactPositiveEvidence
-
-SafetyFast ==
   /\ OverrideReasonSafety
   /\ RetargetGateSafety
   /\ ConfirmationSafety
   /\ TrackedRetargetSafety
   /\ UntrackedSeedSafety
   /\ ReacquireSafety
-  /\ FrontierSidecarRetargetExactness
+  /\ SidecarRetargetRejectsNonExactInputs
+  /\ SidecarRetargetHasExactPositiveEvidence
+
+SafetyFast == FrontierSidecarRetargetExactness
 
 OverrideReasonAnchors ==
   /\ OverrideReasonSafety
@@ -295,8 +294,7 @@ FrontierSidecarRetargetSafetyAnchors ==
 
 FrontierSidecarRetargetCorrectnessEnvelope ==
   /\ TypeInvariant
-  /\ SafetyFast
-  /\ FrontierSidecarRetargetSafetyAnchors
+  /\ FrontierSidecarRetargetExactness
 
 Safety == FrontierSidecarRetargetSafetyAnchors
 

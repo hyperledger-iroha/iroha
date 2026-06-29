@@ -1,7 +1,7 @@
 import Foundation
 
-/// Archived classic Offline Note model/codec helpers retained for compatibility
-/// fixtures; production offline payments use Kagemusha.
+/// Archived classic Offline Note model/codec helpers kept as fixture-only
+/// inputs; production offline payments use Kagemusha.
 public enum OfflineNoteConstants {
     public static let keyCertificatePayloadDomain = "iroha:offline-note:key-certificate-payload"
     public static let issuedClaimDomain = "iroha:offline-note:issued-claim"

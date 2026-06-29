@@ -286,7 +286,12 @@ RbcSessionChunkIngestCoreSafety ==
   /\ AcceptedAndDuplicateChunksAccountExactly
   /\ DigestCleanupMatchesExpectedDigests
 
-RbcSessionChunkIngestExactness == RbcSessionChunkIngestCoreSafety
+RbcSessionChunkIngestExactness ==
+  /\ ActionsMatchSpec
+  /\ ConstructionRejectsInvalidMetadata
+  /\ RejectedChunksDoNotMutate
+  /\ AcceptedAndDuplicateChunksAccountExactly
+  /\ DigestCleanupMatchesExpectedDigests
 
 RbcSessionChunkIngestCorrectnessEnvelope ==
   /\ TypeInvariant

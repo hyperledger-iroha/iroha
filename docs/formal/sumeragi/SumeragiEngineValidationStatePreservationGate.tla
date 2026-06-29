@@ -417,7 +417,7 @@ ValuesStayInDomain ==
     /\ InitialReconfiguration(candidate) \in ReconfigurationValues
     /\ ImplementationReconfiguration(candidate) \in ReconfigurationValues
 
-Safety ==
+EngineValidationStatePreservationExactness ==
   /\ AcceptedPreservesLockedQc
   /\ AcceptedPreservesHighestQc
   /\ AcceptedPreservesCommitVoteCache
@@ -436,6 +436,15 @@ Safety ==
   /\ IgnoredPreservesReconfiguration
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  EngineValidationStatePreservationExactness
+
+EngineValidationStatePreservationCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ EngineValidationStatePreservationExactness
+
+SafetyFast == EngineValidationStatePreservationExactness
 
 =============================================================================
 ====
