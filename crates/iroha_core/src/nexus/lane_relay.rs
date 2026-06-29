@@ -227,7 +227,8 @@ mod tests {
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
 
-        let envelope = sample_envelope(1, 3);
+        let mut envelope = sample_envelope(1, 3);
+        attach_qc(&mut envelope);
         broadcaster.broadcast(vec![envelope.clone(), envelope.clone()]);
 
         let sent = network.sent();

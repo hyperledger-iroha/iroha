@@ -72,7 +72,7 @@ def split_source_entry_spec(spec: str) -> tuple[str, Path]:
     source_kind = source_kind.strip()
     path = path.strip()
     if not separator or not source_kind or not path:
-        raise ValueError(f"--source-entry must use KIND=PATH form, got `{spec}`")
+        raise ValueError("--source-entry must use KIND=PATH form")
     return source_kind, Path(path)
 
 
@@ -90,7 +90,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     present_source_kinds = {source_kind for source_kind, _ in source_entries}
     for source_kind in REQUIRED_TRANSPARENCY_SOURCE_KINDS:
         if source_kind not in present_source_kinds:
-            errors.append(f"missing --source-entry coverage for `{source_kind}`")
+            errors.append("missing required source-entry coverage")
 
     source_paths = [path for _, path in source_entries]
     errors.extend(require_existing_files([args.manifest], "--manifest", seen=seen_input_files))

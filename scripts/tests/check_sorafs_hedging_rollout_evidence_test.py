@@ -330,11 +330,16 @@ def test_sensitive_key_spelling_variants_fail(tmp_path: Path) -> None:
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     errors = "\n".join(result["required"]["feed_collector"]["artifacts"][0]["errors"])
-    assert "transport.accessToken must not be present" in errors
-    assert "transport.api-key must not be present" in errors
-    assert "transport.payloadIncluded must be false" in errors
-    assert "transport.privateKey must not be present" in errors
-    assert "transport.response-body must not be present" in errors
+    assert (
+        errors.count("transport.<sensitive-key> must not be present in rollout evidence")
+        == 4
+    )
+    assert "transport.<sensitive-inclusion-marker> must be false" in errors
+    assert "transport.accessToken" not in errors
+    assert "transport.api-key" not in errors
+    assert "transport.payloadIncluded" not in errors
+    assert "transport.privateKey" not in errors
+    assert "transport.response-body" not in errors
 
 
 def test_governed_hedge_execution_can_pass(tmp_path: Path) -> None:

@@ -284,7 +284,7 @@ def require_known_schema(
         return None
     kind = schema_to_kind.get(schema)
     if kind is None:
-        errors.append(f"schema `{schema}` is not a recognized {artifact_label}")
+        errors.append(f"schema is not a recognized {artifact_label}")
         return None
     return kind
 
@@ -441,8 +441,7 @@ def build_required_evidence_summary(
     )
     if duplicate_kind_names:
         errors.append(
-            f"{evidence_label} required evidence kinds must not contain duplicates "
-            f"{duplicate_kind_names}"
+            f"{evidence_label} required evidence kinds must not contain duplicates"
         )
         return required
     if isinstance(artifacts_by_kind, Mapping):
@@ -464,9 +463,7 @@ def build_required_evidence_summary(
         )
         if malformed_artifact_bucket:
             row_errors.append(f"required `{name}` artifacts must be a sequence")
-            errors.append(
-                f"required {name} {evidence_label} artifacts must be a sequence"
-            )
+            errors.append(f"{evidence_label} required artifacts must be a sequence")
             artifacts = []
         else:
             artifacts = _evidence_artifact_rows(raw_artifacts)
@@ -476,7 +473,7 @@ def build_required_evidence_summary(
                     f"required `{name}` artifacts must be a sequence of artifact objects"
                 )
                 errors.append(
-                    f"required {name} {evidence_label} artifacts must be a sequence "
+                    f"{evidence_label} required artifacts must be a sequence "
                     "of artifact objects"
                 )
                 artifacts = []
@@ -489,7 +486,7 @@ def build_required_evidence_summary(
         )
         if schema_label is None:
             row_errors.append(f"required `{name}` schema must be configured")
-            errors.append(f"required {name} {evidence_label} schema must be configured")
+            errors.append(f"{evidence_label} required schema must be configured")
             schema = None
         else:
             schema = schema_label
@@ -507,9 +504,9 @@ def build_required_evidence_summary(
             "errors": row_errors,
         }
         if not present and not malformed_artifact_bucket:
-            errors.append(f"missing required {name} {evidence_label} evidence")
+            errors.append(f"missing required {evidence_label} evidence")
         elif not artifacts_valid and not malformed_artifact_bucket:
-            errors.append(f"{name} {evidence_label} evidence has invalid artifact(s)")
+            errors.append(f"{evidence_label} evidence has invalid artifact(s)")
 
     deployment_error_count = len(errors)
     deployment_context: dict[str, str] = {}
@@ -799,6 +796,24 @@ def missing_required_evidence_values(
     ]
 
 
+def _diagnostic_mentions_missing_value(message: Any, value: Any) -> bool:
+    """Return whether a generated diagnostic embeds the missing evidence value."""
+
+    if not isinstance(message, str):
+        return False
+    try:
+        value_label = str(value)
+    except Exception:
+        return False
+    if (
+        not value_label.strip()
+        or value_label != value_label.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value_label)
+    ):
+        return False
+    return value_label in message
+
+
 def record_missing_required_evidence_value_errors(
     required: dict[str, dict[str, Any]],
     kind_name: str,
@@ -832,7 +847,14 @@ def record_missing_required_evidence_value_errors(
             message_errors,
             label_name="validation missing required evidence message",
         )
-        errors.append(message_label or message_errors[0])
+        if message_label is None:
+            errors.append(message_errors[0])
+        elif _diagnostic_mentions_missing_value(message_label, value):
+            errors.append(
+                "validation missing required evidence message must not include missing value"
+            )
+        else:
+            errors.append(message_label)
     return missing_values
 
 
@@ -981,7 +1003,7 @@ def record_consistent_evidence_value(
     if previous is None:
         values[key_label] = value_label
     elif previous != value_label:
-        error = f"{context_label}.{key_label} `{value_label}` does not match `{previous}`"
+        error = f"{context_label}.{key_label} does not match previous value"
         if error not in errors:
             errors.append(error)
 
@@ -1033,7 +1055,7 @@ def record_consistent_deployment_context(
                 continue
             if previous == value_label:
                 continue
-            error = f"{context_label}.{key} `{value_label}` does not match `{previous}`"
+            error = f"{context_label}.{key} does not match previous value"
         if isinstance(artifact, dict):
             record_artifact_error(artifact, error, errors)
         elif error not in errors:
@@ -1896,6 +1918,32 @@ def count_evidence_artifacts(
             return 0
         artifact_count += len(artifact_rows)
     return artifact_count
+
+
+def recognized_evidence_artifacts(
+    artifacts_by_kind: Any,
+) -> list[dict[str, Any]]:
+    """Return flattened recognized evidence artifacts with explicit kind labels."""
+
+    if not isinstance(artifacts_by_kind, Mapping):
+        return []
+    recognized: list[dict[str, Any]] = []
+    for kind_name, artifacts in artifacts_by_kind.items():
+        kind_label = _require_validation_label(
+            kind_name,
+            [],
+            label_name="recognized evidence kind",
+        )
+        if kind_label is None:
+            return []
+        artifact_rows = _evidence_artifact_rows(artifacts)
+        if artifact_rows is None:
+            return []
+        for artifact in artifact_rows:
+            row = dict(artifact)
+            row["kind"] = kind_label
+            recognized.append(row)
+    return recognized
 
 
 def count_recognized_evidence_artifacts(

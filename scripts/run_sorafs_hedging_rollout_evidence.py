@@ -98,7 +98,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         paths = paths_by_kind[kind]
         if not paths:
             errors.append(
-                f"missing {EVIDENCE_FLAGS_BY_KIND[kind]} for required `{kind}` rollout evidence"
+                "missing required rollout evidence input"
             )
 
     min_billing_cycles_valid = require_runner_positive_int(

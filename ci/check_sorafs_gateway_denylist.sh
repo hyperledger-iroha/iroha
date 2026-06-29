@@ -85,6 +85,14 @@ def validate_path(path: pathlib.Path, path_label: str) -> None:
                 f"[sorafs-gateway-denylist] {path_label} parent must be a directory: {parent}"
             )
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
+
 def require_regular_file(path: pathlib.Path, path_label: str) -> None:
     validate_path(path, path_label)
     try:
@@ -109,7 +117,7 @@ try:
         chunk = os.read(read_fd, 1024 * 1024)
         if not chunk:
             break
-        os.write(write_fd, chunk)
+        write_all(write_fd, chunk)
 finally:
     os.close(read_fd)
     if write_fd >= 0:

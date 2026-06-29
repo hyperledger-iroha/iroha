@@ -79,6 +79,16 @@ Live gateways should additionally expose Prometheus metrics or JSON logs for:
 - `sorafs_gateway_bytes_total` total bytes served per run.
 - `sorafs_gateway_concurrency_active` active request gauge.
 
+`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free
+local conformance, live staging load, telemetry/SLO, transport-scope, and
+governance approval evidence before SF-5a load promotion. It binds the live
+staging report back to the signed local conformance digest, requires live
+telemetry and governance artifacts to reference the staging report digest, and
+fails closed if raw reports, response bodies, fixture payloads, or runtime
+secrets appear in evidence. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
+emits the matching collection plan and dry-run evidence contract so operators
+can review the required fields before submitting promotion packets.
+
 ## Failure Injection Coverage
 
 - **Proof corruption:** B3 mutates PoR proof material and expects a 422 refusal.

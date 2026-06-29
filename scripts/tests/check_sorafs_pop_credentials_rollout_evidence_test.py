@@ -322,7 +322,8 @@ def test_missing_verifier_service_blocks_rollout(tmp_path: Path, capsys) -> None
     assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     captured = capsys.readouterr()
-    assert "missing required verifier_service rollout evidence" in captured.err
+    assert "missing required rollout evidence" in captured.err
+    assert "missing required verifier_service rollout evidence" not in captured.err
 
 
 def test_transcript_digest_backend_cannot_pass_governance(tmp_path: Path, capsys) -> None:
@@ -364,7 +365,9 @@ def test_payload_leakage_blocks_rollout(tmp_path: Path, capsys) -> None:
 
     assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
-    assert "credential_payload must not be present" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "<sensitive-key> must not be present" in err
+    assert "credential_payload must not be present" not in err
 
 
 def test_stale_revocation_registry_blocks_rollout(tmp_path: Path, capsys) -> None:
@@ -546,4 +549,4 @@ def test_invalid_optional_artifact_blocks_subset_gate(tmp_path: Path, capsys) ->
 def test_unknown_required_kind_fails_before_validation(capsys) -> None:
     assert MODULE.main(["--evidence", "missing.json", "--require-kind", "unknown"]) == 2
 
-    assert "unknown required evidence kind `unknown`" in capsys.readouterr().err
+    assert "unknown required evidence kind" in capsys.readouterr().err

@@ -29,6 +29,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     build_kinded_evidence_artifact,
+    count_evidence_files,
     count_recognized_evidence_artifacts,
     finalize_custom_required_evidence_rows,
     record_consistent_evidence_value,
@@ -53,12 +54,16 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_passed_status,
     require_positive_int,
     require_recent_timestamp,
+    require_rollout_deployment_context_review,
+    require_rollout_deployment_id,
+    require_rollout_environment,
     required_evidence_summary_is_valid,
     recognized_evidence_artifacts_are_valid,
     require_status_in,
     require_string,
     require_string_equal,
     require_string_value_equal,
+    required_evidence_kind_names,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -69,7 +74,6 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
-from sorafs_path_identity import path_diagnostic_label  # noqa: E402
 from sorafs_evidence_sensitivity import visit_sensitive_fields  # noqa: E402
 
 
@@ -79,6 +83,12 @@ DEFAULT_MAX_SNAPSHOT_AGE_SECS = 8 * 24 * 60 * 60
 DEFAULT_MAX_INGEST_LAG_SECS = 15 * 60
 HEX32_LEN = 32
 HEX64_LEN = 64
+EXPLICIT_KIND_CONFLICT_DIAGNOSTIC = "explicit evidence kind conflicts with previous kind"
+UNKNOWN_SCHEMA_DIAGNOSTIC = "unknown reputation evidence schema"
+EXPLICIT_KIND_SCHEMA_MISMATCH_DIAGNOSTIC = (
+    "evidence schema does not match explicit kind"
+)
+INFER_KIND_DIAGNOSTIC = "cannot infer evidence kind"
 
 
 @dataclass(frozen=True)
@@ -104,32 +114,41 @@ EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
 KIND_BY_NAME = {kind.name: kind for kind in EVIDENCE_KINDS}
 SCHEMA_TO_KIND = {kind.schema: kind for kind in EVIDENCE_KINDS if kind.schema}
 DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS if kind.required)
+COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
 EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "publish": (
+    "publish": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
-        "generated_at_unix",
     ),
-    "latest": (
+    "latest": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
-        "generated_at_unix",
     ),
-    "provider": (
+    "provider": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider",
         "proof",
     ),
-    "events": (
+    "events": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "since",
         "next_since",
         "count",
         "events",
     ),
-    "verify": (
+    "verify": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "valid",
         "proof_verified",
         "snapshot_id_hex",
@@ -138,7 +157,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "provider_id",
         "provider_score_bps",
     ),
-    "metrics": (
+    "metrics": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "schema",
         "status",
         "metrics_scrape_success",
@@ -148,7 +168,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "snapshot_age_seconds",
         "ingest_lag_seconds",
     ),
-    "transport": (
+    "transport": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "schema",
         "status",
         "sse_connected",
@@ -158,7 +179,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "sse_event_count",
         "websocket_event_count",
     ),
-    "consumption": (
+    "consumption": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
         "schema",
         "status",
         "routing_score_consumed",
@@ -201,7 +223,15 @@ SENSITIVE_KEYS = {
     "token_b64",
 }
 
-FINGERPRINT_FIELDS: tuple[str, ...] = ("schema", "snapshot_id_hex", "merkle_root_hex")
+FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "schema",
+    "snapshot_id_hex",
+    "merkle_root_hex",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+)
 
 
 @dataclass(frozen=True)
@@ -250,7 +280,7 @@ def parse_evidence_spec(spec: str) -> tuple[str | None, Path]:
     if separator:
         kind = kind.strip()
         if kind not in KIND_BY_NAME:
-            raise ValueError(f"unknown evidence kind `{kind}`")
+            raise ValueError("unknown evidence kind")
         return kind, Path(path.strip())
     return None, Path(spec)
 
@@ -273,7 +303,6 @@ def load_evidence(
         explicit_entries.append((explicit_kind, path))
 
     explicit_kinds_by_path: dict[Path, str | None] = {}
-    explicit_paths_by_path: dict[Path, Path] = {}
     for explicit_kind, path in explicit_entries:
         resolved = resolve_evidence_path(path, errors)
         if resolved is None:
@@ -281,19 +310,9 @@ def load_evidence(
         if resolved in explicit_kinds_by_path:
             previous_kind = explicit_kinds_by_path[resolved]
             if previous_kind != explicit_kind:
-                previous_path = explicit_paths_by_path[resolved]
-                errors.append(
-                    "evidence file `{}` explicit kind `{}` conflicts with "
-                    "explicit kind `{}` from `{}`".format(
-                        path_diagnostic_label(path),
-                        explicit_kind or "<inferred>",
-                        previous_kind or "<inferred>",
-                        path_diagnostic_label(previous_path),
-                    )
-                )
+                errors.append(EXPLICIT_KIND_CONFLICT_DIAGNOSTIC)
             continue
         explicit_kinds_by_path[resolved] = explicit_kind
-        explicit_paths_by_path[resolved] = path
 
     files = discover_evidence_files(
         evidence_dirs,
@@ -318,20 +337,17 @@ def load_evidence(
         payload, digest = loaded_evidence
         schema = payload.get("schema")
         if isinstance(schema, str) and schema not in SCHEMA_TO_KIND and explicit:
-            errors.append(f"{path}: unknown schema `{schema}`")
+            errors.append(UNKNOWN_SCHEMA_DIAGNOSTIC)
             continue
         if isinstance(schema, str) and schema in SCHEMA_TO_KIND and explicit_kind:
             schema_kind = SCHEMA_TO_KIND[schema].name
             if schema_kind != explicit_kind:
-                errors.append(
-                    f"{path}: schema `{schema}` belongs to `{schema_kind}`, "
-                    f"not explicit kind `{explicit_kind}`"
-                )
+                errors.append(EXPLICIT_KIND_SCHEMA_MISMATCH_DIAGNOSTIC)
                 continue
         kind = artifact_kind(path, payload, explicit_kind)
         if kind is None:
             if explicit:
-                errors.append(f"{path}: cannot infer evidence kind")
+                errors.append(INFER_KIND_DIAGNOSTIC)
             continue
         loaded.append(LoadedEvidence(kind, path, payload, digest))
 
@@ -365,6 +381,28 @@ def validate_snapshot_summary(
         path=f"{context}.generated_at_unix",
     )
     return snapshot_id, merkle_root, provider_count
+
+
+def validate_common_rollout_context(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require deployment-bound rollout metadata on every reputation artifact."""
+
+    require_minimum_int(payload, "generated_at_unix", 1, errors)
+    require_rollout_deployment_id(payload, errors)
+    require_rollout_environment(payload, errors)
+    require_rollout_deployment_context_review(payload, errors)
+
+
+def finalize_reputation_required_rows(required: dict[str, dict[str, Any]]) -> None:
+    """Publish the common required-row fields consumed by aggregate readiness."""
+
+    for row in required.values():
+        artifacts = row.get("artifacts")
+        artifact_count = len(artifacts) if isinstance(artifacts, list) else 0
+        row["present"] = artifact_count > 0
+        row["artifact_count"] = artifact_count
 
 
 def validate_publish_or_latest(
@@ -553,6 +591,7 @@ def validate_evidence_set(
         errors: list[str] = []
         payload = evidence.payload
         digest = evidence.digest
+        record_kind = evidence.kind
         visit_sensitive_fields(
             payload,
             "",
@@ -563,6 +602,7 @@ def validate_evidence_set(
         snapshot_id = ""
         merkle_root = ""
         provider_count = 0
+        validate_common_rollout_context(payload, errors)
 
         if evidence.kind in SNAPSHOT_ANCHOR_KINDS:
             snapshot_id, merkle_root, provider_count = validate_publish_or_latest(
@@ -591,26 +631,27 @@ def validate_evidence_set(
         elif evidence.kind == "consumption":
             snapshot_id, merkle_root, provider_count = validate_consumption(evidence, errors)
         else:
-            errors.append(f"unsupported evidence kind `{evidence.kind}`")
+            errors.append("unsupported evidence kind")
+            record_kind = "<unknown>"
 
         record_consistent_evidence_value(
             snapshot_values,
             "snapshot_id_hex",
             snapshot_id,
-            evidence.kind,
+            record_kind,
             errors,
         )
         record_consistent_evidence_value(
             snapshot_values,
             "merkle_root_hex",
             merkle_root,
-            evidence.kind,
+            record_kind,
             errors,
         )
         record_observed_evidence_value(provider_counts, provider_count)
 
         record = build_kinded_evidence_artifact(
-            kind_name=evidence.kind,
+            kind_name=record_kind,
             path=evidence.path,
             digest=digest,
             payload=payload,
@@ -622,7 +663,7 @@ def validate_evidence_set(
             },
         )
         record_snapshot_bound_evidence_artifact(
-            kind_name=evidence.kind,
+            kind_name=record_kind,
             artifact=record,
             snapshot_id=snapshot_id,
             merkle_root=merkle_root,
@@ -635,7 +676,7 @@ def validate_evidence_set(
         recognized.append(record)
         record_custom_required_evidence_artifact(
             required,
-            evidence.kind,
+            record_kind,
             record,
             errors,
         )
@@ -647,7 +688,7 @@ def validate_evidence_set(
         "provider",
         required_providers,
         provider_ids,
-        lambda provider_id: f"missing provider/proof evidence for `{provider_id}`",
+        lambda _provider_id: "missing provider/proof evidence for required provider",
     )
 
     record_missing_required_or_observed_evidence_error(
@@ -691,6 +732,7 @@ def validate_evidence_set(
             "snapshot_id_hex and merkle_root_hex"
         ),
     )
+    finalize_reputation_required_rows(required)
 
     status = (
         "ready"
@@ -698,9 +740,21 @@ def validate_evidence_set(
         and recognized_evidence_artifacts_are_valid(recognized)
         else "failed"
     )
+    errors = (
+        []
+        if status == "ready"
+        else ["reputation rollout evidence did not satisfy required rows"]
+    )
+    files = [evidence.path for evidence in loaded]
     return {
         "schema": SUMMARY_SCHEMA,
         "status": status,
+        "required_kinds": required_evidence_kind_names(required_kinds),
+        "thresholds": {
+            "max_snapshot_age_secs": max_snapshot_age_secs,
+            "max_ingest_lag_secs": max_ingest_lag_secs,
+            "max_evidence_bytes": MAX_EVIDENCE_BYTES,
+        },
         "snapshot_id_hex": snapshot_values.get("snapshot_id_hex"),
         "merkle_root_hex": snapshot_values.get("merkle_root_hex"),
         "valid_snapshot_bindings": [
@@ -710,11 +764,13 @@ def validate_evidence_set(
             }
             for snapshot_id, merkle_root in sorted(valid_snapshot_bindings)
         ],
+        "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_recognized_evidence_artifacts(recognized),
         "recognized_artifacts": recognized,
         "required": required,
         "provider_ids": sorted(provider_ids),
         "provider_count_values": sorted(provider_counts),
+        "errors": errors,
     }
 
 
@@ -814,6 +870,7 @@ def main(argv: list[str] | None = None) -> int:
     if load_errors:
         summary["status"] = "failed"
         summary["load_errors"] = load_errors
+        summary["errors"] = list(summary.get("errors", [])) + load_errors
 
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary

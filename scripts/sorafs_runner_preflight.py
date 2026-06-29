@@ -569,6 +569,69 @@ InputFileIdentities = dict[Path, tuple[str, Path]]
 InputDirIdentities = dict[Path, tuple[str, Path]]
 RESERVED_OUTPUT_ARTIFACT_DIAGNOSTIC = "must not be the same path as reserved output"
 COMMAND_PLAN_SHAPE_DIAGNOSTIC = "command plan must be a sequence of steps"
+INPUT_FILE_PATH_DIAGNOSTIC = "input evidence file must be a path"
+INPUT_FILE_INSPECTION_DIAGNOSTIC = "input evidence file cannot be inspected"
+INPUT_FILE_SYMLINK_DIAGNOSTIC = "input evidence file must not be a symlink"
+INPUT_FILE_PARENT_SYMLINK_DIAGNOSTIC = (
+    "input evidence file parent must not be a symlink"
+)
+INPUT_FILE_PARENT_DIRECTORY_DIAGNOSTIC = (
+    "input evidence file parent must be a directory when it exists"
+)
+INPUT_FILE_MISSING_DIAGNOSTIC = "input evidence file must exist and be a file"
+INPUT_FILE_RESOLUTION_DIAGNOSTIC = "input evidence file cannot be resolved"
+INPUT_FILE_DUPLICATE_DIAGNOSTIC = "duplicate input evidence file"
+
+
+def resolve_runner_evidence_input_file(path: Path, errors: list[str]) -> Path | None:
+    """Return an evidence input identity without echoing the operator path."""
+
+    error_list = _require_error_list(errors)
+    if not isinstance(path, Path):
+        error_list.append(INPUT_FILE_PATH_DIAGNOSTIC)
+        return None
+    resolution_errors: list[str] = []
+    resolved = resolve_path_identity(path, resolution_errors, label="input file")
+    if resolved is None:
+        error_list.append(INPUT_FILE_RESOLUTION_DIAGNOSTIC)
+        return None
+    return resolved
+
+
+def validate_runner_evidence_input_parent_chain(
+    path: Path,
+    errors: list[str],
+) -> bool:
+    """Validate evidence input parents without echoing filesystem labels."""
+
+    error_list = _require_error_list(errors)
+    if not isinstance(path, Path):
+        error_list.append(INPUT_FILE_PATH_DIAGNOSTIC)
+        return False
+    for parent in (path.parent, *path.parent.parents):
+        try:
+            parent_is_symlink = parent.is_symlink()
+        except (OSError, RuntimeError):
+            error_list.append(INPUT_FILE_INSPECTION_DIAGNOSTIC)
+            return False
+        if parent_is_symlink:
+            error_list.append(INPUT_FILE_PARENT_SYMLINK_DIAGNOSTIC)
+            return False
+        try:
+            parent_exists = parent.exists()
+        except (OSError, RuntimeError):
+            error_list.append(INPUT_FILE_INSPECTION_DIAGNOSTIC)
+            return False
+        if parent_exists:
+            try:
+                parent_is_dir = parent.is_dir()
+            except (OSError, RuntimeError):
+                error_list.append(INPUT_FILE_INSPECTION_DIAGNOSTIC)
+                return False
+            if not parent_is_dir:
+                error_list.append(INPUT_FILE_PARENT_DIRECTORY_DIAGNOSTIC)
+                return False
+    return True
 
 
 def command_plan_steps(plan: Any) -> Sequence[Any] | None:
@@ -692,49 +755,41 @@ def require_existing_files(
     if seen_map is None:
         return errors
     for path in path_items:
-        path_exists = inspect_runner_path_exists(path, errors, label=path_label)
-        if path_exists is None:
+        if not isinstance(path, Path):
+            errors.append(INPUT_FILE_PATH_DIAGNOSTIC)
             continue
-        path_is_symlink = inspect_runner_path_is_symlink(
-            path,
-            errors,
-            label=path_label,
-        )
-        if path_is_symlink is None:
+        try:
+            path_exists = path.exists()
+        except (OSError, RuntimeError):
+            errors.append(INPUT_FILE_INSPECTION_DIAGNOSTIC)
+            continue
+        try:
+            path_is_symlink = path.is_symlink()
+        except (OSError, RuntimeError):
+            errors.append(INPUT_FILE_INSPECTION_DIAGNOSTIC)
             continue
         if path_is_symlink:
-            errors.append(
-                f"{path_label} `{path_diagnostic_label(path)}` "
-                "must not be a symlink"
-            )
+            errors.append(INPUT_FILE_SYMLINK_DIAGNOSTIC)
             continue
-        if not validate_runner_input_parent_chain(path, errors, label=path_label):
+        if not validate_runner_evidence_input_parent_chain(path, errors):
             continue
         if not path_exists:
-            errors.append(
-                f"{path_label} `{path_diagnostic_label(path)}` "
-                "must exist and be a file"
-            )
+            errors.append(INPUT_FILE_MISSING_DIAGNOSTIC)
             continue
-        resolved = resolve_runner_input_file(path, errors)
+        resolved = resolve_runner_evidence_input_file(path, errors)
         if resolved is None:
             continue
-        path_is_file = inspect_runner_path_is_file(path, errors, label=path_label)
-        if path_is_file is None:
+        try:
+            path_is_file = path.is_file()
+        except (OSError, RuntimeError):
+            errors.append(INPUT_FILE_INSPECTION_DIAGNOSTIC)
             continue
         if not path_is_file:
-            errors.append(
-                f"{path_label} `{path_diagnostic_label(path)}` "
-                "must exist and be a file"
-            )
+            errors.append(INPUT_FILE_MISSING_DIAGNOSTIC)
             continue
         previous = seen_map.get(resolved)
         if previous is not None:
-            previous_label, previous_path = previous
-            errors.append(
-                f"duplicate {path_label} input `{path_diagnostic_label(path)}` "
-                f"matches {previous_label} `{path_diagnostic_label(previous_path)}`"
-            )
+            errors.append(INPUT_FILE_DUPLICATE_DIAGNOSTIC)
             continue
         seen_map[resolved] = (path_label, path)
     return errors

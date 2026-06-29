@@ -30,5 +30,7 @@ def artifact_fingerprint(
         if field in seen_fields:
             raise ValueError("artifact fingerprint fields must not contain duplicates")
         seen_fields.add(field)
-        fingerprint[field] = payload.get(field)
+        value = payload.get(field)
+        if value is not None:
+            fingerprint[field] = value
     return fingerprint

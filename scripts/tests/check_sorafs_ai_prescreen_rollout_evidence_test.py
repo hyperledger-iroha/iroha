@@ -369,6 +369,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["operator_workflow"]["valid"] is True
+    assert payload["thresholds"] == {"max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES}
     assert payload["recognized_artifact_count"] == 8
     assert payload["valid_runner_bindings"] == [
         {

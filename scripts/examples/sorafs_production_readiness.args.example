@@ -1,0 +1,5 @@
+--evidence-dir artifacts/sorafs/production-readiness/summaries
+--deployment-id sorafs-mainnet-2026-06
+--environment production
+--max-summary-artifact-age-secs 1209600
+--summary-out artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json

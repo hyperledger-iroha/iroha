@@ -49,6 +49,43 @@ impl DaCommitmentStore {
 
     /// Insert an entire bundle captured at `block_height`.
     pub fn insert_bundle(&mut self, block_height: u64, bundle: DaCommitmentBundle) {
+        self.insert_bundle_with_query_filter(block_height, bundle, |_| true);
+    }
+
+    /// Insert an entire bundle while filtering which records remain query-visible.
+    ///
+    /// Every record is still retained in committed-identity indexes and the stored block
+    /// bundle remains byte-for-byte intact. Records rejected by `query_visible` are hidden from
+    /// query indexes so lifecycle resets can keep committed proof material without exposing
+    /// retired-lane records as active DA state.
+    pub fn insert_bundle_with_query_filter(
+        &mut self,
+        block_height: u64,
+        bundle: DaCommitmentBundle,
+        mut query_visible: impl FnMut(&DaCommitmentRecord) -> bool,
+    ) {
+        self.insert_bundle_with_visibility_filter(
+            block_height,
+            bundle,
+            |_| true,
+            |record| query_visible(record),
+        );
+    }
+
+    /// Insert an entire bundle while independently filtering committed identities
+    /// and query visibility.
+    ///
+    /// The stored block bundle remains byte-for-byte intact. Records rejected by
+    /// `identity_visible` are treated as belonging to an earlier lane
+    /// incarnation: they remain available through [`Self::bundle_at`] but do not
+    /// reserve active commitment identities or query rows.
+    pub fn insert_bundle_with_visibility_filter(
+        &mut self,
+        block_height: u64,
+        bundle: DaCommitmentBundle,
+        mut identity_visible: impl FnMut(&DaCommitmentRecord) -> bool,
+        mut query_visible: impl FnMut(&DaCommitmentRecord) -> bool,
+    ) {
         for (idx, record) in bundle.commitments.iter().enumerate() {
             let Some(index_in_bundle) = crate::da::da_bundle_location_index(idx) else {
                 warn!(
@@ -62,7 +99,9 @@ impl DaCommitmentStore {
                 block_height,
                 index_in_bundle,
             };
-            let _ = self.insert(record, location);
+            if identity_visible(record) {
+                let _ = self.insert_with_query_visibility(record, location, query_visible(record));
+            }
         }
 
         if !bundle.commitments.is_empty() {
@@ -74,6 +113,15 @@ impl DaCommitmentStore {
     ///
     /// Returns `true` if the record was inserted into the index.
     pub fn insert(&mut self, record: &DaCommitmentRecord, location: DaCommitmentLocation) -> bool {
+        self.insert_with_query_visibility(record, location, true)
+    }
+
+    fn insert_with_query_visibility(
+        &mut self,
+        record: &DaCommitmentRecord,
+        location: DaCommitmentLocation,
+        query_visible: bool,
+    ) -> bool {
         let key = DaCommitmentKey::from_record(record);
         if self.committed_by_key.contains_key(&key)
             || self
@@ -95,6 +143,9 @@ impl DaCommitmentStore {
             .insert(record.manifest_hash, with_location.clone());
         self.committed_by_ticket
             .insert(record.storage_ticket, with_location.clone());
+        if !query_visible {
+            return true;
+        }
         self.by_manifest
             .insert(record.manifest_hash, with_location.clone());
         self.by_ticket
@@ -427,6 +478,137 @@ mod tests {
 
         let bundle = store.bundle_at(1).expect("committed bundle retained");
         assert_eq!(bundle.commitments.as_slice(), &[record_a, record_b]);
+    }
+
+    #[test]
+    fn insert_bundle_with_query_filter_keeps_bundle_and_committed_identities() {
+        let mut store = DaCommitmentStore::default();
+        let visible = sample_record(0, 1, 0);
+        let hidden = sample_record(1, 1, 0);
+        store.insert_bundle_with_query_filter(
+            7,
+            DaCommitmentBundle::new(vec![visible.clone(), hidden.clone()]),
+            |record| record.lane_id == visible.lane_id,
+        );
+
+        let bundle = store.bundle_at(7).expect("stored committed bundle");
+        assert_eq!(
+            bundle.commitments.as_slice(),
+            &[visible.clone(), hidden.clone()],
+            "committed bundle must stay byte-for-byte available for proof construction"
+        );
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    visible.lane_id.as_u32(),
+                    visible.epoch,
+                    visible.sequence
+                )
+                .is_some(),
+            "visible record should remain queryable"
+        );
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(hidden.lane_id.as_u32(), hidden.epoch, hidden.sequence)
+                .is_none(),
+            "hidden record should not be query-visible"
+        );
+        assert!(
+            store.get_by_manifest(&hidden.manifest_hash).is_none(),
+            "hidden manifest should not be query-visible"
+        );
+        assert!(
+            store
+                .get_by_storage_ticket(&hidden.storage_ticket)
+                .is_none(),
+            "hidden ticket should not be query-visible"
+        );
+        assert!(
+            store
+                .get_committed_by_key(&DaCommitmentKey::from_record(&hidden))
+                .is_some(),
+            "hidden record identity must still be reserved"
+        );
+        assert!(
+            store
+                .get_committed_by_manifest(&hidden.manifest_hash)
+                .is_some(),
+            "hidden manifest identity must still be reserved"
+        );
+        assert!(
+            store
+                .get_committed_by_storage_ticket(&hidden.storage_ticket)
+                .is_some(),
+            "hidden storage-ticket identity must still be reserved"
+        );
+    }
+
+    #[test]
+    fn insert_bundle_with_visibility_filter_hides_old_incarnation_identities() {
+        let mut store = DaCommitmentStore::default();
+        let visible = sample_record(0, 1, 0);
+        let old_incarnation = sample_record(1, 1, 0);
+        store.insert_bundle_with_visibility_filter(
+            7,
+            DaCommitmentBundle::new(vec![visible.clone(), old_incarnation.clone()]),
+            |record| record.lane_id == visible.lane_id,
+            |_| true,
+        );
+
+        let bundle = store.bundle_at(7).expect("stored committed bundle");
+        assert_eq!(
+            bundle.commitments.as_slice(),
+            &[visible.clone(), old_incarnation.clone()],
+            "old-incarnation record must stay available as committed proof material"
+        );
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    visible.lane_id.as_u32(),
+                    visible.epoch,
+                    visible.sequence
+                )
+                .is_some(),
+            "visible record should be indexed"
+        );
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    old_incarnation.lane_id.as_u32(),
+                    old_incarnation.epoch,
+                    old_incarnation.sequence
+                )
+                .is_none(),
+            "old-incarnation record must not be query-visible"
+        );
+        assert!(
+            store
+                .get_committed_by_key(&DaCommitmentKey::from_record(&old_incarnation))
+                .is_none(),
+            "old-incarnation key must not reserve a fresh lane identity"
+        );
+        assert!(
+            !store.contains_record_identity(&old_incarnation),
+            "old-incarnation manifest and storage ticket must not reserve fresh identities"
+        );
+
+        assert!(store.insert(
+            &old_incarnation,
+            DaCommitmentLocation {
+                block_height: 8,
+                index_in_bundle: 0,
+            }
+        ));
+        assert!(
+            store
+                .get_by_lane_epoch_sequence(
+                    old_incarnation.lane_id.as_u32(),
+                    old_incarnation.epoch,
+                    old_incarnation.sequence
+                )
+                .is_some(),
+            "fresh lane incarnation can reuse the same commitment identity"
+        );
     }
 
     #[test]

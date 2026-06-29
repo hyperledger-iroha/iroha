@@ -15,17 +15,17 @@ if str(SCRIPTS_DIR) not in sys.path:
 from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 
 
-def test_artifact_fingerprint_selects_fields_in_order() -> None:
+def test_artifact_fingerprint_selects_present_fields_in_order() -> None:
     payload = {
         "schema": "test",
         "digest": "abc",
+        "optional": None,
         "ignored": "raw",
     }
 
-    assert artifact_fingerprint(payload, ("schema", "digest", "missing")) == {
+    assert artifact_fingerprint(payload, ("schema", "digest", "optional", "missing")) == {
         "schema": "test",
         "digest": "abc",
-        "missing": None,
     }
 
 

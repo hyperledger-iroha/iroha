@@ -3,7 +3,7 @@ lang: ba
 direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: needs-update
-source_hash: e90824639bc20cd535be2f2037b825c934b591957995c2b83a434855eaa551d7
+source_hash: a2af63a1c75b42890f62f56139177adfdedd1c418edac3ac70414553d799aeb4
 source_last_modified: "2026-06-25T18:04:39+00:00"
 translation_last_reviewed: 2026-06-25
 ---

@@ -56,7 +56,7 @@ def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
     provider_id = provider_id.strip()
     path = path.strip()
     if not separator or not provider_id or not path:
-        raise ValueError(f"--provider-proof must use PROVIDER_ID=PATH form, got `{spec}`")
+        raise ValueError("--provider-proof must use PROVIDER_ID=PATH form")
     return provider_id, Path(path)
 
 
@@ -71,7 +71,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append("--provider-id must be non-empty")
             continue
         if provider_id in seen_provider_ids:
-            errors.append(f"duplicate --provider-id `{provider_id}`")
+            errors.append("duplicate --provider-id")
         seen_provider_ids.add(provider_id)
 
     proof_specs: dict[str, Path] = {}
@@ -82,16 +82,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append(error_diagnostic_label(error))
             continue
         if provider_id in proof_specs:
-            errors.append(f"duplicate --provider-proof for `{provider_id}`")
+            errors.append("duplicate --provider-proof")
         proof_specs[provider_id] = path
 
     for provider_id in args.provider_id:
         if provider_id not in proof_specs:
-            errors.append(f"missing --provider-proof for `{provider_id}`")
+            errors.append("missing --provider-proof for requested provider")
 
     extra_proofs = sorted(set(proof_specs) - set(args.provider_id))
-    for provider_id in extra_proofs:
-        errors.append(f"--provider-proof supplied for unrequested provider `{provider_id}`")
+    if extra_proofs:
+        errors.append("--provider-proof supplied for unrequested provider")
 
     errors.extend(require_existing_files([args.snapshot], "--snapshot", seen=seen_input_files))
     errors.extend(

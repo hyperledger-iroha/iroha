@@ -8,10 +8,17 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sorafs_evidence_paths import validate_evidence_parent_chain
-from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+from sorafs_evidence_paths import (
+    EVIDENCE_FILE_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_FILE_MISSING_DIAGNOSTIC,
+    EVIDENCE_FILE_SYMLINK_DIAGNOSTIC,
+    validate_evidence_parent_chain,
+)
+from sorafs_path_identity import error_diagnostic_label
 
 CHUNK_BYTES = 1024 * 1024
+EVIDENCE_JSON_LOAD_DIAGNOSTIC = "failed to load evidence JSON"
+EVIDENCE_JSON_READ_DIAGNOSTIC = "evidence JSON cannot be read"
 
 
 class EvidenceFileTooLargeError(ValueError):
@@ -56,10 +63,6 @@ def _json_key_label(key: Any) -> str:
     return "`<non-canonical>`"
 
 
-def _evidence_path_label(path: Any) -> str:
-    return path_diagnostic_label(path)
-
-
 def _error_label(
     error: BaseException,
     *,
@@ -87,10 +90,9 @@ def json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str
 def validate_evidence_file_for_read(path: Path) -> None:
     """Reject unsafe evidence file paths before opening them."""
 
-    path_label = _evidence_path_label(path)
     try:
         if path.is_symlink():
-            raise ValueError(f"evidence file `{path_label}` must not be a symlink")
+            raise ValueError(EVIDENCE_FILE_SYMLINK_DIAGNOSTIC)
         parent_errors: list[str] = []
         if not validate_evidence_parent_chain(
             path,
@@ -99,16 +101,12 @@ def validate_evidence_file_for_read(path: Path) -> None:
         ):
             raise ValueError(parent_errors[0])
         if not path.is_file():
-            raise ValueError(
-                f"evidence file `{path_label}` must exist and be a file"
-            )
+            raise ValueError(EVIDENCE_FILE_MISSING_DIAGNOSTIC)
     except ValueError:
         raise
     except (OSError, RuntimeError) as error:
-        raise RuntimeError(
-            f"evidence file `{path_label}` cannot be inspected: "
-            f"{_error_label(error, path=path, path_label=path_label)}"
-        ) from error
+        del error
+        raise RuntimeError(EVIDENCE_FILE_INSPECTION_DIAGNOSTIC) from None
 
 
 def evidence_read_open_flags() -> int:
@@ -187,21 +185,15 @@ def load_evidence_json_with_sha256_or_record_error(
     max_bytes: int,
     errors: list[str],
 ) -> tuple[dict[str, Any], str] | None:
-    """Load evidence JSON and append the standard path-qualified error on failure."""
+    """Load evidence JSON and append the standard sanitized error on failure."""
 
     error_list = _require_error_list(errors)
     try:
         return load_evidence_json_with_sha256(path, max_bytes)
-    except (
-        OSError,
-        RuntimeError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        ValueError,
-    ) as error:
-        path_label = _evidence_path_label(path)
-        error_label = _error_label(error, path=path, path_label=path_label)
-        error_list.append(
-            f"{path_label}: failed to load evidence JSON: {error_label}"
-        )
+    except (OSError, RuntimeError):
+        error_list.append(f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: {EVIDENCE_JSON_READ_DIAGNOSTIC}")
+        return None
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        error_label = _error_label(error)
+        error_list.append(f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: {error_label}")
         return None

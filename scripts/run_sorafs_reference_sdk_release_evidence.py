@@ -93,7 +93,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         paths = paths_by_kind[kind]
         if not paths:
             errors.append(
-                f"missing {EVIDENCE_FLAGS_BY_KIND[kind]} for required `{kind}` release evidence"
+                "missing required release evidence input"
             )
 
     for kind, paths in paths_by_kind.items():

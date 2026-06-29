@@ -7,6 +7,8 @@
 # Keep signing keys, bearer tokens, raw snapshots, proof bytes, and operator
 # secrets in runtime-only locations. This example stores only paths and
 # payload-free rollout summaries in the repository-local artifacts/ directory.
+# Generated and supplied evidence must include reviewed deployment context:
+# generated_at_unix, deployment_id, environment, and deployment_context_reviewed.
 
 --sorafs-cli-bin
 target/debug/sorafs_cli

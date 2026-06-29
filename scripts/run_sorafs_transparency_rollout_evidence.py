@@ -29,7 +29,7 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
-from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label  # noqa: E402
+from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     require_rollout_deployment_id,
     require_rollout_environment,
@@ -47,6 +47,28 @@ from sorafs_runner_preflight import (  # noqa: E402
     validate_runner_input_parent_chain,
     validate_runner_preflight,
     write_runner_plan,
+)
+
+DEPLOYMENT_CONTEXT_ARTIFACT_INSPECTION_DIAGNOSTIC = (
+    "deployment-context artifact cannot be inspected"
+)
+DEPLOYMENT_CONTEXT_ARTIFACT_SYMLINK_DIAGNOSTIC = (
+    "deployment-context artifact must not be a symlink"
+)
+DEPLOYMENT_CONTEXT_ARTIFACT_MISSING_DIAGNOSTIC = (
+    "deployment-context artifact must exist and be a file"
+)
+DEPLOYMENT_CONTEXT_ARTIFACT_PARENT_DIAGNOSTIC = (
+    "deployment-context artifact parent is invalid"
+)
+DEPLOYMENT_CONTEXT_ARTIFACT_READ_DIAGNOSTIC = (
+    "generated evidence artifact cannot be read"
+)
+DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC = (
+    "deployment context cannot be written into generated artifact"
+)
+DEPLOYMENT_CONTEXT_ARTIFACT_CONFLICT_DIAGNOSTIC = (
+    "generated evidence artifact has conflicting deployment context"
 )
 
 
@@ -80,7 +102,7 @@ def split_source_entry_spec(spec: str) -> tuple[str, Path]:
     source_kind = source_kind.strip()
     path = path.strip()
     if not separator or not source_kind or not path:
-        raise ValueError(f"--source-entry must use KIND=PATH form, got `{spec}`")
+        raise ValueError("--source-entry must use KIND=PATH form")
     return source_kind, Path(path)
 
 
@@ -99,7 +121,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     present_source_kinds = {source_kind for source_kind, _ in source_entries}
     for source_kind in DEFAULT_REQUIRED_SOURCE_KINDS:
         if source_kind not in present_source_kinds:
-            errors.append(f"missing --source-entry coverage for `{source_kind}`")
+            errors.append("missing required source-entry coverage")
 
     source_paths = [path for _, path in source_entries]
     errors.extend(require_existing_files(source_paths, "--source-entry", seen=seen_input_files))
@@ -257,17 +279,25 @@ def deployment_context_write_open_flags() -> int:
     return flags
 
 
+def validate_deployment_context_artifact_parent(path: Path) -> list[str]:
+    """Return generic parent-chain errors for generated artifact rewrites."""
+
+    parent_errors: list[str] = []
+    if validate_runner_input_parent_chain(
+        path,
+        parent_errors,
+        label="deployment-context artifact",
+    ):
+        return []
+    return [DEPLOYMENT_CONTEXT_ARTIFACT_PARENT_DIAGNOSTIC]
+
+
 def write_deployment_context_artifact(path: Path, payload: dict[str, object]) -> list[str]:
     """Rewrite a generated artifact after stamping reviewed deployment context."""
 
-    errors: list[str] = []
-    if not validate_runner_input_parent_chain(
-        path,
-        errors,
-        label="deployment-context artifact",
-    ):
-        return errors
-    path_label = path_diagnostic_label(path)
+    parent_errors = validate_deployment_context_artifact_parent(path)
+    if parent_errors:
+        return parent_errors
     fd = -1
     try:
         rendered = render_runner_plan(payload)
@@ -277,12 +307,8 @@ def write_deployment_context_artifact(path: Path, payload: dict[str, object]) ->
         with handle:
             handle.write(rendered)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
-        return [
-            "failed to write deployment context into `{}`: {}".format(
-                path_label,
-                error_diagnostic_label(error, path_label=path_label),
-            )
-        ]
+        del error
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC]
     finally:
         if fd >= 0:
             os.close(fd)
@@ -303,28 +329,25 @@ def annotate_evidence_artifact(
         errors,
         label="deployment-context artifact",
     )
+    if errors:
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_INSPECTION_DIAGNOSTIC]
     if artifact_is_symlink:
-        errors.append(f"deployment-context artifact `{path}` must not be a symlink")
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_SYMLINK_DIAGNOSTIC]
     artifact_is_file = inspect_runner_path_is_file(
         path,
         errors,
         label="deployment-context artifact",
     )
-    if artifact_is_file is False:
-        errors.append(f"deployment-context artifact `{path}` must exist and be a file")
     if errors:
-        return errors
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_INSPECTION_DIAGNOSTIC]
+    if artifact_is_file is False:
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_MISSING_DIAGNOSTIC]
 
     try:
         payload = load_evidence_json(path, MAX_EVIDENCE_BYTES)
     except (OSError, RuntimeError, UnicodeDecodeError, ValueError) as error:
-        path_label = path_diagnostic_label(path)
-        return [
-            "failed to read generated evidence artifact `{}`: {}".format(
-                path_label,
-                error_diagnostic_label(error, path_label=path_label),
-            )
-        ]
+        del error
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_READ_DIAGNOSTIC]
 
     for field, value in (
         ("deployment_id", deployment_id),
@@ -333,10 +356,7 @@ def annotate_evidence_artifact(
     ):
         existing = payload.get(field)
         if existing is not None and existing != value:
-            return [
-                f"generated evidence artifact `{path}` field `{field}` "
-                f"must be `{value}`, got `{existing}`"
-            ]
+            return [DEPLOYMENT_CONTEXT_ARTIFACT_CONFLICT_DIAGNOSTIC]
         payload[field] = value
 
     return write_deployment_context_artifact(path, payload)

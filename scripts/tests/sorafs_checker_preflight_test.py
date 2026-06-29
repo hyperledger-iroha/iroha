@@ -507,10 +507,9 @@ def test_summary_out_same_as_discovered_evidence_fails(tmp_path: Path) -> None:
         )
     )
 
-    assert errors == [
-        f"evidence file `{evidence}` conflicts with --summary-out "
-        f"`{tmp_path / 'nested' / '..' / 'evidence.json'}`"
-    ]
+    assert errors == ["evidence file conflicts with reserved output"]
+    assert str(evidence) not in errors[0]
+    assert str(tmp_path / "nested" / ".." / "evidence.json") not in errors[0]
 
 
 def test_write_checker_summary_ignores_absent_path() -> None:
