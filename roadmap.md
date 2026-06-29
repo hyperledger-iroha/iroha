@@ -179,12 +179,16 @@ and completed history lives in [`status.md`](./status.md).
   transactions / `134,170,800` retained bytes. Queue-full operator
   observability now carries retained bytes, oldest queued age, and separate
   count/byte/age saturation causes through Sumeragi status, telemetry status,
-  Prometheus gauges, Izanami chaos digests, and localnet smoke artifacts. Torii
-  single-transaction ingress now also performs authenticated capacity shedding
-  before spending rate-limit budget, matching batch ingress and preserving the
-  operator-visible `PRTRY:QUEUE_FULL` rejection under simultaneous full-queue
-  and rate-limit pressure. Tune the retained-byte default, Torii admission
-  shedding, or the per-peer P2P outbound frame queue caps only if
+  Prometheus gauges, Izanami chaos digests, and localnet smoke artifacts. The
+  public telemetry mirrors, evidence API docs, localnet throughput docs, and
+  Torii status endpoint smoke now pin the same expanded `tx_queue` schema so
+  stale `depth`/`capacity`/`saturated`-only descriptions cannot drift back in.
+  Torii single-transaction ingress now also performs authenticated capacity
+  shedding before spending rate-limit budget, matching batch ingress and
+  preserving the operator-visible `PRTRY:QUEUE_FULL` rejection under
+  simultaneous full-queue and rate-limit pressure. Tune the retained-byte
+  default, Torii admission shedding, or the per-peer P2P outbound frame queue
+  caps only if
   future release-gate reports show real operator backpressure needs different
   limits. Deferred P2P outbound frames held while a peer session is
   missing are now capped by per-peer encoded-byte budget in addition to the
@@ -1561,7 +1565,10 @@ and completed history lives in [`status.md`](./status.md).
   source, the Torii Offline/Offline V2 readiness smoke files, and their
   workflow paths with removed-field absence labels; the mobile
   offline-readiness negative control injects removed gate and smoke-assertion
-  drift to prove the guard rejects both. Torii
+  drift to prove the guard rejects both. The `iroha_config` regression for the
+  rejected `settlement.offline.kagemusha_force_legacy` field must keep removed
+  force-flag wording, with the Kagemusha policy guard rejecting stale
+  removed-knob phrasing in that active test. Torii
   readiness must also keep mobile artifact archive availability false: Torii
   reports native runtime readiness, while Core API serves and gates mobile
   artifacts. JavaScript, Python, Swift, Kotlin/JVM, and Android Java canonical
@@ -3319,6 +3326,13 @@ and completed history lives in [`status.md`](./status.md).
   `swift test --filter OfflineNoteRedeemPlannerTests` so draft placeholder
   proofs, proof-binding finalization, padded scope identifiers, and
   partial/exact redeem planning are runtime-checked instead of only parsed.
+  Swift recursive compact native archive validation must keep
+  `KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes` equal to
+  the shared `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` 64 MiB cap,
+  with the focused Swift test, SDK parity inventory, and
+  `--negative-control-swift-recursive-compact-native-archive-cap` mode proving
+  the cap cannot drift upward before native bridge calls allocate or copy
+  buffers.
 - Kagemusha Python SDK validation must keep the focused Python 3.11 runner on
   the Kagemusha, privacy catalog, crypto algorithm, Nexus app, Offline Cash,
   Connect codec, and address-format pytest files because those files cover the Python

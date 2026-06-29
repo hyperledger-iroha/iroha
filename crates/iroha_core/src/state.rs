@@ -1115,15 +1115,10 @@ pub(crate) fn dataspace_fee_sponsor_matches(
     dataspace: DataSpaceId,
     account_id: &AccountId,
 ) -> bool {
-    dataspace_fee_sponsor_from_config(
-        world,
-        dataspace_catalog,
-        dataspace_fee_sponsors,
-        dataspace,
-    )
-    .ok()
-    .flatten()
-    .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
+    dataspace_fee_sponsor_from_config(world, dataspace_catalog, dataspace_fee_sponsors, dataspace)
+        .ok()
+        .flatten()
+        .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
 }
 
 pub(crate) fn dataspace_fee_sponsor_policy_from_config(

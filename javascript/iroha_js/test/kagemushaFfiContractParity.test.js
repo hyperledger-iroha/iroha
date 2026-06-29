@@ -1306,6 +1306,10 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       ".emptyVerifierKeysPayload",
       ".invalidBundleArchive",
       "testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall",
+      "testNativeArchiveLimitMatchesSharedKagemushaCap",
+      "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+      "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
+      "64 * 1024 * 1024",
     ],
     "Swift recursive compact prover input guard tests",
   );
@@ -12227,6 +12231,10 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii/src/openapi.rs",
       "docs/portal/static/openapi/torii.json",
       "docs/portal/static/openapi/versions/current/torii.json",
+      "Classic Offline V2 note issuance is retired and this retired route fails closed.",
+      "Classic Offline V2 note issuance is retired and this compatibility route fails closed.",
+      "Classic Offline V2 audit is retired and this retired route fails closed.",
+      "Classic Offline V2 audit is retired and this compatibility route fails closed.",
       "Retired X-Iroha-* app-auth headers are rejected on this endpoint",
       "Legacy X-Iroha-* app-auth headers are rejected on this endpoint",
       "Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64",
@@ -12252,6 +12260,11 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     toriiKagemushaOpenApiBranch,
     /Retired X-Iroha-\* app-auth headers are rejected on this endpoint[\s\S]*?contains stale Offline V2 X-Iroha header wording/u,
     "Torii offline-v2 Kagemusha OpenAPI negative control must require the stale X-Iroha wording diagnostic",
+  );
+  assert.match(
+    toriiKagemushaOpenApiBranch,
+    /compatibility route fails closed[\s\S]*?contains stale Offline V2 retired route wording/u,
+    "Torii offline-v2 Kagemusha OpenAPI negative control must require the stale retired-route wording diagnostic",
   );
   assert.match(
     toriiKagemushaOpenApiBranch,
@@ -13522,7 +13535,7 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
     ],
     [
       "--negative-control-core-offline-first-release-test-wording",
-      /retired v1 tree root[\s\S]*?leg[\s\S]*?acy tree root[\s\S]*?non-zk1 transcript payload[\s\S]*?leg[\s\S]*?acy transcript payload[\s\S]*?issuer signature should authorize without attestation marker[\s\S]*?valid fallback/u,
+      /retired v1 tree root[\s\S]*?leg[\s\S]*?acy tree root[\s\S]*?non-zk1 transcript payload[\s\S]*?leg[\s\S]*?acy transcript payload[\s\S]*?issuer signature should authorize without attestation marker[\s\S]*?valid fallback[\s\S]*?crates\/iroha_config\/src\/parameters\/user\.rs[\s\S]*?removed Kagemusha force flag must not parse[\s\S]*?leg[\s\S]*?acy readiness knob must not parse[\s\S]*?removed Kagemusha force flag should produce a parse error/u,
       "core Offline/Kagemusha first-release test wording",
       "partial recursive redeem change output must not record the retired v1 tree root",
     ],
@@ -13656,7 +13669,7 @@ test("recursive Kagemusha policy negative controls pin ABI-7 compact adversarial
     } else if (mode === "--negative-control-core-offline-first-release-test-wording") {
       assert.match(
         branch,
-        /cases\s*=\s*\([\s\S]*?for before, after, expected in cases:[\s\S]*?if expected not in message:[\s\S]*?wrong reason/u,
+        /cases\s*=\s*\([\s\S]*?crates\/iroha_config\/src\/parameters\/user\.rs[\s\S]*?removed Kagemusha force flag must not parse[\s\S]*?iroha_config Kagemusha force flag tests contain stale first-release wording[\s\S]*?for target, before, after, expected in cases:[\s\S]*?if expected not in message:[\s\S]*?wrong reason/u,
         `${label} negative control must check each stale first-release wording diagnostic`,
       );
       assert.ok(
@@ -15274,6 +15287,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-lineage-data-copy",
     "--negative-control-swift-recursive-compact-verifier-bool",
     "--negative-control-swift-recursive-compact-verifier-availability",
+    "--negative-control-swift-recursive-compact-native-archive-cap",
     "--negative-control-swift-kagemusha-native-output-cap",
     "--negative-control-swift-native-output-headers",
     "--negative-control-swift-native-input-headers",
@@ -18601,7 +18615,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     },
     {
       start: 'if mode == "--negative-control-swift-recursive-compact-verifier-availability":',
-      end: 'if mode == "--negative-control-swift-kagemusha-native-output-cap":',
+      end: 'if mode == "--negative-control-swift-recursive-compact-native-archive-cap":',
       marker: "Swift recursive compact wrapper missing bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
       label: "Swift recursive compact verifier availability branch must require the verifier availability marker",
     },
@@ -27255,7 +27269,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const swiftRecursiveCompactVerifierAvailabilityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-recursive-compact-verifier-availability":'),
-    guard.indexOf('if mode == "--negative-control-swift-kagemusha-native-output-cap":'),
+    guard.indexOf('if mode == "--negative-control-swift-recursive-compact-native-archive-cap":'),
   );
   assert.match(
     swiftRecursiveCompactVerifierAvailabilityBranch,
@@ -27271,6 +27285,40 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftRecursiveCompactVerifierAvailabilityBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Swift recursive compact verifier availability negative control must not unconditionally pass after run_checks",
+  );
+  const swiftRecursiveCompactNativeArchiveCapBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-recursive-compact-native-archive-cap":'),
+    guard.indexOf('if mode == "--negative-control-swift-kagemusha-native-output-cap":'),
+  );
+  assert.match(
+    swiftRecursiveCompactNativeArchiveCapBranch,
+    /nativeArchiveMaxBytes = 64 \* 1024 \* 1024[\s\S]*?nativeArchiveMaxBytes = 1024 \* 1024 \* 1024[\s\S]*?testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?testNativeArchiveLimitAllowsIndependentKagemushaCap[\s\S]*?64 \* 1024 \* 1024[\s\S]*?1024 \* 1024 \* 1024/u,
+    "Swift recursive compact native archive cap negative control must mutate the wrapper cap and shared-cap test",
+  );
+  assert.match(
+    swiftRecursiveCompactNativeArchiveCapBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[wrapper\]\s*=\s*mutated_wrapper[\s\S]*?mutated_texts\[test_path\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift recursive compact native archive cap negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftRecursiveCompactNativeArchiveCapBranch,
+    /expected_labels\s*=\s*\([\s\S]*?Swift recursive compact wrapper missing nativeArchiveMaxBytes = 64 \* 1024 \* 1024[\s\S]*?Swift recursive compact verifier tests missing testNativeArchiveLimitMatchesSharedKagemushaCap[\s\S]*?Swift recursive compact verifier tests missing 64 \* 1024 \* 1024[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "Swift recursive compact native archive cap negative control must require source and test diagnostics",
+  );
+  assert.match(
+    swiftRecursiveCompactNativeArchiveCapBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "Swift recursive compact native archive cap negative control must print each detected diagnostic",
+  );
+  assert.match(
+    swiftRecursiveCompactNativeArchiveCapBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift recursive compact native archive cap drift was not detected"\)/u,
+    "Swift recursive compact native archive cap negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftRecursiveCompactNativeArchiveCapBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift recursive compact native archive cap negative control must not unconditionally pass after run_checks",
   );
   const swiftKagemushaNativeOutputCapBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-swift-kagemusha-native-output-cap":'),

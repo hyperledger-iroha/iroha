@@ -705,7 +705,7 @@ fn offline_paths() -> Map {
         (
             "/v1/offline/v2/notes/issue",
             "Retired Offline V2 note issue route.",
-            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 note issuance is retired and this retired route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
@@ -715,7 +715,7 @@ fn offline_paths() -> Map {
         (
             "/v1/offline/v2/audit",
             "Retired Offline V2 audit route.",
-            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 audit is retired and this retired route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -13571,6 +13571,8 @@ mod tests {
             .and_then(Value::as_str)
             .expect("offline issue description");
         assert!(issue_description.contains("retired"));
+        assert!(issue_description.contains("retired route fails closed"));
+        assert!(!issue_description.contains("compatibility route"));
         assert!(issue_description.contains("Kagemusha online-to-offline top-up"));
         let audit_post = paths
             .get("/v1/offline/v2/audit")
@@ -13583,6 +13585,8 @@ mod tests {
             .and_then(Value::as_str)
             .expect("offline audit description");
         assert!(audit_description.contains("retired"));
+        assert!(audit_description.contains("retired route fails closed"));
+        assert!(!audit_description.contains("compatibility route"));
         assert!(audit_description.contains("Kagemusha payment flows"));
         let redeem_post = paths
             .get("/v1/offline/v2/notes/redeem")
