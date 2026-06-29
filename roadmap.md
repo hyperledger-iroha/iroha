@@ -176,10 +176,15 @@ and completed history lives in [`status.md`](./status.md).
   passed with `5,772,558,336` bytes peak total RSS, `1,584,234,496` bytes
   largest peer RSS, and `101,548,032` bytes of post-load RSS growth across the
   180-second sampling window. The final queue still saturated at `1020`
-  transactions / `134,170,800` retained bytes, so remaining work should focus
-  on admission throughput and queue-full operator behavior rather than relaxing
-  consensus recovery memory bounds. Tune the retained-byte default, Torii
-  admission shedding, or the per-peer P2P outbound frame queue caps only if
+  transactions / `134,170,800` retained bytes. Queue-full operator
+  observability now carries retained bytes, oldest queued age, and separate
+  count/byte/age saturation causes through Sumeragi status, telemetry status,
+  Prometheus gauges, Izanami chaos digests, and localnet smoke artifacts. Torii
+  single-transaction ingress now also performs authenticated capacity shedding
+  before spending rate-limit budget, matching batch ingress and preserving the
+  operator-visible `PRTRY:QUEUE_FULL` rejection under simultaneous full-queue
+  and rate-limit pressure. Tune the retained-byte default, Torii admission
+  shedding, or the per-peer P2P outbound frame queue caps only if
   future release-gate reports show real operator backpressure needs different
   limits. Deferred P2P outbound frames held while a peer session is
   missing are now capped by per-peer encoded-byte budget in addition to the

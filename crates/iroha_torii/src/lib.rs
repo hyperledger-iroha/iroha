@@ -32533,6 +32533,7 @@ async fn handler_post_transaction(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32547,7 +32548,6 @@ async fn handler_post_transaction(
             )));
         }
     }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let transaction_bytes =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
             &transaction,
@@ -32631,6 +32631,7 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32648,7 +32649,6 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
@@ -45785,6 +45785,14 @@ pub(crate) mod tests_runtime_handlers {
         route_calls
     }
 
+    fn install_single_slot_transaction_queue(app: &mut SharedAppState) {
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
+        queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
+        app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
+        app_mut.high_load_tx_threshold = usize::MAX;
+    }
+
     fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> SignedTransaction {
         let mut signature = tx.signature().payload().payload().to_vec();
         let last = signature
@@ -45870,6 +45878,65 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+        install_single_slot_transaction_queue(&mut app);
+
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xce,
+            Algorithm::Ed25519,
+            "derive queue-before-rate-limit fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "queue-before-rate-2".to_string())])
+            .sign(keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            headers.clone(),
+            None,
+            versioned_signed_for_test(&tx1),
+        )
+        .await
+        .expect("first transaction should fill the queue")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction(
+            State(app.clone()),
+            headers,
+            None,
+            versioned_signed_for_test(&tx2),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected queue full before token rate limit"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
     }
 
     #[tokio::test]
@@ -46109,6 +46176,74 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limit() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+        install_single_slot_transaction_queue(&mut app);
+
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xcf,
+            Algorithm::Ed25519,
+            "derive entrypoint queue-before-rate-limit fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-queue-before-rate-1".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-queue-before-rate-2".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-api-token",
+            HeaderValue::from_static("entrypoint-queue-before-rate"),
+        );
+
+        let first = super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers.clone(),
+            None,
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx1)),
+        )
+        .await
+        .expect("first entrypoint should fill the queue")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers,
+            None,
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx2)),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected queue full before token rate limit"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
     }
 
     #[tokio::test]
@@ -46582,13 +46717,7 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_overflow() {
         let mut app = mk_app_state_for_tests();
-        {
-            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-            let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
-            queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
-            app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
-            app_mut.high_load_tx_threshold = usize::MAX;
-        }
+        install_single_slot_transaction_queue(&mut app);
 
         let keypair = checked_torii_test_keypair_from_seed_byte(
             0xd5,
