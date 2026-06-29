@@ -1056,6 +1056,10 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   commitment_root?: string;
   sourceEventDigest?: string;
   source_event_digest?: string;
+  sourceBridgeEmitterAddress?: string | BinaryLike | number[];
+  source_bridge_emitter_address?: string | BinaryLike | number[];
+  sourceBridgeEmitterCodeHash?: string | BinaryLike | number[];
+  source_bridge_emitter_code_hash?: string | BinaryLike | number[];
   receipt?: Record<string, unknown>;
   block?: Record<string, unknown>;
   blockReceipts?: readonly Record<string, unknown>[];

@@ -149,12 +149,14 @@ use iroha_sccp::{
     build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_destination_binding_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_signer_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_destination_binding_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and_destination_binding_allow_unready,
     build_sccp_message_transparent_inner_proof_from_artifact,
@@ -164,11 +166,14 @@ use iroha_sccp::{
     recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
     sccp_message_transparent_public_inputs,
+    sccp_message_transparent_public_inputs_with_source_verifier_material,
     sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment,
     sccp_payload_projection, summarize_sccp_message_transparent_open_verify_proof_from_artifact,
     verified_sccp_message_nexus_finality_proof_for_production,
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material,
     verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
     verify_burn_bundle_structure, verify_burn_payload_structure, verify_message_bundle_structure,
+    verify_message_bundle_structure_with_source_verifier_material,
     verify_message_bundle_structure_with_source_verifier_material_and_deployment,
     verify_nexus_bridge_finality_proof_cryptographic, verify_sccp_payload_structure,
 };
@@ -6186,6 +6191,45 @@ impl SccpDestinationQueryMaterial {
     }
 }
 
+fn sccp_default_source_material_for_verified_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<iroha_sccp::SccpSourceVerifierMaterialV1> {
+    if let Some(material) =
+        iroha_sccp::sccp_source_verifier_material_from_message_bundle_evidence(bundle)
+    {
+        return Some(material);
+    }
+    let source_domain = sccp_message_source_domain(&bundle.payload);
+    if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+        return None;
+    }
+    let material = iroha_sccp::sccp_source_verifier_material_for_domain(source_domain)?;
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material(
+        bundle, &material,
+    )
+    .is_some()
+    .then_some(material)
+}
+
+fn sccp_destination_query_material_for_message_bundle(
+    bundle: &NexusSccpMessageProofV1,
+    fields: &SccpEvmDestinationQuery,
+    allow_unready: bool,
+    configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
+) -> Result<SccpDestinationQueryMaterial> {
+    if configured_source_lane.is_some()
+        || sccp_default_source_material_for_verified_bundle(bundle).is_some()
+    {
+        if sccp_destination_query_fields_present(fields) {
+            return Err(sccp_bad_request(
+                "deployment destination fields and proof_bytes_hex are not valid for non-SORA source-chain proof envelope submissions",
+            ));
+        }
+        return Ok(SccpDestinationQueryMaterial::default());
+    }
+    sccp_destination_query_material_for_bundle(bundle, fields, allow_unready)
+}
+
 fn sccp_destination_query_material_for_bundle(
     bundle: &NexusSccpMessageProofV1,
     fields: &SccpEvmDestinationQuery,
@@ -7100,6 +7144,18 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub native_evm_prover_bundle: Option<IrohaJson>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_verifier_material: Option<IrohaJson>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_adapter_engine_deployment: Option<IrohaJson>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_adapter_engine: Option<IrohaJson>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -7373,6 +7429,9 @@ fn sccp_route_manifest_dto(
         post_deploy_live_evidence: sccp_route_manifest_post_deploy_evidence(manifest),
         native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
         native_evm_prover_bundle: manifest.native_evm_prover_bundle.clone(),
+        source_verifier_material: manifest.source_verifier_material.clone(),
+        source_adapter_engine_deployment: manifest.source_adapter_engine_deployment.clone(),
+        source_adapter_engine: manifest.source_adapter_engine.clone(),
         destination_browser_prover: manifest
             .destination_browser_prover
             .as_ref()
@@ -8564,10 +8623,17 @@ fn sccp_configured_launch_ready_for_domain(
             ),
         };
     if domain != launch_domain {
-        return Err(sccp_bad_request(format!(
-            "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
-        )));
+        if sccp_configured_source_lane_for_domain(zk_config, domain)?.is_none() {
+            return Err(sccp_bad_request(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
     }
+    let launch_policy_label = if domain == launch_domain {
+        launch_policy_label
+    } else {
+        "on-chain SCCP lane activation policy"
+    };
 
     let lane = sccp_configured_source_lane_for_domain(zk_config, domain)?.ok_or_else(|| {
         sccp_bad_request(format!(
@@ -8630,7 +8696,11 @@ fn sccp_configured_source_lane_for_bundle_with_policy(
     allow_unready: bool,
 ) -> Result<Option<SccpConfiguredSourceLaneV1>> {
     if allow_unready {
-        return Ok(None);
+        let source_domain = sccp_message_source_domain(&bundle.payload);
+        if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            return Ok(None);
+        }
+        return sccp_configured_source_lane_for_domain(&state.zk_snapshot(), source_domain);
     }
     sccp_configured_source_lane_for_bundle(state, bundle)
 }
@@ -8771,6 +8841,18 @@ fn sccp_message_artifact_for_destination_material(
 ) -> Result<Option<NexusSccpMessageTransparentProofV1>> {
     require_sccp_message_supported_launch_scope(bundle, "proof artifact generation")?;
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
+    if let Some(material) = sccp_default_source_material_for_verified_bundle(bundle) {
+        if destination_binding.is_some() || proof_bytes.is_some() {
+            return Err(sccp_bad_request(
+                "deployment destination fields and proof_bytes_hex are not valid for non-SORA source-chain proof envelope submissions",
+            ));
+        }
+        return Ok(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
+                bundle, &material, true,
+            ),
+        );
+    }
     if let Some(configured_source_lane) = configured_source_lane {
         if destination_binding.is_some() || proof_bytes.is_some() {
             return Err(sccp_bad_request(
@@ -8873,6 +8955,20 @@ fn sccp_message_proof_job_for_destination_material(
 ) -> Result<Option<SccpCounterpartyProofJobV1>> {
     require_sccp_message_supported_launch_scope(bundle, "proof job generation")?;
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
+    if let Some(material) = sccp_default_source_material_for_verified_bundle(bundle) {
+        if destination_binding.is_some() || proof_bytes.is_some() {
+            return Err(sccp_bad_request(
+                "deployment destination fields and proof_bytes_hex are not valid for non-SORA source-chain proof envelope submissions",
+            ));
+        }
+        return Ok(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready(
+                bundle,
+                &material,
+                true,
+            ),
+        );
+    }
     if let Some(configured_source_lane) = configured_source_lane {
         if destination_binding.is_some() || proof_bytes.is_some() {
             return Err(sccp_bad_request(
@@ -8977,8 +9073,11 @@ fn bridge_proof_from_sccp_message_bundle(
         && destination_binding.is_none()
         && proof_bytes.is_none()
         && iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle);
+    let fallback_source_material = sccp_default_source_material_for_verified_bundle(bundle);
     let bundle_structure_is_valid = if diagnostic_taira_tron_xor {
         true
+    } else if let Some(material) = fallback_source_material.as_ref() {
+        verify_message_bundle_structure_with_source_verifier_material(bundle, material)
     } else if let Some(configured_source_lane) = configured_source_lane {
         verify_message_bundle_structure_with_source_verifier_material_and_deployment(
             bundle,
@@ -9002,7 +9101,11 @@ fn bridge_proof_from_sccp_message_bundle(
         return Err(conversion_error(message));
     }
     require_sccp_sora_message_nexus_finality_for_production(bundle, allow_unready)?;
-    let fallback_destination_binding = if allow_unready && destination_binding.is_none() {
+    let fallback_destination_binding = if allow_unready
+        && destination_binding.is_none()
+        && fallback_source_material.is_none()
+        && configured_source_lane.is_none()
+    {
         let manifest = sccp_message_manifest_for_bundle(bundle)?;
         (!iroha_sccp::sccp_manifest_is_production_ready(&manifest)
             && matches!(
@@ -9016,6 +9119,8 @@ fn bridge_proof_from_sccp_message_bundle(
     let destination_binding = destination_binding.or(fallback_destination_binding.as_ref());
     let public_inputs = if diagnostic_taira_tron_xor {
         iroha_sccp::sccp_taira_tron_xor_diagnostic_message_public_inputs(bundle)
+    } else if let Some(material) = fallback_source_material.as_ref() {
+        sccp_message_transparent_public_inputs_with_source_verifier_material(bundle, material)
     } else if let Some(configured_source_lane) = configured_source_lane {
         sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
             bundle,
@@ -12675,6 +12780,9 @@ mod sccp_message_backend_tests {
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
@@ -20677,10 +20785,11 @@ pub async fn handle_post_bridge_proof_submit(
                     bundle,
                     allow_unready,
                 )?;
-                let destination_material = sccp_destination_query_material_for_bundle(
+                let destination_material = sccp_destination_query_material_for_message_bundle(
                     bundle,
                     &evm_destination_fields,
                     allow_unready,
+                    configured_source_lane.as_ref(),
                 )?;
                 validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
                     state.as_ref(),
@@ -20902,20 +21011,21 @@ pub async fn handle_post_bridge_message_submit(
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
     let allow_unready = sccp_allow_unready_transparent_proofs(state.as_ref());
-    let destination_material = sccp_destination_query_material_for_bundle(
+    let configured_source_lane = sccp_configured_source_lane_for_bundle_with_policy(
+        state.as_ref(),
+        &message_bundle,
+        allow_unready,
+    )?;
+    let destination_material = sccp_destination_query_material_for_message_bundle(
         &message_bundle,
         &evm_destination_fields,
         allow_unready,
+        configured_source_lane.as_ref(),
     )?;
     validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
         state.as_ref(),
         &message_bundle,
         destination_material.binding_for_configured_rollout(),
-        allow_unready,
-    )?;
-    let configured_source_lane = sccp_configured_source_lane_for_bundle_with_policy(
-        state.as_ref(),
-        &message_bundle,
         allow_unready,
     )?;
     let bridge_proof = bridge_proof_from_sccp_message_bundle(

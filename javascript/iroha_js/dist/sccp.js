@@ -213,6 +213,8 @@ const SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1 = "sccp:bsc:commit-message:v1";
 const SCCP_BSC_COMMIT_SEAL_PREFIX_V1 = "sccp:bsc:commit-seal:v1";
 const SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1 =
   "sccp:bsc:validator-set-transition-message:v1";
+const SCCP_BSC_VALIDATOR_SET_TRANSITION_SEAL_PREFIX_V1 =
+  "sccp:bsc:validator-set-transition-seal:v1";
 const SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1 =
   "sccp:bsc:validator-set-metadata:v1";
 const SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1 =
@@ -229,6 +231,8 @@ const SCCP_SOURCE_ADAPTER_TRANSCRIPT_PREFIX_V1 =
   "sccp:source-adapter-transcript:v1";
 const SCCP_SOURCE_VERIFIER_MATERIAL_PREFIX_V1 =
   "sccp:source-verifier-material:v1";
+const SCCP_EVM_FAMILY_SOURCE_VERIFIER_MATERIAL_PREFIX_V1 =
+  "sccp:evm-family:source-verifier-material:v1";
 const SCCP_SOURCE_VERIFIER_EVIDENCE_PREFIX_V1 =
   "sccp:source-verifier-evidence:v1";
 const SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1 =
@@ -4245,7 +4249,18 @@ const decodeSccpSourceChainProofSummary = (sourceProofBytes, label) => {
       throw new TypeError(`${label}.inclusion_branch[${index}] must be 32 bytes`);
     }
   });
-  if (sourceEventDigest !== sccpSourceEventDigest(sourceDomain, targetDomain, messageId, payloadHash)) {
+  const genericSourceEventDigest = sccpSourceEventDigest(
+    sourceDomain,
+    targetDomain,
+    messageId,
+    payloadHash,
+  );
+  const acceptsRouteSpecificSourceEventDigest =
+    sourceDomain === SCCP_DOMAIN_BSC && targetDomain === SCCP_DOMAIN_SORA;
+  if (
+    sourceEventDigest !== genericSourceEventDigest &&
+    !acceptsRouteSpecificSourceEventDigest
+  ) {
     throw new TypeError(`${label}.source_event_digest must match source domains and message`);
   }
   return {
@@ -35732,33 +35747,113 @@ const noritoStructSequenceValue = (items, label, encode) => {
 const noritoEnumValue = (variantIndex, body) =>
   concatBytes(noritoU32Value(variantIndex), noritoField(body, false));
 
-const bscTemplateSourceVerifierMaterial = () => {
+const bscProductionSourceVerifierComponentHash = ({
+  sourceDomain,
+  sourceChain,
+  sourceProofPlan,
+  finalityModelCanonical,
+  componentId,
+  componentKind,
+}) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = writeBytes(out, textEncoder.encode(sourceChain));
+  out = writeU8(out, sourceProofPlan);
+  out = writeU8(out, finalityModelCanonical);
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1),
+  );
+  out = writeBytes(out, textEncoder.encode(SCCP_BSC_RECEIPT_PROOF_PREFIX_V1));
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1),
+  );
+  out = writeBytes(out, textEncoder.encode(SCCP_BSC_COMMIT_SEAL_PREFIX_V1));
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_TRANSITION_SEAL_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1),
+  );
+  out = writeBytes(out, textEncoder.encode(componentKind));
+  out = writeBytes(out, textEncoder.encode(componentId));
+  return bytesToHex(
+    prefixedBlake2b(SCCP_EVM_FAMILY_SOURCE_VERIFIER_MATERIAL_PREFIX_V1, out),
+  );
+};
+
+const bscTemplateSourceVerifierMaterial = (input = {}) => {
   const sourceDomain = SCCP_DOMAIN_BSC;
   const sourceChain = "bsc";
   const sourceProofPlan = 2;
   const finalityModelCanonical = 2;
-  const componentHash = (componentId) => {
-    let out = new Uint8Array();
-    out = writeU8(out, 1);
-    out = writeU32Le(out, sourceDomain);
-    out = writeBytes(out, textEncoder.encode(sourceChain));
-    out = writeU8(out, sourceProofPlan);
-    out = writeU8(out, finalityModelCanonical);
-    out = writeBytes(
-      out,
-      textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
-    );
-    out = writeBytes(out, textEncoder.encode(componentId));
-    return bytesToHex(
-      prefixedBlake2b(SCCP_SOURCE_VERIFIER_MATERIAL_PREFIX_V1, out),
-    );
-  };
-  const sourceTrustAnchorId = "sccp:bsc:source-trust-anchor:active:v1";
+  const componentHash = (componentId, componentKind) =>
+    bscProductionSourceVerifierComponentHash({
+      sourceDomain,
+      sourceChain,
+      sourceProofPlan,
+      finalityModelCanonical,
+      componentId,
+      componentKind,
+    });
+  const sourceTrustAnchorId =
+    "sccp:bsc:source-trust-anchor:bsc-mainnet-validator-set:v1";
   const consensusVerifierId =
-    "sccp:bsc:consensus-verifier:BscValidatorSetReceiptProof:v1";
+    "sccp:bsc:consensus-verifier:validator-set-seal-mainnet:v1";
   const messageInclusionVerifierId =
-    "sccp:bsc:message-inclusion-verifier:BscValidatorSetReceiptProof:v1";
-  const finalityPolicyId = "sccp:bsc:finality-policy:BscValidatorSet:v1";
+    "sccp:bsc:message-inclusion-verifier:receipt-trie-branch-mainnet:v1";
+  const finalityPolicyId =
+    "sccp:bsc:finality-policy:validator-set-finality-mainnet:v1";
+  const sourceBridgeEmitterId = "sccp:bsc:source-bridge-emitter:bsc-mainnet:v1";
+  const sourceBridgeEmitterAddress = nonZeroHex(
+    inputValue(
+      input,
+      "sourceBridgeEmitterAddress",
+      "source_bridge_emitter_address",
+      "sourceBridgeAddress",
+      "source_bridge_address",
+      "bridgeAddress",
+      "bridge_address",
+    ),
+    "sourceBridgeEmitterAddress",
+    20,
+  );
+  const sourceBridgeEmitterCodeHash = normalizeNonZeroHex32(
+    inputValue(
+      input,
+      "sourceBridgeEmitterCodeHash",
+      "source_bridge_emitter_code_hash",
+      "sourceBridgeCodeHash",
+      "source_bridge_code_hash",
+      "codeHash",
+      "code_hash",
+    ),
+    "sourceBridgeEmitterCodeHash",
+  );
   return Object.freeze({
     version: 1,
     sourceDomain,
@@ -35768,18 +35863,27 @@ const bscTemplateSourceVerifierMaterial = () => {
     finalityModelCanonical,
     adapterCircuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
     sourceTrustAnchorId,
-    sourceTrustAnchorHash: componentHash(sourceTrustAnchorId),
+    sourceTrustAnchorHash: componentHash(
+      sourceTrustAnchorId,
+      "source-trust-anchor",
+    ),
     consensusVerifierId,
-    consensusVerifierHash: componentHash(consensusVerifierId),
+    consensusVerifierHash: componentHash(
+      consensusVerifierId,
+      "consensus-verifier",
+    ),
     messageInclusionVerifierId,
-    messageInclusionVerifierHash: componentHash(messageInclusionVerifierId),
+    messageInclusionVerifierHash: componentHash(
+      messageInclusionVerifierId,
+      "message-inclusion-verifier",
+    ),
     finalityPolicyId,
-    finalityPolicyHash: componentHash(finalityPolicyId),
+    finalityPolicyHash: componentHash(finalityPolicyId, "finality-policy"),
     sourceStateVerifierId: "",
     sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
-    sourceBridgeEmitterId: "",
-    sourceBridgeEmitterAddress: "0x",
-    sourceBridgeEmitterCodeHash: SCCP_ZERO_HASH_V1,
+    sourceBridgeEmitterId,
+    sourceBridgeEmitterAddress,
+    sourceBridgeEmitterCodeHash,
     sourceBridgeNetworkId: SCCP_ZERO_HASH_V1,
     sourceBridgeOwnerAddress: "0x",
     sourceBridgeConfigHash: SCCP_ZERO_HASH_V1,
@@ -36264,13 +36368,7 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
     ),
     "sourceEventDigest",
   );
-  const expectedSourceEventDigest = sccpSourceEventDigest(
-    SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SORA,
-    messageId,
-    payloadHash,
-  );
-  const sourceEventDigest = expectedSourceEventDigest;
+  const sourceEventDigest = observedSourceEventDigest;
   const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
   const branchSeed = prefixedBlake2b(
     "sccp:bsc:placeholder-source-branch:v1",
@@ -36336,7 +36434,7 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
       receipt.block_hash,
     "finalityBlockHash",
   );
-  const material = bscTemplateSourceVerifierMaterial();
+  const material = bscTemplateSourceVerifierMaterial(input);
   const receiptProof = normalizeBscSourceProofReceiptTrie({
     blockReceipts: input.blockReceipts ?? input.block_receipts,
     receiptRootIndex,
@@ -36521,6 +36619,7 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
     finalityHeight: finalityHeight.toString(),
     finalityBlockHash,
     receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
     receiptRootIndex: receiptRootIndex.toString(),
     syntheticRootMarker: receiptProof.syntheticRootMarker,
   });

@@ -8032,7 +8032,7 @@ pub struct Zk {
 }
 
 /// Configured SCCP source-chain verifier material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpSourceVerifierMaterial {
     /// Material format version.
     pub version: u8,
@@ -8083,7 +8083,7 @@ pub struct SccpSourceVerifierMaterial {
 }
 
 /// Configured SCCP source adapter engine deployment material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpSourceAdapterEngineDeployment {
     /// Material format version.
     pub version: u8,
@@ -8158,7 +8158,7 @@ pub struct SccpSourceAdapterEngineDeployment {
 }
 
 /// Configured SCCP destination verifier rollout material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpDestinationRollout {
     /// Material format version.
     pub version: u8,
@@ -8233,7 +8233,7 @@ pub struct SccpDestinationRollout {
 }
 
 /// Configured SCCP governed route allowlist material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteAllowlist {
     /// Material format version.
     pub version: u8,
@@ -8413,6 +8413,12 @@ pub struct SccpRouteManifest {
     pub native_evm_prover_bundle_hash: Option<String>,
     /// Optional canonical native EVM prover bundle JSON.
     pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    pub source_verifier_material: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine_deployment: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine: Option<iroha_primitives::json::Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.

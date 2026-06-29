@@ -597,8 +597,15 @@ impl Actor {
     }
 
     fn native_amx_vote_roster(&self) -> Vec<PeerId> {
-        let mut roster = self.effective_commit_topology();
+        let mut roster = self.trusted_topology();
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
         roster.retain(roster_member_allowed_bls);
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            roster.retain(roster_member_allowed_bls);
+        }
         roster
     }
 

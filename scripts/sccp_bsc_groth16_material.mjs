@@ -8076,6 +8076,38 @@ function attestationRequestStatusOptions(options, requestPath) {
       forwarded[key] = value;
     }
   }
+  const requestDir = dirname(resolve(requestPath));
+  for (const { option, aliases, fileName } of [
+    {
+      option: "semantic-attestation",
+      aliases: ["semantic-attestation", "semantic-sccp-attestation"],
+      fileName: "semantic-sccp-circuit-attestation.json",
+    },
+    {
+      option: "circuit-security-attestation",
+      aliases: ["circuit-security-attestation", "circuit-audit"],
+      fileName: "circuit-security-attestation.json",
+    },
+    {
+      option: "trusted-setup-attestation",
+      aliases: ["trusted-setup-attestation", "ceremony-attestation"],
+      fileName: "trusted-setup-attestation.json",
+    },
+    {
+      option: "reproducible-build-attestation",
+      aliases: ["reproducible-build-attestation"],
+      fileName: "reproducible-build-attestation.json",
+    },
+  ]) {
+    const explicit = aliases.some((alias) => {
+      const value = ownValue(forwarded, alias) ?? ownValue(options, alias);
+      return value !== undefined && value !== null && trim(value) !== "";
+    });
+    const candidate = join(requestDir, fileName);
+    if (!explicit && existsSync(candidate)) {
+      forwarded[option] = candidate;
+    }
+  }
   return forwarded;
 }
 
@@ -10833,6 +10865,15 @@ export async function finalizeBscGroth16Attestations(options = {}) {
       artifacts.snarkjsVerificationKey,
       "SnarkJS verification key",
     ),
+    ...(artifacts.witnessWasm
+      ? {
+          witnessWasm: await resolveManifestArtifactFile(
+            manifestPath,
+            artifacts.witnessWasm,
+            "witness WASM",
+          ),
+        }
+      : {}),
     circuitSource: await resolveManifestArtifactFile(
       manifestPath,
       artifacts.circuitSource,
@@ -10872,6 +10913,9 @@ export async function finalizeBscGroth16Attestations(options = {}) {
     ptau: resolvedArtifacts.powersOfTau,
     zkey: resolvedArtifacts.provingKey,
     "snarkjs-verifier-key": resolvedArtifacts.snarkjsVerificationKey,
+    ...(resolvedArtifacts.witnessWasm
+      ? { "witness-wasm": resolvedArtifacts.witnessWasm }
+      : {}),
     "circuit-source": resolvedArtifacts.circuitSource,
     "trusted-setup-transcript": resolvedArtifacts.trustedSetupTranscript,
     "reproducible-build-transcript": resolvedArtifacts.reproducibleBuildTranscript,
