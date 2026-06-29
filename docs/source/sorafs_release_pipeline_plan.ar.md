@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_release_pipeline_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 785713b5d5c195ce32e10d3a3f5fdb408a96ec521eb93244b8ec64759cf72aa7
+source_hash: 842bf4fdf33c94123cd444feacafe1535194c70b11060c3efce0935cc20f431d
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
 ---

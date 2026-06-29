@@ -6085,8 +6085,9 @@ and completed history lives in [`status.md`](./status.md).
   absent lanes must keep deterministic missing-row diagnostics. The aggregate
   recognized-summary count must also match the final present required-row set,
   and duplicate lane summaries must keep deterministic duplicate-summary
-  diagnostics. Unknown summary schemas and explicit unrequired summaries must
-  each leave matching aggregate blockers.
+  diagnostics while every duplicate input remains counted as a top-level
+  blocker. Unknown summary schemas and explicit unrequired summaries must each
+  leave matching aggregate blockers.
   Unknown summary schemas
   discovered in summary directories now fail closed instead of being ignored.
   This does not close the live deployment gaps above; it prevents
