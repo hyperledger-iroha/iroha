@@ -11,6 +11,23 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_evidence_paths import (  # noqa: E402
+    EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_PARENT_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC,
+    EVIDENCE_FILE_DUPLICATE_DISCOVERED_DIAGNOSTIC,
+    EVIDENCE_FILE_DUPLICATE_EXPLICIT_DIAGNOSTIC,
+    EVIDENCE_FILE_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_FILE_MISSING_DIAGNOSTIC,
+    EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC,
+    EVIDENCE_FILE_PATH_DIAGNOSTIC,
+    EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC,
+    EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC,
+    EVIDENCE_FILE_SYMLINK_DIAGNOSTIC,
     discover_evidence_files,
     evidence_path_collection,
     evidence_path_identities,
@@ -47,7 +64,8 @@ def test_duplicate_explicit_evidence_path_fails(tmp_path: Path) -> None:
 
     assert files == []
     assert len(errors) == 1
-    assert "duplicate explicit evidence file" in errors[0]
+    assert errors == [EVIDENCE_FILE_DUPLICATE_EXPLICIT_DIAGNOSTIC]
+    assert str(evidence) not in errors[0]
 
 
 def test_explicit_directory_overlap_fails(tmp_path: Path) -> None:
@@ -59,7 +77,8 @@ def test_explicit_directory_overlap_fails(tmp_path: Path) -> None:
 
     assert files == []
     assert len(errors) == 1
-    assert "both --evidence and --evidence-dir" in errors[0]
+    assert errors == [EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC]
+    assert str(evidence) not in errors[0]
 
 
 def test_overlapping_directories_fail(tmp_path: Path) -> None:
@@ -73,7 +92,8 @@ def test_overlapping_directories_fail(tmp_path: Path) -> None:
 
     assert files == []
     assert len(errors) == 1
-    assert "duplicate evidence file" in errors[0]
+    assert errors == [EVIDENCE_FILE_DUPLICATE_DISCOVERED_DIAGNOSTIC]
+    assert str(evidence) not in errors[0]
 
 
 def test_duplicate_evidence_identity_does_not_hide_distinct_files(
@@ -89,7 +109,8 @@ def test_duplicate_evidence_identity_does_not_hide_distinct_files(
 
     assert files == [distinct]
     assert len(errors) == 1
-    assert "both --evidence and --evidence-dir" in errors[0]
+    assert errors == [EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC]
+    assert str(duplicate) not in errors[0]
 
 
 def test_explicit_evidence_conflicting_with_reserved_output_fails(
@@ -108,7 +129,8 @@ def test_explicit_evidence_conflicting_with_reserved_output_fails(
 
     assert files == []
     assert len(errors) == 1
-    assert "conflicts with reserved output" in errors[0]
+    assert errors == [EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC]
+    assert str(evidence) not in errors[0]
 
 
 def test_discovered_evidence_conflicting_with_reserved_output_fails(
@@ -127,7 +149,8 @@ def test_discovered_evidence_conflicting_with_reserved_output_fails(
 
     assert files == []
     assert len(errors) == 1
-    assert "conflicts with reserved output" in errors[0]
+    assert errors == [EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC]
+    assert str(evidence) not in errors[0]
 
 
 def test_missing_explicit_evidence_file_fails_closed(tmp_path: Path) -> None:
@@ -137,7 +160,8 @@ def test_missing_explicit_evidence_file_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([], [missing], errors)
 
     assert files == []
-    assert errors == [f"evidence file `{missing}` must exist and be a file"]
+    assert errors == [EVIDENCE_FILE_MISSING_DIAGNOSTIC]
+    assert str(missing) not in errors[0]
 
 
 def test_explicit_evidence_directory_fails_closed(tmp_path: Path) -> None:
@@ -148,7 +172,8 @@ def test_explicit_evidence_directory_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([], [evidence_dir], errors)
 
     assert files == []
-    assert errors == [f"evidence file `{evidence_dir}` must exist and be a file"]
+    assert errors == [EVIDENCE_FILE_MISSING_DIAGNOSTIC]
+    assert str(evidence_dir) not in errors[0]
 
 
 def test_explicit_evidence_symlink_fails_closed(tmp_path: Path) -> None:
@@ -161,7 +186,8 @@ def test_explicit_evidence_symlink_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([], [symlink], errors)
 
     assert files == []
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_explicit_evidence_parent_symlink_fails_closed(tmp_path: Path) -> None:
@@ -176,7 +202,8 @@ def test_explicit_evidence_parent_symlink_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([], [evidence], errors)
 
     assert files == []
-    assert errors == [f"evidence file parent `{parent}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_discovered_json_directory_fails_closed_without_hiding_files(
@@ -193,7 +220,8 @@ def test_discovered_json_directory_fails_closed_without_hiding_files(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == [regular_file]
-    assert errors == [f"evidence file `{json_dir}` must exist and be a file"]
+    assert errors == [EVIDENCE_FILE_MISSING_DIAGNOSTIC]
+    assert str(json_dir) not in errors[0]
 
 
 def test_discovered_json_symlink_fails_closed_without_hiding_files(
@@ -212,7 +240,8 @@ def test_discovered_json_symlink_fails_closed_without_hiding_files(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == [regular_file, target]
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_noncanonical_missing_explicit_evidence_file_label_is_sanitized(
@@ -222,9 +251,7 @@ def test_noncanonical_missing_explicit_evidence_file_label_is_sanitized(
     files = discover_evidence_files([], [tmp_path / "bad\npath.json"], errors)
 
     assert files == []
-    assert errors == [
-        "evidence file `<non-canonical-path>` must exist and be a file"
-    ]
+    assert errors == [EVIDENCE_FILE_MISSING_DIAGNOSTIC]
 
 
 def test_missing_evidence_directory_fails_closed(tmp_path: Path) -> None:
@@ -234,7 +261,8 @@ def test_missing_evidence_directory_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([missing], [], errors)
 
     assert files == []
-    assert errors == [f"evidence directory `{missing}` must exist and be a directory"]
+    assert errors == [EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC]
+    assert str(missing) not in errors[0]
 
 
 def test_evidence_directory_symlink_fails_closed(tmp_path: Path) -> None:
@@ -248,7 +276,8 @@ def test_evidence_directory_symlink_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([symlink], [], errors)
 
     assert files == []
-    assert errors == [f"evidence directory `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_evidence_directory_parent_symlink_fails_closed(tmp_path: Path) -> None:
@@ -263,7 +292,8 @@ def test_evidence_directory_parent_symlink_fails_closed(tmp_path: Path) -> None:
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == []
-    assert errors == [f"evidence directory parent `{parent}` must not be a symlink"]
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_non_path_evidence_directory_fails_closed_without_traceback() -> None:
@@ -271,7 +301,7 @@ def test_non_path_evidence_directory_fails_closed_without_traceback() -> None:
     files = discover_evidence_files(["reviewed"], [], errors)
 
     assert files == []
-    assert errors == ["evidence directory `reviewed` must be a path"]
+    assert errors == [EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC]
 
 
 def test_noncanonical_evidence_file_labels_are_sanitized() -> None:
@@ -282,7 +312,8 @@ def test_noncanonical_evidence_file_labels_are_sanitized() -> None:
     ):
         errors: list[str] = []
         assert inspect_evidence_file(path_value, errors) is None
-        assert errors == [f"evidence file `{expected_label}` must be a path"]
+        assert errors == [EVIDENCE_FILE_PATH_DIAGNOSTIC]
+        assert expected_label not in errors[0]
 
 
 def test_noncanonical_evidence_directory_labels_are_sanitized() -> None:
@@ -293,7 +324,8 @@ def test_noncanonical_evidence_directory_labels_are_sanitized() -> None:
     ):
         errors: list[str] = []
         assert inspect_evidence_directory(directory, errors) is None
-        assert errors == [f"evidence directory `{expected_label}` must be a path"]
+        assert errors == [EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC]
+        assert expected_label not in errors[0]
 
 
 def test_noncanonical_missing_evidence_directory_label_is_sanitized(
@@ -303,9 +335,7 @@ def test_noncanonical_missing_evidence_directory_label_is_sanitized(
     files = discover_evidence_files([tmp_path / "bad\npath"], [], errors)
 
     assert files == []
-    assert errors == [
-        "evidence directory `<non-canonical-path>` must exist and be a directory"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC]
 
 
 def test_evidence_path_collection_rejects_scalar_and_mapping_containers() -> None:
@@ -451,9 +481,8 @@ def test_evidence_directory_file_path_reports_directory_requirement(tmp_path: Pa
     files = discover_evidence_files([evidence_file], [], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence directory `{evidence_file}` must exist and be a directory"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC]
+    assert str(evidence_file) not in errors[0]
 
 
 def test_evidence_directory_helpers_reject_malformed_error_container(
@@ -493,10 +522,9 @@ def test_evidence_file_inspection_failure_fails_closed(
     files = discover_evidence_files([], [evidence_file], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence file `{evidence_file}` cannot be inspected: "
-        "evidence file stat denied"
-    ]
+    assert errors == [EVIDENCE_FILE_INSPECTION_DIAGNOSTIC]
+    assert str(evidence_file) not in errors[0]
+    assert "evidence file stat denied" not in errors[0]
 
 
 def test_evidence_file_symlink_inspection_failure_fails_closed(
@@ -517,10 +545,9 @@ def test_evidence_file_symlink_inspection_failure_fails_closed(
     files = discover_evidence_files([], [evidence_file], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence file `{evidence_file}` cannot be inspected: "
-        "evidence symlink stat denied"
-    ]
+    assert errors == [EVIDENCE_FILE_INSPECTION_DIAGNOSTIC]
+    assert str(evidence_file) not in errors[0]
+    assert "evidence symlink stat denied" not in errors[0]
 
 
 def test_evidence_file_parent_inspection_failure_fails_closed(
@@ -544,10 +571,9 @@ def test_evidence_file_parent_inspection_failure_fails_closed(
     files = discover_evidence_files([], [evidence_file], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence file parent `{parent}` cannot be inspected: "
-        "evidence parent stat denied"
-    ]
+    assert errors == [EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
+    assert "evidence parent stat denied" not in errors[0]
 
 
 def test_evidence_file_inspection_failure_sanitizes_noncanonical_path(
@@ -568,10 +594,7 @@ def test_evidence_file_inspection_failure_sanitizes_noncanonical_path(
     files = discover_evidence_files([], [evidence_file], errors)
 
     assert files == []
-    assert errors == [
-        "evidence file `<non-canonical-path>` cannot be inspected: "
-        "<non-canonical-error>"
-    ]
+    assert errors == [EVIDENCE_FILE_INSPECTION_DIAGNOSTIC]
 
 
 def test_discovered_evidence_file_inspection_failure_fails_closed(
@@ -595,10 +618,9 @@ def test_discovered_evidence_file_inspection_failure_fails_closed(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence file `{evidence_file}` cannot be inspected: "
-        "discovered evidence stat denied"
-    ]
+    assert errors == [EVIDENCE_FILE_INSPECTION_DIAGNOSTIC]
+    assert str(evidence_file) not in errors[0]
+    assert "discovered evidence stat denied" not in errors[0]
 
 
 def test_evidence_directory_inspection_failure_fails_closed(
@@ -619,10 +641,9 @@ def test_evidence_directory_inspection_failure_fails_closed(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence directory `{evidence_dir}` cannot be inspected: "
-        "evidence dir stat denied"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC]
+    assert str(evidence_dir) not in errors[0]
+    assert "evidence dir stat denied" not in errors[0]
 
 
 def test_evidence_directory_symlink_inspection_failure_fails_closed(
@@ -643,10 +664,9 @@ def test_evidence_directory_symlink_inspection_failure_fails_closed(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == []
-    assert errors == [
-        f"evidence directory `{evidence_dir}` cannot be inspected: "
-        "evidence dir symlink stat denied"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC]
+    assert str(evidence_dir) not in errors[0]
+    assert "evidence dir symlink stat denied" not in errors[0]
 
 
 def test_evidence_directory_inspection_failure_sanitizes_noncanonical_path(
@@ -667,10 +687,7 @@ def test_evidence_directory_inspection_failure_sanitizes_noncanonical_path(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == []
-    assert errors == [
-        "evidence directory `<non-canonical-path>` cannot be inspected: "
-        "<non-canonical-error>"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC]
 
 
 def test_evidence_directory_scan_failure_fails_closed(
@@ -692,9 +709,9 @@ def test_evidence_directory_scan_failure_fails_closed(
     files = discover_evidence_files([evidence_dir], [], errors)
 
     assert files == []
-    assert errors == [
-        f"failed to scan evidence directory `{evidence_dir}`: evidence scan denied"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC]
+    assert str(evidence_dir) not in errors[0]
+    assert "evidence scan denied" not in errors[0]
 
 
 def test_scan_evidence_directory_json_rejects_file_path(tmp_path: Path) -> None:
@@ -704,9 +721,8 @@ def test_scan_evidence_directory_json_rejects_file_path(tmp_path: Path) -> None:
     errors: list[str] = []
     assert scan_evidence_directory_json(evidence_file, errors) == []
 
-    assert errors == [
-        f"evidence directory `{evidence_file}` must exist and be a directory"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC]
+    assert str(evidence_file) not in errors[0]
 
 
 def test_scan_evidence_directory_json_rejects_symlink_directory(
@@ -720,7 +736,8 @@ def test_scan_evidence_directory_json_rejects_symlink_directory(
     errors: list[str] = []
     assert scan_evidence_directory_json(symlink, errors) == []
 
-    assert errors == [f"evidence directory `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_scan_evidence_directory_json_rejects_parent_symlink_directory(
@@ -736,9 +753,8 @@ def test_scan_evidence_directory_json_rejects_parent_symlink_directory(
     errors: list[str] = []
     assert scan_evidence_directory_json(evidence_dir, errors) == []
 
-    assert errors == [
-        f"evidence directory parent `{symlink_root}` must not be a symlink"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(symlink_root) not in errors[0]
 
 
 def test_reserved_output_conflict_scan_inspection_failure_fails_closed(
@@ -766,9 +782,10 @@ def test_reserved_output_conflict_scan_inspection_failure_fails_closed(
     )
 
     assert errors == [
-        f"evidence directory `{evidence_dir}` cannot be inspected: "
-        "reserved scan stat denied"
+        EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC
     ]
+    assert str(evidence_dir) not in errors[0]
+    assert "reserved scan stat denied" not in errors[0]
 
 
 def test_reserved_output_conflict_non_path_directory_fails_closed(
@@ -783,7 +800,8 @@ def test_reserved_output_conflict_non_path_directory_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == ["evidence directory `reviewed` must be a path"]
+    assert errors == [EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC]
+    assert "reviewed" not in errors[0]
 
 
 def test_reserved_output_conflict_evidence_directory_symlink_fails_closed(
@@ -804,7 +822,8 @@ def test_reserved_output_conflict_evidence_directory_symlink_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence directory `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed(
@@ -826,7 +845,8 @@ def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence directory parent `{parent}` must not be a symlink"]
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_reserved_output_conflict_explicit_evidence_directory_fails_closed(
@@ -844,7 +864,8 @@ def test_reserved_output_conflict_explicit_evidence_directory_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence file `{evidence_dir}` must exist and be a file"]
+    assert errors == [EVIDENCE_FILE_MISSING_DIAGNOSTIC]
+    assert str(evidence_dir) not in errors[0]
 
 
 def test_reserved_output_conflict_explicit_evidence_symlink_fails_closed(
@@ -864,7 +885,8 @@ def test_reserved_output_conflict_explicit_evidence_symlink_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
@@ -886,7 +908,8 @@ def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence file parent `{parent}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_reserved_output_conflict_discovered_json_directory_fails_closed(
@@ -906,7 +929,8 @@ def test_reserved_output_conflict_discovered_json_directory_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence file `{json_dir}` must exist and be a file"]
+    assert errors == [EVIDENCE_FILE_MISSING_DIAGNOSTIC]
+    assert str(json_dir) not in errors[0]
 
 
 def test_reserved_output_conflict_discovered_json_symlink_fails_closed(
@@ -928,7 +952,8 @@ def test_reserved_output_conflict_discovered_json_symlink_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_reserved_output_helpers_reject_malformed_path_collections(tmp_path: Path) -> None:
@@ -1182,9 +1207,9 @@ def test_reserved_output_conflict_scan_failure_fails_closed(
         reserved_label="--summary-out",
     )
 
-    assert errors == [
-        f"failed to scan evidence directory `{evidence_dir}`: reserved scan denied"
-    ]
+    assert errors == [EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC]
+    assert str(evidence_dir) not in errors[0]
+    assert "reserved scan denied" not in errors[0]
 
 
 def test_explicit_identity_helpers_record_resolver_failures(tmp_path: Path) -> None:
@@ -1209,7 +1234,8 @@ def test_evidence_path_identities_rejects_symlink_identity(tmp_path: Path) -> No
     identities = evidence_path_identities([symlink], errors)
 
     assert identities == set()
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_is_explicit_evidence_path_rejects_symlink_candidate(
@@ -1223,7 +1249,8 @@ def test_is_explicit_evidence_path_rejects_symlink_candidate(
     errors: list[str] = []
     assert is_explicit_evidence_path(symlink, {target.resolve()}, errors) is False
 
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_is_explicit_evidence_path_rejects_parent_symlink_candidate(
@@ -1240,7 +1267,8 @@ def test_is_explicit_evidence_path_rejects_parent_symlink_candidate(
     errors: list[str] = []
     assert is_explicit_evidence_path(candidate, {target.resolve()}, errors) is False
 
-    assert errors == [f"evidence file parent `{symlink_root}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(symlink_root) not in errors[0]
 
 
 def test_is_explicit_evidence_path_skips_empty_identity_set_without_resolving(
@@ -1271,7 +1299,8 @@ def test_evidence_path_identities_skip_after_discovery_errors(
 
     assert files == [target]
     assert identities == set()
-    assert errors == [f"evidence file `{symlink}` must not be a symlink"]
+    assert errors == [EVIDENCE_FILE_SYMLINK_DIAGNOSTIC]
+    assert str(symlink) not in errors[0]
 
 
 def test_explicit_identity_helper_rejects_malformed_identity_container(

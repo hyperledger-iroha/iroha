@@ -1,0 +1,14 @@
+# Reviewed SF-5a gateway load rollout evidence gate arguments.
+# Point the evidence directory at the reviewed artifact root. Review only
+# payload-free rollout summaries. Keep gateway private keys, bearer tokens,
+# raw reports, response bodies, fixtures, and payload bytes in runtime-only
+# locations.
+--evidence-dir /var/tmp/sorafs/gateway-load-rollout
+--summary-out /var/tmp/sorafs/gateway-load-rollout-summary.json
+--max-evidence-age-secs 604800
+--min-staging-duration-secs 3600
+--min-streams 1000
+--min-success-rate-bps 9900
+--max-error-rate-bps 100
+--max-p95-latency-ms 1500
+--max-p99-latency-ms 3000

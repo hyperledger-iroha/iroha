@@ -187,7 +187,7 @@ def test_missing_required_kind_evidence_fails_before_plan(tmp_path: Path, capsys
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "missing --multi-peer-reconciliation-evidence" in captured.err
+    assert "missing required rollout evidence input" in captured.err
     assert captured.out == ""
 
 
@@ -200,8 +200,9 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "--dashboard-metrics-evidence" in captured.err
-    assert str(missing) in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "--dashboard-metrics-evidence" not in captured.err
+    assert str(missing) not in captured.err
     assert captured.out == ""
 
 
@@ -244,5 +245,5 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
     )
 
     captured = capsys.readouterr()
-    assert "unknown required evidence kind `unknown`" in captured.err
+    assert "unknown required evidence kind" in captured.err
     assert captured.out == ""

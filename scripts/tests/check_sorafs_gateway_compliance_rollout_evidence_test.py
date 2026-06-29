@@ -479,7 +479,7 @@ def test_unknown_required_kind_uses_shared_error_reporting(tmp_path: Path, capsy
     assert run_gate(tmp_path, "--require-kind", "unknown") == 2
 
     captured = capsys.readouterr()
-    assert "unknown required evidence kind `unknown`" in captured.err
+    assert "unknown required evidence kind" in captured.err
     assert "usage:" not in captured.err
     assert captured.out == ""
 

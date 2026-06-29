@@ -23,6 +23,7 @@ SORAFS_CLI_DOC = DOCS_SOURCE_DIR / "sorafs_cli.md"
 SORAFS_CLI_SDK_PLAN = DOCS_SOURCE_DIR / "sorafs_cli_sdk_plan.md"
 SORAFS_EVIDENCE_VIEWER_PLAN = DOCS_SOURCE_DIR / "sorafs_evidence_viewer_plan.md"
 SORAFS_GATEWAY_COMPLIANCE_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_compliance_plan.md"
+SORAFS_GATEWAY_LOAD_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_load_tests.md"
 SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
 SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
 SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
@@ -36,9 +37,12 @@ SORAFS_POTR_PLAN = DOCS_SOURCE_DIR / "sorafs_potr_plan.md"
 SORAFS_PROTO_PLAN = DOCS_SOURCE_DIR / "sorafs_proto_plan.md"
 SORAFS_REPAIR_PLAN = DOCS_SOURCE_DIR / "sorafs_repair_plan.md"
 SORAFS_REFERENCE_SDK_PLAN = DOCS_SOURCE_DIR / "sorafs_reference_sdk_plan.md"
+SORAFS_RELEASE_PIPELINE_PLAN = DOCS_SOURCE_DIR / "sorafs_release_pipeline_plan.md"
 SORAFS_REPUTATION_PLAN = DOCS_SOURCE_DIR / "sorafs_reputation_plan.md"
 SORAFS_RESERVE_RENT_PLAN = DOCS_SOURCE_DIR / "sorafs_reserve_rent_plan.md"
 SORAFS_TRANSPARENCY_PLAN = DOCS_SOURCE_DIR / "sorafs_transparency_plan.md"
+PRODUCTION_READINESS_CHECKER = SCRIPTS_DIR / "check_sorafs_production_readiness.py"
+PRODUCTION_READINESS_RUNNER = SCRIPTS_DIR / "run_sorafs_production_readiness.py"
 EXAMPLES_DIR = SCRIPTS_DIR / "examples"
 DASHBOARDS_DIR = REPO_ROOT / "dashboards"
 TELEMETRY_METRICS_RS = REPO_ROOT / "crates" / "iroha_telemetry" / "src" / "metrics.rs"
@@ -186,6 +190,7 @@ def timestamp_validation_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -206,6 +211,7 @@ def environment_validation_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -226,6 +232,7 @@ def deployment_id_validation_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -246,6 +253,7 @@ def iroha_config_binding_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -268,6 +276,7 @@ def governance_approval_validation_checkers() -> set[str]:
     return {
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -300,6 +309,7 @@ def hex_validation_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -381,6 +391,7 @@ def minimum_int_validation_checkers() -> set[str]:
     return {
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -413,6 +424,7 @@ def maximum_number_validation_checkers() -> set[str]:
     return {
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -438,6 +450,7 @@ def passed_status_validation_checkers() -> set[str]:
     return {
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -478,6 +491,7 @@ def schema_string_type_validation_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -521,6 +535,7 @@ def scalar_binding_validation_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -541,6 +556,7 @@ def scalar_bound_digest_reference_checkers() -> set[str]:
         "check_sorafs_ai_prescreen_rollout_evidence.py",
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
         "check_sorafs_orderbook_rollout_evidence.py",
@@ -595,6 +611,7 @@ def positive_int_arg_checkers() -> set[str]:
     return {
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -614,6 +631,7 @@ def non_negative_int_arg_checkers() -> set[str]:
     return {
         "check_sorafs_appeal_finance_rollout_evidence.py",
         "check_sorafs_gateway_compliance_rollout_evidence.py",
+        "check_sorafs_gateway_load_rollout_evidence.py",
         "check_sorafs_governance_dag_rollout_evidence.py",
         "check_sorafs_hedging_rollout_evidence.py",
         "check_sorafs_moderation_panel_rollout_evidence.py",
@@ -636,6 +654,7 @@ def non_negative_int_arg_runners() -> set[str]:
     return {
         "run_sorafs_appeal_finance_rollout_evidence.py",
         "run_sorafs_gateway_compliance_rollout_evidence.py",
+        "run_sorafs_gateway_load_rollout_evidence.py",
         "run_sorafs_governance_dag_rollout_evidence.py",
         "run_sorafs_hedging_rollout_evidence.py",
         "run_sorafs_moderation_panel_rollout_evidence.py",
@@ -1005,7 +1024,7 @@ def test_reviewed_response_files_use_shared_path_identity_resolution() -> None:
         in helper_test
     )
     assert "error_diagnostic_label" in response_args
-    assert "path_diagnostic_label" in response_args
+    assert "path_diagnostic_label" not in response_args
     assert "resolve_path_identity" in response_args
     assert "resolve_path_identity(" in response_args
     assert "path.resolve()" not in response_args
@@ -1918,6 +1937,98 @@ def test_source_entry_runner_examples_cover_required_source_entry_kinds() -> Non
     assert missing == {}
 
 
+def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
+    reputation_runner = read(SCRIPTS_DIR / "run_sorafs_reputation_rollout_evidence.py")
+    ai_runner = read(SCRIPTS_DIR / "run_sorafs_ai_prescreen_rollout_evidence.py")
+    transparency_runner = read(SCRIPTS_DIR / "run_sorafs_transparency_rollout_evidence.py")
+    reputation_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_reputation_rollout_evidence_test.py"
+    )
+    ai_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    transparency_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
+    )
+
+    assert "--provider-proof must use PROVIDER_ID=PATH form" in reputation_runner
+    assert "got `{spec}`" not in reputation_runner
+    assert 'errors.append("duplicate --provider-id")' in reputation_runner
+    assert "duplicate --provider-id `" not in reputation_runner
+    assert 'errors.append("duplicate --provider-proof")' in reputation_runner
+    assert "duplicate --provider-proof for `" not in reputation_runner
+    assert "missing --provider-proof for requested provider" in reputation_runner
+    assert "missing --provider-proof for `" not in reputation_runner
+    assert "--provider-proof supplied for unrequested provider" in reputation_runner
+    assert "unrequested provider `" not in reputation_runner
+    assert "--source-entry must use KIND=PATH form" in ai_runner
+    assert "--source-entry must use KIND=PATH form" in transparency_runner
+    assert "got `{spec}`" not in ai_runner
+    assert "got `{spec}`" not in transparency_runner
+    assert "has conflicting " in transparency_runner
+    assert "DEPLOYMENT_CONTEXT_ARTIFACT_CONFLICT_DIAGNOSTIC" in transparency_runner
+    assert '"deployment context".format(path_diagnostic_label(path), field)' not in (
+        transparency_runner
+    )
+    assert "got `{existing}`" not in transparency_runner
+    assert "test_malformed_provider_proof_does_not_echo_spec" in reputation_test
+    assert "test_duplicate_provider_proof_does_not_echo_provider_id" in reputation_test
+    assert "test_malformed_source_entry_does_not_echo_spec" in ai_test
+    assert "test_malformed_source_entry_does_not_echo_spec" in transparency_test
+    assert (
+        "test_generated_artifact_context_conflict_does_not_echo_existing_value"
+        in transparency_test
+    )
+
+
+def test_runner_missing_input_diagnostics_are_payload_free() -> None:
+    runner_sources = {path.name: read(path) for path in RUNNERS}
+    production_runner = read(PRODUCTION_READINESS_RUNNER)
+
+    for name, source in runner_sources.items():
+        assert "for required `{kind}`" not in source, name
+        assert "coverage for `{source_kind}`" not in source, name
+        assert "missing {EVIDENCE_FLAGS_BY_KIND[kind]}" not in source, name
+
+    assert "missing required rollout evidence input" in "\n".join(
+        runner_sources.values()
+    )
+    assert (
+        "missing required release evidence input"
+        in runner_sources["run_sorafs_reference_sdk_release_evidence.py"]
+    )
+    assert (
+        "missing required source-entry coverage"
+        in runner_sources["run_sorafs_ai_prescreen_rollout_evidence.py"]
+    )
+    assert (
+        "missing required source-entry coverage"
+        in runner_sources["run_sorafs_transparency_rollout_evidence.py"]
+    )
+    assert (
+        "missing --provider-proof for requested provider"
+        in runner_sources["run_sorafs_reputation_rollout_evidence.py"]
+    )
+    assert "missing --provider-proof for `" not in runner_sources[
+        "run_sorafs_reputation_rollout_evidence.py"
+    ]
+    assert "missing required production readiness summary input" in production_runner
+    assert (
+        "summary supplied for unrequired production readiness gate"
+        in production_runner
+    )
+    assert "for required `{gate}`" not in production_runner
+    assert "for unrequired `{gate}`" not in production_runner
+    helper_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    assert "dataset_manifest\" not in captured.err" in helper_test
+    helper_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
+    )
+    assert "feed_source\" not in captured.err" in helper_test
+
+
 def test_sorafs_hedging_billing_observability_pack_is_checked_in() -> None:
     expected = [
         DASHBOARDS_DIR / "grafana" / "sorafs_hedging_billing.json",
@@ -2171,6 +2282,11 @@ def test_rollout_runners_preflight_required_files() -> None:
     ]
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
 
+    assert "INPUT_FILE_MISSING_DIAGNOSTIC" in helper
+    assert "input evidence file must exist and be a file" in helper
+    assert "INPUT_FILE_DUPLICATE_DIAGNOSTIC" in helper
+    assert "duplicate input evidence file" in helper
+    assert "duplicate {path_label} input" not in helper
     assert "must exist and be a file" in helper
     assert "duplicate" in helper
     assert "RuntimeError" in helper
@@ -2421,8 +2537,12 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
         SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
     )
 
-    assert "path_diagnostic_label" in runner
-    assert "error_diagnostic_label(error, path_label=path_label)" in runner
+    assert "path_diagnostic_label" not in runner
+    assert "error_diagnostic_label(error, path_label=path_label)" not in runner
+    assert "DEPLOYMENT_CONTEXT_ARTIFACT_READ_DIAGNOSTIC" in runner
+    assert "DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC" in runner
+    assert "DEPLOYMENT_CONTEXT_ARTIFACT_PARENT_DIAGNOSTIC" in runner
+    assert "validate_deployment_context_artifact_parent" in runner
     assert "def deployment_context_write_open_flags" in runner
     assert "validate_runner_input_parent_chain" in runner
     assert "os.open(path, deployment_context_write_open_flags())" in runner
@@ -2430,6 +2550,8 @@ def test_transparency_runner_sanitizes_generated_artifact_annotation_errors() ->
     assert "path.write_text(render_runner_plan(payload)" not in runner
     assert "failed to read generated evidence artifact `{path}`: {error}" not in runner
     assert "failed to write deployment context into `{path}`: {error}" not in runner
+    assert "failed to read generated evidence artifact `{}" not in runner
+    assert "failed to write deployment context into `{}" not in runner
     assert "test_generated_artifact_read_error_is_sanitized" in runner_test
     assert "test_deployment_context_write_uses_no_follow_descriptor_open" in runner_test
     assert "test_deployment_context_write_error_is_sanitized" in runner_test
@@ -2986,26 +3108,41 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "def _validate_response_argfile_parent_chain" in helper
     assert "def _read_response_argfile_bytes" in helper
     assert "path.is_symlink()" in helper
-    assert "@ARGFILE `{path_label}` must not be a symlink" in helper
-    assert "@ARGFILE parent `{parent_label}` must not be a symlink" in helper
+    assert (
+        'ARGFILE_PARENT_SYMLINK_DIAGNOSTIC = '
+        '"@ARGFILE parent must not be a symlink"'
+    ) in helper
+    assert 'ARGFILE_PARENT_DIRECTORY_DIAGNOSTIC = (' in helper
+    assert '"@ARGFILE parent must be a directory when it exists"' in helper
+    assert (
+        'ARGFILE_PARENT_INSPECTION_DIAGNOSTIC = '
+        '"@ARGFILE parent cannot be inspected"'
+    ) in helper
+    assert 'ARGFILE_SYMLINK_DIAGNOSTIC = "@ARGFILE must not be a symlink"' in helper
+    assert 'ARGFILE_MISSING_DIAGNOSTIC = "@ARGFILE must exist and be a file"' in helper
+    assert 'ARGFILE_INSPECTION_DIAGNOSTIC = "@ARGFILE cannot be inspected"' in helper
+    assert 'ARGFILE_READ_DIAGNOSTIC = "@ARGFILE cannot be read"' in helper
+    assert 'ARGFILE_RESOLUTION_DIAGNOSTIC = "@ARGFILE cannot be resolved"' in helper
     assert "os.open(path, _response_argfile_open_flags())" in helper
     assert "os.fstat(fd).st_size" in helper
     assert "os.fdopen(fd, \"rb\")" in helper
     assert "os.close(fd)" in helper
     assert "must exist and be a file" in helper
-    assert "failed to resolve @ARGFILE" in helper
-    assert "failed to stat @ARGFILE" in helper
-    assert "failed to read @ARGFILE" in helper
+    assert "@ARGFILE `{path_label}` must not be a symlink" not in helper
+    assert "@ARGFILE parent `{parent_label}` must not be a symlink" not in helper
+    assert "failed to resolve @ARGFILE" not in helper
+    assert "failed to stat @ARGFILE" not in helper
+    assert "failed to read @ARGFILE" not in helper
     assert "failed to stat @ARGFILE `{path}`: {error}" not in helper
     assert "failed to read @ARGFILE `{path}`: {error}" not in helper
     assert "@ARGFILE `{path}` must be UTF-8: {error}" not in helper
     assert "@ARGFILE `{path}` line {line_number}: {error}" not in helper
-    assert "error_diagnostic_label(error, path_label=path_label)" in helper
-    assert "path_diagnostic_label(path)" in helper
+    assert "error_diagnostic_label(error, path_label=path_label)" not in helper
+    assert "path_diagnostic_label(path)" not in helper
     assert "path.read_bytes()" not in helper
     assert "path.stat().st_size" not in helper
     assert "RuntimeError" in helper
-    assert '"@ARGFILE `{}` line {}: {}".format(' in helper
+    assert '"@ARGFILE line {}: {}".format(' in helper
     assert "recursive @ARGFILE" in helper
     assert "must be UTF-8" in helper
     assert "test_response_file_stat_failure_is_stable_value_error" in helper_test
@@ -3495,27 +3632,27 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "def evidence_path_collection" in helper
     assert "paths must be a sequence" in helper
     assert "isinstance(paths, (str, bytes, bytearray, Mapping))" in helper
-    assert "both --evidence and --evidence-dir" in helper
+    assert "EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC" in helper
+    assert "evidence file provided by multiple evidence sources" in helper
+    assert "both --evidence and --evidence-dir" not in helper
     assert "duplicate evidence file" in helper
     assert "def inspect_evidence_file" in helper
     assert "def validate_evidence_parent_chain" in helper
     assert "evidence_label = _require_label(label)" in helper
     assert "parent_label = f\"{evidence_label} parent\"" in helper
-    assert "evidence file `{_path_label(path)}` must be a path" in helper
+    assert "EVIDENCE_FILE_PATH_DIAGNOSTIC" in helper
     assert "path.is_symlink()" in helper
-    assert "evidence file `{_path_label(path)}` must not be a symlink" in helper
+    assert "EVIDENCE_FILE_SYMLINK_DIAGNOSTIC" in helper
     assert "must exist and be a file" in helper
     assert "must exist and be a directory" in helper
-    assert "evidence directory `{_path_label(directory)}` must be a path" in helper
-    assert (
-        "evidence directory `{_path_label(directory)}` must not be a symlink"
-        in helper
-    )
+    assert "EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC" in helper
+    assert "EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC" in helper
     assert "def inspect_evidence_directory" in helper
     assert "def scan_evidence_directory_json" in helper
     assert "inspect_evidence_directory(directory, error_list)" in helper
     assert "cannot be inspected" in helper
-    assert "failed to scan evidence directory" in helper
+    assert "EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC" in helper
+    assert "failed to scan evidence directory" not in helper
     assert "reserved_output_paths" in helper
     assert "reserved_output_path_identities" in helper
     assert "validate_evidence_parent_chain(path, error_list, label=path_label)" in helper
@@ -3525,7 +3662,9 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "reserved output" in helper
     assert "conflicts with reserved output" in helper
     assert "resolve_path_identity" in helper
-    assert "resolve_path_identity(path, errors, label=label)" in helper
+    assert "resolution_errors: list[str] = []" in helper
+    assert "EVIDENCE_PATH_RESOLUTION_DIAGNOSTIC" in helper
+    assert "resolve_path_identity(path, resolution_errors, label=path_label)" in helper
     assert "RuntimeError" in path_identity_helper
     assert "evidence_path_identities" in helper
     assert "if error_list:\n        return identities" in helper
@@ -3727,12 +3866,16 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "evidence JSON errors must contain non-empty canonical strings" in helper
     assert "failed to load evidence JSON" in helper
     assert "import os" in helper
-    assert "from sorafs_evidence_paths import validate_evidence_parent_chain" in helper
+    assert "from sorafs_evidence_paths import (" in helper
+    assert "EVIDENCE_FILE_INSPECTION_DIAGNOSTIC" in helper
+    assert "EVIDENCE_FILE_MISSING_DIAGNOSTIC" in helper
+    assert "EVIDENCE_FILE_SYMLINK_DIAGNOSTIC" in helper
+    assert "validate_evidence_parent_chain" in helper
     assert "from sorafs_path_identity import" in helper
-    assert "path_diagnostic_label(" in helper
+    assert "path_diagnostic_label(" not in helper
     assert "error_diagnostic_label(" in helper
     assert "def _canonical_diagnostic_text" not in helper
-    assert "def _evidence_path_label" in helper
+    assert "def _evidence_path_label" not in helper
     assert "def _error_label" in helper
     assert "evidence path must be a path" in helper
     assert "<non-path>" in path_identity_helper
@@ -3828,11 +3971,36 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "read_json_artifact" not in reputation
     assert "load_evidence_json_with_sha256_or_record_error(" in reputation
     assert "load_evidence_json_with_sha256(path, MAX_EVIDENCE_BYTES)" not in reputation
+    assert "unknown reputation evidence schema" in reputation
+    assert "unknown schema `{schema}`" not in reputation
+    assert "path_diagnostic_label" not in reputation
+    assert "EXPLICIT_KIND_CONFLICT_DIAGNOSTIC" in reputation
+    assert "EXPLICIT_KIND_SCHEMA_MISMATCH_DIAGNOSTIC" in reputation
+    assert "evidence schema does not match explicit kind" in reputation
+    assert "explicit kind `{}`" not in reputation
+    assert "belongs to `{}`" not in reputation
+    assert 'raise ValueError("unknown evidence kind")' in reputation
+    assert "unknown evidence kind `{kind}`" not in reputation
+    assert 'errors.append("unsupported evidence kind")' in reputation
+    assert "unsupported evidence kind `{evidence.kind}`" not in reputation
+    assert 'record_kind = "<unknown>"' in reputation
+    assert "missing provider/proof evidence for required provider" in reputation
+    assert "missing provider/proof evidence for `{provider_id}`" not in reputation
+    assert 'f"{path}: schema' not in reputation
+    assert 'f"{path}: cannot infer evidence kind"' not in reputation
     assert "json.JSONDecodeError" not in reputation
     assert "evidence file `{path}` must exist" not in reputation
     assert "if not path.is_file()" not in reputation
     assert "path.read_bytes()" not in reputation
     assert "hashlib.sha256(data).hexdigest()" not in reputation
+    reputation_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_reputation_rollout_evidence_test.py"
+    )
+    assert "private-key-placeholder" in reputation_test
+    assert "unknown_schema not in" in reputation_test
+    assert "test_unknown_explicit_evidence_kind_does_not_echo_kind" in reputation_test
+    assert "test_unsupported_loaded_evidence_kind_is_sanitized" in reputation_test
+    assert "provider-b-private-key-placeholder" in reputation_test
     assert missing == []
     assert local_load_error_recorders == []
 
@@ -3872,7 +4040,9 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
     assert "for field in fields:" in helper
     assert "ord(character) < 32" in helper
     assert "seen_fields: set[str] = set()" in helper
-    assert "fingerprint[field] = payload.get(field)" in helper
+    assert "if value is not None:" in helper
+    assert "fingerprint[field] = value" in helper
+    assert "test_artifact_fingerprint_selects_present_fields_in_order" in helper_test
     assert (
         "test_artifact_fingerprint_rejects_non_object_payload_without_traceback"
         in helper_test
@@ -4029,8 +4199,13 @@ def test_rollout_checkers_use_shared_recognized_artifact_count() -> None:
         path.name
         for path in standard_artifact_checkers()
         if "count_evidence_artifacts," not in read(path)
+        or "recognized_evidence_artifacts," not in read(path)
         or (
             '"recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind)'
+            not in read(path)
+        )
+        or (
+            '"recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind)'
             not in read(path)
         )
         or "len(artifacts) for artifacts in artifacts_by_kind.values()" in read(path)
@@ -4045,6 +4220,7 @@ def test_rollout_checkers_use_shared_recognized_artifact_count() -> None:
     assert "value, (str, bytes, bytearray)" in helper
     assert "all(isinstance(artifact, Mapping) for artifact in value)" in helper
     assert "def count_evidence_artifacts" in helper
+    assert "def recognized_evidence_artifacts" in helper
     assert "def count_recognized_evidence_artifacts" in helper
     assert "_evidence_artifact_rows(artifacts)" in helper
     assert "artifact_rows is None" in helper
@@ -4056,6 +4232,11 @@ def test_rollout_checkers_use_shared_recognized_artifact_count() -> None:
     )
     assert (
         'count_evidence_artifacts({"bad\\nkind": [{"valid": True}]}) == 0'
+        in helper_test
+    )
+    assert "test_recognized_evidence_artifacts_flatten_kind_buckets" in helper_test
+    assert (
+        "test_recognized_evidence_artifacts_rejects_malformed_buckets_without_traceback"
         in helper_test
     )
     assert (
@@ -4087,6 +4268,9 @@ def test_rollout_checkers_use_shared_evidence_file_count() -> None:
     assert "not all(isinstance(item, Path) for item in value)" in helper
     assert "test_count_evidence_files_rejects_strings_without_traceback" in helper_test
     assert 'count_evidence_files([Path("one.json"), "two.json"]) == 0' in helper_test
+    reputation_checker = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
+    assert "count_evidence_files," in reputation_checker
+    assert '"evidence_file_count": count_evidence_files(files)' in reputation_checker
     assert missing == []
 
 
@@ -4218,6 +4402,8 @@ def test_rollout_checkers_use_shared_standard_payload_validator() -> None:
     assert "def require_known_schema" in helper
     assert "schema_to_kind: Any" in helper
     assert "schema registry must be a mapping" in helper
+    assert "schema is not a recognized {artifact_label}" in helper
+    assert "schema `{schema}` is not a recognized" not in helper
     assert "def validate_standard_evidence_payload" in helper
     assert "payload: Any" in helper
     assert "require_known_schema(payload, schema_to_kind, artifact_label, errors)" in helper
@@ -4235,6 +4421,8 @@ def test_rollout_checkers_use_shared_standard_payload_validator() -> None:
     assert "return kind_name, errors" in helper
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     assert "test_require_string_helpers_reject_malformed_payloads" in helper_test
+    assert "private-key-placeholder" in helper_test
+    assert "unknown_schema not in" in helper_test
     assert "test_require_known_schema_rejects_malformed_schema_registry" in helper_test
     assert "test_validate_standard_evidence_payload_rejects_malformed_payload" in helper_test
     assert (
@@ -4570,6 +4758,14 @@ def test_rollout_checkers_use_shared_timestamp_validation() -> None:
 
 def test_rollout_checkers_use_shared_environment_validation() -> None:
     expected_names = environment_validation_checkers()
+    def uses_custom_shared_environment_validation(path: Path) -> bool:
+        source = read(path)
+        return (
+            path.name == "check_sorafs_reputation_rollout_evidence.py"
+            and "require_rollout_environment," in source
+            and "require_rollout_environment(payload, errors)" in source
+        )
+
     missing_shared_context = [
         path.name
         for path in CHECKERS
@@ -4588,6 +4784,7 @@ def test_rollout_checkers_use_shared_environment_validation() -> None:
         path.name
         for path in CHECKERS
         if '"environment"' in read(path) and path.name not in expected_names
+        and not uses_custom_shared_environment_validation(path)
     ]
     local_copies = [
         path.name
@@ -4614,6 +4811,16 @@ def test_rollout_checkers_use_shared_environment_validation() -> None:
 
 def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
     expected_names = deployment_id_validation_checkers()
+    def uses_custom_shared_deployment_id_validation(path: Path) -> bool:
+        source = read(path)
+        return (
+            path.name == "check_sorafs_reputation_rollout_evidence.py"
+            and "require_rollout_deployment_id," in source
+            and "require_rollout_deployment_id(payload, errors)" in source
+            and "require_rollout_deployment_context_review," in source
+            and "require_rollout_deployment_context_review(payload, errors)" in source
+        )
+
     missing_shared_context = [
         path.name
         for path in CHECKERS
@@ -4632,6 +4839,7 @@ def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
         path.name
         for path in CHECKERS
         if '"deployment_id"' in read(path) and path.name not in expected_names
+        and not uses_custom_shared_deployment_id_validation(path)
     ]
     local_copies = [
         path.name
@@ -6453,10 +6661,11 @@ def test_rollout_checkers_use_shared_required_summary_builder() -> None:
     assert "required evidence kinds must not contain duplicates" in helper
     assert "malformed_artifact_bucket = name in artifact_buckets" in helper
     assert "required `{name}` artifacts must be a sequence" in helper
-    assert "required {name} {evidence_label} artifacts must be a sequence" in helper
+    assert "required {name} {evidence_label} artifacts" not in helper
+    assert "{evidence_label} required artifacts must be a sequence" in helper
     assert "required `{name}` artifacts must be a sequence of artifact objects" in helper
     assert (
-        "required {name} {evidence_label} artifacts must be a sequence "
+        "{evidence_label} required artifacts must be a sequence "
         in helper
     )
     assert "of artifact objects" in helper
@@ -6468,11 +6677,17 @@ def test_rollout_checkers_use_shared_required_summary_builder() -> None:
     assert 'label_name=f"required `{name}` schema"' in helper
     assert "required `{name}` schema must be configured" in helper
     assert "required evidence kinds must be a sequence of strings" in helper
-    assert "missing required {name} {evidence_label} evidence" in helper
-    assert "{name} {evidence_label} evidence has invalid artifact(s)" in helper
+    assert "missing required {name} {evidence_label} evidence" not in helper
+    assert "missing required {evidence_label} evidence" in helper
+    assert "{name} {evidence_label} evidence has invalid artifact(s)" not in helper
+    assert "{evidence_label} evidence has invalid artifact(s)" in helper
     assert "evidence_artifact_is_valid(artifact)" in helper
     assert (
         "test_build_required_evidence_summary_rejects_malformed_artifact_rows"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_build_required_evidence_summary_duplicate_diagnostics_are_payload_free"
         in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     )
     assert (
@@ -6700,9 +6915,15 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
         in helper_test
     )
     assert "def record_missing_required_evidence_value_errors" in helper
+    assert "def _diagnostic_mentions_missing_value" in helper
     assert "validation missing required evidence message" in helper
+    assert "must not include missing value" in helper
     assert (
         "test_record_missing_required_evidence_value_errors_rejects_malformed_labels"
+        in helper_test
+    )
+    assert (
+        "test_record_missing_required_evidence_value_errors_rejects_value_echoing_messages"
         in helper_test
     )
     assert "def required_or_observed_evidence_values_are_present" in helper
@@ -6745,6 +6966,9 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
     assert "validation evidence key" in helper
     assert "validation evidence value" in helper
     assert 'errors.append(f"{context_label}.{key_label} must be a string")' in helper
+    assert "does not match previous value" in helper
+    assert "does not match `{previous}`" not in helper
+    assert "`{value_label}`" not in helper
     assert (
         "test_record_consistent_evidence_value_reports_malformed_values"
         in helper_test
@@ -6840,6 +7064,14 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
         'finalize_custom_required_evidence_rows(required, evidence_label="evidence")'
         in reputation
     )
+    assert "def finalize_reputation_required_rows(" in reputation
+    assert "finalize_reputation_required_rows(required)" in reputation
+    assert 'row["present"] = artifact_count > 0' in reputation
+    assert 'row["artifact_count"] = artifact_count' in reputation
+    assert "validate_common_rollout_context(payload, errors)" in reputation
+    assert '"deployment_id"' in reputation
+    assert '"environment"' in reputation
+    assert '"deployment_context_reviewed"' in reputation
     assert 'mark_required_evidence_invalid(required, "provider")' not in reputation
     assert 'mark_required_evidence_invalid(required, "latest")' not in reputation
     assert "record_missing_required_evidence_value_errors(\n" in reputation
@@ -7236,10 +7468,17 @@ def test_rollout_checkers_use_shared_required_kind_parser() -> None:
     )
     assert "must be non-empty" in helper
     assert "duplicate required evidence kind" in helper
+    assert "duplicate default required evidence kind" in helper
     assert "unknown required evidence kind" in helper
+    assert "duplicate required evidence kind `{candidate}`" not in helper
+    assert "duplicate default required evidence kind `{candidate}`" not in helper
+    assert "unknown required evidence kind `{candidate}`" not in helper
+    assert "unknown default required evidence kind `{candidate}`" not in helper
     assert "test_malformed_required_kind_values_fail" in helper_test
     assert "test_non_string_required_kind_value_fails" in helper_test
     assert "test_malformed_required_kind_name_text_fails" in helper_test
+    assert "unknown-private-key-placeholder" in helper_test
+    assert "default-private-key-placeholder" in helper_test
     assert "test_malformed_allowed_kind_registry_fails" in helper_test
     assert "test_malformed_default_required_kinds_fail" in helper_test
     assert missing == []
@@ -7309,6 +7548,19 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
     assert "def normalize_sensitive_key" in helper
     assert "def _require_error_list" in helper
     assert "def _require_diagnostic_string" in helper
+    assert "def _diagnostic_path_segment" in helper
+    assert "def _join_diagnostic_path" in helper
+    assert "<non-canonical-key>" in helper
+    assert "<non-string-key>" in helper
+    assert "<sensitive-key>" in helper
+    assert (
+        'errors.append(f"{visit_path} must not be present in {evidence_label}")'
+        in helper
+    )
+    assert (
+        'errors.append(f"{child_path} must not be present in {evidence_label}")'
+        not in helper
+    )
     assert "sensitive field errors must be a list of strings" in helper
     assert "sensitive field errors must contain non-empty canonical strings" in helper
     assert "label=\"sensitive field path\"" in helper
@@ -7327,12 +7579,17 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
     assert "HIGH_RISK_SENSITIVE_KEY_FRAGMENTS" in helper
     assert "PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES" in helper
     assert "def _is_allowed_inclusion_marker_value" in helper
+    assert "def _is_sensitive_inclusion_marker" in helper
+    assert "def _inclusion_marker_stem_variants" in helper
     assert "def _is_payload_free_sensitive_reference" in helper
     assert "fragment in normalized_key" in helper
     assert "normalized_key in normalized_keys" in helper
     assert "normalized_key.endswith(\"included\")" in helper
     assert "len(normalized_key) > len(\"included\")" not in helper
-    assert "child_path} must be false" in helper
+    assert "<sensitive-inclusion-marker>" in helper
+    assert "marker_path = _join_diagnostic_path(" in helper
+    assert "child_path} must be false" not in helper
+    assert "marker_path} must be false" in helper
     assert "from sorafs_evidence_sensitivity import visit_sensitive_fields" in validation_helper
     assert "sensitive_keys=sensitive_keys" in validation_helper
     assert "sorafs_evidence_sensitivity" in reputation
@@ -7345,6 +7602,12 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
         "test_non_string_payload_keys_fail_closed_and_still_scan_children"
         in helper_test
     )
+    assert "test_noncanonical_sensitive_key_paths_are_sanitized" in helper_test
+    assert (
+        "test_sensitive_parent_path_is_redacted_for_nested_diagnostics"
+        in helper_test
+    )
+    assert "test_sensitive_inclusion_marker_key_names_are_redacted" in helper_test
     assert "test_malformed_sensitive_key_configuration_fails_closed" in helper_test
     assert "test_sensitive_scan_rejects_malformed_error_container" in helper_test
     assert "test_sensitive_scan_rejects_malformed_existing_error_text" in helper_test
@@ -8753,6 +9016,379 @@ def test_unshipped_gateway_compliance_service_surface_is_not_exposed() -> None:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     assert exposed == {}
+
+
+def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
+    source = read(SORAFS_GATEWAY_LOAD_PLAN)
+    normalized = re.sub(r"\s+", " ", source)
+
+    required_open = (
+        "It does not open a live HTTP/3 gateway or sleep through a wall-clock soak test",
+        "Live staging load evidence",
+        "No committed SoraFS HTTP/3 gateway endpoint is present in this checkout; add HTTP/3 scenarios only after the gateway exposes that transport.",
+        "Archive signed local conformance reports from `ci/check_sorafs_gateway_conformance.sh`",
+        "Run a live staging load rig with the same fixture bundle",
+        "Add a live-target adapter if operators need the integration test to exercise a deployed gateway instead of the fixture-backed adapter.",
+        "Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed HTTP/3 endpoint and configuration surface.",
+        "Record cold-cache SLO baselines after the staging hardware profile is chosen.",
+        "`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free local conformance, live staging load, telemetry/SLO, transport-scope, and governance approval evidence before SF-5a load promotion.",
+        "`scripts/run_sorafs_gateway_load_rollout_evidence.py` emits the matching collection plan and dry-run evidence contract",
+    )
+    missing = [phrase for phrase in required_open if phrase not in normalized]
+
+    assert missing == []
+
+
+def test_unshipped_gateway_load_live_surface_is_not_exposed() -> None:
+    route_patterns = (
+        "/v1/sorafs/gateway/load/live",
+        "/v1/sorafs/gateway/load/staging",
+        "/v1/sorafs/gateway/load/http3",
+        "/v1/sorafs/gateway/load/promotion",
+        "/v1/sorafs/gateway/load/soak",
+    )
+    unshipped_cli_subcommands = (
+        "gateway-load-live",
+        "gateway-load-staging",
+        "gateway-load-http3",
+        "gateway-load-promote",
+        "gateway-load-soak",
+    )
+    exposed: dict[str, list[str]] = {}
+
+    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
+        source = read(path)
+        matched = [route for route in route_patterns if route in source]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
+        source = read(path)
+        matched = [
+            subcommand
+            for subcommand in unshipped_cli_subcommands
+            if f'"{subcommand}"' in source or f"`{subcommand}`" in source
+        ]
+        if matched:
+            exposed[str(path.relative_to(REPO_ROOT))] = matched
+
+    assert exposed == {}
+
+
+def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
+    plan = re.sub(r"\s+", " ", read(SORAFS_RELEASE_PIPELINE_PLAN))
+    roadmap_source = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
+    checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py")
+    direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example")
+    runner_example = read(
+        EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"
+    )
+
+    required_markers = (
+        "`scripts/check_sorafs_production_readiness.py` is the final aggregate SoraFS promotion gate",
+        "sorafs.production_readiness.aggregate_gate.v1",
+        "`scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane summary paths",
+        "artifact/load-error lists",
+        "no extra `required` rows",
+        "top-level evidence/artifact counts consistent with the validated rows",
+        "evidence file counts to match the distinct recognized artifact paths",
+        "threshold metadata as a non-empty canonical non-negative integer map that the aggregate row preserves for release review",
+        "reject extra top-level lane-summary fields outside the schema-closed payload-free lane summary contract",
+        "validate allowed top-level lane metadata as payload-free canonical strings, non-negative integers, booleans, objects, and lists with expected container shapes",
+        "validate exact lowercase-hex binding-list metadata shapes before aggregate promotion",
+        "validate exact lowercase-hex and positive-integer scalar list metadata shapes before aggregate promotion",
+        "validate governance public-head identifiers as lowercase hex list metadata before aggregate promotion",
+        "validate exact object-list metadata shapes before aggregate promotion",
+        "reject exact duplicate object-list metadata entries while preserving artifact order",
+        "validate exact object metadata shapes before aggregate promotion",
+        "require set-derived lane metadata lists to be duplicate-free and sorted in canonical order",
+        "bind those metadata fields to the lane-specific contract that emits them",
+        "canonical required-row schema labels when present",
+        "reject extra required-row fields outside the schema-closed payload-free required-row contract",
+        "canonical unique artifact paths and lowercase SHA-256 digests",
+        "canonical artifact schema/status labels when present",
+        "reject extra artifact-row fields outside the schema-closed payload-free artifact contract",
+        "require top-level recognized-artifact inventory and validate it against the per-kind required-row artifact counts and `(kind, path, sha256)` identities plus matching required artifact metadata instead of ignoring it",
+        "validate schema-closed aggregate lane rows with canonical path, lowercase SHA-256, count, timestamp, list, and error shapes before release review",
+        "validate the schema-closed aggregate summary envelope before writing the final production-readiness report",
+        "require aggregate recognized-summary counts to match present required rows",
+        "validate final aggregate required rows for exact present and missing row output contracts",
+        "pin deterministic missing-row diagnostics for absent lane summaries",
+        "pin deterministic duplicate-summary diagnostics for duplicate lane summaries",
+        "count every duplicate lane-summary input while keeping one duplicate row diagnostic per gate",
+        "pin aggregate blockers for unknown schemas and explicit unrequired summaries",
+        "reject unknown summary schemas discovered in summary directories",
+        "rejects explicit summaries for lanes outside a narrowed `--require-gate` selection",
+        "SoraFS production promotion now has an aggregate readiness gate over the existing per-lane rollout/release evidence summaries",
+        "This does not close the live deployment gaps above",
+    )
+    missing = [
+        marker
+        for marker in required_markers
+        if marker not in plan and marker not in roadmap_source
+    ]
+
+    assert missing == []
+    assert 'SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"' in checker
+    assert "DEFAULT_REQUIRED_GATES" in checker
+    assert "visit_sensitive_fields(" in checker
+    assert "test_sensitive_summary_key_diagnostic_is_sanitized" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "require_absent_or_empty_error_list(payload, \"load_errors\", errors)" in checker
+    assert "require_threshold_map(payload, \"thresholds\", errors)" in checker
+    assert "must be present" in checker
+    assert "must not be empty" in checker
+    assert "keys must be canonical strings" in checker
+    assert "must be a non-negative integer" in checker
+    assert '"thresholds": thresholds' in checker
+    assert "PAYLOAD_FREE_SUMMARY_FIELDS" in checker
+    assert "frozenset().union(" in checker
+    assert "*GATE_METADATA_FIELDS.values()" in checker
+    assert (
+        "PAYLOAD_FREE_SUMMARY_CORE_FIELDS | PAYLOAD_FREE_SUMMARY_METADATA_FIELDS"
+        in checker
+    )
+    assert "require_payload_free_summary_fields(payload, errors)" in checker
+    assert "def is_sensitive_diagnostic_key" in checker
+    assert "def payload_free_diagnostic_key_label" in checker
+    assert "is not allowed in payload-free lane summary" in checker
+    assert "<sensitive-key> is not allowed in payload-free lane summary" not in checker
+    assert "{field}.{key_diagnostic_label} must not be present" in checker
+    assert "test_sensitive_summary_key_diagnostic_sanitizes_canonical_key" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_sensitive_threshold_key_is_not_carried_into_summary" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "PAYLOAD_FREE_SUMMARY_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS" in checker
+    assert "GATE_METADATA_FIELDS" in checker
+    assert "validate_payload_free_summary_metadata(gate, payload, errors)" in checker
+    assert "must be 64 lowercase hex characters" in checker
+    assert "test_digest_list_metadata_entries_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "valid_reference_decision_ids" in checker
+    assert "valid_public_head_cids" in checker
+    assert "must be a positive integer" in checker
+    assert "test_reference_decision_id_metadata_entries_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_public_head_cid_metadata_entries_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_provider_count_values_metadata_entries_are_positive_ints" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "must be a payload-free metadata object" in checker
+    assert "is not allowed in payload-free object metadata" in checker
+    assert "test_object_list_metadata_entries_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_object_list_metadata_entries_must_not_duplicate" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_provider_bake_metadata_completed_at_must_not_precede_start" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "validate_payload_free_object_metadata" in checker
+    assert "test_deployment_context_metadata_entries_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "validate_payload_free_ordered_list_metadata" in checker
+    assert "must not contain duplicate metadata entries" in checker
+    assert "must be sorted in canonical order" in checker
+    assert "test_digest_list_metadata_entries_must_be_unique_and_sorted" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_binding_metadata_entries_must_be_unique_and_sorted" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_provider_count_values_metadata_must_be_unique_and_sorted" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "must be a payload-free binding object" in checker
+    assert "is not allowed in payload-free binding metadata" in checker
+    assert "test_hex_binding_metadata_entries_are_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "must be {expected_hex_length} lowercase hex characters" in checker
+    assert "test_reputation_top_level_hex_metadata_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "is not allowed for `" in checker
+    assert "must be a payload-free metadata list" in checker
+    assert "must contain only payload-free canonical metadata" in checker
+    assert "validate_payload_free_artifact_fingerprint(artifact, path, errors)" in checker
+    assert "test_artifact_fingerprint_metadata_must_be_payload_free" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "AGGREGATE_REQUIRED_GATE_ROW_FIELDS" in checker
+    assert "validate_aggregate_gate_row_output" in checker
+    assert "test_aggregate_gate_row_output_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "AGGREGATE_SUMMARY_FIELDS" in checker
+    assert "AGGREGATE_MISSING_GATE_ROW_FIELDS" in checker
+    assert "validate_aggregate_required_row_output" in checker
+    assert "deterministic missing summary diagnostic" in checker
+    assert "validate_duplicate_summary_diagnostics" in checker
+    assert "deterministic duplicate summary diagnostic exactly once" in checker
+    assert "duplicate-summary diagnostics must match duplicate summary inputs" in checker
+    assert "validate_disallowed_summary_diagnostics" in checker
+    assert "unknown-schema diagnostics must match discovered unknown summaries" in checker
+    assert "unrequired-gate diagnostics must match explicit unrequired summaries" in checker
+    assert "validate_aggregate_summary_output" in checker
+    assert "recognized_summary_count must match present required rows" in checker
+    assert "test_aggregate_required_row_output_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_aggregate_summary_output_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert ".schema must be canonical when present" in checker
+    assert "PAYLOAD_FREE_REQUIRED_ROW_FIELDS" in checker
+    assert "require_payload_free_required_row_fields" in checker
+    assert "is not allowed in payload-free required row" in checker
+    assert "deployment_context_reviewed" in checker
+    assert "required row labels must be canonical strings" in checker
+    assert "sanitized_required_row_labels" not in checker
+    assert "required_kinds contains duplicate kind" in checker
+    assert "required_kinds contains duplicate `{kind_label}`" not in checker
+    assert "required_kinds contains unknown full-contract kinds {extra}" not in checker
+    assert "test_malformed_extra_required_row_label_is_sanitized" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_extra_required_kind_labels_are_payload_free" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_extra_required_row_label_is_payload_free" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "required contains rows outside the full" in checker
+    assert "f\"{sanitized_required_row_labels(extra_required_rows)}\"" not in checker
+    assert "belongs to unrequired" in checker
+    assert ".sha256 must be canonical lowercase SHA-256" in checker
+    assert ".schema must be canonical when present" in checker
+    assert 'require_optional_artifact_label(artifact, "status", path, errors)' in checker
+    assert "PAYLOAD_FREE_ARTIFACT_FIELDS" in checker
+    assert "require_payload_free_artifact_fields" in checker
+    assert "is not allowed in payload-free artifact summary" in checker
+    assert (
+        "test_sensitive_required_and_artifact_field_diagnostics_are_sanitized"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert ".kind must match required row kind" in checker
+    assert "unknown SoraFS readiness summary schema" in checker
+    assert "unknown SoraFS readiness summary schema `{schema}`" not in checker
+    assert (
+        'f"{path_diagnostic_label(path)}: unknown SoraFS readiness summary schema"'
+        not in checker
+    )
+    assert "test_unknown_sorafs_schema_in_summary_dir_fails" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert ".artifacts must not duplicate artifact paths" in checker
+    assert ".artifacts must not duplicate artifact identities" in checker
+    assert "recognized_artifacts must not duplicate artifact paths" in checker
+    assert "test_required_artifact_duplicate_paths_fail" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_recognized_artifacts_duplicate_paths_fail" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "recognized_artifacts length must match recognized_artifact_count" in checker
+    assert "recognized_artifacts must be present" in checker
+    assert "must be a non-empty array" in checker
+    assert "recognized_artifact_paths" in checker
+    assert "evidence_file_count must match recognized artifact path count" in checker
+    assert "recognized_artifacts must match required artifact counts" in checker
+    assert "recognized_artifacts must match required artifact identities" in checker
+    assert "required_artifacts_by_identity" in checker
+    assert 'for metadata_field in ("schema", "status", "fingerprint")' in checker
+    assert ".kind must be part of the full" in checker
+    assert "recognized_artifact_count must match required row artifact total" in checker
+    assert "max_summary_artifact_age_secs" in checker
+    assert "summary_contract" in runner
+    assert "supplied for unrequired" in runner
+    assert "--evidence-dir artifacts/sorafs/production-readiness/summaries" in direct_example
+    assert "--gateway-load-summary artifacts/sorafs/gateway-load/summary.json" in runner_example
+    assert "--dry-run" in runner_example
+
+
+def test_sorafs_production_readiness_aggregate_covers_every_lane_checker() -> None:
+    aggregate = load_script_module(
+        PRODUCTION_READINESS_CHECKER,
+        "check_sorafs_production_readiness_contract",
+    )
+    runner = load_script_module(
+        PRODUCTION_READINESS_RUNNER,
+        "run_sorafs_production_readiness_contract",
+    )
+    checker_modules = {
+        path.name: load_script_module(path, f"{path.stem}_aggregate_contract")
+        for path in CHECKERS
+    }
+    checker_schema_to_name = {
+        module.SUMMARY_SCHEMA: name for name, module in checker_modules.items()
+    }
+    aggregate_schema_to_gate = {
+        gate.schema: gate for gate in aggregate.GATE_SUMMARY_KINDS
+    }
+    missing_from_aggregate = sorted(
+        set(checker_schema_to_name) - set(aggregate_schema_to_gate)
+    )
+    missing_checker = sorted(
+        set(aggregate_schema_to_gate) - set(checker_schema_to_name)
+    )
+    required_kind_mismatches = {
+        gate.name: {
+            "aggregate": list(gate.required_kinds),
+            "checker": list(
+                checker_modules[
+                    checker_schema_to_name[gate.schema]
+                ].DEFAULT_REQUIRED_KINDS
+            ),
+        }
+        for gate in aggregate.GATE_SUMMARY_KINDS
+        if tuple(gate.required_kinds)
+        != tuple(
+            checker_modules[
+                checker_schema_to_name[gate.schema]
+            ].DEFAULT_REQUIRED_KINDS
+        )
+    }
+    missing_threshold_emitters = sorted(
+        path.name for path in CHECKERS if '"thresholds": {' not in read(path)
+    )
+    missing_recognized_emitters = sorted(
+        path.name
+        for path in CHECKERS
+        if '"recognized_artifacts":' not in read(path)
+    )
+
+    assert missing_from_aggregate == []
+    assert missing_checker == []
+    assert required_kind_mismatches == {}
+    assert missing_threshold_emitters == []
+    assert missing_recognized_emitters == []
+    assert tuple(aggregate.DEFAULT_REQUIRED_GATES) == tuple(
+        gate.name for gate in aggregate.GATE_SUMMARY_KINDS
+    )
+    assert set(runner.SUMMARY_OPTIONS_BY_GATE) == set(aggregate.DEFAULT_REQUIRED_GATES)
+    assert set(runner.SUMMARY_FLAGS_BY_GATE) == set(aggregate.DEFAULT_REQUIRED_GATES)
+    assert all(
+        runner.SUMMARY_FLAGS_BY_GATE[gate].startswith("--")
+        for gate in aggregate.DEFAULT_REQUIRED_GATES
+    )
 
 
 def test_reserve_rent_live_control_plane_stays_open_in_docs() -> None:

@@ -12,6 +12,45 @@ from sorafs_path_identity import (
     resolve_path_identity,
 )
 
+EVIDENCE_PATH_RESOLUTION_DIAGNOSTIC = "evidence path cannot be resolved"
+EVIDENCE_FILE_PATH_DIAGNOSTIC = "evidence file must be a path"
+EVIDENCE_FILE_INSPECTION_DIAGNOSTIC = "evidence file cannot be inspected"
+EVIDENCE_FILE_SYMLINK_DIAGNOSTIC = "evidence file must not be a symlink"
+EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC = (
+    "evidence file parent cannot be inspected"
+)
+EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC = (
+    "evidence file parent must not be a symlink"
+)
+EVIDENCE_FILE_PARENT_DIRECTORY_DIAGNOSTIC = (
+    "evidence file parent must be a directory when it exists"
+)
+EVIDENCE_FILE_MISSING_DIAGNOSTIC = "evidence file must exist and be a file"
+EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC = (
+    "evidence file conflicts with reserved output"
+)
+EVIDENCE_FILE_DUPLICATE_EXPLICIT_DIAGNOSTIC = "duplicate explicit evidence file"
+EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC = (
+    "evidence file provided by multiple evidence sources"
+)
+EVIDENCE_FILE_DUPLICATE_DISCOVERED_DIAGNOSTIC = "duplicate evidence file"
+EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC = "evidence directory must be a path"
+EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC = "evidence directory cannot be inspected"
+EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC = "evidence directory must not be a symlink"
+EVIDENCE_DIRECTORY_PARENT_INSPECTION_DIAGNOSTIC = (
+    "evidence directory parent cannot be inspected"
+)
+EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC = (
+    "evidence directory parent must not be a symlink"
+)
+EVIDENCE_DIRECTORY_PARENT_DIRECTORY_DIAGNOSTIC = (
+    "evidence directory parent must be a directory when it exists"
+)
+EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC = (
+    "evidence directory must exist and be a directory"
+)
+EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC = "evidence directory cannot be scanned"
+
 
 def _require_error_list(errors: Any) -> list[str]:
     if not isinstance(errors, list):
@@ -74,7 +113,15 @@ def resolve_evidence_path(
 ) -> Path | None:
     """Return the canonical identity for an evidence path, recording failures."""
 
-    return resolve_path_identity(path, errors, label=label)
+    error_list = _require_error_list(errors)
+    path_label = _require_label(label)
+    if path_label == "evidence path":
+        resolution_errors: list[str] = []
+        resolved = resolve_path_identity(path, resolution_errors, label=path_label)
+        if resolution_errors:
+            error_list.append(EVIDENCE_PATH_RESOLUTION_DIAGNOSTIC)
+        return resolved
+    return resolve_path_identity(path, error_list, label=path_label)
 
 
 def evidence_path_collection(
@@ -110,9 +157,7 @@ def evidence_path_identities(paths: object, errors: list[str]) -> set[Path]:
         if is_file is None:
             continue
         if not is_file:
-            error_list.append(
-                f"evidence file `{_path_label(path)}` must exist and be a file"
-            )
+            error_list.append(EVIDENCE_FILE_MISSING_DIAGNOSTIC)
             continue
         resolved = resolve_evidence_path(path, error_list)
         if resolved is not None:
@@ -138,7 +183,7 @@ def is_explicit_evidence_path(
     if is_file is None:
         return False
     if not is_file:
-        errors.append(f"evidence file `{_path_label(path)}` must exist and be a file")
+        errors.append(EVIDENCE_FILE_MISSING_DIAGNOSTIC)
         return False
     resolved = resolve_evidence_path(path, errors)
     return resolved is not None and resolved in identities
@@ -198,13 +243,11 @@ def inspect_evidence_directory(
 
     error_list = _require_error_list(errors)
     if not isinstance(directory, Path):
-        error_list.append(f"evidence directory `{_path_label(directory)}` must be a path")
+        error_list.append(EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC)
         return None
     try:
         if directory.is_symlink():
-            error_list.append(
-                f"evidence directory `{_path_label(directory)}` must not be a symlink"
-            )
+            error_list.append(EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC)
             return None
         if not validate_evidence_parent_chain(
             directory,
@@ -214,11 +257,8 @@ def inspect_evidence_directory(
             return None
         return directory.is_dir()
     except (OSError, RuntimeError) as error:
-        directory_label = _path_label(directory)
-        error_list.append(
-            f"evidence directory `{directory_label}` cannot be inspected: "
-            f"{_error_label(error, path_label=directory_label)}"
-        )
+        del error
+        error_list.append(EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC)
         return None
 
 
@@ -230,13 +270,11 @@ def inspect_evidence_file(
 
     error_list = _require_error_list(errors)
     if not isinstance(path, Path):
-        error_list.append(f"evidence file `{_path_label(path)}` must be a path")
+        error_list.append(EVIDENCE_FILE_PATH_DIAGNOSTIC)
         return None
     try:
         if path.is_symlink():
-            error_list.append(
-                f"evidence file `{_path_label(path)}` must not be a symlink"
-            )
+            error_list.append(EVIDENCE_FILE_SYMLINK_DIAGNOSTIC)
             return None
         if not validate_evidence_parent_chain(
             path,
@@ -246,11 +284,8 @@ def inspect_evidence_file(
             return None
         return path.is_file()
     except (OSError, RuntimeError) as error:
-        path_label = _path_label(path)
-        error_list.append(
-            f"evidence file `{path_label}` cannot be inspected: "
-            f"{_error_label(error, path_label=path_label)}"
-        )
+        del error
+        error_list.append(EVIDENCE_FILE_INSPECTION_DIAGNOSTIC)
         return None
 
 
@@ -265,28 +300,49 @@ def validate_evidence_parent_chain(
     error_list = _require_error_list(errors)
     evidence_label = _require_label(label)
     if not isinstance(path, Path):
-        error_list.append(f"{evidence_label} `{_path_label(path)}` must be a path")
+        if evidence_label == "evidence file":
+            error_list.append(EVIDENCE_FILE_PATH_DIAGNOSTIC)
+        elif evidence_label == "evidence directory":
+            error_list.append(EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC)
+        else:
+            error_list.append(f"{evidence_label} `{_path_label(path)}` must be a path")
         return False
     for parent in (path.parent, *path.parent.parents):
         parent_label = f"{evidence_label} parent"
         try:
             if parent.is_symlink():
-                error_list.append(
-                    f"{parent_label} `{_path_label(parent)}` must not be a symlink"
-                )
+                if evidence_label == "evidence file":
+                    error_list.append(EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC)
+                elif evidence_label == "evidence directory":
+                    error_list.append(EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC)
+                else:
+                    error_list.append(
+                        f"{parent_label} `{_path_label(parent)}` "
+                        "must not be a symlink"
+                    )
                 return False
             if parent.exists() and not parent.is_dir():
-                error_list.append(
-                    f"{parent_label} `{_path_label(parent)}` "
-                    "must be a directory when it exists"
-                )
+                if evidence_label == "evidence file":
+                    error_list.append(EVIDENCE_FILE_PARENT_DIRECTORY_DIAGNOSTIC)
+                elif evidence_label == "evidence directory":
+                    error_list.append(EVIDENCE_DIRECTORY_PARENT_DIRECTORY_DIAGNOSTIC)
+                else:
+                    error_list.append(
+                        f"{parent_label} `{_path_label(parent)}` "
+                        "must be a directory when it exists"
+                    )
                 return False
         except (OSError, RuntimeError) as error:
-            parent_path_label = _path_label(parent)
-            error_list.append(
-                f"{parent_label} `{parent_path_label}` cannot be inspected: "
-                f"{_error_label(error, path_label=parent_path_label)}"
-            )
+            del error
+            if evidence_label == "evidence file":
+                error_list.append(EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC)
+            elif evidence_label == "evidence directory":
+                error_list.append(EVIDENCE_DIRECTORY_PARENT_INSPECTION_DIAGNOSTIC)
+            else:
+                parent_path_label = _path_label(parent)
+                error_list.append(
+                    f"{parent_label} `{parent_path_label}` cannot be inspected"
+                )
             return False
     return True
 
@@ -299,24 +355,19 @@ def scan_evidence_directory_json(
 
     error_list = _require_error_list(errors)
     if not isinstance(directory, Path):
-        error_list.append(f"evidence directory `{_path_label(directory)}` must be a path")
+        error_list.append(EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC)
         return []
     is_dir = inspect_evidence_directory(directory, error_list)
     if is_dir is None:
         return []
     if not is_dir:
-        error_list.append(
-            f"evidence directory `{_path_label(directory)}` must exist and be a directory"
-        )
+        error_list.append(EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC)
         return []
     try:
         return sorted(directory.rglob("*.json"))
     except (OSError, RuntimeError) as error:
-        directory_label = _path_label(directory)
-        error_list.append(
-            f"failed to scan evidence directory `{directory_label}`: "
-            f"{_error_label(error, path_label=directory_label)}"
-        )
+        del error
+        error_list.append(EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC)
         return []
 
 
@@ -360,19 +411,15 @@ def record_reserved_output_evidence_conflicts(
         if is_file is None:
             return
         if not is_file:
-            error_list.append(
-                f"evidence file `{_path_label(path)}` must exist and be a file"
-            )
+            error_list.append(EVIDENCE_FILE_MISSING_DIAGNOSTIC)
             return
         resolved = resolve_evidence_path(path, error_list)
         if resolved is None:
             return
         reserved_output = reserved_outputs.get(resolved)
         if reserved_output is not None:
-            error_list.append(
-                f"evidence file `{_path_label(path)}` conflicts with {output_label} "
-                f"`{_path_label(reserved_output)}`"
-            )
+            del reserved_output
+            error_list.append(EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC)
 
     for path in evidence_file_items:
         check(path)
@@ -422,19 +469,15 @@ def discover_evidence_files(
         if is_file is None:
             return
         if not is_file:
-            error_list.append(
-                f"evidence file `{_path_label(path)}` must exist and be a file"
-            )
+            error_list.append(EVIDENCE_FILE_MISSING_DIAGNOSTIC)
             return
         resolved = resolve_evidence_path(path, error_list)
         if resolved is None:
             return
         reserved_output = reserved_outputs.get(resolved)
         if reserved_output is not None:
-            error_list.append(
-                f"evidence file `{_path_label(path)}` conflicts with reserved output "
-                f"`{_path_label(reserved_output)}`"
-            )
+            del reserved_output
+            error_list.append(EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC)
             return
         previous = seen.get(resolved)
         if previous is not None:
@@ -444,21 +487,13 @@ def discover_evidence_files(
             except ValueError:
                 pass
             if explicit and previous_explicit:
-                error_list.append(
-                    f"duplicate explicit evidence file `{_path_label(path)}` "
-                    f"matches `{_path_label(previous_path)}`"
-                )
+                del previous_path
+                error_list.append(EVIDENCE_FILE_DUPLICATE_EXPLICIT_DIAGNOSTIC)
             elif explicit or previous_explicit:
-                duplicate_source = "both --evidence and --evidence-dir"
-                error_list.append(
-                    f"evidence file `{_path_label(path)}` is provided by "
-                    f"{duplicate_source}"
-                )
+                error_list.append(EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC)
             else:
-                error_list.append(
-                    f"duplicate evidence file `{_path_label(path)}` also discovered "
-                    f"from `{_path_label(previous_path)}`"
-                )
+                del previous_path
+                error_list.append(EVIDENCE_FILE_DUPLICATE_DISCOVERED_DIAGNOSTIC)
             return
         seen[resolved] = (path, explicit)
         files.append(path)
@@ -471,9 +506,7 @@ def discover_evidence_files(
         if is_dir is None:
             continue
         if not is_dir:
-            error_list.append(
-                f"evidence directory `{_path_label(directory)}` must exist and be a directory"
-            )
+            error_list.append(EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC)
             continue
         discovered = scan_evidence_directory_json(directory, error_list)
         for path in discovered:

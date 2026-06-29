@@ -1,0 +1,21 @@
+# Reviewed SF-5a gateway load rollout evidence collection arguments.
+# The runner only verifies existing payload-free JSON artifacts; collect them
+# from the deployment with site-local commands before running this plan.
+# Run with:
+#   python3 scripts/run_sorafs_gateway_load_rollout_evidence.py \
+#     @scripts/examples/sorafs_gateway_load_rollout_collection.args.example \
+#     --dry-run
+--out-dir /var/tmp/sorafs/gateway-load-rollout
+--local-conformance-evidence /var/tmp/sorafs/gateway-load-rollout/local-conformance.json
+--staging-load-evidence /var/tmp/sorafs/gateway-load-rollout/staging-load.json
+--telemetry-slo-evidence /var/tmp/sorafs/gateway-load-rollout/telemetry-slo.json
+--transport-scope-evidence /var/tmp/sorafs/gateway-load-rollout/transport-scope.json
+--governance-approval-evidence /var/tmp/sorafs/gateway-load-rollout/governance-approval.json
+--summary-out /var/tmp/sorafs/gateway-load-rollout/rollout-summary.json
+--max-evidence-age-secs 604800
+--min-staging-duration-secs 3600
+--min-streams 1000
+--min-success-rate-bps 9900
+--max-error-rate-bps 100
+--max-p95-latency-ms 1500
+--max-p99-latency-ms 3000

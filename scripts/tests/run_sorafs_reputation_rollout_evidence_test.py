@@ -146,36 +146,68 @@ def test_response_file_dry_run_prints_complete_reputation_plan(
 
 def test_missing_provider_proof_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
+    provider_id = "provider-a-private-key-placeholder"
+    provider_index = args.index("--provider-id") + 1
+    args[provider_index] = provider_id
     proof_index = args.index("--provider-proof")
     del args[proof_index : proof_index + 2]
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "missing --provider-proof" in captured.err
+    assert "missing --provider-proof for requested provider" in captured.err
+    assert provider_id not in captured.err
     assert captured.out == ""
 
 
 def test_duplicate_provider_id_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
-    args.extend(["--provider-id", "provider-a"])
+    provider_id = "provider-a-private-key-placeholder"
+    first_provider_index = args.index("--provider-id") + 1
+    first_proof_index = args.index("--provider-proof") + 1
+    args[first_provider_index] = provider_id
+    args[first_proof_index] = f"{provider_id}={tmp_path / 'payloads' / 'provider-a-proof.to'}"
+    args.extend(["--provider-id", provider_id])
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "duplicate --provider-id `provider-a`" in captured.err
+    assert "duplicate --provider-id" in captured.err
+    assert provider_id not in captured.err
     assert captured.out == ""
 
 
 def test_extra_provider_proof_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
+    provider_id = "provider-b-private-key-placeholder"
     proof_path = write_payload(tmp_path / "payloads" / "provider-b-proof.to")
-    args.extend(["--provider-proof", f"provider-b={proof_path}"])
+    args.extend(["--provider-proof", f"{provider_id}={proof_path}"])
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "unrequested provider `provider-b`" in captured.err
+    assert "--provider-proof supplied for unrequested provider" in captured.err
+    assert provider_id not in captured.err
+    assert captured.out == ""
+
+
+def test_duplicate_provider_proof_does_not_echo_provider_id(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    provider_id = "provider-a-private-key-placeholder"
+    provider_index = args.index("--provider-id") + 1
+    first_proof_index = args.index("--provider-proof") + 1
+    proof_path = tmp_path / "payloads" / "provider-a-proof.to"
+    args[provider_index] = provider_id
+    args[first_proof_index] = f"{provider_id}={proof_path}"
+    args.extend(["--provider-proof", f"{provider_id}={proof_path}"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "duplicate --provider-proof" in captured.err
+    assert provider_id not in captured.err
     assert captured.out == ""
 
 
@@ -194,6 +226,19 @@ def test_malformed_provider_proof_sanitizes_exception_text(
     assert bad_message not in "\n".join(errors)
 
 
+def test_malformed_provider_proof_does_not_echo_spec(tmp_path: Path) -> None:
+    args = complete_args(tmp_path)
+    bad_spec = "provider-a-private-key-placeholder"
+    proof_index = args.index("--provider-proof") + 1
+    args[proof_index] = bad_spec
+
+    errors = MODULE.validate_inputs(MODULE.parse_args(args))
+
+    diagnostics = "\n".join(errors)
+    assert "--provider-proof must use PROVIDER_ID=PATH form" in diagnostics
+    assert bad_spec not in diagnostics
+
+
 def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     missing = tmp_path / "missing-metrics.json"
@@ -203,6 +248,7 @@ def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "--metrics-evidence" in captured.err
-    assert str(missing) in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "--metrics-evidence" not in captured.err
+    assert str(missing) not in captured.err
     assert captured.out == ""

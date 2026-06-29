@@ -13,6 +13,15 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_response_args import (  # noqa: E402
+    ARGFILE_INSPECTION_DIAGNOSTIC,
+    ARGFILE_MISSING_DIAGNOSTIC,
+    ARGFILE_PARENT_INSPECTION_DIAGNOSTIC,
+    ARGFILE_PARENT_SYMLINK_DIAGNOSTIC,
+    ARGFILE_READ_DIAGNOSTIC,
+    ARGFILE_RECURSION_DIAGNOSTIC,
+    ARGFILE_RESOLUTION_DIAGNOSTIC,
+    ARGFILE_SYMLINK_DIAGNOSTIC,
+    ARGFILE_UTF8_DIAGNOSTIC,
     EvidenceArgumentParser,
     MAX_EXPANDED_ARGS,
     MAX_RESPONSE_ARGFILE_BYTES,
@@ -123,7 +132,8 @@ def test_recursive_response_file_fails(tmp_path: Path) -> None:
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert "recursive @ARGFILE" in str(error)
+        assert str(error) == ARGFILE_RECURSION_DIAGNOSTIC
+        assert str(args_file) not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("recursive response file was accepted")
 
@@ -132,7 +142,8 @@ def test_directory_response_file_fails(tmp_path: Path) -> None:
     try:
         expand_response_args([f"@{tmp_path}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert "must exist and be a file" in str(error)
+        assert str(error) == ARGFILE_MISSING_DIAGNOSTIC
+        assert str(tmp_path) not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("directory response file was accepted")
 
@@ -146,7 +157,8 @@ def test_symlink_response_file_fails_before_read(tmp_path: Path) -> None:
     try:
         expand_response_args([f"@{symlink}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert str(error) == f"@ARGFILE `{symlink}` must not be a symlink"
+        assert str(error) == ARGFILE_SYMLINK_DIAGNOSTIC
+        assert str(symlink) not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("symlink response file was accepted")
 
@@ -163,7 +175,8 @@ def test_response_file_parent_symlink_fails_before_read(tmp_path: Path) -> None:
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert str(error) == f"@ARGFILE parent `{symlink_root}` must not be a symlink"
+        assert str(error) == ARGFILE_PARENT_SYMLINK_DIAGNOSTIC
+        assert str(symlink_root) not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("parent-symlink response file was accepted")
 
@@ -184,8 +197,9 @@ def test_response_file_resolve_failure_is_stable_value_error(
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert f"failed to resolve @ARGFILE `{args_file}`" in str(error)
-        assert "symlink loop" in str(error)
+        assert str(error) == ARGFILE_RESOLUTION_DIAGNOSTIC
+        assert str(args_file) not in str(error)
+        assert "symlink loop" not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("resolver failure escaped response-file handling")
 
@@ -208,8 +222,9 @@ def test_response_file_stat_failure_is_stable_value_error(
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert f"failed to stat @ARGFILE `{args_file}`" in str(error)
-        assert "argfile stat denied" in str(error)
+        assert str(error) == ARGFILE_INSPECTION_DIAGNOSTIC
+        assert str(args_file) not in str(error)
+        assert "argfile stat denied" not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("stat failure escaped response-file handling")
 
@@ -233,9 +248,8 @@ def test_response_file_stat_failure_sanitizes_malformed_error(
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert str(error) == (
-            f"failed to stat @ARGFILE `{args_file}`: <non-canonical-error>"
-        )
+        assert str(error) == ARGFILE_INSPECTION_DIAGNOSTIC
+        assert str(args_file) not in str(error)
         assert bad_message not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed stat failure escaped response-file handling")
@@ -259,8 +273,9 @@ def test_response_file_read_failure_is_stable_value_error(
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert f"failed to read @ARGFILE `{args_file}`" in str(error)
-        assert "argfile read denied" in str(error)
+        assert str(error) == ARGFILE_READ_DIAGNOSTIC
+        assert str(args_file) not in str(error)
+        assert "argfile read denied" not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("read failure escaped response-file handling")
 
@@ -284,9 +299,8 @@ def test_response_file_read_failure_sanitizes_malformed_error(
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert str(error) == (
-            f"failed to read @ARGFILE `{args_file}`: <non-canonical-error>"
-        )
+        assert str(error) == ARGFILE_READ_DIAGNOSTIC
+        assert str(args_file) not in str(error)
         assert bad_message not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed read failure escaped response-file handling")
@@ -323,7 +337,8 @@ def test_response_file_non_utf8_bytes_fail_stably(tmp_path: Path) -> None:
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert f"@ARGFILE `{args_file}` must be UTF-8" in str(error)
+        assert str(error) == ARGFILE_UTF8_DIAGNOSTIC
+        assert str(args_file) not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("non-UTF-8 response file was accepted")
 
@@ -335,7 +350,8 @@ def test_response_file_line_parse_error_identifies_file_and_line(tmp_path: Path)
     try:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
-        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert str(error).startswith("@ARGFILE line 1:")
+        assert str(args_file) not in str(error)
         assert "No closing quotation" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed response-file line was accepted")
@@ -354,9 +370,8 @@ def test_response_file_line_parse_error_sanitizes_malformed_error(
     try:
         expand_response_args([f"@{args_file}"], BrokenParser())
     except ValueError as error:
-        assert str(error) == (
-            f"@ARGFILE `{args_file}` line 1: <non-canonical-error>"
-        )
+        assert str(error) == "@ARGFILE line 1: <non-canonical-error>"
+        assert str(args_file) not in str(error)
         assert "line parse denied" not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed response-file line error leaked diagnostics")
@@ -375,7 +390,8 @@ def test_response_file_parser_returning_scalar_line_args_fails_with_line(
     try:
         expand_response_args([f"@{args_file}"], BrokenParser())
     except ValueError as error:
-        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert str(error).startswith("@ARGFILE line 1:")
+        assert str(args_file) not in str(error)
         assert "response-file line arguments must be a sequence of strings" in str(
             error
         )
@@ -396,7 +412,8 @@ def test_response_file_parser_returning_non_string_line_arg_fails_with_line(
     try:
         expand_response_args([f"@{args_file}"], BrokenParser())
     except ValueError as error:
-        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert str(error).startswith("@ARGFILE line 1:")
+        assert str(args_file) not in str(error)
         assert "argument `7` must be a string" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("non-string line argument was accepted")
@@ -415,7 +432,8 @@ def test_response_file_parser_returning_malformed_line_arg_fails_with_line(
     try:
         expand_response_args([f"@{args_file}"], BrokenParser())
     except ValueError as error:
-        assert f"@ARGFILE `{args_file}` line 1" in str(error)
+        assert str(error).startswith("@ARGFILE line 1:")
+        assert str(args_file) not in str(error)
         assert "argument must be a non-empty canonical string" in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("malformed line argument was accepted")
@@ -438,6 +456,7 @@ def test_oversized_response_file_fails(tmp_path: Path) -> None:
         expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
     except ValueError as error:
         assert "exceeds" in str(error)
+        assert str(args_file) not in str(error)
     else:  # pragma: no cover - defensive
         raise AssertionError("oversized response file was accepted")
 

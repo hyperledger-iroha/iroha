@@ -2,6 +2,7 @@
 //! Localnet autoscale regression test for Nexus lane expansion/contraction.
 
 use std::{
+    borrow::Cow,
     fs,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -60,6 +61,7 @@ const AUTOSCALE_SINGLE_CYCLE_RETRY_LIMIT: usize = 4;
 const AUTOSCALE_MULTI_CYCLE_RETRY_LIMIT: usize = 4;
 const AUTOSCALE_SOAK_DEFAULT_SEED: &str = "autoscale-localnet-soak-default";
 const AUTOSCALE_SOAK_SEED_ENV: &str = "IROHA_AUTOSCALE_SOAK_SEED";
+const AUTOSCALE_SOAK_DURATION_ENV: &str = "IROHA_AUTOSCALE_SOAK_DURATION_SECS";
 const AUTOSCALE_SOAK_ARTIFACT_DIR_ENV: &str = "IROHA_AUTOSCALE_SOAK_ARTIFACT_DIR";
 const AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV: &str = "IROHA_AUTOSCALE_SOAK_FORCE_FAIL_CYCLE";
 const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -939,7 +941,127 @@ fn parse_autoscale_transition_stats(log_contents: &str) -> AutoscaleTransitionSt
     }
 }
 
-fn peer_autoscale_transition_stats(peer: &NetworkPeer) -> Result<AutoscaleTransitionStats> {
+fn strip_ansi_escape_codes(input: &str) -> Cow<'_, str> {
+    if !input.as_bytes().contains(&0x1B) {
+        return Cow::Borrowed(input);
+    }
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1B' && chars.next_if_eq(&'[').is_some() {
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    Cow::Owned(output)
+}
+
+fn line_has_unsigned_field(line: &str, field: &str, expected: Option<u64>) -> bool {
+    let prefixes = [
+        format!("{field}="),
+        format!("{field}:"),
+        format!("\"{field}\":"),
+    ];
+    let expected_text = expected.map(|value| value.to_string());
+    prefixes.into_iter().any(|prefix| {
+        line.match_indices(prefix.as_str()).any(|(offset, _)| {
+            if offset > 0
+                && line[..offset].chars().next_back().is_some_and(|previous| {
+                    !previous.is_ascii_whitespace() && !matches!(previous, '{' | '[' | '(' | ',')
+                })
+            {
+                return false;
+            }
+            let value = line[offset + prefix.len()..].trim_start();
+            let digit_len = value
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .map(char::len_utf8)
+                .sum::<usize>();
+            if digit_len == 0 {
+                return false;
+            }
+            let digits = &value[..digit_len];
+            if expected_text
+                .as_ref()
+                .is_some_and(|expected| digits != expected)
+            {
+                return false;
+            }
+            if digits.parse::<u64>().is_err() {
+                return false;
+            }
+            value[digit_len..].chars().next().is_none_or(|next| {
+                next.is_ascii_whitespace() || matches!(next, ',' | ';' | '}' | ']' | ')')
+            })
+        })
+    })
+}
+
+fn line_has_lane_field(line: &str, lane_id: u32) -> bool {
+    line_has_unsigned_field(line, "lane", Some(u64::from(lane_id)))
+}
+
+fn line_has_autoscale_transition_base_fields(line: &str, lane_id: u32) -> bool {
+    line_has_lane_field(line, lane_id)
+        && line_has_unsigned_field(line, "height", None)
+        && line_has_unsigned_field(line, "active_lanes", None)
+        && line_has_unsigned_field(line, "autoscale_capacity_lanes", None)
+}
+
+fn line_has_autoscale_scale_out_transition_fields(line: &str, lane_id: u32) -> bool {
+    line_has_autoscale_transition_base_fields(line, lane_id)
+        && line_has_unsigned_field(line, "out_latency_ratio_permille", None)
+        && line_has_unsigned_field(line, "out_utilization_p95_permille", None)
+}
+
+fn line_has_autoscale_scale_in_transition_fields(line: &str, lane_id: u32) -> bool {
+    line_has_autoscale_transition_base_fields(line, lane_id)
+        && line_has_unsigned_field(line, "in_latency_ratio_permille", None)
+        && line_has_unsigned_field(line, "in_utilization_p95_permille", None)
+}
+
+fn parse_autoscale_transition_stats_for_lane(
+    log_contents: &str,
+    lane_id: u32,
+) -> AutoscaleTransitionStats {
+    let scale_out_transitions = u64::try_from(
+        log_contents
+            .lines()
+            .filter(|raw_line| {
+                let line = strip_ansi_escape_codes(raw_line);
+                line.contains(AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER)
+                    && line_has_autoscale_scale_out_transition_fields(line.as_ref(), lane_id)
+            })
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let scale_in_transitions = u64::try_from(
+        log_contents
+            .lines()
+            .filter(|raw_line| {
+                let line = strip_ansi_escape_codes(raw_line);
+                line.contains(AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER)
+                    && line_has_autoscale_scale_in_transition_fields(line.as_ref(), lane_id)
+            })
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    AutoscaleTransitionStats {
+        scale_out_transitions,
+        scale_in_transitions,
+    }
+}
+
+fn peer_autoscale_transition_stats_for_lane(
+    peer: &NetworkPeer,
+    lane_id: u32,
+) -> Result<AutoscaleTransitionStats> {
     let Some(stdout_log_path) = peer_run_stdout_log_path(peer)? else {
         return Ok(AutoscaleTransitionStats::default());
     };
@@ -951,25 +1073,30 @@ fn peer_autoscale_transition_stats(peer: &NetworkPeer) -> Result<AutoscaleTransi
         Err(err) => {
             return Err(err).map_err(|error| {
                 eyre!(
-                    "read autoscale transition log {:?}: {error}",
+                    "read lane-specific autoscale transition log {:?}: {error}",
                     stdout_log_path
                 )
             });
         }
     };
-    Ok(parse_autoscale_transition_stats(&log_contents))
+    Ok(parse_autoscale_transition_stats_for_lane(
+        &log_contents,
+        lane_id,
+    ))
 }
 
-fn autoscale_transition_snapshot(
+fn autoscale_transition_snapshot_for_lane(
     network: &sandbox::SerializedNetwork,
+    lane_id: u32,
 ) -> Result<Vec<AutoscaleTransitionStats>> {
     network
         .peers()
         .iter()
         .enumerate()
         .map(|(index, peer)| {
-            peer_autoscale_transition_stats(peer)
-                .map_err(|err| eyre!("read autoscale transition stats on peer {index}: {err}"))
+            peer_autoscale_transition_stats_for_lane(peer, lane_id).map_err(|err| {
+                eyre!("read lane-specific autoscale transition stats on peer {index}: {err}")
+            })
         })
         .collect()
 }
@@ -1052,6 +1179,8 @@ struct LaneValidatorSnapshot {
     total: u64,
     active: u64,
     pending_activation: u64,
+    jailed: u64,
+    exiting: u64,
     max_activation_epoch: u64,
     max_activation_height: u64,
 }
@@ -1084,6 +1213,8 @@ fn decode_lane_validator_snapshot(
 
     let mut active = 0_u64;
     let mut pending_activation = 0_u64;
+    let mut jailed = 0_u64;
+    let mut exiting = 0_u64;
     let mut max_activation_epoch = 0_u64;
     let mut max_activation_height = 0_u64;
     if let Some(entries) = items {
@@ -1100,6 +1231,8 @@ fn decode_lane_validator_snapshot(
                 Some("PendingActivation") => {
                     pending_activation = pending_activation.saturating_add(1);
                 }
+                Some("Jailed") => jailed = jailed.saturating_add(1),
+                Some("Exiting") => exiting = exiting.saturating_add(1),
                 _ => {}
             }
             if let Some(epoch) = entry_obj
@@ -1122,6 +1255,8 @@ fn decode_lane_validator_snapshot(
         total,
         active,
         pending_activation,
+        jailed,
+        exiting,
         max_activation_epoch,
         max_activation_height,
     })
@@ -1142,6 +1277,8 @@ fn fetch_lane_validator_snapshot(client: &Client, lane_id: u32) -> Option<LaneVa
                     total: 0,
                     active: 0,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 0,
                     max_activation_height: 0,
                 })
@@ -1240,13 +1377,43 @@ fn all_peers_have_storage_lane_count(
         .all(|(_, lanes)| lanes.len() == expected_count)
 }
 
-fn all_peers_have_storage_lane(snapshot: &[(usize, Vec<String>)], lane_id: u32) -> bool {
-    let lane_prefix = format!("lane_{lane_id:03}");
-    let lane_prefix_with_separator = format!("{lane_prefix}_");
+fn storage_lane_id(segment: &str) -> Option<u32> {
+    let rest = segment.strip_prefix("lane_")?;
+    let digits = rest.get(..3)?;
+    if !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let suffix = rest.get(3..)?;
+    if !(suffix.is_empty() || suffix.starts_with('_')) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn all_peers_have_storage_lane_profile(
+    snapshot: &[(usize, Vec<String>)],
+    expected_count: usize,
+    required_lane_id: u32,
+) -> bool {
+    let Some(expected_count_u32) = u32::try_from(expected_count).ok() else {
+        return false;
+    };
     snapshot.iter().all(|(_, lanes)| {
-        lanes.iter().any(|lane| {
-            lane == &lane_prefix || lane.starts_with(lane_prefix_with_separator.as_str())
-        })
+        if lanes.len() != expected_count {
+            return false;
+        }
+        let Some(mut lane_ids) = lanes
+            .iter()
+            .map(|lane| storage_lane_id(lane))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        lane_ids.sort_unstable();
+        lane_ids.dedup();
+        lane_ids.len() == expected_count
+            && lane_ids.contains(&required_lane_id)
+            && lane_ids.into_iter().eq(0..expected_count_u32)
     })
 }
 
@@ -1291,7 +1458,19 @@ fn peer_lane_validator_snapshot(
     peer.lane_validators
         .iter()
         .filter(|lane| lane.lane_id == lane_id)
-        .max_by_key(|lane| (lane.active, lane.pending_activation, lane.total))
+        .max_by_key(|lane| {
+            (
+                lane.active,
+                lane.pending_activation,
+                lane.jailed,
+                lane.exiting,
+                lane.total,
+            )
+        })
+}
+
+fn lane_validator_has_live_activity(lane: &LaneValidatorSnapshot) -> bool {
+    lane.active > 0 || lane.pending_activation > 0 || lane.jailed > 0 || lane.exiting > 0
 }
 
 fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
@@ -1306,10 +1485,10 @@ fn peer_has_lane_declaration(peer: &PeerStatusSnapshot, lane_id: u32) -> bool {
             .lane_governance_ids
             .iter()
             .any(|declared_lane| *declared_lane == lane_id)
-        || peer.lane_validators.iter().any(|lane| {
-            lane.lane_id == lane_id
-                && (lane.total > 0 || lane.active > 0 || lane.pending_activation > 0)
-        })
+        || peer
+            .lane_validators
+            .iter()
+            .any(|lane| lane.lane_id == lane_id && lane_validator_has_live_activity(lane))
 }
 
 fn peer_has_lane_declaration_transition(
@@ -1371,12 +1550,11 @@ fn peer_has_lane_progress_transition(
         peer_lane_validator_snapshot(peer, lane_id),
         peer_lane_validator_snapshot(baseline_peer, lane_id),
     ) {
-        (Some(current), Some(baseline)) => {
+        (Some(current), Some(baseline)) if lane_validator_has_live_activity(current) => {
             current.active > baseline.active
                 || current.pending_activation > baseline.pending_activation
-                || current.total > baseline.total
-                || current.max_activation_epoch > baseline.max_activation_epoch
-                || current.max_activation_height > baseline.max_activation_height
+                || current.jailed > baseline.jailed
+                || current.exiting > baseline.exiting
         }
         _ => false,
     };
@@ -1441,7 +1619,7 @@ fn expansion_signal_breakdown(
         }
         if let Some(validator) = peer_lane_validator_snapshot(peer, lane_id) {
             breakdown.peers_with_lane_validator_snapshot += 1;
-            if validator.active > 0 || validator.pending_activation > 0 {
+            if lane_validator_has_live_activity(validator) {
                 breakdown.peers_with_lane_validator_activity += 1;
             }
         }
@@ -1529,8 +1707,11 @@ fn expansion_observed_on_storage_for_lane_count(
     expanded_provisioned_lanes: usize,
     elastic_lane_id: u32,
 ) -> bool {
-    expansion_observed_on_storage_for_count(storage_snapshot, expanded_provisioned_lanes)
-        && all_peers_have_storage_lane(storage_snapshot, elastic_lane_id)
+    all_peers_have_storage_lane_profile(
+        storage_snapshot,
+        expanded_provisioned_lanes,
+        elastic_lane_id,
+    )
 }
 
 fn expansion_observed_on_storage(storage_snapshot: &[(usize, Vec<String>)]) -> bool {
@@ -1593,13 +1774,7 @@ fn peer_has_contracted_profile(
     let elastic_lane_commitments_idle = !peer_has_lane_commitment_activity(status, elastic_lane_id);
     let elastic_lane_relay_idle = peer_lane_relay_height(status, elastic_lane_id).is_none();
     let elastic_lane_validator_idle = match peer_lane_validator_snapshot(status, elastic_lane_id) {
-        Some(snapshot) => {
-            snapshot.total == 0
-                && snapshot.active == 0
-                && snapshot.pending_activation == 0
-                && snapshot.max_activation_epoch == 0
-                && snapshot.max_activation_height == 0
-        }
+        Some(snapshot) => !lane_validator_has_live_activity(snapshot),
         None => true,
     };
 
@@ -1891,6 +2066,18 @@ fn autoscale_soak_seed() -> String {
         .unwrap_or_else(|| AUTOSCALE_SOAK_DEFAULT_SEED.to_owned())
 }
 
+fn autoscale_soak_duration_from_env_value(raw: Option<&str>) -> Duration {
+    raw.and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(AUTOSCALE_SOAK_DURATION)
+}
+
+fn autoscale_soak_duration() -> Duration {
+    let raw = std::env::var(AUTOSCALE_SOAK_DURATION_ENV).ok();
+    autoscale_soak_duration_from_env_value(raw.as_deref())
+}
+
 fn autoscale_soak_force_fail_cycle() -> Option<usize> {
     std::env::var(AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV)
         .ok()
@@ -2142,7 +2329,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
             Err(err) => {
                 last_status_error = Some(err.to_string());
                 let scale_out_transition_observed_on_quorum =
-                    match autoscale_transition_snapshot(network) {
+                    match autoscale_transition_snapshot_for_lane(network, elastic_lane_id) {
                         Ok(snapshot) => {
                             last_scale_out_transition_peers = peers_with_scale_out_transition(
                                 &snapshot,
@@ -2222,19 +2409,20 @@ fn wait_for_expanded_lanes_with_heartbeat(
             elastic_lane_id,
             quorum_required,
         );
-        let scale_out_transition_observed_on_quorum = match autoscale_transition_snapshot(network) {
-            Ok(snapshot) => {
-                last_scale_out_transition_peers =
-                    peers_with_scale_out_transition(&snapshot, baseline_autoscale_transitions);
-                last_transition_snapshot = snapshot;
-                last_transition_error = None;
-                last_scale_out_transition_peers >= quorum_required
-            }
-            Err(err) => {
-                last_transition_error = Some(err.to_string());
-                false
-            }
-        };
+        let scale_out_transition_observed_on_quorum =
+            match autoscale_transition_snapshot_for_lane(network, elastic_lane_id) {
+                Ok(snapshot) => {
+                    last_scale_out_transition_peers =
+                        peers_with_scale_out_transition(&snapshot, baseline_autoscale_transitions);
+                    last_transition_snapshot = snapshot;
+                    last_transition_error = None;
+                    last_scale_out_transition_peers >= quorum_required
+                }
+                Err(err) => {
+                    last_transition_error = Some(err.to_string());
+                    false
+                }
+            };
 
         let expansion_ready = if require_scale_out_transition {
             scale_out_transition_observed_on_quorum
@@ -2315,7 +2503,7 @@ fn wait_for_expanded_lanes_with_heartbeat(
     }
 
     Err(eyre!(
-        "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
+        "{context}: timed out waiting for expanded lane profile (lane {elastic_lane_id} active via status `capacity>0 || committed>0`, sumeragi lane commitment `tx_count>0 || teu_total>0`, public-lane validator lifecycle activity (`active || pending_activation || jailed || exiting`), baseline transition via lane declaration/progress, or deterministic autoscale scale-out transitions on >= {quorum_required}/{TOTAL_PEERS} peers{}; storage lane count={expanded_provisioned_lanes} accepted only as fallback after grace {:?} + post-storage status window {:?} when elastic lane storage progresses on >= {quorum_required}/{TOTAL_PEERS} peers and scale-out transition quorum is not required); last status snapshot: {last_status_snapshot:?}; last storage snapshot: {last_storage_snapshot:?}; last elastic storage snapshot: {last_elastic_storage_snapshot:?}; last autoscale transition snapshot: {last_transition_snapshot:?}; last scale-out transition peers: {last_scale_out_transition_peers}/{TOTAL_PEERS}; last status error: {last_status_error:?}; last transition error: {last_transition_error:?}; last heartbeat error: {last_heartbeat_error:?}; last top-up error: {last_top_up_error:?}",
         if require_scale_out_transition {
             "; strict mode requires deterministic scale-out transition quorum unless the cycle baseline already satisfies that quorum and the storage lane profile remains expanded"
         } else {
@@ -2544,7 +2732,7 @@ fn wait_for_contracted_lanes(
         let scale_in_transition_observed_on_quorum = if require_scale_in_transition {
             let baseline_after_expansion =
                 baseline_autoscale_transitions_after_expansion.unwrap_or_default();
-            match autoscale_transition_snapshot(network) {
+            match autoscale_transition_snapshot_for_lane(network, elastic_lane_id) {
                 Ok(snapshot) => {
                     let (peers_with_scale_in_after_expansion, peers_with_scale_in_since_cycle) =
                         scale_in_transition_counts(
@@ -2655,7 +2843,8 @@ fn run_expand_contract_cycle(
 
     let pre_cycle_status = status_snapshot(network)?;
     let pre_cycle_elastic_storage = elastic_lane_storage_snapshot(network, elastic_lane_id)?;
-    let pre_cycle_autoscale_transitions = autoscale_transition_snapshot(network)?;
+    let pre_cycle_autoscale_transitions =
+        autoscale_transition_snapshot_for_lane(network, elastic_lane_id)?;
     let pre_cycle_max_non_empty_height = max_non_empty_height(&pre_cycle_status);
     let pre_cycle_max_txs_approved = max_txs_approved(&pre_cycle_status);
     let pre_cycle_max_txs_rejected = max_txs_rejected(&pre_cycle_status);
@@ -2734,7 +2923,8 @@ fn run_expand_contract_cycle(
         "[autoscale-localnet][cycle {cycle_index}] expansion wait: {:.3}s",
         expansion_time_s
     );
-    let post_expansion_autoscale_transitions = autoscale_transition_snapshot(network)?;
+    let post_expansion_autoscale_transitions =
+        autoscale_transition_snapshot_for_lane(network, elastic_lane_id)?;
     let peers_with_scale_out = peers_with_scale_out_transition(
         &post_expansion_autoscale_transitions,
         &pre_cycle_autoscale_transitions,
@@ -2792,7 +2982,8 @@ fn run_expand_contract_cycle(
         "[autoscale-localnet][cycle {cycle_index}] contraction wait: {:.3}s",
         contraction_time_s
     );
-    let post_contraction_autoscale_transitions = autoscale_transition_snapshot(network)?;
+    let post_contraction_autoscale_transitions =
+        autoscale_transition_snapshot_for_lane(network, elastic_lane_id)?;
     let peers_with_scale_in_after_expansion = peers_with_scale_in_transition(
         &post_contraction_autoscale_transitions,
         &post_expansion_autoscale_transitions,
@@ -3258,6 +3449,7 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
         .lock()
         .expect("autoscale localnet test mutex poisoned");
     let soak_seed = autoscale_soak_seed();
+    let soak_duration = autoscale_soak_duration();
     let load_sequence_seed = configure_load_sequence_seed(Some(&soak_seed));
     let test_started = Instant::now();
     let startup_started = Instant::now();
@@ -3302,7 +3494,8 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
     )?;
     eprintln!("[autoscale-localnet][soak] dynamic commit quorum (2f+1): {quorum_required}");
     eprintln!(
-        "[autoscale-localnet][soak] deterministic seed ({AUTOSCALE_SOAK_SEED_ENV}): {soak_seed}; load sequence start: {load_sequence_seed}"
+        "[autoscale-localnet][soak] deterministic seed ({AUTOSCALE_SOAK_SEED_ENV}): {soak_seed}; load sequence start: {load_sequence_seed}; duration ({AUTOSCALE_SOAK_DURATION_ENV}): {:.3}s",
+        soak_duration.as_secs_f64()
     );
 
     let mut soak_reporter = AutoscaleSoakReporter::new(&network, context)?;
@@ -3317,7 +3510,7 @@ fn nexus_autoscale_soak_expand_contract_cycles_in_localnet() -> Result<()> {
     let mut cycle_index = 1_usize;
     let mut failure_cycle = None::<usize>;
     let soak_result = 'soak: {
-        while soak_started.elapsed() < AUTOSCALE_SOAK_DURATION {
+        while soak_started.elapsed() < soak_duration {
             if force_fail_cycle == Some(cycle_index) {
                 let forced_reason = format!(
                     "autoscale soak forced failure at cycle {cycle_index} via {AUTOSCALE_SOAK_FORCE_FAIL_CYCLE_ENV}"
@@ -3447,8 +3640,9 @@ mod tests {
         LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
         PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
         PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
-        contraction_observed_on_quorum_peers, contraction_observed_on_quorum_peers_for_profile,
-        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
+        autoscale_soak_duration_from_env_value, contraction_observed_on_quorum_peers,
+        contraction_observed_on_quorum_peers_for_profile, elastic_lane_storage_progressed,
+        expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
@@ -3458,6 +3652,7 @@ mod tests {
         expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count,
         expansion_probe_top_up_tx_count, expansion_scaled_top_up_tx_count,
         expansion_top_up_tx_count, parse_autoscale_transition_stats,
+        parse_autoscale_transition_stats_for_lane, peers_with_expanded_lane_signal,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
         scale_in_transition_counts, scale_out_transition_observed_on_quorum_peers,
         should_require_scale_in_transition, should_require_scale_in_transition_for_lane,
@@ -3622,6 +3817,30 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_soak_duration_env_value_preserves_long_default_unless_positive_seconds() {
+        assert_eq!(
+            autoscale_soak_duration_from_env_value(None),
+            super::AUTOSCALE_SOAK_DURATION
+        );
+        assert_eq!(
+            autoscale_soak_duration_from_env_value(Some("")),
+            super::AUTOSCALE_SOAK_DURATION
+        );
+        assert_eq!(
+            autoscale_soak_duration_from_env_value(Some("0")),
+            super::AUTOSCALE_SOAK_DURATION
+        );
+        assert_eq!(
+            autoscale_soak_duration_from_env_value(Some("not-a-number")),
+            super::AUTOSCALE_SOAK_DURATION
+        );
+        assert_eq!(
+            autoscale_soak_duration_from_env_value(Some(" 120 ")),
+            Duration::from_secs(120)
+        );
+    }
+
+    #[test]
     fn single_cycle_load_profile_escalates_per_attempt() {
         assert_eq!(
             single_cycle_load_tx_count(0),
@@ -3717,6 +3936,47 @@ mod tests {
         let stats = parse_autoscale_transition_stats(&log);
         assert_eq!(stats.scale_out_transitions, 2);
         assert_eq!(stats.scale_in_transitions, 1);
+    }
+
+    #[test]
+    fn autoscale_transition_stats_parse_lane_specific_log_markers() {
+        let log = format!(
+            "INFO \u{1b}[32mheight\u{1b}[0m=2 \u{1b}[32mlane\u{1b}[0m=3 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3; active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=4 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             {{\"height\":2,\"lane\":3,\"active_lanes\":3,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}\n\
+             height: 2 lane: 3 active_lanes: 3 autoscale_capacity_lanes: 1 in_latency_ratio_permille: 700 in_utilization_p95_permille: 20 {input}\n\
+             lane=3 {out}\n\
+             height=2 lane=3 active_lanes=3 {out}\n\
+             height=2 lane=3 autoscale_capacity_lanes=1 {out}\n\
+             height=2 lane=3 active_lanes=3 autoscale_capacity_lanes=1 in_latency_ratio_permille=700 in_utilization_p95_permille=20 {out}\n\
+             height=2 lane=3 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {input}\n\
+             target_lane=3 height=2 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             target-lane=3 height=2 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=03 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3shadow active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3_extra active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3.0 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3-ghost active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=30 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(lane_three.scale_out_transitions, 3);
+        assert_eq!(lane_three.scale_in_transitions, 1);
+
+        let lane_four = parse_autoscale_transition_stats_for_lane(&log, 4);
+        assert_eq!(lane_four.scale_out_transitions, 1);
+        assert_eq!(lane_four.scale_in_transitions, 0);
+
+        let lane_one = parse_autoscale_transition_stats_for_lane(&log, 1);
+        assert_eq!(
+            lane_one.scale_out_transitions, 0,
+            "lane=30 must not be counted as lane=1"
+        );
+        assert_eq!(lane_one.scale_in_transitions, 0);
     }
 
     #[test]
@@ -4237,6 +4497,60 @@ mod tests {
     }
 
     #[test]
+    fn public_profile_expansion_requires_target_lane_relay_progress() {
+        let pre_cycle_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut wrong_lane_relay = pre_cycle_snapshot.clone();
+        for peer in wrong_lane_relay.iter_mut().take(3) {
+            peer.lane_relay.push(LaneRelaySnapshot {
+                lane_id: 1,
+                block_height: 42,
+            });
+        }
+
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &wrong_lane_relay,
+            Some(&pre_cycle_snapshot),
+            1,
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &wrong_lane_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut stale_relay = pre_cycle_snapshot.clone();
+        for peer in stale_relay.iter_mut().take(3) {
+            peer.lane_relay.push(LaneRelaySnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                block_height: 42,
+            });
+        }
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &stale_relay,
+            Some(&stale_relay),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
+        let mut progressed_relay = stale_relay.clone();
+        for peer in progressed_relay.iter_mut().take(3) {
+            peer.lane_relay
+                .iter_mut()
+                .find(|relay| relay.lane_id == PUBLIC_PROFILE_ELASTIC_LANE_ID)
+                .expect("elastic-lane relay fixture")
+                .block_height += 1;
+        }
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &progressed_relay,
+            Some(&stale_relay),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+    }
+
+    #[test]
     fn public_profile_contraction_rejects_missing_base_or_lingering_elastic_state() {
         let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         assert!(contraction_observed_on_quorum_peers_for_profile(
@@ -4303,6 +4617,8 @@ mod tests {
                 total: 4,
                 active: 1,
                 pending_activation: 0,
+                jailed: 0,
+                exiting: 0,
                 max_activation_epoch: 1,
                 max_activation_height: 42,
             });
@@ -4313,6 +4629,123 @@ mod tests {
             PUBLIC_PROFILE_ELASTIC_LANE_ID,
             3
         ));
+    }
+
+    #[test]
+    fn public_profile_contraction_allows_terminal_validator_audit_rows() {
+        let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut terminal_validator_rows = contracted_public_profile.clone();
+        for peer in terminal_validator_rows.iter_mut().take(3) {
+            peer.lane_validators.push(LaneValidatorSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                total: 4,
+                active: 0,
+                pending_activation: 0,
+                jailed: 0,
+                exiting: 0,
+                max_activation_epoch: 7,
+                max_activation_height: 42,
+            });
+        }
+
+        assert!(contraction_observed_on_quorum_peers_for_profile(
+            &terminal_validator_rows,
+            PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &terminal_validator_rows,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID
+            ),
+            0,
+            "terminal public-validator audit rows must not fake elastic-lane expansion"
+        );
+    }
+
+    #[test]
+    fn public_profile_contraction_rejects_revivable_validator_rows() {
+        let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut jailed_validator_rows = contracted_public_profile.clone();
+        for peer in jailed_validator_rows.iter_mut().take(3) {
+            peer.lane_validators.push(LaneValidatorSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                total: 4,
+                active: 0,
+                pending_activation: 0,
+                jailed: 1,
+                exiting: 0,
+                max_activation_epoch: 7,
+                max_activation_height: 42,
+            });
+        }
+        assert!(!contraction_observed_on_quorum_peers_for_profile(
+            &jailed_validator_rows,
+            PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &jailed_validator_rows,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID
+            ),
+            3,
+            "jailed public validators remain live lane-scoped state"
+        );
+
+        let mut jailed_with_terminal_noise = jailed_validator_rows.clone();
+        for peer in jailed_with_terminal_noise.iter_mut().take(3) {
+            let validator = peer
+                .lane_validators
+                .iter_mut()
+                .find(|validator| validator.lane_id == PUBLIC_PROFILE_ELASTIC_LANE_ID)
+                .expect("elastic lane validator snapshot");
+            validator.total = validator.total.saturating_add(3);
+            validator.max_activation_epoch = validator.max_activation_epoch.saturating_add(3);
+            validator.max_activation_height = validator.max_activation_height.saturating_add(30);
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &jailed_with_terminal_noise,
+                Some(&jailed_validator_rows),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID
+            ),
+            0,
+            "terminal audit rows beside an already-live validator must not fake fresh expansion progress"
+        );
+
+        let mut exiting_validator_rows = contracted_public_profile.clone();
+        for peer in exiting_validator_rows.iter_mut().take(3) {
+            peer.lane_validators.push(LaneValidatorSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                total: 4,
+                active: 0,
+                pending_activation: 0,
+                jailed: 0,
+                exiting: 1,
+                max_activation_epoch: 7,
+                max_activation_height: 42,
+            });
+        }
+        assert!(!contraction_observed_on_quorum_peers_for_profile(
+            &exiting_validator_rows,
+            PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &exiting_validator_rows,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID
+            ),
+            3,
+            "exiting public validators remain live until release"
+        );
     }
 
     #[test]
@@ -4476,6 +4909,75 @@ mod tests {
                 3
             )
         );
+
+        let duplicate_elastic_missing_base = vec![
+            (
+                0,
+                vec![
+                    "lane_000_core".to_owned(),
+                    "lane_001_governance".to_owned(),
+                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_duplicate".to_owned(),
+                ],
+            );
+            4
+        ];
+        assert!(expansion_observed_on_storage_for_count(
+            &duplicate_elastic_missing_base,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &duplicate_elastic_missing_base,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+        assert!(
+            !expansion_observed_with_prior_scale_out_quorum_on_storage_for_lane_count(
+                &duplicate_elastic_missing_base,
+                &prior_transitions,
+                PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3
+            )
+        );
+
+        let valid_profile_with_extra_spoofed_lane = vec![
+            (
+                0,
+                vec![
+                    "lane_000_core".to_owned(),
+                    "lane_001_governance".to_owned(),
+                    "lane_002_zk".to_owned(),
+                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003shadow".to_owned(),
+                ],
+            );
+            4
+        ];
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &valid_profile_with_extra_spoofed_lane,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+
+        let valid_profile_with_duplicate_elastic = vec![
+            (
+                0,
+                vec![
+                    "lane_000_core".to_owned(),
+                    "lane_001_governance".to_owned(),
+                    "lane_002_zk".to_owned(),
+                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_duplicate".to_owned(),
+                ],
+            );
+            4
+        ];
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &valid_profile_with_duplicate_elastic,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
     }
 
     #[test]
@@ -5299,6 +5801,8 @@ mod tests {
                     total: 4,
                     active: 0,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 1,
                     max_activation_height: 100,
                 }],
@@ -5322,6 +5826,8 @@ mod tests {
                     total: 4,
                     active: 0,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 1,
                     max_activation_height: 100,
                 }],
@@ -5345,6 +5851,8 @@ mod tests {
                     total: 4,
                     active: 0,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 1,
                     max_activation_height: 100,
                 }],
@@ -5368,6 +5876,8 @@ mod tests {
                     total: 4,
                     active: 0,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 1,
                     max_activation_height: 100,
                 }],
@@ -5390,6 +5900,8 @@ mod tests {
                     total: 4,
                     active: 3,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 1,
                     max_activation_height: 100,
                 }],
@@ -5409,6 +5921,8 @@ mod tests {
                     total: 4,
                     active: 2,
                     pending_activation: 1,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 1,
                     max_activation_height: 101,
                 }],
@@ -5428,6 +5942,8 @@ mod tests {
                     total: 4,
                     active: 1,
                     pending_activation: 0,
+                    jailed: 0,
+                    exiting: 0,
                     max_activation_epoch: 2,
                     max_activation_height: 102,
                 }],

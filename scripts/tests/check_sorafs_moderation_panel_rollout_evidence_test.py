@@ -480,11 +480,10 @@ def test_mixed_reviewed_deployment_context_fails(tmp_path: Path) -> None:
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
     }
-    assert (
-        "e2e_panel.deployment_id `moderation-panel-staging-b` does not match "
-        f"`{DEPLOYMENT_ID}`"
-        in result["errors"]
-    )
+    joined = "\n".join(result["errors"])
+    assert "e2e_panel.deployment_id does not match previous value" in result["errors"]
+    assert "moderation-panel-staging-b" not in joined
+    assert DEPLOYMENT_ID not in joined
 
 
 def test_missing_e2e_panel_fails(tmp_path: Path) -> None:

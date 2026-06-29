@@ -1016,8 +1016,7 @@ def test_duplicate_input_file_identity_fails(tmp_path: Path) -> None:
 
     errors = require_existing_files([evidence, evidence], "--evidence")
 
-    assert len(errors) == 1
-    assert "duplicate --evidence input" in errors[0]
+    assert errors == ["duplicate input evidence file"]
 
 
 def test_missing_input_file_reports_only_file_requirement(tmp_path: Path) -> None:
@@ -1025,7 +1024,7 @@ def test_missing_input_file_reports_only_file_requirement(tmp_path: Path) -> Non
 
     errors = require_existing_files([missing], "--evidence")
 
-    assert errors == [f"--evidence `{missing}` must exist and be a file"]
+    assert errors == ["input evidence file must exist and be a file"]
 
 
 def test_input_file_symlink_fails(tmp_path: Path) -> None:
@@ -1036,7 +1035,7 @@ def test_input_file_symlink_fails(tmp_path: Path) -> None:
 
     errors = require_existing_files([symlink], "--evidence")
 
-    assert errors == [f"--evidence `{symlink}` must not be a symlink"]
+    assert errors == ["input evidence file must not be a symlink"]
 
 
 def test_input_file_parent_symlink_fails(tmp_path: Path) -> None:
@@ -1048,7 +1047,7 @@ def test_input_file_parent_symlink_fails(tmp_path: Path) -> None:
 
     errors = require_existing_files([parent / "evidence.json"], "--evidence")
 
-    assert errors == [f"--evidence parent `{parent}` must not be a symlink"]
+    assert errors == ["input evidence file parent must not be a symlink"]
 
 
 def test_input_file_parent_chain_symlink_fails(tmp_path: Path) -> None:
@@ -1064,21 +1063,19 @@ def test_input_file_parent_chain_symlink_fails(tmp_path: Path) -> None:
         "--evidence",
     )
 
-    assert errors == [f"--evidence parent `{ancestor}` must not be a symlink"]
+    assert errors == ["input evidence file parent must not be a symlink"]
 
 
 def test_missing_input_file_sanitizes_noncanonical_path() -> None:
     errors = require_existing_files([Path("missing\nfile.json")], "--evidence")
 
-    assert errors == [
-        "--evidence `<non-canonical-path>` must exist and be a file"
-    ]
+    assert errors == ["input evidence file must exist and be a file"]
 
 
 def test_input_file_rejects_non_path_without_traceback() -> None:
     errors = require_existing_files(["evidence.json"], "--evidence")
 
-    assert errors == ["--evidence `evidence.json` must be a path"]
+    assert errors == ["input evidence file must be a path"]
 
 
 def test_input_file_rejects_scalar_and_mapping_path_collections() -> None:
@@ -1135,7 +1132,7 @@ def test_input_file_inspection_failure_is_reported(
 
     errors = require_existing_files([evidence], "--evidence")
 
-    assert errors == [f"--evidence `{evidence}` cannot be inspected: input stat denied"]
+    assert errors == ["input evidence file cannot be inspected"]
 
 
 def test_input_file_symlink_inspection_failure_is_reported(
@@ -1155,9 +1152,7 @@ def test_input_file_symlink_inspection_failure_is_reported(
 
     errors = require_existing_files([evidence], "--evidence")
 
-    assert errors == [
-        f"--evidence `{evidence}` cannot be inspected: input symlink stat denied"
-    ]
+    assert errors == ["input evidence file cannot be inspected"]
 
 
 def test_cross_label_duplicate_input_file_identity_fails(tmp_path: Path) -> None:
@@ -1170,9 +1165,7 @@ def test_cross_label_duplicate_input_file_identity_fails(tmp_path: Path) -> None
         *require_existing_files([evidence], "--second-evidence", seen=seen),
     ]
 
-    assert len(errors) == 1
-    assert "duplicate --second-evidence input" in errors[0]
-    assert "--first-evidence" in errors[0]
+    assert errors == ["duplicate input evidence file"]
 
 
 def test_input_file_resolver_failure_is_reported(

@@ -1,0 +1,22 @@
+--out-dir artifacts/sorafs/production-readiness
+--ai-prescreen-summary artifacts/sorafs/ai-prescreen/summary.json
+--appeal-finance-summary artifacts/sorafs/appeal-finance/summary.json
+--gateway-compliance-summary artifacts/sorafs/gateway-compliance/summary.json
+--gateway-load-summary artifacts/sorafs/gateway-load/summary.json
+--governance-dag-summary artifacts/sorafs/governance-dag/summary.json
+--hedging-billing-summary artifacts/sorafs/hedging-billing/summary.json
+--moderation-panel-summary artifacts/sorafs/moderation-panel/summary.json
+--orderbook-summary artifacts/sorafs/orderbook/summary.json
+--pdp-summary artifacts/sorafs/pdp/summary.json
+--pop-credentials-summary artifacts/sorafs/pop-credentials/summary.json
+--por-summary artifacts/sorafs/por/summary.json
+--potr-summary artifacts/sorafs/potr/summary.json
+--reference-sdk-release-summary artifacts/sorafs/reference-sdk-release/summary.json
+--repair-summary artifacts/sorafs/repair/summary.json
+--reputation-summary artifacts/sorafs/reputation/summary.json
+--reserve-rent-summary artifacts/sorafs/reserve-rent/summary.json
+--transparency-summary artifacts/sorafs/transparency/summary.json
+--deployment-id sorafs-mainnet-2026-06
+--environment production
+--max-summary-artifact-age-secs 1209600
+--dry-run

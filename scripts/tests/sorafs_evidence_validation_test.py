@@ -80,6 +80,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_snapshot_bound_evidence_artifact,
     record_string_value_binding_errors,
     record_string_tuple_binding_errors,
+    recognized_evidence_artifacts,
     validate_bound_evidence_digest_references,
     validate_bound_evidence_tuple_references,
     recognized_evidence_artifacts_are_valid,
@@ -133,7 +134,6 @@ def test_build_evidence_artifact_records_payload_free_fingerprint() -> None:
         "status": "passed",
         "fingerprint": {
             "digest_hex": "a" * 64,
-            "missing_field": None,
         },
         "valid": True,
         "errors": [],
@@ -393,7 +393,6 @@ def test_build_kinded_evidence_artifact_records_snapshot_fingerprint() -> None:
         "sha256": "d" * 64,
         "fingerprint": {
             "provider_id": "provider-a",
-            "missing_field": None,
             "snapshot_id_hex": "a" * 64,
             "merkle_root_hex": "b" * 64,
         },
@@ -1098,14 +1097,36 @@ def test_record_missing_required_evidence_value_errors_marks_missing_values() ->
         "provider",
         ("provider-a", "provider-b"),
         {"provider-a"},
-        lambda provider_id: f"missing provider/proof evidence for `{provider_id}`",
+        lambda _provider_id: "missing provider/proof evidence for required provider",
     )
 
     assert missing == ["provider-b"]
     assert required["provider"]["valid"] is False
     assert required["provider"]["errors"] == [
-        "missing provider/proof evidence for `provider-b`"
+        "missing provider/proof evidence for required provider"
     ]
+
+
+def test_record_missing_required_evidence_value_errors_rejects_value_echoing_messages() -> None:
+    required = {
+        "provider": {"valid": True, "errors": [], "artifacts": []},
+    }
+    secret_provider = "private-key-provider"
+
+    missing = record_missing_required_evidence_value_errors(
+        required,
+        "provider",
+        (secret_provider,),
+        set(),
+        lambda provider_id: f"missing provider/proof evidence for `{provider_id}`",
+    )
+
+    assert missing == [secret_provider]
+    assert required["provider"]["valid"] is False
+    assert required["provider"]["errors"] == [
+        "validation missing required evidence message must not include missing value"
+    ]
+    assert secret_provider not in "\n".join(required["provider"]["errors"])
 
 
 def test_record_missing_required_evidence_value_errors_skips_complete_values() -> None:
@@ -3003,8 +3024,11 @@ def test_record_consistent_evidence_value_reports_mismatches() -> None:
 
     assert values == {"snapshot_id_hex": "aa"}
     assert errors == [
-        "provider.snapshot_id_hex `bb` does not match `aa`",
+        "provider.snapshot_id_hex does not match previous value",
     ]
+    joined = "\n".join(errors)
+    assert "aa" not in joined
+    assert "bb" not in joined
 
 
 def test_record_consistent_evidence_value_reports_malformed_values() -> None:
@@ -3138,15 +3162,18 @@ def test_record_consistent_deployment_context_reports_mixed_context() -> None:
     assert gateway["errors"] == []
     assert settlement["valid"] is False
     assert settlement["errors"] == [
-        "settlement.deployment_id `sorafs-staging-b` does not match "
-        "`sorafs-staging-a`",
-        "settlement.environment `release` does not match `staging`",
+        "settlement.deployment_id does not match previous value",
+        "settlement.environment does not match previous value",
     ]
     assert errors == [
-        "settlement.json: settlement.deployment_id `sorafs-staging-b` does not match "
-        "`sorafs-staging-a`",
-        "settlement.json: settlement.environment `release` does not match `staging`",
+        "settlement.json: settlement.deployment_id does not match previous value",
+        "settlement.json: settlement.environment does not match previous value",
     ]
+    joined = "\n".join(errors + settlement["errors"])
+    assert "sorafs-staging-a" not in joined
+    assert "sorafs-staging-b" not in joined
+    assert "release" not in joined
+    assert "staging" not in joined
 
 
 def test_record_consistent_deployment_context_rejects_malformed_labels() -> None:
@@ -3965,6 +3992,43 @@ def test_count_evidence_artifacts_rejects_malformed_buckets_without_traceback() 
     assert count_evidence_artifacts({"bad\nkind": [{"valid": True}]}) == 0
 
 
+def test_recognized_evidence_artifacts_flatten_kind_buckets() -> None:
+    artifacts = {
+        "routes": [
+            {
+                "path": "routes.json",
+                "sha256": "a" * 64,
+                "valid": True,
+                "fingerprint": {"generated_at_unix": 1},
+            }
+        ],
+        "metrics": [{"path": "metrics.json", "sha256": "b" * 64, "valid": True}],
+    }
+
+    assert recognized_evidence_artifacts(artifacts) == [
+        {
+            "path": "routes.json",
+            "sha256": "a" * 64,
+            "valid": True,
+            "fingerprint": {"generated_at_unix": 1},
+            "kind": "routes",
+        },
+        {
+            "path": "metrics.json",
+            "sha256": "b" * 64,
+            "valid": True,
+            "kind": "metrics",
+        },
+    ]
+
+
+def test_recognized_evidence_artifacts_rejects_malformed_buckets_without_traceback() -> None:
+    assert recognized_evidence_artifacts("bad") == []
+    assert recognized_evidence_artifacts({"routes": "bad"}) == []
+    assert recognized_evidence_artifacts({"routes": [{"valid": True}, "bad"]}) == []
+    assert recognized_evidence_artifacts({"bad\nkind": [{"valid": True}]}) == []
+
+
 def test_count_recognized_evidence_artifacts_counts_custom_rows() -> None:
     assert count_recognized_evidence_artifacts(
         ({"path": "one.json"}, {"path": "two.json"})
@@ -4230,7 +4294,7 @@ def test_build_required_evidence_summary_reports_present_valid_and_missing() -> 
         "artifacts": [],
         "errors": [],
     }
-    assert errors == ["missing required missing rollout evidence"]
+    assert errors == ["missing required rollout evidence"]
 
 
 def test_build_required_evidence_summary_reports_invalid_release_artifacts() -> None:
@@ -4249,7 +4313,7 @@ def test_build_required_evidence_summary_reports_invalid_release_artifacts() -> 
     assert summary["archive"]["valid"] is False
     assert summary["archive"]["artifact_count"] == 1
     assert summary["archive"]["artifacts"] == [artifact]
-    assert errors == ["archive release evidence has invalid artifact(s)"]
+    assert errors == ["release evidence has invalid artifact(s)"]
 
 
 def test_build_required_evidence_summary_rejects_malformed_artifact_rows() -> None:
@@ -4280,10 +4344,10 @@ def test_build_required_evidence_summary_rejects_malformed_artifact_rows() -> No
             "required `archive` artifacts must be a sequence of artifact objects"
         ]
     assert scalar_errors == [
-        "required archive release artifacts must be a sequence of artifact objects"
+        "release required artifacts must be a sequence of artifact objects"
     ]
     assert mixed_errors == [
-        "required archive release artifacts must be a sequence of artifact objects"
+        "release required artifacts must be a sequence of artifact objects"
     ]
 
 
@@ -4341,10 +4405,10 @@ def test_build_required_evidence_summary_rejects_missing_schema_metadata() -> No
         "errors": ["required `control` schema must be configured"],
     }
     assert errors == [
-        "required ready rollout schema must be configured",
-        "required blank rollout schema must be configured",
-        "required padded rollout schema must be configured",
-        "required control rollout schema must be configured",
+        "rollout required schema must be configured",
+        "rollout required schema must be configured",
+        "rollout required schema must be configured",
+        "rollout required schema must be configured",
     ]
 
 
@@ -4370,8 +4434,8 @@ def test_build_required_evidence_summary_rejects_malformed_metadata_maps() -> No
     assert errors == [
         "release artifacts by kind must be a mapping",
         "release schema by kind must be a mapping",
-        "required ready release schema must be configured",
-        "missing required ready release evidence",
+        "release required schema must be configured",
+        "missing required release evidence",
     ]
 
 
@@ -4419,15 +4483,18 @@ def test_build_required_evidence_summary_rejects_mixed_deployments() -> None:
     assert summary["gateway"]["artifacts"][0]["errors"] == []
     assert summary["settlement"]["artifacts"][0]["valid"] is False
     assert summary["settlement"]["artifacts"][0]["errors"] == [
-        "settlement.deployment_id `sorafs-staging-b` does not match "
-        "`sorafs-staging-a`",
-        "settlement.environment `release` does not match `staging`",
+        "settlement.deployment_id does not match previous value",
+        "settlement.environment does not match previous value",
     ]
     assert errors == [
-        "settlement.json: settlement.deployment_id `sorafs-staging-b` does not match "
-        "`sorafs-staging-a`",
-        "settlement.json: settlement.environment `release` does not match `staging`",
+        "settlement.json: settlement.deployment_id does not match previous value",
+        "settlement.json: settlement.environment does not match previous value",
     ]
+    joined = "\n".join(errors + summary["settlement"]["artifacts"][0]["errors"])
+    assert "sorafs-staging-a" not in joined
+    assert "sorafs-staging-b" not in joined
+    assert "release" not in joined
+    assert "staging" not in joined
 
 
 def test_build_required_evidence_summary_uses_fail_closed_validity() -> None:
@@ -4446,7 +4513,7 @@ def test_build_required_evidence_summary_uses_fail_closed_validity() -> None:
     assert summary["archive"]["valid"] is False
     assert summary["archive"]["artifact_count"] == 2
     assert summary["archive"]["artifacts"] == artifacts
-    assert errors == ["archive release evidence has invalid artifact(s)"]
+    assert errors == ["release evidence has invalid artifact(s)"]
 
 
 def test_build_required_evidence_summary_rejects_malformed_required_kinds() -> None:
@@ -4538,9 +4605,28 @@ def test_build_required_evidence_summary_rejects_duplicate_required_kinds() -> N
         == {}
     )
     assert errors == [
-        "release required evidence kinds must not contain duplicates "
-        "['archive', 'ready']"
+        "release required evidence kinds must not contain duplicates"
     ]
+
+
+def test_build_required_evidence_summary_duplicate_diagnostics_are_payload_free() -> None:
+    errors: list[str] = []
+    secret_kind = "private-key-placeholder"
+
+    assert (
+        build_required_evidence_summary(
+            (secret_kind, secret_kind),
+            {secret_kind: [{"valid": True}]},
+            {secret_kind: "sorafs.secret.v1"},
+            errors,
+            evidence_label="release",
+        )
+        == {}
+    )
+
+    joined = "\n".join(errors)
+    assert errors == ["release required evidence kinds must not contain duplicates"]
+    assert secret_kind not in joined
 
 
 def test_build_required_evidence_summary_rejects_malformed_artifact_buckets() -> None:
@@ -4574,9 +4660,9 @@ def test_build_required_evidence_summary_rejects_malformed_artifact_buckets() ->
     ]
     assert summary["missing"]["errors"] == []
     assert errors == [
-        "required text rollout artifacts must be a sequence",
-        "required mapping rollout artifacts must be a sequence",
-        "missing required missing rollout evidence",
+        "rollout required artifacts must be a sequence",
+        "rollout required artifacts must be a sequence",
+        "missing required rollout evidence",
     ]
 
 
@@ -4910,9 +4996,10 @@ def test_require_known_schema_reports_type_and_unknown_schema_errors() -> None:
     kinds = {"sorafs.test.v1": "test-kind"}
 
     assert require_known_schema({"schema": 1}, kinds, "SoraFS test artifact", errors) is None
+    unknown_schema = "sorafs.unknown.private-key-placeholder.v1"
     assert (
         require_known_schema(
-            {"schema": "sorafs.other.v1"},
+            {"schema": unknown_schema},
             kinds,
             "SoraFS test artifact",
             errors,
@@ -4922,8 +5009,9 @@ def test_require_known_schema_reports_type_and_unknown_schema_errors() -> None:
 
     assert errors == [
         "schema must be a string",
-        "schema `sorafs.other.v1` is not a recognized SoraFS test artifact",
+        "schema is not a recognized SoraFS test artifact",
     ]
+    assert unknown_schema not in "\n".join(errors)
 
 
 def test_require_known_schema_rejects_malformed_schema_before_lookup() -> None:
@@ -5001,7 +5089,7 @@ def test_validate_standard_evidence_payload_runs_shared_wrapper_checks() -> None
     assert kind_name == "route"
     assert seen == [("route", "passed")]
     assert errors == [
-        "responseBody must not be present in rollout evidence",
+        "<sensitive-key> must not be present in rollout evidence",
         "kind-specific failure",
     ]
 
