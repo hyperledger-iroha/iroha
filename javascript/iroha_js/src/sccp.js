@@ -35810,6 +35810,90 @@ const bscProductionSourceVerifierComponentHash = ({
   );
 };
 
+const bscSourceProofRecordInput = (input, ...keys) => {
+  const selected = inputValue(input, ...keys);
+  if (
+    selected === undefined ||
+    selected === null ||
+    typeof selected !== "object" ||
+    Array.isArray(selected)
+  ) {
+    return undefined;
+  }
+  return selected;
+};
+
+const bscSourceVerifierMaterialInput = (input) =>
+  bscSourceProofRecordInput(
+    input,
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+    "bscSourceVerifierMaterial",
+    "bsc_source_verifier_material",
+    "sccpSourceVerifierMaterial",
+    "sccp_source_verifier_material",
+  );
+
+const bscSourceAdapterDeploymentInput = (input) =>
+  bscSourceProofRecordInput(
+    input,
+    "sourceAdapterEngineDeployment",
+    "source_adapter_engine_deployment",
+    "sourceAdapterDeployment",
+    "source_adapter_deployment",
+    "bscSourceAdapterEngineDeployment",
+    "bsc_source_adapter_engine_deployment",
+    "bscSourceAdapterDeployment",
+    "bsc_source_adapter_deployment",
+  );
+
+const bscSourceProofMaterialValue = (input, ...keys) => {
+  const direct = inputValue(input, ...keys);
+  if (direct !== undefined) return direct;
+  const material = bscSourceVerifierMaterialInput(input);
+  if (material) {
+    const materialValue = inputValue(material, ...keys);
+    if (materialValue !== undefined) return materialValue;
+  }
+  const deployment = bscSourceAdapterDeploymentInput(input);
+  return deployment ? inputValue(deployment, ...keys) : undefined;
+};
+
+const bscSourceProofHash32Value = (input, fallback, label, ...keys) => {
+  const selected = bscSourceProofMaterialValue(input, ...keys);
+  return selected === undefined
+    ? fallback
+    : normalizeHex32(selected, label);
+};
+
+const bscSourceProofNonZeroHash32Value = (input, fallback, label, ...keys) => {
+  const selected = bscSourceProofMaterialValue(input, ...keys);
+  return selected === undefined
+    ? fallback
+    : normalizeNonZeroHex32(selected, label);
+};
+
+const bscSourceProofMaybeAddressValue = (input, fallback, label, ...keys) => {
+  const selected = bscSourceProofMaterialValue(input, ...keys);
+  if (selected === undefined) return fallback;
+  const bytes = toMaybeEmptyBytes(selected, label);
+  if (bytes.length === 0) return "0x";
+  if (bytes.length !== 20) {
+    throw new TypeError(`${label} must be empty or 20 bytes`);
+  }
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return bytesToHex(bytes);
+};
+
+const bscSourceProofHasTrustAnchorHash = (input) =>
+  bscSourceProofMaterialValue(
+    input,
+    "sourceTrustAnchorHash",
+    "source_trust_anchor_hash",
+  ) !== undefined;
+
 const bscTemplateSourceVerifierMaterial = (input = {}) => {
   const sourceDomain = SCCP_DOMAIN_BSC;
   const sourceChain = "bsc";
@@ -35834,7 +35918,7 @@ const bscTemplateSourceVerifierMaterial = (input = {}) => {
     "sccp:bsc:finality-policy:validator-set-finality-mainnet:v1";
   const sourceBridgeEmitterId = "sccp:bsc:source-bridge-emitter:bsc-mainnet:v1";
   const sourceBridgeEmitterAddress = nonZeroHex(
-    inputValue(
+    bscSourceProofMaterialValue(
       input,
       "sourceBridgeEmitterAddress",
       "source_bridge_emitter_address",
@@ -35847,7 +35931,7 @@ const bscTemplateSourceVerifierMaterial = (input = {}) => {
     20,
   );
   const sourceBridgeEmitterCodeHash = normalizeNonZeroHex32(
-    inputValue(
+    bscSourceProofMaterialValue(
       input,
       "sourceBridgeEmitterCodeHash",
       "source_bridge_emitter_code_hash",
@@ -35867,34 +35951,630 @@ const bscTemplateSourceVerifierMaterial = (input = {}) => {
     finalityModelCanonical,
     adapterCircuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
     sourceTrustAnchorId,
-    sourceTrustAnchorHash: componentHash(
-      sourceTrustAnchorId,
-      "source-trust-anchor",
+    sourceTrustAnchorHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(
+        sourceTrustAnchorId,
+        "source-trust-anchor",
+      ),
+      "sourceTrustAnchorHash",
+      "sourceTrustAnchorHash",
+      "source_trust_anchor_hash",
     ),
     consensusVerifierId,
-    consensusVerifierHash: componentHash(
-      consensusVerifierId,
-      "consensus-verifier",
+    consensusVerifierHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(
+        consensusVerifierId,
+        "consensus-verifier",
+      ),
+      "consensusVerifierHash",
+      "consensusVerifierHash",
+      "consensus_verifier_hash",
     ),
     messageInclusionVerifierId,
-    messageInclusionVerifierHash: componentHash(
-      messageInclusionVerifierId,
-      "message-inclusion-verifier",
+    messageInclusionVerifierHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(
+        messageInclusionVerifierId,
+        "message-inclusion-verifier",
+      ),
+      "messageInclusionVerifierHash",
+      "messageInclusionVerifierHash",
+      "message_inclusion_verifier_hash",
     ),
     finalityPolicyId,
-    finalityPolicyHash: componentHash(finalityPolicyId, "finality-policy"),
+    finalityPolicyHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(finalityPolicyId, "finality-policy"),
+      "finalityPolicyHash",
+      "finalityPolicyHash",
+      "finality_policy_hash",
+    ),
     sourceStateVerifierId: "",
-    sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
+    sourceStateVerifierHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceStateVerifierHash",
+      "sourceStateVerifierHash",
+      "source_state_verifier_hash",
+    ),
     sourceBridgeEmitterId,
     sourceBridgeEmitterAddress,
     sourceBridgeEmitterCodeHash,
-    sourceBridgeNetworkId: SCCP_ZERO_HASH_V1,
-    sourceBridgeOwnerAddress: "0x",
-    sourceBridgeConfigHash: SCCP_ZERO_HASH_V1,
-    sourceAdapterDeploymentHash: SCCP_ZERO_HASH_V1,
-    sourceAdapterDeploymentReceiptHash: SCCP_ZERO_HASH_V1,
+    sourceBridgeNetworkId: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceBridgeNetworkId",
+      "sourceBridgeNetworkId",
+      "source_bridge_network_id",
+      "networkId",
+      "network_id",
+    ),
+    sourceBridgeOwnerAddress: bscSourceProofMaybeAddressValue(
+      input,
+      "0x",
+      "sourceBridgeOwnerAddress",
+      "sourceBridgeOwnerAddress",
+      "source_bridge_owner_address",
+      "ownerAddress",
+      "owner_address",
+    ),
+    sourceBridgeConfigHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceBridgeConfigHash",
+      "sourceBridgeConfigHash",
+      "source_bridge_config_hash",
+      "configHash",
+      "config_hash",
+    ),
+    sourceAdapterDeploymentHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceAdapterDeploymentHash",
+      "sourceAdapterDeploymentHash",
+      "source_adapter_deployment_hash",
+      "sourceAdapterEngineDeploymentHash",
+      "source_adapter_engine_deployment_hash",
+      "deploymentHash",
+      "deployment_hash",
+    ),
+    sourceAdapterDeploymentReceiptHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceAdapterDeploymentReceiptHash",
+      "sourceAdapterDeploymentReceiptHash",
+      "source_adapter_deployment_receipt_hash",
+      "deploymentReceiptHash",
+      "deployment_receipt_hash",
+    ),
   });
 };
+
+const bscPlaceholderValidatorPrivateKey = ({
+  sourceEventDigest,
+  finalityBlockHash,
+  receiptsRoot,
+}) => {
+  let seed = prefixedKeccak(
+    "sccp:bsc:placeholder-validator-secret:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(receiptsRoot, "receiptsRoot", 32),
+    ),
+  );
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (secp256k1.utils.isValidPrivateKey(seed)) {
+      return seed;
+    }
+    seed = keccak_256(seed);
+  }
+  throw new TypeError("failed to derive a valid BSC placeholder validator key");
+};
+
+const bscRecoverableSignature = (messageHash, privateKey) => {
+  const signature = secp256k1.sign(
+    hexToBytes(messageHash, "commitMessageHash", 32),
+    privateKey,
+    { prehash: false, lowS: true },
+  );
+  const compact = signature.toCompactRawBytes();
+  const recovery = signature.recovery ?? signature.recoveryBit;
+  if (!Number.isInteger(recovery) || recovery < 0 || recovery > 3) {
+    throw new TypeError("BSC validator signature recovery id is missing");
+  }
+  return concatBytes(compact, Uint8Array.from([recovery + 27]));
+};
+
+const normalizeBscSourceValidatorPrivateKey = (value, label) => {
+  const privateKey = toBytes(value, label);
+  if (privateKey.length !== 32 || !secp256k1.utils.isValidPrivateKey(privateKey)) {
+    throw new TypeError(`${label} must be a valid secp256k1 private key`);
+  }
+  return copyBytes(privateKey);
+};
+
+const bscSourceValidatorPrivateKeyListInput = (input) => {
+  const selected = strictOptionalResultField(
+    input,
+    "sourceValidatorPrivateKeys",
+    "sourceValidatorPrivateKeys",
+    "source_validator_private_keys",
+    "validatorPrivateKeys",
+    "validator_private_keys",
+    "privateKeys",
+    "private_keys",
+  );
+  if (selected === SCCP_OPTIONAL_FIELD_MISSING) return null;
+  if (typeof selected === "string") {
+    return selected.split(/[\s,]+/u).filter((part) => part.length > 0);
+  }
+  if (
+    selected instanceof Uint8Array ||
+    ArrayBuffer.isView(selected) ||
+    selected instanceof ArrayBuffer
+  ) {
+    return [selected];
+  }
+  if (!Array.isArray(selected)) {
+    throw new TypeError("sourceValidatorPrivateKeys must be an array or string");
+  }
+  return selected;
+};
+
+const readBscSourceValidatorPrivateKeys = (input, required = false) => {
+  const selected = bscSourceValidatorPrivateKeyListInput(input);
+  if (selected === null) {
+    if (required) {
+      throw new TypeError(
+        "BSC source-chain proof requires sourceValidatorPrivateKeys",
+      );
+    }
+    return null;
+  }
+  if (selected.length === 0 || selected.length > SCCP_BSC_MAX_PARLIA_VALIDATORS) {
+    throw new RangeError(
+      `sourceValidatorPrivateKeys must contain 1..${SCCP_BSC_MAX_PARLIA_VALIDATORS} keys`,
+    );
+  }
+  return Object.freeze(
+    selected.map((privateKey, index) =>
+      normalizeBscSourceValidatorPrivateKey(
+        privateKey,
+        `sourceValidatorPrivateKeys[${index}]`,
+      ),
+    ),
+  );
+};
+
+const readBscSourceValidatorPowers = (input, validatorCount, fallbackPower) => {
+  const selected = strictOptionalResultField(
+    input,
+    "sourceValidatorPowers",
+    "sourceValidatorPowers",
+    "source_validator_powers",
+    "validatorPowers",
+    "validator_powers",
+  );
+  if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
+    return Object.freeze(Array.from({ length: validatorCount }, () => fallbackPower));
+  }
+  if (!Array.isArray(selected)) {
+    throw new TypeError("sourceValidatorPowers must be an array");
+  }
+  if (selected.length !== validatorCount) {
+    throw new RangeError(
+      "sourceValidatorPowers length must equal sourceValidatorPrivateKeys length",
+    );
+  }
+  return Object.freeze(
+    selected.map((power, index) => {
+      const normalized = normalizeUnsignedBigInt(
+        power,
+        `sourceValidatorPowers[${index}]`,
+      );
+      if (normalized === 0n) {
+        throw new RangeError(`sourceValidatorPowers[${index}] must not be zero`);
+      }
+      return normalized;
+    }),
+  );
+};
+
+const bscAllSignersBitmap = (validatorCount) => {
+  const bitmap = new Uint8Array(Math.ceil(validatorCount / 8));
+  for (let index = 0; index < validatorCount; index += 1) {
+    bitmap[Math.floor(index / 8)] |= 1 << (index % 8);
+  }
+  return bitmap;
+};
+
+const bscValidatorSetFromPrivateKeys = (privateKeys, validatorPowers) => {
+  const validatorPublicKeys = [];
+  const validatorAddresses = [];
+  for (const [index, privateKey] of privateKeys.entries()) {
+    const publicKey = secp256k1.getPublicKey(privateKey, true);
+    const fullPublicKey = secp256k1.getPublicKey(privateKey, false);
+    const validatorAddress = keccak_256(fullPublicKey.slice(1)).slice(12);
+    validatorPublicKeys.push(publicKey);
+    validatorAddresses.push(validatorAddress);
+    if (!secp256k1.utils.isValidPrivateKey(privateKey)) {
+      throw new TypeError(`sourceValidatorPrivateKeys[${index}] is invalid`);
+    }
+  }
+  const validatorSetHash = bscValidatorSetHashFromPayload({
+    validatorAddresses: validatorAddresses.map((address) => bytesToHex(address)),
+    validatorPowers,
+  });
+  return Object.freeze({
+    validatorPublicKeys: Object.freeze(validatorPublicKeys),
+    validatorAddresses: Object.freeze(validatorAddresses),
+    validatorPowers,
+    validatorSetHash,
+  });
+};
+
+const bscCommitSealFromPrivateKeys = ({
+  privateKeys,
+  validatorSet,
+  commitMessageHash,
+}) => {
+  const signersBitmap = bscAllSignersBitmap(privateKeys.length);
+  const signatures = privateKeys.map((privateKey) =>
+    bscRecoverableSignature(commitMessageHash, privateKey),
+  );
+  const totalPower = validatorSet.validatorPowers.reduce(
+    (sum, power) => sum + power,
+    0n,
+  );
+  const signedPower = totalPower;
+  return Object.freeze({
+    version: 1,
+    totalPower,
+    signedPower,
+    commitMessageHash,
+    validatorPublicKeys: validatorSet.validatorPublicKeys,
+    validatorPowers: validatorSet.validatorPowers,
+    signersBitmap,
+    signatures: Object.freeze(signatures),
+  });
+};
+
+const bscMaterialWithValidatorSetHash = (
+  material,
+  validatorSetHash,
+  hasExplicitTrustAnchor,
+) => {
+  if (hasExplicitTrustAnchor) {
+    if (material.sourceTrustAnchorHash !== validatorSetHash) {
+      throw new RangeError(
+        "sourceTrustAnchorHash must match the BSC source validator set hash",
+      );
+    }
+    return material;
+  }
+  return Object.freeze({
+    ...material,
+    sourceTrustAnchorHash: validatorSetHash,
+  });
+};
+
+export function buildBscSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC source-chain proof input must be an object");
+  }
+  const privateKeys = readBscSourceValidatorPrivateKeys(input, true);
+  return buildBscPlaceholderSourceChainProofEnvelope({
+    ...input,
+    sourceValidatorPrivateKeys: privateKeys,
+  });
+}
+
+/*
+ * Compatibility builder for tests and legacy diagnostics. Supplying
+ * sourceValidatorPrivateKeys switches it to the production signing path.
+ */
+export function buildBscPlaceholderSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC placeholder source-chain proof input must be an object");
+  }
+  const optionalInput = (label, ...names) => {
+    const selected = strictOptionalResultField(input, label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const messageId = normalizeNonZeroHex32(
+    strictResultField(input, "messageId", "messageId", "message_id"),
+    "messageId",
+  );
+  const payloadHash = normalizeNonZeroHex32(
+    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
+    "payloadHash",
+  );
+  const commitmentRoot = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "commitmentRoot",
+  );
+  const observedSourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "sourceEventDigest",
+  );
+  const sourceEventDigest = observedSourceEventDigest;
+  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
+  const branchSeed = prefixedBlake2b(
+    "sccp:bsc:placeholder-source-branch:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+    ),
+  );
+  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
+  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
+    sourceEventLeafHash,
+    0,
+    inclusionBranch,
+  );
+
+  const receipt = input.receipt && typeof input.receipt === "object" ? input.receipt : {};
+  const block = input.block && typeof input.block === "object" ? input.block : {};
+  const receiptRootIndex = normalizeUnsignedBigIntMax(
+    optionalInput(
+      "receiptRootIndex",
+      "receiptRootIndex",
+      "receipt_root_index",
+      "transactionIndex",
+      "transaction_index",
+    ) ??
+      receipt.transactionIndex ??
+      receipt.transaction_index ??
+      0,
+    "receiptRootIndex",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  const finalityHeight = normalizeUnsignedBigIntMax(
+    optionalInput(
+      "finalityHeight",
+      "finalityHeight",
+      "finality_height",
+      "blockNumber",
+      "block_number",
+    ) ??
+      block.number ??
+      block.blockNumber ??
+      receipt.blockNumber ??
+      receipt.block_number,
+    "finalityHeight",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  if (finalityHeight === 0n) {
+    throw new TypeError("finalityHeight must not be zero");
+  }
+  const finalityBlockHash = normalizeNonZeroHex32(
+    optionalInput(
+      "finalityBlockHash",
+      "finalityBlockHash",
+      "finality_block_hash",
+      "blockHash",
+      "block_hash",
+    ) ??
+      block.hash ??
+      block.blockHash ??
+      receipt.blockHash ??
+      receipt.block_hash,
+    "finalityBlockHash",
+  );
+  let material = bscTemplateSourceVerifierMaterial(input);
+  const receiptProof = normalizeBscSourceProofReceiptTrie({
+    blockReceipts: input.blockReceipts ?? input.block_receipts,
+    receiptRootIndex,
+    receiptOrMessageRoot,
+  });
+  const validatorEpoch = finalityHeight / SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS;
+  if (validatorEpoch === 0n) {
+    throw new TypeError("BSC finalityHeight must fall inside a nonzero Parlia epoch");
+  }
+  const sourceValidatorPrivateKeys = readBscSourceValidatorPrivateKeys(input);
+  const usesSuppliedValidators = sourceValidatorPrivateKeys !== null;
+  const privateKeys =
+    sourceValidatorPrivateKeys ??
+    Object.freeze([
+      bscPlaceholderValidatorPrivateKey({
+        sourceEventDigest,
+        observedSourceEventDigest,
+        finalityBlockHash,
+        receiptsRoot: receiptProof.receiptsRoot,
+      }),
+    ]);
+  const validatorPowers = readBscSourceValidatorPowers(
+    input,
+    privateKeys.length,
+    usesSuppliedValidators ? 1n : 3n,
+  );
+  const validatorSet = bscValidatorSetFromPrivateKeys(
+    privateKeys,
+    validatorPowers,
+  );
+  material = usesSuppliedValidators
+    ? bscMaterialWithValidatorSetHash(
+        material,
+        validatorSet.validatorSetHash,
+        bscSourceProofHasTrustAnchorHash(input),
+      )
+    : material;
+  const validatorSetHash = validatorSet.validatorSetHash;
+  const commitMessageHash = bscCommitMessageHash({
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+  });
+  const sealProof = bscCommitSealFromPrivateKeys({
+    privateKeys,
+    validatorSet,
+    commitMessageHash,
+  });
+  const commitSealHash = bscCommitSealHash({
+    version: 1,
+    totalPower: sealProof.totalPower,
+    signedPower: sealProof.signedPower,
+    commitMessageHash,
+    validatorPublicKeys: sealProof.validatorPublicKeys,
+    validatorPowers: sealProof.validatorPowers,
+    signersBitmap: sealProof.signersBitmap,
+    signatures: sealProof.signatures,
+    validatorSetHash,
+  });
+  const receiptTrieProofHash = bscSccpReceiptProofHash({
+    sourceEventDigest,
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    commitSealHash,
+    receiptRootIndex,
+    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+    inclusionBranch,
+  });
+  const adapter = Object.freeze({
+    version: 1,
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    commitSealHash,
+    receiptTrieProofHash,
+    sealProof,
+    receiptRootIndex,
+    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+  });
+  const adapterProofHash = sccpSourceAdapterProofHash(adapter);
+  const adapterTranscriptHash = sccpSourceAdapterTranscriptHash({
+    sourceDomain: SCCP_DOMAIN_BSC,
+    targetDomain: SCCP_DOMAIN_SORA,
+    sourceProofPlan: material.sourceProofPlan,
+    finalityModelCanonical: material.finalityModelCanonical,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+    sourceEventDigest,
+    adapter,
+  });
+  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
+    sourceDomain: SCCP_DOMAIN_BSC,
+    finalityModelCanonical: material.finalityModelCanonical,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+  });
+  const evidence = Object.freeze({
+    version: 1,
+    sourceDomain: SCCP_DOMAIN_BSC,
+    sourceChain: "bsc",
+    sourceProofPlan: material.sourceProofPlan,
+    finalityModel: material.finalityModel,
+    adapterProofHash,
+    adapterTranscriptHash,
+    adapterCircuitId: material.adapterCircuitId,
+    sourceTrustAnchorId: material.sourceTrustAnchorId,
+    sourceTrustAnchorHash: material.sourceTrustAnchorHash,
+    consensusVerifierId: material.consensusVerifierId,
+    consensusVerifierHash: material.consensusVerifierHash,
+    messageInclusionVerifierId: material.messageInclusionVerifierId,
+    messageInclusionVerifierHash: material.messageInclusionVerifierHash,
+    finalityPolicyId: material.finalityPolicyId,
+    finalityPolicyHash: material.finalityPolicyHash,
+    sourceStateVerifierId: material.sourceStateVerifierId,
+    sourceStateVerifierHash: material.sourceStateVerifierHash,
+    sourceBridgeEmitterId: material.sourceBridgeEmitterId,
+    sourceBridgeEmitterAddress: material.sourceBridgeEmitterAddress,
+    sourceBridgeEmitterCodeHash: material.sourceBridgeEmitterCodeHash,
+    sourceBridgeNetworkId: material.sourceBridgeNetworkId,
+    sourceBridgeOwnerAddress: material.sourceBridgeOwnerAddress,
+    sourceBridgeConfigHash: material.sourceBridgeConfigHash,
+    sourceAdapterDeploymentHash: material.sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash: material.sourceAdapterDeploymentReceiptHash,
+  });
+  const adapterVerificationProof = Object.freeze({
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    circuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+    proofBytes: prefixedBlake2b(
+      "sccp:bsc:placeholder-source-adapter-opening:v1",
+      hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
+    ),
+  });
+  const consensusProof = buildBscSourceConsensusProofBytes({
+    material,
+    adapter,
+    adapterTranscriptHash,
+    evidence,
+    adapterVerificationProof,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+    finalizedHeaderHash,
+  });
+  const messageInclusionProof = buildBscSourceMessageInclusionProofBytes({
+    messageId,
+    payloadHash,
+    sourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+  });
+  const sourceProofBytes = noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_BSC),
+      noritoU32Value(SCCP_DOMAIN_SORA),
+      noritoStringValue("bsc", false, "sourceChain"),
+      noritoU32Value(material.sourceProofPlan),
+      noritoU32Value(material.finalityModel),
+      hexToBytes(messageId, "messageId", 32),
+      hexToBytes(payloadHash, "payloadHash", 32),
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+      noritoU64Value(finalityHeight),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      noritoRawByteVecValue(consensusProof, "consensusProof"),
+      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
+      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
+    ]),
+    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
+  );
+  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+  return Object.freeze({
+    sourceProofHex: bytesToHex(sourceProofBytes),
+    sourceProofBytes: copyBytes(sourceProofBytes),
+    sourceEventDigest,
+    observedSourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+    finalityHeight: finalityHeight.toString(),
+    finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    receiptRootIndex: receiptRootIndex.toString(),
+    syntheticRootMarker: receiptProof.syntheticRootMarker,
+  });
+}
 
 const sccpSourceEventLeafHash = (sourceEventDigest) =>
   bytesToHex(
@@ -36301,333 +36981,6 @@ const buildBscSourceMessageInclusionProofBytes = ({
     ]),
     SCCP_SOURCE_MESSAGE_INCLUSION_PROOF_SCHEMA_HASH_HEX,
   );
-
-const bscPlaceholderValidatorPrivateKey = ({
-  sourceEventDigest,
-  finalityBlockHash,
-  receiptsRoot,
-}) => {
-  let seed = prefixedKeccak(
-    "sccp:bsc:placeholder-validator-secret:v1",
-    concatBytes(
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
-      hexToBytes(receiptsRoot, "receiptsRoot", 32),
-    ),
-  );
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    if (secp256k1.utils.isValidPrivateKey(seed)) {
-      return seed;
-    }
-    seed = keccak_256(seed);
-  }
-  throw new TypeError("failed to derive a valid BSC placeholder validator key");
-};
-
-const bscRecoverableSignature = (messageHash, privateKey) => {
-  const signature = secp256k1.sign(
-    hexToBytes(messageHash, "commitMessageHash", 32),
-    privateKey,
-    { prehash: false, lowS: true },
-  );
-  const compact = signature.toCompactRawBytes();
-  const recovery = signature.recovery ?? signature.recoveryBit;
-  if (!Number.isInteger(recovery) || recovery < 0 || recovery > 3) {
-    throw new TypeError("BSC placeholder validator signature recovery id is missing");
-  }
-  return concatBytes(compact, Uint8Array.from([recovery + 27]));
-};
-
-export function buildBscPlaceholderSourceChainProofEnvelope(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("BSC placeholder source-chain proof input must be an object");
-  }
-  const optionalInput = (label, ...names) => {
-    const selected = strictOptionalResultField(input, label, ...names);
-    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
-  };
-  const messageId = normalizeNonZeroHex32(
-    strictResultField(input, "messageId", "messageId", "message_id"),
-    "messageId",
-  );
-  const payloadHash = normalizeNonZeroHex32(
-    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
-    "payloadHash",
-  );
-  const commitmentRoot = normalizeNonZeroHex32(
-    strictResultField(
-      input,
-      "commitmentRoot",
-      "commitmentRoot",
-      "commitment_root",
-    ),
-    "commitmentRoot",
-  );
-  const observedSourceEventDigest = normalizeNonZeroHex32(
-    strictResultField(
-      input,
-      "sourceEventDigest",
-      "sourceEventDigest",
-      "source_event_digest",
-    ),
-    "sourceEventDigest",
-  );
-  const sourceEventDigest = observedSourceEventDigest;
-  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
-  const branchSeed = prefixedBlake2b(
-    "sccp:bsc:placeholder-source-branch:v1",
-    concatBytes(
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(commitmentRoot, "commitmentRoot", 32),
-    ),
-  );
-  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
-  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
-    sourceEventLeafHash,
-    0,
-    inclusionBranch,
-  );
-
-  const receipt = input.receipt && typeof input.receipt === "object" ? input.receipt : {};
-  const block = input.block && typeof input.block === "object" ? input.block : {};
-  const receiptRootIndex = normalizeUnsignedBigIntMax(
-    optionalInput(
-      "receiptRootIndex",
-      "receiptRootIndex",
-      "receipt_root_index",
-      "transactionIndex",
-      "transaction_index",
-    ) ??
-      receipt.transactionIndex ??
-      receipt.transaction_index ??
-      0,
-    "receiptRootIndex",
-    SCCP_U64_MAX,
-    "u64",
-  );
-  const finalityHeight = normalizeUnsignedBigIntMax(
-    optionalInput(
-      "finalityHeight",
-      "finalityHeight",
-      "finality_height",
-      "blockNumber",
-      "block_number",
-    ) ??
-      block.number ??
-      block.blockNumber ??
-      receipt.blockNumber ??
-      receipt.block_number,
-    "finalityHeight",
-    SCCP_U64_MAX,
-    "u64",
-  );
-  if (finalityHeight === 0n) {
-    throw new TypeError("finalityHeight must not be zero");
-  }
-  const finalityBlockHash = normalizeNonZeroHex32(
-    optionalInput(
-      "finalityBlockHash",
-      "finalityBlockHash",
-      "finality_block_hash",
-      "blockHash",
-      "block_hash",
-    ) ??
-      block.hash ??
-      block.blockHash ??
-      receipt.blockHash ??
-      receipt.block_hash,
-    "finalityBlockHash",
-  );
-  const material = bscTemplateSourceVerifierMaterial(input);
-  const receiptProof = normalizeBscSourceProofReceiptTrie({
-    blockReceipts: input.blockReceipts ?? input.block_receipts,
-    receiptRootIndex,
-    receiptOrMessageRoot,
-  });
-  const validatorEpoch = finalityHeight / SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS;
-  if (validatorEpoch === 0n) {
-    throw new TypeError("BSC finalityHeight must fall inside a nonzero Parlia epoch");
-  }
-  const privateKey = bscPlaceholderValidatorPrivateKey({
-    sourceEventDigest,
-    observedSourceEventDigest,
-    finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-  });
-  const publicKey = secp256k1.getPublicKey(privateKey, true);
-  const fullPublicKey = secp256k1.getPublicKey(privateKey, false);
-  const validatorAddress = keccak_256(fullPublicKey.slice(1)).slice(12);
-  const validatorPower = 3n;
-  const validatorSetHash = bscValidatorSetHashFromPayload({
-    validatorAddresses: [bytesToHex(validatorAddress)],
-    validatorPowers: [validatorPower],
-  });
-  const commitMessageHash = bscCommitMessageHash({
-    validatorEpoch,
-    blockNumber: finalityHeight,
-    blockHash: finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-  });
-  const signature = bscRecoverableSignature(commitMessageHash, privateKey);
-  const sealProof = Object.freeze({
-    version: 1,
-    totalPower: validatorPower,
-    signedPower: validatorPower,
-    commitMessageHash,
-    validatorPublicKeys: Object.freeze([publicKey]),
-    validatorPowers: Object.freeze([validatorPower]),
-    signersBitmap: Uint8Array.from([1]),
-    signatures: Object.freeze([signature]),
-  });
-  const commitSealHash = bscCommitSealHash({
-    version: 1,
-    totalPower: validatorPower,
-    signedPower: validatorPower,
-    commitMessageHash,
-    validatorPublicKeys: [publicKey],
-    validatorPowers: [validatorPower],
-    signersBitmap: Uint8Array.from([1]),
-    signatures: [signature],
-    validatorSetHash,
-  });
-  const receiptTrieProofHash = bscSccpReceiptProofHash({
-    sourceEventDigest,
-    validatorEpoch,
-    blockNumber: finalityHeight,
-    blockHash: finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-    commitSealHash,
-    receiptRootIndex,
-    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
-    inclusionBranch,
-  });
-  const adapter = Object.freeze({
-    version: 1,
-    validatorEpoch,
-    blockNumber: finalityHeight,
-    blockHash: finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-    commitSealHash,
-    receiptTrieProofHash,
-    sealProof,
-    receiptRootIndex,
-    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
-  });
-  const adapterProofHash = sccpSourceAdapterProofHash(adapter);
-  const adapterTranscriptHash = sccpSourceAdapterTranscriptHash({
-    sourceDomain: SCCP_DOMAIN_BSC,
-    targetDomain: SCCP_DOMAIN_SORA,
-    sourceProofPlan: material.sourceProofPlan,
-    finalityModelCanonical: material.finalityModelCanonical,
-    finalityHeight,
-    finalityBlockHash,
-    receiptOrMessageRoot,
-    sourceEventDigest,
-    adapter,
-  });
-  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
-    sourceDomain: SCCP_DOMAIN_BSC,
-    finalityModelCanonical: material.finalityModelCanonical,
-    finalityHeight,
-    finalityBlockHash,
-    receiptOrMessageRoot,
-  });
-  const evidence = Object.freeze({
-    version: 1,
-    sourceDomain: SCCP_DOMAIN_BSC,
-    sourceChain: "bsc",
-    sourceProofPlan: material.sourceProofPlan,
-    finalityModel: material.finalityModel,
-    adapterProofHash,
-    adapterTranscriptHash,
-    adapterCircuitId: material.adapterCircuitId,
-    sourceTrustAnchorId: material.sourceTrustAnchorId,
-    sourceTrustAnchorHash: material.sourceTrustAnchorHash,
-    consensusVerifierId: material.consensusVerifierId,
-    consensusVerifierHash: material.consensusVerifierHash,
-    messageInclusionVerifierId: material.messageInclusionVerifierId,
-    messageInclusionVerifierHash: material.messageInclusionVerifierHash,
-    finalityPolicyId: material.finalityPolicyId,
-    finalityPolicyHash: material.finalityPolicyHash,
-    sourceStateVerifierId: material.sourceStateVerifierId,
-    sourceStateVerifierHash: material.sourceStateVerifierHash,
-    sourceBridgeEmitterId: material.sourceBridgeEmitterId,
-    sourceBridgeEmitterAddress: material.sourceBridgeEmitterAddress,
-    sourceBridgeEmitterCodeHash: material.sourceBridgeEmitterCodeHash,
-    sourceBridgeNetworkId: material.sourceBridgeNetworkId,
-    sourceBridgeOwnerAddress: material.sourceBridgeOwnerAddress,
-    sourceBridgeConfigHash: material.sourceBridgeConfigHash,
-    sourceAdapterDeploymentHash: material.sourceAdapterDeploymentHash,
-    sourceAdapterDeploymentReceiptHash: material.sourceAdapterDeploymentReceiptHash,
-  });
-  const adapterVerificationProof = Object.freeze({
-    version: 1,
-    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
-    circuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
-    proofBytes: prefixedBlake2b(
-      "sccp:bsc:placeholder-source-adapter-opening:v1",
-      hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
-    ),
-  });
-  const consensusProof = buildBscSourceConsensusProofBytes({
-    material,
-    adapter,
-    adapterTranscriptHash,
-    evidence,
-    adapterVerificationProof,
-    finalityHeight,
-    finalityBlockHash,
-    receiptOrMessageRoot,
-    finalizedHeaderHash,
-  });
-  const messageInclusionProof = buildBscSourceMessageInclusionProofBytes({
-    messageId,
-    payloadHash,
-    sourceEventDigest,
-    sourceEventLeafHash,
-    receiptOrMessageRoot,
-  });
-  const sourceProofBytes = noritoFrame(
-    noritoStructValue([
-      noritoU8(1),
-      noritoU32Value(SCCP_DOMAIN_BSC),
-      noritoU32Value(SCCP_DOMAIN_SORA),
-      noritoStringValue("bsc", false, "sourceChain"),
-      noritoU32Value(material.sourceProofPlan),
-      noritoU32Value(material.finalityModel),
-      hexToBytes(messageId, "messageId", 32),
-      hexToBytes(payloadHash, "payloadHash", 32),
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(commitmentRoot, "commitmentRoot", 32),
-      noritoU64Value(finalityHeight),
-      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
-      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
-      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
-      noritoRawByteVecValue(consensusProof, "consensusProof"),
-      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
-      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
-    ]),
-    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
-  );
-  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
-  return Object.freeze({
-    sourceProofHex: bytesToHex(sourceProofBytes),
-    sourceProofBytes: copyBytes(sourceProofBytes),
-    sourceEventDigest,
-    observedSourceEventDigest,
-    sourceEventLeafHash,
-    receiptOrMessageRoot,
-    finalityHeight: finalityHeight.toString(),
-    finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-    receiptRootIndex: receiptRootIndex.toString(),
-    syntheticRootMarker: receiptProof.syntheticRootMarker,
-  });
-}
 
 export function canonicalTronReceiptRootMptValue(receiptRoot) {
   const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");
@@ -42464,17 +42817,58 @@ const requireTransferDomain = (transfer, key, expected, label) => {
 };
 
 const readTairaXorTextValue = (value, label) => {
+  const normalizeTextCandidate = (candidate, candidateLabel) => {
+    if (typeof candidate === "string") {
+      const text = normalizeNonEmptyString(candidate, candidateLabel);
+      if (/^0x(?:[0-9a-fA-F]{2})+$/u.test(text)) {
+        try {
+          return normalizeNonEmptyString(
+            decodeCanonicalUtf8Bytes(toBytes(text, candidateLabel), candidateLabel),
+            candidateLabel,
+          );
+        } catch (_error) {
+          return text;
+        }
+      }
+      return text;
+    }
+    return normalizeNonEmptyString(
+      decodeCanonicalUtf8Bytes(toBytes(candidate, candidateLabel), candidateLabel),
+      candidateLabel,
+    );
+  };
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const kind = strictResultField(value, `${label}.kind`, "kind");
     if (kind !== "TextUtf8") {
       throw new TypeError(`${label} must be a TextUtf8 SCCP codec value`);
     }
-    return normalizeNonEmptyString(
-      strictResultField(value, `${label}.value`, "value"),
-      `${label}.value`,
+    const payload = strictOptionalResultField(
+      value,
+      `${label}.payload`,
+      "payload",
     );
+    const canonicalValue = strictOptionalResultField(
+      value,
+      `${label}.value`,
+      "value",
+    );
+    let normalized = null;
+    if (payload !== SCCP_OPTIONAL_FIELD_MISSING) {
+      normalized = normalizeTextCandidate(payload, `${label}.payload`);
+    }
+    if (canonicalValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+      const valueText = normalizeTextCandidate(canonicalValue, `${label}.value`);
+      if (normalized !== null && normalized !== valueText) {
+        throw new TypeError(`${label}.payload must match ${label}.value`);
+      }
+      normalized = valueText;
+    }
+    if (normalized === null) {
+      throw new TypeError(`${label}.value is required`);
+    }
+    return normalized;
   }
-  return normalizeNonEmptyString(value, label);
+  return normalizeTextCandidate(value, label);
 };
 
 const readTairaXorTronAddressPayload = (value, label) => {
@@ -42506,6 +42900,20 @@ const readTairaXorTronAddressPayload = (value, label) => {
 };
 
 const readTairaXorEvmAddressPayload = (value, label) => {
+  const normalizeCandidate = (candidate, candidateLabel) => {
+    try {
+      return normalizeEvmTransactionAddress(candidate, candidateLabel);
+    } catch (primaryError) {
+      try {
+        return normalizeEvmTransactionAddress(
+          decodeCanonicalUtf8Bytes(toBytes(candidate, candidateLabel), candidateLabel),
+          candidateLabel,
+        );
+      } catch (_utf8Error) {
+        throw primaryError;
+      }
+    }
+  };
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const kind = strictResultField(value, `${label}.kind`, "kind");
     if (kind !== "EvmHex") {
@@ -42516,13 +42924,37 @@ const readTairaXorEvmAddressPayload = (value, label) => {
       `${label}.payload`,
       "payload",
     );
-    const selected =
-      payload === SCCP_OPTIONAL_FIELD_MISSING
-        ? strictResultField(value, `${label}.value`, "value")
-        : payload;
-    return normalizeEvmTransactionAddress(selected, `${label}.value`);
+    const canonicalValue = strictOptionalResultField(
+      value,
+      `${label}.value`,
+      "value",
+    );
+    let normalized = null;
+    for (const [field, candidate] of [
+      ["payload", payload],
+      ["value", canonicalValue],
+    ]) {
+      if (candidate === SCCP_OPTIONAL_FIELD_MISSING) {
+        continue;
+      }
+      const candidateNormalized = normalizeCandidate(
+        candidate,
+        `${label}.${field}`,
+      );
+      if (normalized === null) {
+        normalized = candidateNormalized;
+        continue;
+      }
+      if (normalized !== candidateNormalized) {
+        throw new TypeError(`${label}.payload must match ${label}.value`);
+      }
+    }
+    if (normalized === null) {
+      throw new TypeError(`${label}.value is required`);
+    }
+    return normalized;
   }
-  return normalizeEvmTransactionAddress(value, label);
+  return normalizeCandidate(value, label);
 };
 
 export function bindTairaXorTronToTairaSourceProofPackage(input) {

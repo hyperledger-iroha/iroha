@@ -1076,6 +1076,60 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   finality_block_hash?: string;
   blockHash?: string;
   block_hash?: string;
+  sourceVerifierMaterial?: Record<string, unknown>;
+  source_verifier_material?: Record<string, unknown>;
+  bscSourceVerifierMaterial?: Record<string, unknown>;
+  bsc_source_verifier_material?: Record<string, unknown>;
+  sccpSourceVerifierMaterial?: Record<string, unknown>;
+  sccp_source_verifier_material?: Record<string, unknown>;
+  sourceAdapterEngineDeployment?: Record<string, unknown>;
+  source_adapter_engine_deployment?: Record<string, unknown>;
+  sourceAdapterDeployment?: Record<string, unknown>;
+  source_adapter_deployment?: Record<string, unknown>;
+  bscSourceAdapterEngineDeployment?: Record<string, unknown>;
+  bsc_source_adapter_engine_deployment?: Record<string, unknown>;
+  bscSourceAdapterDeployment?: Record<string, unknown>;
+  bsc_source_adapter_deployment?: Record<string, unknown>;
+  sourceTrustAnchorHash?: string;
+  source_trust_anchor_hash?: string;
+  sourceBridgeNetworkId?: string;
+  source_bridge_network_id?: string;
+  sourceBridgeOwnerAddress?: string | BinaryLike | number[];
+  source_bridge_owner_address?: string | BinaryLike | number[];
+  sourceBridgeConfigHash?: string;
+  source_bridge_config_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+  deploymentReceiptHash?: string;
+  deployment_receipt_hash?: string;
+  sourceValidatorPrivateKeys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  source_validator_private_keys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  validatorPrivateKeys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  validator_private_keys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  sourceValidatorPowers?: readonly (string | number | bigint)[];
+  source_validator_powers?: readonly (string | number | bigint)[];
+  validatorPowers?: readonly (string | number | bigint)[];
+  validator_powers?: readonly (string | number | bigint)[];
 }
 
 export interface BscPlaceholderSourceChainProofEnvelopeResult {
@@ -1088,6 +1142,7 @@ export interface BscPlaceholderSourceChainProofEnvelopeResult {
   readonly finalityHeight: string;
   readonly finalityBlockHash: string;
   readonly receiptsRoot: string;
+  readonly validatorSetHash: string;
   readonly receiptRootIndex: string;
   readonly syntheticRootMarker: boolean;
 }
@@ -7263,6 +7318,9 @@ export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(
   receiptRoot: string,
 ): Uint8Array;
+export function buildBscSourceChainProofEnvelope(
+  input: BscPlaceholderSourceChainProofEnvelopeInput,
+): BscPlaceholderSourceChainProofEnvelopeResult;
 export function buildBscPlaceholderSourceChainProofEnvelope(
   input: BscPlaceholderSourceChainProofEnvelopeInput,
 ): BscPlaceholderSourceChainProofEnvelopeResult;
