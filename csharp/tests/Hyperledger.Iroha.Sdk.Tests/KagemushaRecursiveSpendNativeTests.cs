@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Offline;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -141,17 +142,55 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
-    public void RecursiveSpendNativePreferredModeDefaultsToRecursiveWhenAvailable()
+    public void RecursiveSpendNativeProbeResultClearsAndFreesUnexpectedNativeOutput()
+    {
+        var bytes = Encoding.UTF8.GetBytes("unexpected-kagemusha-probe-output-never-survives-free");
+        var pointer = Marshal.AllocHGlobal(bytes.Length);
+        var freed = false;
+        Marshal.Copy(bytes, 0, pointer, bytes.Length);
+
+        try
+        {
+            var accepted = KagemushaRecursiveSpendNative.ConsumeProbeResult(
+                -311,
+                pointer,
+                (UIntPtr)bytes.Length,
+                ptr =>
+                {
+                    Assert.Equal(pointer, ptr);
+                    AssertPointerZeroed(ptr, bytes.Length);
+                    Marshal.FreeHGlobal(ptr);
+                    pointer = IntPtr.Zero;
+                    freed = true;
+                });
+
+            Assert.False(accepted);
+            Assert.True(freed);
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+    }
+
+    [Fact]
+    public void RecursiveSpendNativePreferredModePrefersRecursiveCompactWhenAvailable()
     {
         Assert.Equal(
-            KagemushaOfflineSpendMode.RecursiveSpendV1,
+            KagemushaOfflineSpendMode.RecursiveCompactV1,
             KagemushaRecursiveSpendNative.PreferredMode(true, true));
         Assert.Equal(
-            KagemushaOfflineSpendMode.CheckedPrefoldV1,
+            KagemushaOfflineSpendMode.RecursiveCompactV1,
             KagemushaRecursiveSpendNative.PreferredMode(true, false));
         Assert.Equal(
             KagemushaOfflineSpendMode.RecursiveSpendV1,
             KagemushaRecursiveSpendNative.PreferredMode(false, true));
+        Assert.Equal(
+            KagemushaOfflineSpendMode.CheckedPrefoldV1,
+            KagemushaRecursiveSpendNative.PreferredMode(false, false));
         Assert.Equal(
             KagemushaOfflineSpendMode.RecursiveSpendV1,
             KagemushaRecursiveSpendNative.PreferredMode(true));
@@ -1018,16 +1057,102 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "lineageVerifierRecord is required for reserved-lineage bundles",
             missingVerifierRecord.Message);
 
+        var missingMultiProfileRecords = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                lineageVerifierRecordsCount: 0,
+                lineageWitnessHasReservedPreviousProofs: true));
+        Assert.Equal("hasLineageVerifierRecord", missingMultiProfileRecords.ParamName);
+        Assert.Contains(
+            "lineageVerifierRecord is required for lineage witnesses with reserved-lineage proofs",
+            missingMultiProfileRecords.Message);
+
+        var danglingLegacyRecord = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: true,
+                lineageVerifierRecordsCount: 0,
+                lineageWitnessHasReservedPreviousProofs: false));
+        Assert.Equal("hasLineageVerifierRecord", danglingLegacyRecord.ParamName);
+        Assert.Contains(
+            "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses with reserved-lineage proofs",
+            danglingLegacyRecord.Message);
+
+        var danglingPluralRecords = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                lineageVerifierRecordsCount: 1,
+                lineageWitnessHasReservedPreviousProofs: false));
+        Assert.Equal("lineageVerifierRecordsCount", danglingPluralRecords.ParamName);
+        Assert.Contains(
+            "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses with reserved-lineage proofs",
+            danglingPluralRecords.Message);
+
+        var negativePluralCount = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                lineageVerifierRecordsCount: -1,
+                lineageWitnessHasReservedPreviousProofs: false));
+        Assert.Equal("lineageVerifierRecordsCount", negativePluralCount.ParamName);
+
+        var overLimitPluralCount = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                requestArchive,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: true,
+                hasLineageVerifierRecord: false,
+                lineageVerifierRecordsCount: (int)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1,
+                lineageWitnessHasReservedPreviousProofs: true));
+        Assert.Equal("lineageVerifierRecordsCount", overLimitPluralCount.ParamName);
+        Assert.Contains("must not exceed", overLimitPluralCount.Message);
+
+        var reservedPreviousWithoutWitness = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                1u,
+                hasLineageWitness: false,
+                hasLineageVerifierRecord: false,
+                lineageVerifierRecordsCount: 1,
+                lineageWitnessHasReservedPreviousProofs: true));
+        Assert.Equal("hasLineageWitness", reservedPreviousWithoutWitness.ParamName);
+
         KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
             KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
             1u,
             hasLineageWitness: true,
             hasLineageVerifierRecord: false);
         KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+            1u,
+            hasLineageWitness: true,
+            hasLineageVerifierRecord: false,
+            lineageVerifierRecordsCount: 2,
+            lineageWitnessHasReservedPreviousProofs: true);
+        KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
             2u,
             hasLineageWitness: false,
             hasLineageVerifierRecord: true);
+        KagemushaRecursiveSpendNative.ValidateRedeemLineagePreflight(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+            1u,
+            hasLineageWitness: true,
+            hasLineageVerifierRecord: false,
+            lineageVerifierRecordsCount: 1,
+            lineageWitnessHasReservedPreviousProofs: false);
     }
 
     [Fact]
@@ -1204,6 +1329,61 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 currentNoteAmount: "100",
                 changeOutput: validChangeOutput));
         Assert.Equal("requestArchive", validBytesThenArchiveValidation.ParamName);
+    }
+
+    [Fact]
+    public void RecursiveSpendNativeRedeemChangeOutputPreflightRejectsReservedMaterialBeforeNativeBridge()
+    {
+        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
+        var bundleSummary = KagemushaRecursiveSpendNative.DecodeBundleSummary(
+            SharedRecursiveSpendArchive("init_bundle"));
+        var reservedValues = new[]
+        {
+            bundleSummary.CurrentNote.NoteCommitment,
+            bundleSummary.CurrentNote.SpendNullifier,
+            bundleSummary.TopupAnchorNullifiers[0],
+        };
+
+        foreach (var reservedValue in reservedValues)
+        {
+            var directError = Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputNotReserved(
+                    reservedValue,
+                    bundleSummary));
+            Assert.Equal("changeOutput", directError.ParamName);
+            Assert.Contains(
+                "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
+                directError.Message);
+
+            var redeemError = Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.Redeem(
+                    malformedRequestArchive,
+                    publicAmount: "1",
+                    bundleSummary,
+                    reservedValue));
+            Assert.Equal("changeOutput", redeemError.ParamName);
+            Assert.Contains(
+                "changeOutput must not reuse the current note commitment, redeem nullifier, or top-up anchor nullifier",
+                redeemError.Message);
+        }
+
+        var nullSummary = Assert.Throws<ArgumentNullException>(() =>
+            KagemushaRecursiveSpendNative.ValidateRedeemChangeOutputNotReserved(
+                NonReservedChangeOutput(bundleSummary),
+                null!));
+        Assert.Equal("bundleSummary", nullSummary.ParamName);
+
+        var validChangeOutputThenArchiveValidation = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.Redeem(
+                malformedRequestArchive,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+                bundleSummary.HopCount,
+                hasLineageWitness: false,
+                hasLineageVerifierRecord: true,
+                publicAmount: "1",
+                bundleSummary,
+                NonReservedChangeOutput(bundleSummary)));
+        Assert.Equal("requestArchive", validChangeOutputThenArchiveValidation.ParamName);
     }
 
     [Theory]
@@ -1431,6 +1611,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             KagemushaRecursiveSpendNative.RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes,
             limits.GetProperty("pallas_open_envelope_max_transcript_label_bytes").GetInt32());
+        Assert.Equal(2, KagemushaRecursiveSpendNative.FoldStepMaxInputs);
         Assert.Equal(
             KagemushaRecursiveSpendNative.NativeArchiveMaxBytes,
             limits.GetProperty("native_archive_max_bytes").GetInt32());
@@ -1579,8 +1760,16 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 "change_output",
                 "lineage_verifier_record",
                 "block_height",
+                "lineage_verifier_records",
             },
             requestFieldsByType["KagemushaRecursiveSpendRedeemRequestV1"]);
+        var lineageVerifierRecords = requestFieldRecordsByType["KagemushaRecursiveSpendRedeemRequestV1"]
+            .Single(field => field.GetProperty("name").GetString() == "lineage_verifier_records");
+        Assert.Equal("Vec<VerifyingKeyRecord>", lineageVerifierRecords.GetProperty("type").GetString());
+        Assert.True(lineageVerifierRecords.GetProperty("norito_default").GetBoolean());
+        Assert.Equal(
+            "additional_reserved_lineage_verifier_records",
+            lineageVerifierRecords.GetProperty("semantics").GetString());
         foreach (var requestType in requestFieldsByType.Keys)
         {
             var blockHeight = requestFieldRecordsByType[requestType]
@@ -1596,7 +1785,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "KagemushaRecursiveSpendRedeemRequestV1",
             redeemArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "5894cfa6edae0de07129dcf14a686bfe8a19486e33d6e8fa6d834076a4359515",
+            "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864",
             redeemArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -1606,7 +1795,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "RedeemKagemushaRecursive",
             redeemInstructionArchive.GetProperty("norito_type").GetString());
         Assert.Equal(
-            "e49686ef68b8db1f6dbd507235eb72224fb99f424fc78638c2ecb171ef0441c0",
+            "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e",
             redeemInstructionArchive.GetProperty("sha256_hex").GetString());
         Assert.True(redeemInstructionArchive.GetProperty("byte_len").GetInt32() > 0);
         Assert.NotEmpty(Convert.FromBase64String(
@@ -1633,6 +1822,65 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendSharedAbi7FixturePinsCurrentProfileHashes()
+    {
+        using var archiveFixture = LoadSharedRecursiveSpendAbi7Archives();
+        var root = archiveFixture.RootElement;
+        Assert.Equal(
+            "iroha.kagemusha.recursive_spend.abi7.archive_fixtures.v1",
+            root.GetProperty("schema").GetString());
+
+        var expectedArchives = new Dictionary<string, (string Operation, string NoritoType, int ByteLen, string Sha256Hex)>
+        {
+            ["append_bundle"] = (
+                "append",
+                "KagemushaRecursiveSpendBundleV1",
+                13622,
+                "4df72bb5469869fa6851985fe5a6d433ee1a08bb3b87a9ae2204273d66923906"),
+            ["verify_request"] = (
+                "verify",
+                "KagemushaRecursiveSpendVerifyRequestV1",
+                13628,
+                "d3815dd9f6a015c6178e6976167308d0113823ce5877a21ae8f088fb54a56d76"),
+            ["verify_result"] = (
+                "verify",
+                "KagemushaRecursiveSpendVerifyResultV1",
+                304,
+                "67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15"),
+            ["redeem_request"] = (
+                "redeem",
+                "KagemushaRecursiveSpendRedeemRequestV1",
+                26266,
+                "0ea80af6e6260a254fe4931cd4c75b622f998db6434d8762136e65547e303089"),
+            ["redeem_instruction"] = (
+                "redeem",
+                "RedeemKagemushaRecursive",
+                26262,
+                "5e2d34bdda70b524497397ca72e4a3849b02ab58007b15337dd73eb247039f09"),
+        };
+
+        var seenArchives = new HashSet<string>();
+        foreach (var archive in root.GetProperty("archives").EnumerateArray())
+        {
+            var name = archive.GetProperty("name").GetString()!;
+            Assert.True(expectedArchives.TryGetValue(name, out var expected), $"unexpected ABI-7 archive {name}");
+            seenArchives.Add(name);
+            Assert.Equal(expected.Operation, archive.GetProperty("operation").GetString());
+            Assert.Equal(expected.NoritoType, archive.GetProperty("norito_type").GetString());
+            Assert.Equal(expected.ByteLen, archive.GetProperty("byte_len").GetInt32());
+            Assert.Equal(expected.Sha256Hex, archive.GetProperty("sha256_hex").GetString());
+
+            var bytes = Convert.FromBase64String(archive.GetProperty("bytes_base64").GetString()!);
+            Assert.Equal(expected.ByteLen, bytes.Length);
+            Assert.Equal(
+                expected.Sha256Hex,
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        }
+
+        Assert.True(seenArchives.SetEquals(expectedArchives.Keys));
+    }
+
+    [Fact]
     public void RecursiveSpendBundleSummaryDecoderReadsSharedBundleArchives()
     {
         var initBundleArchive = SharedRecursiveSpendArchive("init_bundle");
@@ -1646,6 +1894,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(string.IsNullOrWhiteSpace(initBundle.ChainId));
         Assert.Equal(32, initBundle.InitialRoot.Length);
         Assert.Equal(32, initBundle.FinalRoot.Length);
+        Assert.Equal(KagemushaRecursiveSpendNative.FoldStepMaxInputs, initBundle.TopupAnchorNullifiers.Count);
+        foreach (var topupAnchorNullifier in initBundle.TopupAnchorNullifiers)
+        {
+            Assert.Equal(32, topupAnchorNullifier.Length);
+            Assert.False(topupAnchorNullifier.All(value => value == 0));
+        }
         Assert.Equal(32, initBundle.CurrentNote.NoteCommitment.Length);
         Assert.Equal(32, initBundle.CurrentNote.SpendNullifier.Length);
         Assert.Equal("7", initBundle.CurrentNote.Amount);
@@ -1658,6 +1912,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var noteCommitmentByte = noteCommitment[0];
         noteCommitment[0] ^= 0xff;
         Assert.Equal(noteCommitmentByte, initBundle.CurrentNote.NoteCommitment[0]);
+        var copiedTopupAnchorNullifier = initBundle.TopupAnchorNullifiers[0];
+        var copiedTopupAnchorNullifierByte = copiedTopupAnchorNullifier[0];
+        copiedTopupAnchorNullifier[0] ^= 0xff;
+        Assert.Equal(copiedTopupAnchorNullifierByte, initBundle.TopupAnchorNullifiers[0][0]);
 
         var appendBundle = KagemushaRecursiveSpendNative.DecodeBundleSummary(
             SharedRecursiveSpendArchive("append_bundle"));
@@ -1666,6 +1924,129 @@ public sealed class KagemushaRecursiveSpendNativeTests
             appendBundle.ProofCircuitId));
         Assert.Equal(32, appendBundle.InitialRoot.Length);
         Assert.Equal(32, appendBundle.FinalRoot.Length);
+    }
+
+    [Fact]
+    public void RecursiveSpendTransitionProfileSummaryDecoderReadsSharedArchives()
+    {
+        var initProfile = KagemushaRecursiveSpendNative.DecodeTransitionProfileSummary(
+            SharedRecursiveSpendArchive("transition_profile_init"));
+
+        Assert.Equal(0u, initProfile.HopIndex);
+        Assert.Equal(1u, initProfile.HopCount);
+        Assert.False(initProfile.HasPriorState);
+        Assert.Empty(initProfile.PreviousTopupAnchorNullifiers);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.FoldStepMaxOutputs,
+            initProfile.CurrentHopOutputCommitments.Count);
+        foreach (var outputCommitment in initProfile.CurrentHopOutputCommitments)
+        {
+            Assert.Equal(32, outputCommitment.Length);
+            Assert.False(outputCommitment.All(value => value == 0));
+        }
+
+        var appendProfile = KagemushaRecursiveSpendNative.DecodeTransitionProfileSummary(
+            SharedRecursiveSpendArchive("transition_profile_append"));
+
+        Assert.Equal(1u, appendProfile.HopIndex);
+        Assert.Equal(2u, appendProfile.HopCount);
+        Assert.True(appendProfile.HasPriorState);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.FoldStepMaxInputs,
+            appendProfile.PreviousTopupAnchorNullifiers.Count);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.FoldStepMaxOutputs,
+            appendProfile.CurrentHopOutputCommitments.Count);
+        foreach (var previousTopupAnchorNullifier in appendProfile.PreviousTopupAnchorNullifiers)
+        {
+            Assert.Equal(32, previousTopupAnchorNullifier.Length);
+            Assert.False(previousTopupAnchorNullifier.All(value => value == 0));
+        }
+
+        var copiedPreviousTopupAnchorNullifier = appendProfile.PreviousTopupAnchorNullifiers[0];
+        var copiedPreviousTopupAnchorNullifierByte = copiedPreviousTopupAnchorNullifier[0];
+        copiedPreviousTopupAnchorNullifier[0] ^= 0xff;
+        Assert.Equal(
+            copiedPreviousTopupAnchorNullifierByte,
+            appendProfile.PreviousTopupAnchorNullifiers[0][0]);
+        var copiedOutputCommitment = appendProfile.CurrentHopOutputCommitments[0];
+        var copiedOutputCommitmentByte = copiedOutputCommitment[0];
+        copiedOutputCommitment[0] ^= 0xff;
+        Assert.Equal(copiedOutputCommitmentByte, appendProfile.CurrentHopOutputCommitments[0][0]);
+    }
+
+    [Fact]
+    public void RecursiveSpendTransitionProfileSummaryDecoderRejectsPreviousTopupAnchorDrift()
+    {
+        var initProfileArchive = SharedRecursiveSpendArchive("transition_profile_init");
+        var appendProfileArchive = SharedRecursiveSpendArchive("transition_profile_append");
+        var appendProfile = KagemushaRecursiveSpendNative.DecodeTransitionProfileSummary(appendProfileArchive);
+        var carriedPreviousTopupAnchor = appendProfile.PreviousTopupAnchorNullifiers[0];
+        var nonReservedOutput = NonReservedTransitionProfileOutput(appendProfile);
+
+        foreach (var malformedPreviousAnchors in new[]
+        {
+            (
+                Archive: RecursiveSpendTransitionProfileWithField(
+                    appendProfileArchive,
+                    7,
+                    TopupAnchorNullifierCountPayload(0)),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers count is out of range"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithField(
+                    appendProfileArchive,
+                    7,
+                    TopupAnchorNullifiersPayload(new byte[32])),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers must not contain zero values"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithField(
+                    appendProfileArchive,
+                    7,
+                    TopupAnchorNullifiersPayload(Fixed32(0x34), Fixed32(0x34))),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers must be strictly sorted and unique"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithField(
+                    appendProfileArchive,
+                    7,
+                    TopupAnchorNullifiersPayload(Fixed32(0x35), Fixed32(0x34))),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers must be strictly sorted and unique"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithField(
+                    initProfileArchive,
+                    7,
+                    TopupAnchorNullifiersPayload(Fixed32(0x34))),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers count is out of range"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithCurrentHopOutputCommitments(
+                    appendProfileArchive,
+                    SortedFixed32(carriedPreviousTopupAnchor, nonReservedOutput)),
+                ExpectedField: "transition_profile.output_commitments must not reuse previous top-up anchor nullifiers"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithCurrentNoteField(
+                    appendProfileArchive,
+                    0,
+                    carriedPreviousTopupAnchor),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers must not reuse current note material"
+            ),
+            (
+                Archive: RecursiveSpendTransitionProfileWithCurrentNoteField(
+                    appendProfileArchive,
+                    1,
+                    carriedPreviousTopupAnchor),
+                ExpectedField: "transition_profile.previous_topup_anchor_nullifiers must not reuse current note material"
+            ),
+        })
+        {
+            AssertTransitionProfileSummaryRejects(
+                malformedPreviousAnchors.Archive,
+                malformedPreviousAnchors.ExpectedField);
+        }
     }
 
     [Fact]
@@ -1708,6 +2089,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
             (
                 Archive: RecursiveSpendLineageWitnessWithTrailingPreviousProofsField(),
                 ExpectedField: "lineageWitness.previousRecursiveProofs"
+            ),
+            (
+                Archive: RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly(),
+                ExpectedField: "lineageWitness.previousRecursiveProofs count must not exceed"
             ),
             (
                 Archive: RecursiveSpendLineageWitnessWithTrailingPreviousProofField(),
@@ -1801,6 +2186,13 @@ public sealed class KagemushaRecursiveSpendNativeTests
             (FieldIndex: 3, Replacement: KagemushaFixedArrayPayload(0x02, 33), ExpectedField: "initialRoot"),
             (FieldIndex: 4, Replacement: KagemushaFixedArrayPayload(0x03, 31), ExpectedField: "finalRoot"),
             (FieldIndex: 4, Replacement: KagemushaFixedArrayPayload(0x03, 33), ExpectedField: "finalRoot"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifierCountPayload(0), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers count is out of range"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifierCountPayload((ulong)KagemushaRecursiveSpendNative.FoldStepMaxInputs + 1), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers count is out of range"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifiersPayload(new byte[32]), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers must not contain zero values"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifiersPayload(Fixed32(0x34), Fixed32(0x34)), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifiersPayload(Fixed32(0x35), Fixed32(0x34)), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers must be strictly sorted and unique"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifiersPayload(KagemushaRecursiveSpendNative.DecodeBundleSummary(initBundleArchive).CurrentNote.NoteCommitment), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"),
+            (FieldIndex: 5, Replacement: TopupAnchorNullifiersPayload(KagemushaRecursiveSpendNative.DecodeBundleSummary(initBundleArchive).CurrentNote.SpendNullifier), ExpectedField: "bundle.accumulator.topup_anchor_nullifiers must not reuse current note material"),
         })
         {
             Assert.Contains(
@@ -1811,6 +2203,34 @@ public sealed class KagemushaRecursiveSpendNativeTests
                             initBundleArchive,
                             malformedAccumulatorField.FieldIndex,
                             malformedAccumulatorField.Replacement))).Message);
+        }
+
+        foreach (var topupAnchorPrecedence in new[]
+        {
+            (
+                Label: "malformed proof cannot mask invalid top-up anchor nullifiers",
+                Archive: RecursiveSpendBundleWithEmptyProofBytes(
+                    RecursiveSpendBundleWithAccumulatorField(
+                        initBundleArchive,
+                        5,
+                        TopupAnchorNullifiersPayload(new byte[32])))
+            ),
+            (
+                Label: "trailing accumulator cannot mask invalid top-up anchor nullifiers",
+                Archive: RecursiveSpendBundleWithAccumulatorTrailingField(
+                    RecursiveSpendBundleWithAccumulatorField(
+                        initBundleArchive,
+                        5,
+                        TopupAnchorNullifiersPayload(new byte[32])))
+            ),
+        })
+        {
+            var error = Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeBundleSummary(topupAnchorPrecedence.Archive));
+            Assert.Contains(
+                "bundle.accumulator.topup_anchor_nullifiers must not contain zero values",
+                error.Message);
+            Assert.False(string.IsNullOrWhiteSpace(topupAnchorPrecedence.Label));
         }
 
         foreach (var malformedHopCount in new[]
@@ -1964,6 +2384,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveSpendNativeRejectsEmptyArchivesBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
 
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(Array.Empty<byte>()));
@@ -2000,7 +2421,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative.BuildPallasOpenEnvelopesArchive(Array.Empty<byte>()));
@@ -2041,6 +2462,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveAggregationProverRejectsMalformedInputsBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
         var recordBundle = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
@@ -2051,7 +2473,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var pallasOpenEnvelopes = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     new byte[] { 0x01, 0x02 }));
         Assert.Contains("Pallas open-envelopes archive must be a valid Norito archive", pallasOpenEnvelopes.Message);
     }
@@ -2060,6 +2482,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveAggregationProverRejectsOversizedInputsBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
         var oversizedArchive = OversizedKagemushaArchive();
         AssertOversizedArchive(
             () => KagemushaRecursiveSpendNative
@@ -2071,7 +2494,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         AssertOversizedArchive(
             () => KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     oversizedArchive),
             "Pallas open-envelopes archive must not exceed",
             "pallasOpenEnvelopesArchive");
@@ -2081,6 +2504,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveAggregationProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
         var emptyPayloadArchive = KagemushaNoritoFrame(0x4b);
         var recordBundle = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
@@ -2092,11 +2516,543 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var pallasOpenEnvelopes = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     emptyPayloadArchive));
         Assert.Contains(
             "Pallas open-envelopes archive must contain a non-empty Norito payload",
             pallasOpenEnvelopes.Message);
+    }
+
+    [Fact]
+    public void RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge()
+    {
+        var validRecordBundle = RecordBundleWithStepCount();
+        var validKeyArtifacts = KagemushaNoritoFrameWithPayload(0x4b);
+        var malformedArchives = new (byte[] Archive, string ExpectedMessage)[]
+        {
+            (
+                KagemushaNoritoFrameFromSchemaHash(
+                    NoritoCodec.SchemaHash("test.PallasOpenEnvelopes"),
+                    new byte[] { 0x72 },
+                    KagemushaNoritoCompactLenFlag),
+                "pallasOpenEnvelopesArchive must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"
+            ),
+            (PallasOpenEnvelopesArchive(0), "pallasOpenEnvelopesArchive requires exactly 1 envelope(s)"),
+            (PallasOpenEnvelopesArchive(2), "pallasOpenEnvelopesArchive requires exactly 1 envelope(s)"),
+            (
+                PallasOpenEnvelopesArchive(configure: spec => spec.IncludeDomainTag = false),
+                "pallasOpenEnvelopesArchive[0].domain_tag is required"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec => spec.ParamsGSequencePayload = U64LE(5)),
+                "pallasOpenEnvelopesArchive[0].params.g length must equal params.n"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec => spec.ParamsHSequencePayload = U64LE(5)),
+                "pallasOpenEnvelopesArchive[0].params.h length must equal params.n"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec => spec.ProofLSequencePayload = U64LE(3)),
+                "pallasOpenEnvelopesArchive[0].proof round count mismatch: expected 2, found count prefix"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec => spec.ProofRSequencePayload = U64LE(3)),
+                "pallasOpenEnvelopesArchive[0].proof round count mismatch: expected 2, found count prefix"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.VkCommitmentPayload = KagemushaFixedArrayPayload(0x70, 32)),
+                "pallasOpenEnvelopesArchive[0].vk_commitment must be exactly 32 bytes"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.VkCommitmentOptionPayload = OptionRawWithTrailingByte(SyntheticFixed32(0x70))),
+                "pallasOpenEnvelopesArchive[0].vk_commitment"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.VkCommitmentOptionPayload = OptionRawWithUnknownTag()),
+                "pallasOpenEnvelopesArchive[0].vk_commitment option tag must be 0 or 1"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.VkCommitmentOptionPayload = OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x70))),
+                "pallasOpenEnvelopesArchive[0].vk_commitment payload length mismatch"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.PublicInputsSchemaHashPayload = KagemushaFixedArrayPayload(0x71, 32)),
+                "pallasOpenEnvelopesArchive[0].public_inputs_schema_hash must be exactly 32 bytes"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.PublicInputsSchemaHashOptionPayload = OptionRawWithTrailingByte(SyntheticFixed32(0x71))),
+                "pallasOpenEnvelopesArchive[0].public_inputs_schema_hash"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.PublicInputsSchemaHashOptionPayload = OptionRawWithUnknownTag()),
+                "pallasOpenEnvelopesArchive[0].public_inputs_schema_hash option tag must be 0 or 1"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.PublicInputsSchemaHashOptionPayload =
+                        OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x71))),
+                "pallasOpenEnvelopesArchive[0].public_inputs_schema_hash payload length mismatch"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.DomainTagPayload = KagemushaFixedArrayPayload(0x72, 32)),
+                "pallasOpenEnvelopesArchive[0].domain_tag must be exactly 32 bytes"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.DomainTagOptionPayload = OptionRawWithTrailingByte(SyntheticFixed32(0x72))),
+                "pallasOpenEnvelopesArchive[0].domain_tag"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.DomainTagOptionPayload = OptionRawWithUnknownTag()),
+                "pallasOpenEnvelopesArchive[0].domain_tag option tag must be 0 or 1"
+            ),
+            (
+                PallasOpenEnvelopesArchive(configure: spec =>
+                    spec.DomainTagOptionPayload = OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x72))),
+                "pallasOpenEnvelopesArchive[0].domain_tag payload length mismatch"
+            ),
+        };
+
+        foreach (var (archive, expectedMessage) in malformedArchives)
+        {
+            AssertPallasArchiveRejected(
+                () => KagemushaRecursiveSpendNative
+                    .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        validRecordBundle,
+                        archive),
+                expectedMessage);
+            AssertPallasArchiveRejected(
+                () => KagemushaRecursiveSpendNative
+                    .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                        validRecordBundle,
+                        archive,
+                        validKeyArtifacts),
+                expectedMessage);
+        }
+
+        var countMismatch = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative
+                .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    RecordBundleWithStepCount(2),
+                    PallasOpenEnvelopesArchive()));
+        Assert.Equal("pallasOpenEnvelopesArchive", countMismatch.ParamName);
+        Assert.Contains("pallasOpenEnvelopesArchive requires exactly 2 envelope(s)", countMismatch.Message);
+    }
+
+    [Fact]
+    public void RecursiveSpendInitRequestEncoderRejectsMalformedLineageAndPallasInputsBeforeNativeBridge()
+    {
+        var recordBundle = RecordBundleWithStepCount();
+        var pallasOpenEnvelopes = PallasOpenEnvelopesArchive();
+        var currentNote = ValidSpendableNoteDescriptor();
+        var initVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            0xd1);
+        var initProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initVerifierKey,
+            0xd2);
+        var appendVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            0xd3);
+        var appendProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            appendVerifierKey,
+            0xd4);
+        var initArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            initVerifierKey,
+            initProvingKey);
+        var appendArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForAppend(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            appendVerifierKey,
+            appendProvingKey);
+
+        var request = KagemushaRecursiveSpendNative.EncodeInitRequest(
+            recordBundle,
+            pallasOpenEnvelopes,
+            currentNote,
+            initArtifacts,
+            blockHeight: 42);
+        Assert.Equal(
+            NoritoCodec.SchemaHash(KagemushaRecursiveSpendNative.RecursiveSpendInitRequestWireName),
+            request.AsSpan(6, 16).ToArray());
+        Assert.Equal(KagemushaNoritoCompactLenFlag, request[39]);
+        var fields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(request),
+            KagemushaNoritoCompactLenFlag);
+        Assert.Equal(6, fields.Count);
+        Assert.Equal(0x01, fields[3][0]);
+        Assert.Equal(0x01, fields[4][0]);
+        Assert.Equal(0x01, fields[5][0]);
+
+        var wrongArtifactProfile = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeInitRequest(
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                appendArtifacts));
+        Assert.Equal("lineageKeyArtifacts", wrongArtifactProfile.ParamName);
+        Assert.Contains("lineage_key_artifacts must be init artifacts", wrongArtifactProfile.Message);
+
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.EncodeInitRequestWithLineageMaterials(
+                    recordBundle,
+                    pallasOpenEnvelopes,
+                    currentNote,
+                    appendVerifierKey,
+                    appendProvingKey)).Message);
+
+        var pallasMismatch = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeInitRequest(
+                recordBundle,
+                PallasOpenEnvelopesArchive(2),
+                currentNote,
+                initArtifacts));
+        Assert.Equal("pallasOpenEnvelopesArchive", pallasMismatch.ParamName);
+        Assert.Contains("pallasOpenEnvelopesArchive requires exactly 1 envelope(s)", pallasMismatch.Message);
+
+        Assert.Throws<ArgumentNullException>(() =>
+            KagemushaRecursiveSpendNative.EncodeInitRequest(
+                recordBundle,
+                pallasOpenEnvelopes,
+                null!,
+                initArtifacts));
+    }
+
+    [Fact]
+    public void RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge()
+    {
+        var previousBundle = SharedRecursiveSpendArchive("init_bundle");
+        var recordBundle = RecordBundleWithStepCount();
+        var pallasOpenEnvelopes = PallasOpenEnvelopesArchive();
+        var previousProofOpenEnvelopes = PallasOpenEnvelopesArchive();
+        var previousLineageRecord = VerifyingKeyRecordArchive();
+        var currentNote = ValidSpendableNoteDescriptor();
+        var appendVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            0xd5);
+        var appendProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            appendVerifierKey,
+            0xd6);
+        var initVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            0xd7);
+        var initProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initVerifierKey,
+            0xd8);
+        var appendArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForAppend(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            appendVerifierKey,
+            appendProvingKey);
+        var initArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            initVerifierKey,
+            initProvingKey);
+
+        var request = KagemushaRecursiveSpendNative.EncodeAppendRequest(
+            previousBundle,
+            recordBundle,
+            pallasOpenEnvelopes,
+            currentNote,
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            previousLineageRecord,
+            previousProofOpenEnvelopes,
+            appendArtifacts,
+            blockHeight: 43);
+        Assert.Equal(
+            NoritoCodec.SchemaHash(KagemushaRecursiveSpendNative.RecursiveSpendAppendRequestWireName),
+            request.AsSpan(6, 16).ToArray());
+        Assert.Equal(KagemushaNoritoCompactLenFlag, request[39]);
+        var fields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(request),
+            KagemushaNoritoCompactLenFlag);
+        Assert.Equal(10, fields.Count);
+        Assert.NotEmpty(fields[6]);
+        Assert.Equal(0x01, fields[7][0]);
+        Assert.Equal(0x01, fields[8][0]);
+        Assert.Equal(0x01, fields[9][0]);
+
+        var missingPreviousRecord = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageVerifierRecordArchive: null,
+                previousProofOpenEnvelopesArchive: previousProofOpenEnvelopes,
+                lineageKeyArtifacts: appendArtifacts));
+        Assert.Equal("previousLineageVerifierRecordArchive", missingPreviousRecord.ParamName);
+        Assert.Contains("previousLineageVerifierRecordArchive is required", missingPreviousRecord.Message);
+
+        var missingPreviousOpenings = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageRecord,
+                previousProofOpenEnvelopesArchive: null,
+                lineageKeyArtifacts: appendArtifacts));
+        Assert.Equal("previousProofOpenEnvelopesArchive", missingPreviousOpenings.ParamName);
+        Assert.Contains("previousProofOpenEnvelopesArchive is required", missingPreviousOpenings.Message);
+
+        var malformedPreviousOpenings = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageRecord,
+                KagemushaNoritoFrameWithPayload(0x4b),
+                appendArtifacts));
+        Assert.Equal("previousProofOpenEnvelopesArchive", malformedPreviousOpenings.ParamName);
+        Assert.Contains(
+            "previousProofOpenEnvelopesArchive must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+            malformedPreviousOpenings.Message);
+
+        var overCountPreviousOpenings = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageRecord,
+                PallasOpenEnvelopesArchive(2),
+                appendArtifacts));
+        Assert.Contains(
+            "previousProofOpenEnvelopesArchive requires exactly 1 envelope(s)",
+            overCountPreviousOpenings.Message);
+
+        var danglingPreviousOpenings = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                previousLineageRecord,
+                previousProofOpenEnvelopes,
+                lineageKeyArtifacts: null));
+        Assert.Equal("previousProofOpenEnvelopesArchive", danglingPreviousOpenings.ParamName);
+        Assert.Contains("previousProofOpenEnvelopesArchive is only valid", danglingPreviousOpenings.Message);
+
+        var wrongAppendArtifact = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequest(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageRecord,
+                previousProofOpenEnvelopes,
+                initArtifacts));
+        Assert.Equal("lineageKeyArtifacts", wrongAppendArtifact.ParamName);
+        Assert.Contains("lineage_key_artifacts must be append artifacts", wrongAppendArtifact.Message);
+
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.EncodeAppendRequestWithLineageMaterials(
+                    previousBundle,
+                    recordBundle,
+                    pallasOpenEnvelopes,
+                    currentNote,
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                    previousLineageRecord,
+                    previousProofOpenEnvelopes,
+                    initVerifierKey,
+                    initProvingKey)).Message);
+
+        var danglingLineageKeyMaterial = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithLineageMaterials(
+                previousBundle,
+                recordBundle,
+                pallasOpenEnvelopes,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                previousLineageRecord,
+                previousProofOpenEnvelopesArchive: null,
+                appendVerifierKey,
+                appendProvingKey));
+        Assert.Equal("lineageVerifierKey", danglingLineageKeyMaterial.ParamName);
+        Assert.Contains("lineageKeyArtifacts are only valid for lineage append output", danglingLineageKeyMaterial.Message);
+    }
+
+    [Fact]
+    public void RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder()
+    {
+        var malformedRecordBundle = new byte[] { 0x01, 0x02 };
+        var currentNote = ValidSpendableNoteDescriptor();
+        var initVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            0xd9);
+        var initProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initVerifierKey,
+            0xda);
+        var appendVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            0xdb);
+        var appendProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            appendVerifierKey,
+            0xdc);
+        var initArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            initVerifierKey,
+            initProvingKey);
+        var appendArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForAppend(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            appendVerifierKey,
+            appendProvingKey);
+
+        var wrongProfile = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeInitRequestWithGeneratedPallas(
+                malformedRecordBundle,
+                currentNote,
+                appendArtifacts));
+        Assert.Equal("lineageKeyArtifacts", wrongProfile.ParamName);
+        Assert.Contains("lineage_key_artifacts must be init artifacts", wrongProfile.Message);
+
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.EncodeInitRequestWithGeneratedPallas(
+                    malformedRecordBundle,
+                    currentNote,
+                    appendVerifierKey,
+                    appendProvingKey)).Message);
+
+        var nullNote = Assert.Throws<ArgumentNullException>(() =>
+            KagemushaRecursiveSpendNative.EncodeInitRequestWithGeneratedPallas(
+                malformedRecordBundle,
+                null!,
+                initArtifacts));
+        Assert.Equal("currentNote", nullNote.ParamName);
+    }
+
+    [Fact]
+    public void RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder()
+    {
+        var previousBundle = SharedRecursiveSpendArchive("init_bundle");
+        var malformedRecordBundle = new byte[] { 0x01, 0x02 };
+        var previousLineageRecord = VerifyingKeyRecordArchive();
+        var currentNote = ValidSpendableNoteDescriptor();
+        var initVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            0xdd);
+        var initProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initVerifierKey,
+            0xde);
+        var appendVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            0xdf);
+        var appendProvingKey = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            appendVerifierKey,
+            0xe0);
+        var initArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            initVerifierKey,
+            initProvingKey);
+        var appendArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForAppend(
+            2,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            appendVerifierKey,
+            appendProvingKey);
+
+        var missingPreviousRecord = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                previousBundle,
+                malformedRecordBundle,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageVerifierRecordArchive: null,
+                lineageKeyArtifacts: appendArtifacts));
+        Assert.Equal("previousLineageVerifierRecordArchive", missingPreviousRecord.ParamName);
+        Assert.Contains("previousLineageVerifierRecordArchive is required", missingPreviousRecord.Message);
+
+        var wrongProfile = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                previousBundle,
+                malformedRecordBundle,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageRecord,
+                initArtifacts));
+        Assert.Equal("lineageKeyArtifacts", wrongProfile.ParamName);
+        Assert.Contains("lineage_key_artifacts must be append artifacts", wrongProfile.Message);
+
+        var malformedPreviousRecord = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                previousBundle,
+                malformedRecordBundle,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageVerifierRecordArchive: new byte[] { 0x01, 0x02 },
+                lineageKeyArtifacts: appendArtifacts));
+        Assert.Equal("previousLineageVerifierRecordArchive", malformedPreviousRecord.ParamName);
+        Assert.Contains("must be a valid Norito V1 archive", malformedPreviousRecord.Message);
+
+        var danglingLineageKeyMaterial = Assert.Throws<ArgumentException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                previousBundle,
+                malformedRecordBundle,
+                currentNote,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
+                previousLineageVerifierRecordArchive: previousLineageRecord,
+                lineageVerifierKey: appendVerifierKey,
+                lineageProvingKeyArchive: appendProvingKey));
+        Assert.Equal("lineageVerifierKey", danglingLineageKeyMaterial.ParamName);
+        Assert.Contains("lineageKeyArtifacts are only valid for lineage append output", danglingLineageKeyMaterial.Message);
+
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(() =>
+                KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                    previousBundle,
+                    malformedRecordBundle,
+                    currentNote,
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                    previousLineageVerifierRecordArchive: previousLineageRecord,
+                    lineageVerifierKey: initVerifierKey,
+                    lineageProvingKeyArchive: initProvingKey)).Message);
+
+        var nullNote = Assert.Throws<ArgumentNullException>(() =>
+            KagemushaRecursiveSpendNative.EncodeAppendRequestWithGeneratedPallas(
+                previousBundle,
+                malformedRecordBundle,
+                null!,
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                previousLineageVerifierRecordArchive: previousLineageRecord,
+                lineageKeyArtifacts: appendArtifacts));
+        Assert.Equal("currentNote", nullNote.ParamName);
     }
 
     [Fact]
@@ -2146,18 +3102,20 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveCompactProverRejectsMalformedInputsBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
+        var validPallasOpenEnvelopes = PallasOpenEnvelopesArchive();
         var recordBundle = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     new byte[] { 0x01, 0x02 },
-                    validArchive,
+                    validPallasOpenEnvelopes,
                     validArchive));
         Assert.Contains("Record bundle archive must be a valid Norito archive", recordBundle.Message);
 
         var pallasOpenEnvelopes = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     new byte[] { 0x01, 0x02 },
                     validArchive));
         Assert.Contains("Pallas open-envelopes archive must be a valid Norito archive", pallasOpenEnvelopes.Message);
@@ -2165,8 +3123,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var keyArtifacts = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
-                    validArchive,
+                    validRecordBundle,
+                    validPallasOpenEnvelopes,
                     new byte[] { 0x01, 0x02 }));
         Assert.Contains("Recursive compact key artifacts archive must be a valid Norito archive", keyArtifacts.Message);
     }
@@ -2175,6 +3133,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveCompactProverRejectsOversizedInputsBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
+        var validPallasOpenEnvelopes = PallasOpenEnvelopesArchive();
         var oversizedArchive = OversizedKagemushaArchive();
         AssertOversizedArchive(
             () => KagemushaRecursiveSpendNative
@@ -2187,7 +3147,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         AssertOversizedArchive(
             () => KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     oversizedArchive,
                     validArchive),
             "Pallas open-envelopes archive must not exceed",
@@ -2195,8 +3155,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
         AssertOversizedArchive(
             () => KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
-                    validArchive,
+                    validRecordBundle,
+                    validPallasOpenEnvelopes,
                     oversizedArchive),
             "Recursive compact key artifacts archive must not exceed",
             "recursiveCompactKeyArtifactsArchive");
@@ -2206,6 +3166,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveCompactProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
+        var validPallasOpenEnvelopes = PallasOpenEnvelopesArchive();
         var emptyPayloadArchive = KagemushaNoritoFrame(0x4b);
         var recordBundle = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
@@ -2218,7 +3180,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var pallasOpenEnvelopes = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     emptyPayloadArchive,
                     validArchive));
         Assert.Contains(
@@ -2228,8 +3190,8 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var keyArtifacts = Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
-                    validArchive,
+                    validRecordBundle,
+                    validPallasOpenEnvelopes,
                     emptyPayloadArchive));
         Assert.Contains(
             "Recursive compact key artifacts archive must contain a non-empty Norito payload",
@@ -2304,6 +3266,43 @@ public sealed class KagemushaRecursiveSpendNativeTests
 
         Assert.Contains("connect_norito_kagemusha_recursive_spend_redeem", error.Message);
         Assert.Contains("-311", error.Message);
+    }
+
+    [Fact]
+    public void RecursiveSpendNativeReadBridgeOutputClearsAndFreesNonNullPointerOnBridgeErrors()
+    {
+        var errorBytes = Encoding.UTF8.GetBytes("kagemusha-native-error-output-never-survives-free");
+        var pointer = Marshal.AllocHGlobal(errorBytes.Length);
+        var freed = false;
+        Marshal.Copy(errorBytes, 0, pointer, errorBytes.Length);
+
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                KagemushaRecursiveSpendNative.ReadBridgeOutput(
+                    "connect_norito_kagemusha_recursive_spend_redeem",
+                    -311,
+                    pointer,
+                    (UIntPtr)errorBytes.Length,
+                    ptr =>
+                    {
+                        Assert.Equal(pointer, ptr);
+                        AssertPointerZeroed(ptr, errorBytes.Length);
+                        Marshal.FreeHGlobal(ptr);
+                        pointer = IntPtr.Zero;
+                        freed = true;
+                    }));
+
+            Assert.True(freed);
+            Assert.Contains("-311", error.Message);
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
     }
 
     [Fact]
@@ -2391,6 +3390,43 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendNativeReadBridgeOutputClearsMalformedNoritoBeforeFree()
+    {
+        var output = new byte[] { 0x01, 0x02, 0x03 };
+        var pointer = Marshal.AllocHGlobal(output.Length);
+        var freed = false;
+        Marshal.Copy(output, 0, pointer, output.Length);
+
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                KagemushaRecursiveSpendNative.ReadBridgeOutput(
+                    "connect_norito_kagemusha_recursive_spend_redeem",
+                    0,
+                    pointer,
+                    (UIntPtr)output.Length,
+                    ptr =>
+                    {
+                        Assert.Equal(pointer, ptr);
+                        AssertPointerZeroed(ptr, output.Length);
+                        Marshal.FreeHGlobal(ptr);
+                        pointer = IntPtr.Zero;
+                        freed = true;
+                    }));
+
+            Assert.True(freed);
+            Assert.Contains("invalid Norito archive", error.Message);
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+    }
+
+    [Fact]
     public void RecursiveSpendNativeReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput()
     {
         var error = Assert.Throws<InvalidOperationException>(() =>
@@ -2443,16 +3479,47 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveSpendNativeReadBridgeOutputReturnsValidNoritoSuccessOutput()
     {
         var archive = KagemushaNoritoFrameWithPayload(0x4b);
-        var output = ReadBridgeOutputWithBytes(archive);
+        var pointer = Marshal.AllocHGlobal(archive.Length);
+        var freed = false;
+        Marshal.Copy(archive, 0, pointer, archive.Length);
 
-        Assert.Equal(archive, output);
+        try
+        {
+            var output = KagemushaRecursiveSpendNative.ReadBridgeOutput(
+                "connect_norito_kagemusha_recursive_spend_redeem",
+                0,
+                pointer,
+                (UIntPtr)archive.Length,
+                ptr =>
+                {
+                    Assert.Equal(pointer, ptr);
+                    AssertPointerZeroed(ptr, archive.Length);
+                    Marshal.FreeHGlobal(ptr);
+                    pointer = IntPtr.Zero;
+                    freed = true;
+                });
+
+            Assert.Equal(archive, output);
+            Assert.True(freed);
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
     }
 
     [Fact]
     public void RecursiveSpendNativeRejectsMalformedArchivesBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
-        static void AssertRejectsMalformedEverywhere(byte[] malformed, byte[] validArchive)
+        var validRecordBundle = RecordBundleWithStepCount();
+        static void AssertRejectsMalformedEverywhere(
+            byte[] malformed,
+            byte[] validArchive,
+            byte[] validRecordBundle)
         {
             Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(malformed));
             Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(malformed));
@@ -2489,30 +3556,32 @@ public sealed class KagemushaRecursiveSpendNativeTests
             Assert.Throws<ArgumentException>(() =>
                 KagemushaRecursiveSpendNative
                     .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                        validArchive,
+                        validRecordBundle,
                         malformed));
         }
 
-        AssertRejectsMalformedEverywhere(new byte[] { 0x01, 0x02 }, validArchive);
+        AssertRejectsMalformedEverywhere(new byte[] { 0x01, 0x02 }, validArchive, validRecordBundle);
 
         var compressed = KagemushaNoritoFrameWithPayload(0x4b);
         compressed[22] = 1;
-        AssertRejectsMalformedEverywhere(compressed, validArchive);
+        AssertRejectsMalformedEverywhere(compressed, validArchive, validRecordBundle);
 
         var unsupportedFlags = KagemushaNoritoFrameWithPayload(0x4b);
         unsupportedFlags[39] = 0x08;
-        AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive);
+        AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive, validRecordBundle);
 
         var invalidFieldBitset = KagemushaNoritoFrameWithPayload(0x4b);
         invalidFieldBitset[39] = 0x20;
-        AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive);
+        AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive, validRecordBundle);
 
         AssertRejectsMalformedEverywhere(
             WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[] { 0x7f }),
-            validArchive);
+            validArchive,
+            validRecordBundle);
         AssertRejectsMalformedEverywhere(
             WithHeaderPadding(KagemushaNoritoFrameWithPayload(0x4b), new byte[65]),
-            validArchive);
+            validArchive,
+            validRecordBundle);
     }
 
     [Fact]
@@ -2587,6 +3656,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
     public void RecursiveSpendNativeRejectsEmptyPayloadArchivesBeforeLoadingNativeBridge()
     {
         var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+        var validRecordBundle = RecordBundleWithStepCount();
         var emptyPayloadArchive = KagemushaNoritoFrame(0x4b);
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(emptyPayloadArchive));
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(emptyPayloadArchive));
@@ -2623,8 +3693,38 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Throws<ArgumentException>(() =>
             KagemushaRecursiveSpendNative
                 .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    validArchive,
+                    validRecordBundle,
                     emptyPayloadArchive));
+    }
+
+    [Fact]
+    public void RecursiveSpendRecordBundlePreflightRejectsOverLimitStepCountBeforeLoadingNativeBridge()
+    {
+        var recordBundle = RecordBundleWithOverLimitStepCountOnly();
+        var validArchive = KagemushaNoritoFrameWithPayload(0x4b);
+
+        void AssertRecordBundleRejected(Action action)
+        {
+            var error = Assert.Throws<ArgumentException>(action);
+            Assert.Equal("recordBundleArchive", error.ParamName);
+            Assert.Contains("recordBundle.steps fold step count must not exceed", error.Message);
+        }
+
+        AssertRecordBundleRejected(
+            () => KagemushaRecursiveSpendNative.ProveVerifiedCompactPaymentTokenWithRecords(recordBundle));
+        AssertRecordBundleRejected(
+            () => KagemushaRecursiveSpendNative.BuildPallasOpenEnvelopesArchive(recordBundle));
+        AssertRecordBundleRejected(
+            () => KagemushaRecursiveSpendNative
+                .ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundle,
+                    validArchive));
+        AssertRecordBundleRejected(
+            () => KagemushaRecursiveSpendNative
+                .ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundle,
+                    validArchive,
+                    validArchive));
     }
 
     [Fact]
@@ -2739,6 +3839,11 @@ public sealed class KagemushaRecursiveSpendNativeTests
     {
         0x11, 0x9f, 0x4d, 0xf3, 0x8a, 0x98, 0xef, 0x58,
         0x48, 0xad, 0x0a, 0xad, 0xb9, 0x71, 0x57, 0x79,
+    };
+    private static readonly byte[] PallasOpenEnvelopeVectorSchemaHash = new byte[]
+    {
+        0xfe, 0x38, 0x26, 0x32, 0x8f, 0x08, 0x17, 0x71,
+        0x75, 0x0f, 0x24, 0xfe, 0x11, 0x02, 0x60, 0xca,
     };
 
     private static byte[] KagemushaNoritoFrame(byte schemaByte)
@@ -2877,12 +3982,253 @@ public sealed class KagemushaRecursiveSpendNativeTests
             flags ?? archive[39]);
     }
 
+    private static byte[] RecordBundleWithStepCount(int hopCount = 1)
+    {
+        var stepPayload = KagemushaNoritoEncodeFields(
+            Enumerable.Range(0, 6).Select(index => new byte[] { (byte)(0xa0 + index) }),
+            KagemushaNoritoCompactLenFlag);
+        var steps = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(steps, (ulong)hopCount);
+        var stepsPayload = steps
+            .Concat(Enumerable.Range(0, hopCount)
+                .SelectMany(_ => KagemushaNoritoField(stepPayload)))
+            .ToArray();
+        return RecordBundleWithStepsPayload(stepsPayload);
+    }
+
+    private static byte[] RecordBundleWithOverLimitStepCountOnly()
+    {
+        var stepsPayload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            stepsPayload,
+            (ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1);
+        return RecordBundleWithStepsPayload(stepsPayload);
+    }
+
+    private static byte[] RecordBundleWithStepsPayload(byte[] stepsPayload)
+    {
+        var bundlePayload = KagemushaNoritoEncodeFields(
+            new[]
+            {
+                new byte[] { 0x41 },
+                new byte[] { 0x42 },
+                stepsPayload,
+            },
+            KagemushaNoritoCompactLenFlag);
+        return KagemushaNoritoFrameFromSchemaHash(
+            NoritoCodec.SchemaHash(KagemushaRecursiveSpendNative.VerifiedFoldRecordBundleWireName),
+            KagemushaNoritoEncodeFields(
+                new[]
+                {
+                    bundlePayload,
+                    Array.Empty<byte>(),
+                },
+                KagemushaNoritoCompactLenFlag),
+            KagemushaNoritoCompactLenFlag);
+    }
+
+    private static KagemushaRecursiveSpendableNoteDescriptor ValidSpendableNoteDescriptor()
+    {
+        return new KagemushaRecursiveSpendableNoteDescriptor(
+            Enumerable.Repeat((byte)0x31, 32).ToArray(),
+            Enumerable.Repeat((byte)0x32, 32).ToArray(),
+            "7");
+    }
+
+    private static byte[] VerifyingKeyRecordArchive()
+    {
+        return KagemushaNoritoFrameFromSchemaHash(
+            NoritoCodec.SchemaHash(KagemushaRecursiveSpendNative.VerifyingKeyRecordWireName),
+            KagemushaNoritoEncodeFields(
+                new[]
+                {
+                    KagemushaNoritoString(KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend),
+                    KagemushaNoritoString("kagemusha-recursive-spend-test-key"),
+                    KagemushaNoritoByteVec(Enumerable.Repeat((byte)0x55, 32).ToArray()),
+                },
+                KagemushaNoritoCompactLenFlag),
+            KagemushaNoritoCompactLenFlag);
+    }
+
+    private static void AssertPallasArchiveRejected(Action action, string expectedMessage)
+    {
+        var error = Assert.Throws<ArgumentException>(action);
+        Assert.Equal("pallasOpenEnvelopesArchive", error.ParamName);
+        Assert.Contains(expectedMessage, error.Message);
+    }
+
+    private static byte[] PallasOpenEnvelopesArchive(
+        int count = 1,
+        Action<PallasOpenEnvelopeSpec>? configure = null)
+    {
+        var spec = new PallasOpenEnvelopeSpec();
+        configure?.Invoke(spec);
+        var envelope = PallasOpenEnvelopePayload(spec);
+        var payload = U64LE((ulong)count)
+            .Concat(Enumerable.Range(0, count)
+                .SelectMany(_ => KagemushaNoritoField(envelope)))
+            .ToArray();
+        return KagemushaNoritoFrameFromSchemaHash(
+            PallasOpenEnvelopeVectorSchemaHash,
+            payload,
+            KagemushaNoritoCompactLenFlag);
+    }
+
+    private static byte[] PallasOpenEnvelopePayload(PallasOpenEnvelopeSpec spec)
+    {
+        const int n = 4;
+        var parameters = KagemushaNoritoEncodeFields(
+            new[]
+            {
+                U16LE(1),
+                U16LE(spec.ParamsCurveId),
+                U32LE(n),
+                spec.ParamsGSequencePayload ?? Fixed32Sequence(n, 0x10),
+                spec.ParamsHSequencePayload ?? Fixed32Sequence(n, 0x20),
+                SyntheticFixed32(0x30),
+            },
+            KagemushaNoritoCompactLenFlag);
+        var publicValue = KagemushaNoritoEncodeFields(
+            new[]
+            {
+                U16LE(1),
+                U16LE(spec.PublicCurveId),
+                U32LE(n),
+                SyntheticFixed32(0x31),
+                SyntheticFixed32(0x32),
+                SyntheticFixed32(0x33),
+            },
+            KagemushaNoritoCompactLenFlag);
+        var proof = KagemushaNoritoEncodeFields(
+            new[]
+            {
+                U16LE(1),
+                spec.ProofLSequencePayload ?? Fixed32Sequence(2, 0x40),
+                spec.ProofRSequencePayload ?? Fixed32Sequence(2, 0x50),
+                SyntheticFixed32(0x60),
+                SyntheticFixed32(0x61),
+            },
+            KagemushaNoritoCompactLenFlag);
+        return KagemushaNoritoEncodeFields(
+            new[]
+            {
+                parameters,
+                publicValue,
+                proof,
+                KagemushaNoritoString(spec.TranscriptLabel),
+                spec.VkCommitmentOptionPayload ??
+                    OptionRaw(spec.IncludeVkCommitment ? spec.VkCommitmentPayload ?? SyntheticFixed32(0x70) : null),
+                spec.PublicInputsSchemaHashOptionPayload ??
+                    OptionRaw(
+                        spec.IncludePublicInputsSchemaHash
+                            ? spec.PublicInputsSchemaHashPayload ?? SyntheticFixed32(0x71)
+                            : null),
+                spec.DomainTagOptionPayload ??
+                    OptionRaw(spec.IncludeDomainTag ? spec.DomainTagPayload ?? SyntheticFixed32(0x72) : null),
+            },
+            KagemushaNoritoCompactLenFlag);
+    }
+
+    private static byte[] Fixed32Sequence(int count, byte seed)
+    {
+        return U64LE((ulong)count)
+            .Concat(Enumerable.Range(0, count)
+                .SelectMany(index => KagemushaNoritoField(SyntheticFixed32((byte)(seed + index)))))
+            .ToArray();
+    }
+
+    private static byte[] SyntheticFixed32(byte seed)
+    {
+        return Enumerable.Range(0, 32)
+            .Select(index => (byte)(seed + index))
+            .ToArray();
+    }
+
+    private static byte[] OptionRaw(byte[]? payload)
+    {
+        if (payload is null)
+        {
+            return new byte[] { 0 };
+        }
+        return new byte[] { 1 }
+            .Concat(KagemushaNoritoLength(payload.Length, KagemushaNoritoCompactLenFlag))
+            .Concat(payload)
+            .ToArray();
+    }
+
+    private static byte[] OptionRawWithTrailingByte(byte[] payload)
+    {
+        return OptionRaw(payload).Concat(new byte[] { 0x7f }).ToArray();
+    }
+
+    private static byte[] OptionRawWithUnknownTag()
+    {
+        return new byte[] { 0x02 };
+    }
+
+    private static byte[] OptionRawWithDeclaredLengthTooLong(byte[] payload)
+    {
+        return new byte[] { 1 }
+            .Concat(KagemushaNoritoLength(payload.Length + 1, KagemushaNoritoCompactLenFlag))
+            .Concat(payload)
+            .ToArray();
+    }
+
+    private static byte[] U64LE(ulong value)
+    {
+        var output = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(output, value);
+        return output;
+    }
+
+    private static byte[] U32LE(int value)
+    {
+        var output = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(output, checked((uint)value));
+        return output;
+    }
+
+    private static byte[] U16LE(int value)
+    {
+        var output = new byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(output, checked((ushort)value));
+        return output;
+    }
+
+    private sealed class PallasOpenEnvelopeSpec
+    {
+        internal int ParamsCurveId { get; set; } = 1;
+        internal int PublicCurveId { get; set; } = 1;
+        internal string TranscriptLabel { get; set; } = "pallas-open";
+        internal byte[]? ParamsGSequencePayload { get; set; }
+        internal byte[]? ParamsHSequencePayload { get; set; }
+        internal byte[]? ProofLSequencePayload { get; set; }
+        internal byte[]? ProofRSequencePayload { get; set; }
+        internal bool IncludeVkCommitment { get; set; } = true;
+        internal bool IncludePublicInputsSchemaHash { get; set; } = true;
+        internal bool IncludeDomainTag { get; set; } = true;
+        internal byte[]? VkCommitmentPayload { get; set; }
+        internal byte[]? PublicInputsSchemaHashPayload { get; set; }
+        internal byte[]? DomainTagPayload { get; set; }
+        internal byte[]? VkCommitmentOptionPayload { get; set; }
+        internal byte[]? PublicInputsSchemaHashOptionPayload { get; set; }
+        internal byte[]? DomainTagOptionPayload { get; set; }
+    }
+
     private static void AssertBundleSummaryRejects(byte[] archive, string expectedField)
     {
         Assert.Contains(
             expectedField,
             Assert.Throws<ArgumentException>(
                 () => KagemushaRecursiveSpendNative.DecodeBundleSummary(archive)).Message);
+    }
+
+    private static void AssertTransitionProfileSummaryRejects(byte[] archive, string expectedField)
+    {
+        Assert.Contains(
+            expectedField,
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.DecodeTransitionProfileSummary(archive)).Message);
     }
 
     private static byte[] RecursiveSpendBundleWithPayloadTextReplaced(
@@ -2953,6 +4299,26 @@ public sealed class KagemushaRecursiveSpendNativeTests
                 KagemushaNoritoString("ignored-extra-previous-proofs-field"),
                 flags))
             .ToArray();
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(fields, flags));
+    }
+
+    private static byte[] RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly()
+    {
+        var archive = SharedRecursiveSpendArchive("lineage_witness_append_result");
+        var flags = archive[39];
+        var fields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(fields.Count > 3);
+
+        var previousProofsPayload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            previousProofsPayload,
+            (ulong)KagemushaRecursiveSpendNative.CompactTokenMaxHops + 1);
+        fields[3] = previousProofsPayload;
+
         return RebuildKagemushaNoritoFrameLike(
             archive,
             KagemushaNoritoEncodeFields(fields, flags));
@@ -3090,6 +4456,59 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.True(fieldIndex >= 0 && fieldIndex < accumulatorFields.Count);
         accumulatorFields[fieldIndex] = replacementPayload;
         topLevelFields[0] = KagemushaNoritoEncodeFields(accumulatorFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendTransitionProfileWithField(
+        byte[] archive,
+        int fieldIndex,
+        byte[] replacementPayload)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(fieldIndex >= 0 && fieldIndex < topLevelFields.Count);
+        topLevelFields[fieldIndex] = replacementPayload;
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendTransitionProfileWithCurrentHopOutputCommitments(
+        byte[] archive,
+        byte[][] outputCommitments)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count > 20);
+        var currentHopFields = KagemushaNoritoReadFieldPayloads(topLevelFields[20], flags);
+        Assert.True(currentHopFields.Count > 3);
+        currentHopFields[3] = TopupAnchorNullifiersPayload(outputCommitments);
+        topLevelFields[20] = KagemushaNoritoEncodeFields(currentHopFields, flags);
+        return RebuildKagemushaNoritoFrameLike(
+            archive,
+            KagemushaNoritoEncodeFields(topLevelFields, flags));
+    }
+
+    private static byte[] RecursiveSpendTransitionProfileWithCurrentNoteField(
+        byte[] archive,
+        int fieldIndex,
+        byte[] replacementPayload)
+    {
+        var flags = archive[39];
+        var topLevelFields = KagemushaNoritoReadFieldPayloads(
+            KagemushaNoritoPayload(archive),
+            flags);
+        Assert.True(topLevelFields.Count > 21);
+        var currentNoteFields = KagemushaNoritoReadFieldPayloads(topLevelFields[21], flags);
+        Assert.True(fieldIndex >= 0 && fieldIndex < currentNoteFields.Count);
+        currentNoteFields[fieldIndex] = replacementPayload;
+        topLevelFields[21] = KagemushaNoritoEncodeFields(currentNoteFields, flags);
         return RebuildKagemushaNoritoFrameLike(
             archive,
             KagemushaNoritoEncodeFields(topLevelFields, flags));
@@ -3263,6 +4682,81 @@ public sealed class KagemushaRecursiveSpendNativeTests
         return Enumerable.Range(0, count)
             .SelectMany(_ => KagemushaNoritoField(new byte[] { value }))
             .ToArray();
+    }
+
+    private static byte[] Fixed32(byte value)
+    {
+        return Enumerable.Repeat(value, 32).ToArray();
+    }
+
+    private static byte[] TopupAnchorNullifierCountPayload(ulong count)
+    {
+        var payload = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, count);
+        return payload;
+    }
+
+    private static byte[] TopupAnchorNullifiersPayload(params byte[][] nullifiers)
+    {
+        return TopupAnchorNullifierCountPayload((ulong)nullifiers.Length)
+            .Concat(nullifiers.SelectMany(nullifier => KagemushaNoritoField(nullifier)))
+            .ToArray();
+    }
+
+    private static byte[][] SortedFixed32(params byte[][] values)
+    {
+        var sorted = values.Select(value => value.ToArray()).ToArray();
+        Array.Sort(sorted, CompareFixed32);
+        return sorted;
+    }
+
+    private static int CompareFixed32(byte[] left, byte[] right)
+    {
+        Assert.Equal(32, left.Length);
+        Assert.Equal(32, right.Length);
+        for (var index = 0; index < 32; index++)
+        {
+            var comparison = left[index].CompareTo(right[index]);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+        }
+        return 0;
+    }
+
+    private static byte[] NonReservedTransitionProfileOutput(
+        KagemushaRecursiveSpendTransitionProfileSummary transitionProfile)
+    {
+        for (var seed = 0x40; seed <= 0xff; seed++)
+        {
+            var candidate = Fixed32((byte)seed);
+            if (!candidate.SequenceEqual(transitionProfile.CurrentNote.NoteCommitment)
+                && !candidate.SequenceEqual(transitionProfile.CurrentNote.SpendNullifier)
+                && !transitionProfile.PreviousTopupAnchorNullifiers.Any(
+                    nullifier => candidate.SequenceEqual(nullifier))
+                && !transitionProfile.CurrentHopOutputCommitments.Any(
+                    outputCommitment => candidate.SequenceEqual(outputCommitment)))
+            {
+                return candidate;
+            }
+        }
+        throw new InvalidOperationException("test helper could not find a non-reserved profile output");
+    }
+
+    private static byte[] NonReservedChangeOutput(KagemushaRecursiveSpendBundleSummary bundleSummary)
+    {
+        for (var seed = 0x40; seed <= 0xff; seed++)
+        {
+            var candidate = Fixed32((byte)seed);
+            if (!candidate.SequenceEqual(bundleSummary.CurrentNote.NoteCommitment)
+                && !candidate.SequenceEqual(bundleSummary.CurrentNote.SpendNullifier)
+                && !bundleSummary.TopupAnchorNullifiers.Any(nullifier => candidate.SequenceEqual(nullifier)))
+            {
+                return candidate;
+            }
+        }
+        throw new InvalidOperationException("test helper could not find a non-reserved change output");
     }
 
     private static List<byte[]> KagemushaNoritoReadFieldPayloads(byte[] payload, byte flags)
@@ -3476,5 +4970,12 @@ public sealed class KagemushaRecursiveSpendNativeTests
             pointer,
             (UIntPtr)bytes.Length,
             Marshal.FreeHGlobal);
+    }
+
+    private static void AssertPointerZeroed(IntPtr pointer, int length)
+    {
+        var observed = new byte[length];
+        Marshal.Copy(pointer, observed, 0, observed.Length);
+        Assert.True(Array.TrueForAll(observed, value => value == 0));
     }
 }

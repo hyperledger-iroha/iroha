@@ -97,19 +97,368 @@ public sealed class TransactionBuilderTests
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
     }
 
+    [Fact]
+    public void SignedTransactionEnvelopeDefensivelyCopiesBytes()
+    {
+        var envelope = NewTransactionBuilder()
+            .TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId)
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(17)
+            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        var expectedNoritoBytes = envelope.NoritoBytes;
+        var expectedSignedTransactionBytes = envelope.SignedTransactionBytes;
+        var expectedPayloadBytes = envelope.PayloadBytes;
+        var expectedTransactionHash = envelope.TransactionHash;
+        var expectedTransactionHashHex = envelope.TransactionHashHex;
+
+        MutateFirstByte(envelope.NoritoBytes);
+        MutateFirstByte(envelope.SignedTransactionBytes);
+        MutateFirstByte(envelope.PayloadBytes);
+        MutateFirstByte(envelope.TransactionHash);
+
+        Assert.Equal(expectedNoritoBytes, envelope.NoritoBytes);
+        Assert.Equal(expectedSignedTransactionBytes, envelope.SignedTransactionBytes);
+        Assert.Equal(expectedPayloadBytes, envelope.PayloadBytes);
+        Assert.Equal(expectedTransactionHash, envelope.TransactionHash);
+        Assert.Equal(expectedTransactionHashHex, envelope.TransactionHashHex);
+        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+
+        var constructorSignatureBytes = Enumerable
+            .Range(0, Ed25519Signer.SignatureLength)
+            .Select(index => (byte)(0x0a + index))
+            .ToArray();
+        var constructorPayloadBytes = new byte[] { 0x07, 0x08, 0x09 };
+        var constructorSignedTransactionBytes = BuildSignedTransactionBytes(
+            constructorSignatureBytes,
+            constructorPayloadBytes);
+        var constructorNoritoBytes = constructorSignedTransactionBytes.ToArray();
+        var constructorTransactionHash = ComputeTransactionHash(constructorSignedTransactionBytes);
+        var expectedConstructorSignedTransactionBytes = constructorSignedTransactionBytes.ToArray();
+        var expectedConstructorPayloadBytes = constructorPayloadBytes.ToArray();
+        var expectedConstructorTransactionHash = constructorTransactionHash.ToArray();
+        var direct = new SignedTransactionEnvelope(
+            constructorNoritoBytes,
+            constructorSignedTransactionBytes,
+            constructorPayloadBytes,
+            constructorTransactionHash);
+
+        MutateFirstByte(constructorNoritoBytes);
+        MutateFirstByte(constructorSignedTransactionBytes);
+        MutateFirstByte(constructorPayloadBytes);
+        MutateFirstByte(constructorTransactionHash);
+        MutateFirstByte(direct.NoritoBytes);
+        MutateFirstByte(direct.SignedTransactionBytes);
+        MutateFirstByte(direct.PayloadBytes);
+        MutateFirstByte(direct.TransactionHash);
+
+        Assert.Equal(expectedConstructorSignedTransactionBytes, direct.NoritoBytes);
+        Assert.Equal(expectedConstructorSignedTransactionBytes, direct.SignedTransactionBytes);
+        Assert.Equal(expectedConstructorPayloadBytes, direct.PayloadBytes);
+        Assert.Equal(expectedConstructorTransactionHash, direct.TransactionHash);
+        Assert.Equal(Convert.ToHexString(expectedConstructorTransactionHash).ToLowerInvariant(), direct.TransactionHashHex);
+
+        static void MutateFirstByte(byte[] value)
+        {
+            Assert.NotEmpty(value);
+            value[0] ^= 0xff;
+        }
+    }
+
+    [Fact]
+    public void SignedTransactionEnvelopeRejectsMalformedConstructorBytes()
+    {
+        var signatureBytes = Enumerable.Repeat((byte)0x08, Ed25519Signer.SignatureLength).ToArray();
+        var payloadBytes = new byte[] { 0x07 };
+        var signedTransactionBytes = BuildSignedTransactionBytes(signatureBytes, payloadBytes);
+        var noritoBytes = signedTransactionBytes.ToArray();
+        var transactionHash = ComputeTransactionHash(signedTransactionBytes);
+        var malformedSignedTransactionBytes = new byte[] { 0x04, 0x05, 0x06 };
+
+        AssertArgumentException(
+            "noritoBytes",
+            () => new SignedTransactionEnvelope([], signedTransactionBytes, payloadBytes, transactionHash));
+        AssertArgumentException(
+            "signedTransactionBytes",
+            () => new SignedTransactionEnvelope([0x01], [], payloadBytes, transactionHash));
+        AssertArgumentException(
+            "payloadBytes",
+            () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, [], transactionHash));
+        AssertArgumentException(
+            "transactionHash",
+            () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, payloadBytes, transactionHash[..^1]));
+        AssertArgumentException(
+            "noritoBytes",
+            () => new SignedTransactionEnvelope([0x04, 0xff, 0x06], signedTransactionBytes, payloadBytes, transactionHash));
+        AssertArgumentException(
+            "signedTransactionBytes",
+            () => new SignedTransactionEnvelope(
+                malformedSignedTransactionBytes,
+                malformedSignedTransactionBytes,
+                payloadBytes,
+                ComputeTransactionHash(malformedSignedTransactionBytes)));
+        AssertArgumentException(
+            "payloadBytes",
+            () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, [0x08], transactionHash));
+        AssertArgumentException(
+            "signedTransactionBytes",
+            () =>
+            {
+                var withNonEmptyAttachments = BuildSignedTransactionBytes(signatureBytes, payloadBytes, attachments: [1]);
+                _ = new SignedTransactionEnvelope(
+                    withNonEmptyAttachments,
+                    withNonEmptyAttachments,
+                    payloadBytes,
+                    ComputeTransactionHash(withNonEmptyAttachments));
+            });
+        AssertArgumentException(
+            "signedTransactionBytes",
+            () =>
+            {
+                var withTrailingField = signedTransactionBytes.Concat(new byte[8]).ToArray();
+                _ = new SignedTransactionEnvelope(
+                    withTrailingField,
+                    withTrailingField,
+                    payloadBytes,
+                    ComputeTransactionHash(withTrailingField));
+            });
+        AssertArgumentException(
+            "transactionHash",
+            () =>
+            {
+                var mismatchedHash = transactionHash.ToArray();
+                mismatchedHash[0] ^= 0xff;
+                _ = new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, payloadBytes, mismatchedHash);
+            });
+    }
+
     [Theory]
     [InlineData("", FixtureAccountId)]
     [InlineData(" 00000042", FixtureAccountId)]
     [InlineData("00000042 ", FixtureAccountId)]
+    [InlineData("0000 0042", FixtureAccountId)]
     [InlineData("0000\u000042", FixtureAccountId)]
     [InlineData(FixtureChainId, "")]
     [InlineData(FixtureChainId, " ")]
     [InlineData(FixtureChainId, " sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData(FixtureChainId, "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData(FixtureChainId, "sorauﾛ1N ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData(FixtureChainId, "sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData(FixtureChainId, "merchant@sora")]
+    [InlineData(FixtureChainId, "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
+    [InlineData(FixtureChainId, "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     public void ConstructorRejectsNonExactRequiredFields(string chainId, string authorityAccountId)
     {
         Assert.Throws<ArgumentException>(() => new TransactionBuilder(chainId, authorityAccountId));
+    }
+
+    [Fact]
+    public void SetCreationTimeRejectsZeroAndPreEpochValues()
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => builder.SetCreationTimeMilliseconds(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => builder.SetCreationTime(DateTimeOffset.UnixEpoch));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            builder.SetCreationTime(DateTimeOffset.UnixEpoch.AddMilliseconds(-1));
+        });
+    }
+
+    [Fact]
+    public void SetCreationTimeAcceptsPositiveUnixMilliseconds()
+    {
+        var builder = NewTransactionBuilder();
+
+        var result = builder.SetCreationTime(DateTimeOffset.UnixEpoch.AddMilliseconds(1));
+
+        Assert.Same(builder, result);
+        Assert.Equal(1UL, builder.CreationTimeMilliseconds);
+    }
+
+    [Fact]
+    public void TriggerRepetitionInstructionsRejectZeroBeforeSigning()
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            builder.MintTriggerRepetitions(0, "settlement_window");
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            builder.BurnTriggerRepetitions(0, "settlement_window");
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            TransactionInstruction.MintTriggerRepetitions(0, "settlement_window");
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            TransactionInstruction.BurnTriggerRepetitions(0, "settlement_window");
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            _ = new MintTriggerRepetitionsInstruction(0, "settlement_window");
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            _ = new BurnTriggerRepetitionsInstruction(0, "settlement_window");
+        });
+
+        var mint = TransactionInstruction.MintTriggerRepetitions(1, "settlement_window");
+        var burn = TransactionInstruction.BurnTriggerRepetitions(1, "settlement_window");
+        Assert.Throws<ArgumentOutOfRangeException>(() => mint with { Repetitions = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => burn with { Repetitions = 0 });
+        Assert.Empty(builder.Instructions);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("0.0")]
+    [InlineData("0.0000")]
+    [InlineData("-1")]
+    [InlineData("-1.25")]
+    public void AssetQuantityInstructionsRejectNonPositiveValuesBeforeSigning(string quantity)
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            builder.TransferAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            builder.MintAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            builder.BurnAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            TransactionInstruction.MintAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            _ = new TransferAssetInstruction(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            _ = new MintAssetInstruction(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        {
+            _ = new BurnAssetInstruction(FixtureAssetDefinitionId, quantity, FixtureAccountId);
+        });
+
+        var transfer = TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
+        var mint = TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
+        var burn = TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
+        Assert.Throws<ArgumentOutOfRangeException>(() => transfer with { Quantity = quantity });
+        Assert.Throws<ArgumentOutOfRangeException>(() => mint with { Quantity = quantity });
+        Assert.Throws<ArgumentOutOfRangeException>(() => burn with { Quantity = quantity });
+        Assert.Empty(builder.Instructions);
+    }
+
+    [Theory]
+    [InlineData("merchant@sora")]
+    [InlineData("0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
+    [InlineData("n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
+    public void AccountInstructionFactoriesRejectNonCanonicalAccountIdsBeforeSigning(string accountId)
+    {
+        var builder = NewTransactionBuilder();
+
+        Assert.Throws<ArgumentException>(() => builder.TransferAsset(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(() => builder.TransferDomain("wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => builder.TransferAssetDefinition(FixtureAssetDefinitionId, accountId));
+        Assert.Throws<ArgumentException>(() => builder.TransferNft("dragon$wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => builder.MintAsset(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(() => builder.BurnAsset(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(
+            () => builder.SetAssetKeyValue(FixtureAssetDefinitionId, accountId, "display_name", JsonValue.Create("Treasury buffer")));
+        Assert.Throws<ArgumentException>(() => builder.RemoveAssetKeyValue(FixtureAssetDefinitionId, accountId, "display_name"));
+        Assert.Throws<ArgumentException>(
+            () => builder.SetAccountKeyValue(accountId, "display_name", JsonValue.Create("Treasury buffer")));
+        Assert.Throws<ArgumentException>(() => builder.RemoveAccountKeyValue(accountId, "display_name"));
+
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferDomain("wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferAssetDefinition(FixtureAssetDefinitionId, accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.TransferNft("dragon$wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(
+            () => TransactionInstruction.SetAssetKeyValue(
+                FixtureAssetDefinitionId,
+                accountId,
+                "display_name",
+                JsonValue.Create("Treasury buffer")));
+        Assert.Throws<ArgumentException>(
+            () => TransactionInstruction.RemoveAssetKeyValue(FixtureAssetDefinitionId, accountId, "display_name"));
+        Assert.Throws<ArgumentException>(
+            () => TransactionInstruction.SetAccountKeyValue(accountId, "display_name", JsonValue.Create("Treasury buffer")));
+        Assert.Throws<ArgumentException>(() => TransactionInstruction.RemoveAccountKeyValue(accountId, "display_name"));
+
+        Assert.Throws<ArgumentException>(() => new TransferAssetInstruction(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(() => new TransferDomainInstruction("wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => new TransferAssetDefinitionInstruction(FixtureAssetDefinitionId, accountId));
+        Assert.Throws<ArgumentException>(() => new TransferNftInstruction("dragon$wonderland", accountId));
+        Assert.Throws<ArgumentException>(() => new MintAssetInstruction(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(() => new BurnAssetInstruction(FixtureAssetDefinitionId, "1", accountId));
+        Assert.Throws<ArgumentException>(
+            () => new SetAssetKeyValueInstruction(
+                FixtureAssetDefinitionId,
+                accountId,
+                "display_name",
+                JsonValue.Create("Treasury buffer")));
+        Assert.Throws<ArgumentException>(
+            () => new RemoveAssetKeyValueInstruction(FixtureAssetDefinitionId, accountId, "display_name"));
+        Assert.Throws<ArgumentException>(
+            () => new SetAccountKeyValueInstruction(accountId, "display_name", JsonValue.Create("Treasury buffer")));
+        Assert.Throws<ArgumentException>(() => new RemoveAccountKeyValueInstruction(accountId, "display_name"));
+
+        var transferAsset = TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
+        var transferDomain = TransactionInstruction.TransferDomain("wonderland", FixtureAccountId);
+        var transferDefinition = TransactionInstruction.TransferAssetDefinition(FixtureAssetDefinitionId, FixtureAccountId);
+        var transferNft = TransactionInstruction.TransferNft("dragon$wonderland", FixtureAccountId);
+        var mint = TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
+        var burn = TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
+        var setAsset = TransactionInstruction.SetAssetKeyValue(
+            FixtureAssetDefinitionId,
+            FixtureAccountId,
+            "display_name",
+            JsonValue.Create("Treasury buffer"));
+        var removeAsset = TransactionInstruction.RemoveAssetKeyValue(
+            FixtureAssetDefinitionId,
+            FixtureAccountId,
+            "display_name");
+        var setAccount = TransactionInstruction.SetAccountKeyValue(
+            FixtureAccountId,
+            "display_name",
+            JsonValue.Create("Treasury buffer"));
+        var removeAccount = TransactionInstruction.RemoveAccountKeyValue(FixtureAccountId, "display_name");
+
+        Assert.Throws<ArgumentException>(() => transferAsset with { DestinationAccountId = accountId });
+        Assert.Throws<ArgumentException>(() => transferDomain with { DestinationAccountId = accountId });
+        Assert.Throws<ArgumentException>(() => transferDefinition with { DestinationAccountId = accountId });
+        Assert.Throws<ArgumentException>(() => transferNft with { DestinationAccountId = accountId });
+        Assert.Throws<ArgumentException>(() => mint with { DestinationAccountId = accountId });
+        Assert.Throws<ArgumentException>(() => burn with { DestinationAccountId = accountId });
+        Assert.Throws<ArgumentException>(() => setAsset with { AccountId = accountId });
+        Assert.Throws<ArgumentException>(() => removeAsset with { AccountId = accountId });
+        Assert.Throws<ArgumentException>(() => setAccount with { AccountId = accountId });
+        Assert.Throws<ArgumentException>(() => removeAccount with { AccountId = accountId });
+        Assert.Empty(builder.Instructions);
     }
 
     [Theory]
@@ -119,6 +468,8 @@ public sealed class TransactionBuilderTests
     [InlineData("memo ")]
     [InlineData("\u00A0memo")]
     [InlineData("memo\u00A0")]
+    [InlineData("me mo")]
+    [InlineData("me\u00A0mo")]
     [InlineData("me\u0000mo")]
     public void SetMetadataRejectsNonExactKeys(string key)
     {
@@ -135,6 +486,7 @@ public sealed class TransactionBuilderTests
     [InlineData("")]
     [InlineData(" memo")]
     [InlineData("memo ")]
+    [InlineData("me mo")]
     [InlineData("me\u001Fmo")]
     public void ReplaceMetadataRejectsNonExactKeysWithoutMutatingExistingMetadata(string key)
     {
@@ -158,6 +510,7 @@ public sealed class TransactionBuilderTests
     [InlineData("")]
     [InlineData(" 00000042")]
     [InlineData("00000042 ")]
+    [InlineData("0000 0042")]
     [InlineData("0000\u000042")]
     public void TransactionEncodingContextRejectsNonExactChainIds(string chainId)
     {
@@ -172,6 +525,8 @@ public sealed class TransactionBuilderTests
     [InlineData(" alice")]
     [InlineData("alice ")]
     [InlineData("\u00A0alice")]
+    [InlineData("ali ce")]
+    [InlineData("ali\u00A0ce")]
     [InlineData("ali\u0000ce")]
     public void TransactionEncodingContextRejectsNonExactNames(string name)
     {
@@ -185,6 +540,17 @@ public sealed class TransactionBuilderTests
     [InlineData(" 1")]
     [InlineData("1 ")]
     [InlineData("\u00A01")]
+    [InlineData("+1")]
+    [InlineData("+0.1")]
+    [InlineData("-0")]
+    [InlineData("-0.0")]
+    [InlineData("01")]
+    [InlineData("01.0")]
+    [InlineData(".1")]
+    [InlineData("1.")]
+    [InlineData("-")]
+    [InlineData("1 0")]
+    [InlineData("1.\u00A00")]
     [InlineData("1\u0000")]
     public void TransactionEncodingContextRejectsNonExactNumerics(string numeric)
     {
@@ -194,10 +560,24 @@ public sealed class TransactionBuilderTests
     }
 
     [Theory]
+    [InlineData("0")]
+    [InlineData("0.0")]
+    [InlineData("1")]
+    [InlineData("1.2300")]
+    [InlineData("-1.25")]
+    public void TransactionEncodingContextAcceptsCanonicalNumerics(string numeric)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.NotEmpty(context.EncodeNumeric(numeric));
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(" dragon$wonderland")]
     [InlineData("dragon$wonderland ")]
     [InlineData("dragon$ wonderland")]
+    [InlineData("dra gon$wonderland")]
     [InlineData("dra\u0000gon$wonderland")]
     public void TransactionEncodingContextRejectsNonExactNftIds(string nftId)
     {
@@ -210,12 +590,44 @@ public sealed class TransactionBuilderTests
     [InlineData("")]
     [InlineData(" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM")]
     [InlineData("62Fk4FPcMuLvW5QjDGNF2a4jAmjM ")]
+    [InlineData("62Fk4FPcMuLvW5QjDGNF2 a4jAmjM")]
     [InlineData("62Fk4FPcMuLvW5QjDGNF2a4jAmjM\u0000")]
     public void TransactionEncodingContextRejectsNonExactAssetDefinitionIds(string assetDefinitionId)
     {
         var context = new TransactionEncodingContext(FixtureAccountId);
 
         Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(assetDefinitionId));
+    }
+
+    [Fact]
+    public void TransactionEncodingContextRejectsNonExactHashAndFixedByteLiterals()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        var hash = new string('a', 64);
+
+        foreach (var literal in new[] { "", " ", " " + hash, hash + " ", "\u00A0" + hash, hash[..32] + " " + hash[32..], hash + "\u0000" })
+        {
+            Assert.ThrowsAny<ArgumentException>(() => context.EncodeHashLiteral(literal));
+        }
+
+        foreach (var literal in new[] { "", " ", " 0x0102", "0x0102 ", "\u00A00x0102", "0x01 02", "0x0102\u0000" })
+        {
+            Assert.ThrowsAny<ArgumentException>(() => context.EncodeFixedBytesLiteral(literal, expectedLength: 2));
+        }
+    }
+
+    [Theory]
+    [InlineData("0x010203", 2)]
+    [InlineData("0x010", 2)]
+    [InlineData("0xzz", 1)]
+    [InlineData("zz", 1)]
+    public void TransactionEncodingContextRejectsMalformedFixedByteLiterals(
+        string literal,
+        int expectedLength)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+
+        Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(literal, expectedLength));
     }
 
     [Fact]
@@ -230,6 +642,8 @@ public sealed class TransactionBuilderTests
     [InlineData("")]
     [InlineData(" sort_key")]
     [InlineData("sort_key ")]
+    [InlineData("sort key")]
+    [InlineData("sort\u00A0key")]
     [InlineData("sort\u0000key")]
     public void TransactionEncodingContextRejectsNonExactOptionalStrings(string value)
     {
@@ -241,7 +655,11 @@ public sealed class TransactionBuilderTests
     [Theory]
     [InlineData(" sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData("sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53 ")]
+    [InlineData("sorauﾛ1N ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
     [InlineData("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")]
+    [InlineData("merchant@sora")]
+    [InlineData("0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
+    [InlineData("n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     public void TransactionEncodingContextRejectsNonExactAccountIds(string accountId)
     {
         Assert.Throws<ArgumentException>(() => new TransactionEncodingContext(accountId));
@@ -260,7 +678,14 @@ public sealed class TransactionBuilderTests
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17);
-        configure(builder);
+        var configureException = Record.Exception(() => configure(builder));
+        if (configureException is not null)
+        {
+            var argumentException = Assert.IsAssignableFrom<ArgumentException>(configureException);
+            Assert.NotEmpty(label);
+            Assert.NotEmpty(argumentException.Message);
+            return;
+        }
 
         var exception = Assert.ThrowsAny<ArgumentException>(() =>
         {
@@ -277,6 +702,7 @@ public sealed class TransactionBuilderTests
 
         Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(" " + FixtureAccountId));
         Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(FixtureAccountId + " "));
+        Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox(FixtureAccountId.Insert(8, " ")));
         Assert.Throws<ArgumentException>(() => instruction.EncodeInstructionBox("sorauﾛ1N\u0000ｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"));
     }
 
@@ -341,7 +767,7 @@ public sealed class TransactionBuilderTests
             {
                 PollInterval = TimeSpan.FromMilliseconds(1),
                 Timeout = TimeSpan.FromSeconds(1),
-            });
+            }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(PipelineTransactionState.Applied, status.State);
         Assert.Equal((ulong)11, status.BlockHeight);
@@ -1035,8 +1461,187 @@ public sealed class TransactionBuilderTests
         AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
     }
 
+    [Fact]
+    public void BuildSignedDefensivelyCopiesJsonInstructionPayloads()
+    {
+        var assetValue = MutableInstructionJsonPayload("asset");
+        var domainValue = MutableInstructionJsonPayload("domain");
+        var accountValue = MutableInstructionJsonPayload("account");
+        var assetDefinitionValue = MutableInstructionJsonPayload("asset-definition");
+        var nftValue = MutableInstructionJsonPayload("nft");
+        var triggerReplacementValue = MutableInstructionJsonPayload("trigger-init");
+        var executeReplacementArgs = MutableInstructionJsonPayload("execute-init");
+
+        var setAsset = TransactionInstruction.SetAssetKeyValue(
+            FixtureAssetDefinitionId,
+            FixtureAccountId,
+            "display_name",
+            assetValue);
+        var setDomain = TransactionInstruction.SetDomainKeyValue("wonderland", "display_name", domainValue);
+        var setAccount = TransactionInstruction.SetAccountKeyValue(FixtureAccountId, "display_name", accountValue);
+        var setAssetDefinition = TransactionInstruction.SetAssetDefinitionKeyValue(
+            FixtureAssetDefinitionId,
+            "ticker",
+            assetDefinitionValue);
+        var setNft = TransactionInstruction.SetNftKeyValue("dragon$wonderland", "rarity", nftValue);
+        var setTrigger = TransactionInstruction.SetTriggerKeyValue(
+            "settlement_window",
+            "mode",
+            MutableInstructionJsonPayload("trigger-placeholder")) with
+        {
+            Value = triggerReplacementValue,
+        };
+        var executeTrigger = TransactionInstruction.ExecuteTrigger(
+            "settlement_window",
+            MutableInstructionJsonPayload("execute-placeholder")) with
+        {
+            Args = executeReplacementArgs,
+        };
+
+        var builder = NewTransactionBuilder()
+            .AddInstruction(setAsset)
+            .AddInstruction(setDomain)
+            .AddInstruction(setAccount)
+            .AddInstruction(setAssetDefinition)
+            .AddInstruction(setNft)
+            .AddInstruction(setTrigger)
+            .AddInstruction(executeTrigger)
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(17);
+
+        MutateInstructionJsonPayload(assetValue, "asset-input-mutated");
+        MutateInstructionJsonPayload(domainValue, "domain-input-mutated");
+        MutateInstructionJsonPayload(accountValue, "account-input-mutated");
+        MutateInstructionJsonPayload(assetDefinitionValue, "asset-definition-input-mutated");
+        MutateInstructionJsonPayload(nftValue, "nft-input-mutated");
+        MutateInstructionJsonPayload(triggerReplacementValue, "trigger-input-mutated");
+        MutateInstructionJsonPayload(executeReplacementArgs, "execute-input-mutated");
+
+        MutateInstructionJsonPayload(setAsset.Value!.AsObject(), "asset-getter-mutated");
+        MutateInstructionJsonPayload(setDomain.Value!.AsObject(), "domain-getter-mutated");
+        MutateInstructionJsonPayload(setAccount.Value!.AsObject(), "account-getter-mutated");
+        MutateInstructionJsonPayload(setAssetDefinition.Value!.AsObject(), "asset-definition-getter-mutated");
+        MutateInstructionJsonPayload(setNft.Value!.AsObject(), "nft-getter-mutated");
+        MutateInstructionJsonPayload(setTrigger.Value!.AsObject(), "trigger-getter-mutated");
+        MutateInstructionJsonPayload(executeTrigger.Args!.AsObject(), "execute-getter-mutated");
+
+        var envelope = builder.BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
+        Assert.Equal(7, instructions.Count);
+        Assert.Equal(ExpectedInstructionJsonPayload("asset"), ReadSetJsonPayload(instructions[0].Payload, prefixLength: 0));
+        Assert.Equal(ExpectedInstructionJsonPayload("domain"), ReadSetJsonPayload(instructions[1].Payload, prefixLength: 4));
+        Assert.Equal(ExpectedInstructionJsonPayload("account"), ReadSetJsonPayload(instructions[2].Payload, prefixLength: 4));
+        Assert.Equal(
+            ExpectedInstructionJsonPayload("asset-definition"),
+            ReadSetJsonPayload(instructions[3].Payload, prefixLength: 4));
+        Assert.Equal(ExpectedInstructionJsonPayload("nft"), ReadSetJsonPayload(instructions[4].Payload, prefixLength: 4));
+        Assert.Equal(
+            ExpectedInstructionJsonPayload("trigger-init"),
+            ReadSetJsonPayload(instructions[5].Payload, prefixLength: 4));
+        Assert.Equal(ExpectedInstructionJsonPayload("execute-init"), ReadExecuteTriggerJsonPayload(instructions[6].Payload));
+
+        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+
+        static JsonObject MutableInstructionJsonPayload(string label)
+        {
+            return new JsonObject
+            {
+                ["tags"] = new JsonArray("stable"),
+                ["nested"] = new JsonObject
+                {
+                    ["enabled"] = true,
+                },
+                ["label"] = label,
+            };
+        }
+
+        static string ExpectedInstructionJsonPayload(string label)
+        {
+            return "{\"label\":\"" + label + "\",\"nested\":{\"enabled\":true},\"tags\":[\"stable\"]}";
+        }
+
+        static void MutateInstructionJsonPayload(JsonObject payload, string label)
+        {
+            payload["label"] = label;
+            payload["extra"] = true;
+            payload["nested"]!.AsObject()["enabled"] = false;
+            payload["tags"]!.AsArray()[0] = "mutated";
+        }
+
+        static string ReadSetJsonPayload(byte[] framedPayload, int prefixLength)
+        {
+            var payload = SkipNoritoHeader(framedPayload);
+            _ = ReadField(payload[prefixLength..], out var offsetAfterObject);
+            _ = ReadField(payload[(prefixLength + offsetAfterObject)..], out var offsetAfterKey);
+            return ReadNoritoString(ReadField(payload[(prefixLength + offsetAfterObject + offsetAfterKey)..], out _));
+        }
+
+        static string ReadExecuteTriggerJsonPayload(byte[] framedPayload)
+        {
+            var payload = SkipNoritoHeader(framedPayload);
+            _ = ReadField(payload, out var offsetAfterTriggerId);
+            return ReadNoritoString(ReadField(payload[offsetAfterTriggerId..], out _));
+        }
+    }
+
+    [Fact]
+    public void BuilderPublicSnapshotsDoNotMutateSignedState()
+    {
+        var metadataValue = new JsonObject
+        {
+            ["label"] = "initial",
+            ["nested"] = new JsonObject
+            {
+                ["enabled"] = true,
+            },
+        };
+        var builder = NewTransactionBuilder()
+            .TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId)
+            .SetMetadata("trace", metadataValue)
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(17);
+
+        metadataValue["label"] = "input-mutated";
+        metadataValue["nested"]!.AsObject()["enabled"] = false;
+
+        var instructionsSnapshot = Assert.IsAssignableFrom<IList<TransactionInstruction>>(builder.Instructions);
+        instructionsSnapshot[0] = TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "99", FixtureAccountId);
+
+        var metadataSnapshot = builder.Metadata;
+        metadataSnapshot["trace"]!.AsObject()["label"] = "snapshot-mutated";
+        metadataSnapshot["trace"]!.AsObject()["nested"]!.AsObject()["enabled"] = false;
+        if (metadataSnapshot is IDictionary<string, JsonNode?> writableMetadata)
+        {
+            var mutationException = Record.Exception(() =>
+            {
+                writableMetadata["injected"] = JsonValue.Create("bad");
+            });
+            Assert.True(
+                mutationException is null or NotSupportedException,
+                $"Unexpected metadata snapshot mutation exception: {mutationException}");
+        }
+
+        var envelope = builder.BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
+        var instruction = Assert.Single(instructions);
+        Assert.Equal("iroha.transfer", instruction.WireId);
+
+        var metadata = ReadEncodedMetadata(envelope.PayloadBytes);
+        var entry = Assert.Single(metadata);
+        Assert.Equal("trace", entry.Key);
+        Assert.Equal("{\"label\":\"initial\",\"nested\":{\"enabled\":true}}", entry.Value);
+        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+    }
+
     private static void AssertSignedEnvelopeStructure(SignedTransactionEnvelope envelope, byte[] privateKeySeed)
     {
+        Assert.Equal(envelope.SignedTransactionBytes, envelope.NoritoBytes);
+        Assert.Equal(ComputeTransactionHash(envelope.SignedTransactionBytes), envelope.TransactionHash);
+
         var signatureField = ReadField(envelope.SignedTransactionBytes, out var offsetAfterSignature);
         var payloadField = ReadField(envelope.SignedTransactionBytes[offsetAfterSignature..], out var offsetAfterPayload);
         var attachmentsField = ReadField(envelope.SignedTransactionBytes[(offsetAfterSignature + offsetAfterPayload)..], out var offsetAfterAttachments);
@@ -1050,6 +1655,46 @@ public sealed class TransactionBuilderTests
         var payloadHash = IrohaHash.Hash(envelope.PayloadBytes);
         var publicKey = Ed25519Signer.GetPublicKey(privateKeySeed);
         Assert.True(Ed25519Signer.Verify(payloadHash, signature, publicKey));
+    }
+
+    private static void AssertArgumentException(string paramName, Action action)
+    {
+        var exception = Assert.Throws<ArgumentException>(action);
+        Assert.Equal(paramName, exception.ParamName);
+    }
+
+    private static byte[] ComputeTransactionHash(ReadOnlySpan<byte> signedTransactionBytes)
+    {
+        var entrypoint = new OfflineNoritoWriter();
+        entrypoint.WriteUInt32LittleEndian(0);
+        entrypoint.WriteField(signedTransactionBytes);
+        return IrohaHash.Hash(entrypoint.ToArray());
+    }
+
+    private static byte[] BuildSignedTransactionBytes(
+        byte[] signatureBytes,
+        byte[] payloadBytes,
+        byte[]? attachments = null,
+        byte[]? multisig = null)
+    {
+        var signedTransaction = new OfflineNoritoWriter();
+        signedTransaction.WriteField(EncodeConstVec(signatureBytes));
+        signedTransaction.WriteField(payloadBytes);
+        signedTransaction.WriteField(attachments ?? [0]);
+        signedTransaction.WriteField(multisig ?? [0]);
+        return signedTransaction.ToArray();
+    }
+
+    private static byte[] EncodeConstVec(byte[] value)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteUInt64LittleEndian((ulong)value.Length);
+        foreach (var item in value)
+        {
+            writer.WriteField([item]);
+        }
+
+        return writer.ToArray();
     }
 
     private static TransactionBuilder NewTransactionBuilder()
@@ -1085,8 +1730,74 @@ public sealed class TransactionBuilderTests
         ];
         yield return
         [
+            "mint asset definition",
+            (Action<TransactionBuilder>)(builder => builder.MintAsset(
+                FixtureAssetDefinitionId + "\u0000",
+                "1",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "mint quantity",
+            (Action<TransactionBuilder>)(builder => builder.MintAsset(
+                FixtureAssetDefinitionId,
+                "\u00A01",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "mint destination",
+            (Action<TransactionBuilder>)(builder => builder.MintAsset(
+                FixtureAssetDefinitionId,
+                "1",
+                FixtureAccountId + "\u0000")),
+        ];
+        yield return
+        [
+            "burn asset definition",
+            (Action<TransactionBuilder>)(builder => builder.BurnAsset(
+                " " + FixtureAssetDefinitionId,
+                "1",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "burn quantity",
+            (Action<TransactionBuilder>)(builder => builder.BurnAsset(
+                FixtureAssetDefinitionId,
+                "1\u0000",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
+            "burn destination",
+            (Action<TransactionBuilder>)(builder => builder.BurnAsset(
+                FixtureAssetDefinitionId,
+                "1",
+                " " + FixtureAccountId)),
+        ];
+        yield return
+        [
+            "transfer quantity internal whitespace",
+            (Action<TransactionBuilder>)(builder => builder.TransferAsset(
+                FixtureAssetDefinitionId,
+                "1 0",
+                FixtureAccountId)),
+        ];
+        yield return
+        [
             "domain id",
             (Action<TransactionBuilder>)(builder => builder.TransferDomain(" wonderland", FixtureAccountId)),
+        ];
+        yield return
+        [
+            "domain id internal whitespace",
+            (Action<TransactionBuilder>)(builder => builder.TransferDomain("wonder land", FixtureAccountId)),
+        ];
+        yield return
+        [
+            "domain transfer destination",
+            (Action<TransactionBuilder>)(builder => builder.TransferDomain("wonderland", FixtureAccountId + " ")),
         ];
         yield return
         [
@@ -1097,8 +1808,20 @@ public sealed class TransactionBuilderTests
         ];
         yield return
         [
+            "asset-definition transfer destination",
+            (Action<TransactionBuilder>)(builder => builder.TransferAssetDefinition(
+                FixtureAssetDefinitionId,
+                "\u00A0" + FixtureAccountId)),
+        ];
+        yield return
+        [
             "nft id",
             (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland ", FixtureAccountId)),
+        ];
+        yield return
+        [
+            "nft transfer destination",
+            (Action<TransactionBuilder>)(builder => builder.TransferNft("dragon$wonderland", FixtureAccountId + "\u0000")),
         ];
         yield return
         [
@@ -1111,11 +1834,84 @@ public sealed class TransactionBuilderTests
         ];
         yield return
         [
+            "asset metadata key internal whitespace",
+            (Action<TransactionBuilder>)(builder => builder.SetAssetKeyValue(
+                FixtureAssetDefinitionId,
+                FixtureAccountId,
+                "display name",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "asset metadata asset definition",
+            (Action<TransactionBuilder>)(builder => builder.SetAssetKeyValue(
+                FixtureAssetDefinitionId + " ",
+                FixtureAccountId,
+                "display_name",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "asset metadata account",
+            (Action<TransactionBuilder>)(builder => builder.SetAssetKeyValue(
+                FixtureAssetDefinitionId,
+                FixtureAccountId + "\u0000",
+                "display_name",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "remove asset metadata key",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAssetKeyValue(
+                FixtureAssetDefinitionId,
+                FixtureAccountId,
+                "display_name\u0000")),
+        ];
+        yield return
+        [
+            "remove asset metadata asset definition",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAssetKeyValue(
+                " " + FixtureAssetDefinitionId,
+                FixtureAccountId,
+                "display_name")),
+        ];
+        yield return
+        [
+            "remove asset metadata account",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAssetKeyValue(
+                FixtureAssetDefinitionId,
+                "\u00A0" + FixtureAccountId,
+                "display_name")),
+        ];
+        yield return
+        [
             "domain metadata key",
             (Action<TransactionBuilder>)(builder => builder.SetDomainKeyValue(
                 "wonderland",
                 "display_name ",
                 JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "domain metadata id",
+            (Action<TransactionBuilder>)(builder => builder.SetDomainKeyValue(
+                "wonderland\u0000",
+                "display_name",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "remove domain metadata key",
+            (Action<TransactionBuilder>)(builder => builder.RemoveDomainKeyValue(
+                "wonderland",
+                "\u00A0display_name")),
+        ];
+        yield return
+        [
+            "remove domain metadata id",
+            (Action<TransactionBuilder>)(builder => builder.RemoveDomainKeyValue(
+                " wonderland",
+                "display_name")),
         ];
         yield return
         [
@@ -1127,11 +1923,137 @@ public sealed class TransactionBuilderTests
         ];
         yield return
         [
+            "account metadata key",
+            (Action<TransactionBuilder>)(builder => builder.SetAccountKeyValue(
+                FixtureAccountId,
+                "display_name ",
+                JsonValue.Create("Treasury buffer"))),
+        ];
+        yield return
+        [
+            "remove account metadata account",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAccountKeyValue(
+                FixtureAccountId + "\u0000",
+                "display_name")),
+        ];
+        yield return
+        [
+            "remove account metadata key",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAccountKeyValue(
+                FixtureAccountId,
+                " display_name")),
+        ];
+        yield return
+        [
+            "asset-definition metadata id",
+            (Action<TransactionBuilder>)(builder => builder.SetAssetDefinitionKeyValue(
+                "\u00A0" + FixtureAssetDefinitionId,
+                "ticker",
+                JsonValue.Create("XOR"))),
+        ];
+        yield return
+        [
+            "asset-definition metadata key",
+            (Action<TransactionBuilder>)(builder => builder.SetAssetDefinitionKeyValue(
+                FixtureAssetDefinitionId,
+                "ticker\u0000",
+                JsonValue.Create("XOR"))),
+        ];
+        yield return
+        [
+            "remove asset-definition metadata id",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAssetDefinitionKeyValue(
+                FixtureAssetDefinitionId + " ",
+                "ticker")),
+        ];
+        yield return
+        [
+            "remove asset-definition metadata key",
+            (Action<TransactionBuilder>)(builder => builder.RemoveAssetDefinitionKeyValue(
+                FixtureAssetDefinitionId,
+                " ticker")),
+        ];
+        yield return
+        [
+            "nft metadata id",
+            (Action<TransactionBuilder>)(builder => builder.SetNftKeyValue(
+                " dragon$wonderland",
+                "rarity",
+                JsonValue.Create("legendary"))),
+        ];
+        yield return
+        [
+            "nft metadata key",
+            (Action<TransactionBuilder>)(builder => builder.SetNftKeyValue(
+                "dragon$wonderland",
+                "rarity ",
+                JsonValue.Create("legendary"))),
+        ];
+        yield return
+        [
+            "remove nft metadata id",
+            (Action<TransactionBuilder>)(builder => builder.RemoveNftKeyValue(
+                "dragon$wonderland\u0000",
+                "rarity")),
+        ];
+        yield return
+        [
+            "remove nft metadata key",
+            (Action<TransactionBuilder>)(builder => builder.RemoveNftKeyValue(
+                "dragon$wonderland",
+                "\u00A0rarity")),
+        ];
+        yield return
+        [
             "trigger id",
             (Action<TransactionBuilder>)(builder => builder.SetTriggerKeyValue(
                 " settlement_window",
                 "mode",
                 JsonValue.Create("strict"))),
+        ];
+        yield return
+        [
+            "trigger id internal whitespace",
+            (Action<TransactionBuilder>)(builder => builder.SetTriggerKeyValue(
+                "settlement window",
+                "mode",
+                JsonValue.Create("strict"))),
+        ];
+        yield return
+        [
+            "trigger key",
+            (Action<TransactionBuilder>)(builder => builder.SetTriggerKeyValue(
+                "settlement_window",
+                "mode\u0000",
+                JsonValue.Create("strict"))),
+        ];
+        yield return
+        [
+            "remove trigger id",
+            (Action<TransactionBuilder>)(builder => builder.RemoveTriggerKeyValue(
+                "settlement_window ",
+                "mode")),
+        ];
+        yield return
+        [
+            "remove trigger key",
+            (Action<TransactionBuilder>)(builder => builder.RemoveTriggerKeyValue(
+                "settlement_window",
+                " mode")),
+        ];
+        yield return
+        [
+            "mint trigger id",
+            (Action<TransactionBuilder>)(builder => builder.MintTriggerRepetitions(
+                1,
+                "\u00A0settlement_window")),
+        ];
+        yield return
+        [
+            "burn trigger id",
+            (Action<TransactionBuilder>)(builder => builder.BurnTriggerRepetitions(
+                1,
+                "settlement_window\u0000")),
         ];
         yield return
         [
@@ -1263,6 +2185,44 @@ public sealed class TransactionBuilderTests
 
         Assert.Equal(instructionsBytes.Length, offset);
         return instructions;
+    }
+
+    private static List<(string Key, string Value)> ReadEncodedMetadata(ReadOnlySpan<byte> payloadBytes)
+    {
+        _ = ReadField(payloadBytes, out var offsetAfterChainId);
+        _ = ReadField(payloadBytes[offsetAfterChainId..], out var offsetAfterAuthority);
+        _ = ReadField(payloadBytes[(offsetAfterChainId + offsetAfterAuthority)..], out var offsetAfterCreationTime);
+        _ = ReadField(payloadBytes[(offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime)..], out var offsetAfterExecutable);
+        _ = ReadField(
+            payloadBytes[(offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable)..],
+            out var offsetAfterTimeToLive);
+        _ = ReadField(
+            payloadBytes[
+                (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                    + offsetAfterTimeToLive)..],
+            out var offsetAfterNonce);
+        var metadataBytes = ReadField(
+            payloadBytes[
+                (offsetAfterChainId + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                    + offsetAfterTimeToLive + offsetAfterNonce)..],
+            out _);
+
+        var count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(metadataBytes[..8]));
+        var offset = 8;
+        var metadata = new List<(string Key, string Value)>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var entryBytes = ReadField(metadataBytes[offset..], out var consumed);
+            offset += consumed;
+
+            var keyBytes = ReadField(entryBytes, out var offsetAfterKey);
+            var valueField = ReadField(entryBytes[offsetAfterKey..], out _);
+            var encodedJson = ReadField(valueField, out _);
+            metadata.Add((ReadNoritoString(keyBytes), ReadNoritoString(encodedJson)));
+        }
+
+        Assert.Equal(metadataBytes.Length, offset);
+        return metadata;
     }
 
     private static string ReadNoritoString(ReadOnlySpan<byte> bytes)

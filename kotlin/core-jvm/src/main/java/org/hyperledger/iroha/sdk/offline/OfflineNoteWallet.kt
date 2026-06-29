@@ -40,6 +40,7 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 /** State persisted for a wallet-owned Offline Note note. */
 enum class OfflineNoteWalletNoteState {
     SPENDABLE,
+    ISSUE_PENDING,
     RECEIVE_PENDING,
     SPENT,
     REDEEM_PENDING,
@@ -933,8 +934,20 @@ interface OfflineNoteOutcomeProvider {
 
 /** Outcome index that maps committed/rejected Offline Note instructions to note states. */
 class OfflineNoteOutcomeIndex {
+    private val committedIssues = LinkedHashMap<String, String?>()
+    private val rejectedIssues = LinkedHashMap<String, String?>()
     private val committedRedeems = LinkedHashMap<String, String?>()
     private val rejectedRedeems = LinkedHashMap<String, String?>()
+
+    fun recordCommittedIssue(issue: OfflineNote.Issue, transactionHashHex: String?): OfflineNoteOutcomeIndex {
+        putFirst(committedIssues, issue.noteCommitment(), transactionHashHex)
+        return this
+    }
+
+    fun recordRejectedIssue(issue: OfflineNote.Issue, transactionHashHex: String?): OfflineNoteOutcomeIndex {
+        putFirst(rejectedIssues, issue.noteCommitment(), transactionHashHex)
+        return this
+    }
 
     fun recordCommittedAudit(audit: OfflineNote.AuditBundle, transactionHashHex: String?): OfflineNoteOutcomeIndex {
         return this
@@ -956,9 +969,21 @@ class OfflineNoteOutcomeIndex {
 
     fun resolve(note: OfflineNoteWalletNote): OfflineNoteSyncResolution? =
         when (note.state) {
+            OfflineNoteWalletNoteState.ISSUE_PENDING -> resolveIssuePending(note)
             OfflineNoteWalletNoteState.REDEEM_PENDING -> resolveRedeemPending(note)
             else -> null
         }
+
+    private fun resolveIssuePending(note: OfflineNoteWalletNote): OfflineNoteSyncResolution? {
+        val key = note.noteCommitmentHex()
+        return when {
+            committedIssues.containsKey(key) ->
+                OfflineNoteSyncResolution(OfflineNoteWalletNoteState.SPENDABLE, committedIssues[key])
+            rejectedIssues.containsKey(key) ->
+                OfflineNoteSyncResolution(OfflineNoteWalletNoteState.CANCELLED, rejectedIssues[key])
+            else -> null
+        }
+    }
 
     private fun resolveRedeemPending(note: OfflineNoteWalletNote): OfflineNoteSyncResolution? {
         val commitmentKey = note.noteCommitmentHex()
@@ -997,6 +1022,14 @@ class OfflineNoteOutcomeIndex {
                 val rejected = outcome.transactionStatus.equals("rejected", ignoreCase = true)
                 if (!committed && !rejected) continue
                 when {
+                    outcome.kind.equals(KIND_ISSUE, ignoreCase = true) -> {
+                        val issue = OfflineNote.decodeIssueInstruction(outcome.encodedInstruction())
+                        if (committed) {
+                            index.recordCommittedIssue(issue, outcome.transactionHashHex)
+                        } else {
+                            index.recordRejectedIssue(issue, outcome.transactionHashHex)
+                        }
+                    }
                     outcome.kind.equals(KIND_AUDIT, ignoreCase = true) -> {
                         val audit = OfflineNote.decodeAuditInstruction(outcome.encodedInstruction())
                         if (committed) {
@@ -1043,10 +1076,11 @@ class ToriiOfflineNoteOutcomeProvider @JvmOverloads constructor(
     private val observers: List<ClientObserver> = observers.toList()
 
     override fun listOutcomes(): CompletableFuture<List<OfflineNoteExplorerInstructionOutcome>> {
+        val issue = fetchKind(OfflineNoteOutcomeIndex.KIND_ISSUE)
         val audit = fetchKind(OfflineNoteOutcomeIndex.KIND_AUDIT)
         val redeem = fetchKind(OfflineNoteOutcomeIndex.KIND_REDEEM)
-        return CompletableFuture.allOf(audit, redeem).thenApply {
-            audit.join() + redeem.join()
+        return CompletableFuture.allOf(issue, audit, redeem).thenApply {
+            issue.join() + audit.join() + redeem.join()
         }
     }
 
@@ -1443,7 +1477,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                                     noteCommitment = noteCommitment,
                                     noteSecret = noteSecret,
                                     origin = origin,
-                                    state = OfflineNoteWalletNoteState.SPENDABLE,
+                                    state = OfflineNoteWalletNoteState.ISSUE_PENDING,
                                     createdAtMs = now,
                                     updatedAtMs = now,
                                 )
@@ -2049,6 +2083,7 @@ private fun ensureSuccess(response: ClientResponse) {
 }
 
 private fun isPendingState(state: OfflineNoteWalletNoteState): Boolean = when (state) {
+    OfflineNoteWalletNoteState.ISSUE_PENDING,
     OfflineNoteWalletNoteState.REDEEM_PENDING -> true
     OfflineNoteWalletNoteState.RECEIVE_PENDING,
     OfflineNoteWalletNoteState.SPENDABLE,

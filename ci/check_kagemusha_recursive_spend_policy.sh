@@ -7675,12 +7675,6 @@ if mode == "--negative-control-active-noncsharp-todo":
         ),
         (
             "roadmap.md",
-            "TODO(C# Windows): promote the C# preferred-mode selector",
-            "TODO(non-C#): promote the C# preferred-mode selector",
-            "roadmap C# handoff scope",
-        ),
-        (
-            "roadmap.md",
             "TODO(C# Windows): certify matching exact C# native-output diagnostics on a",
             "TODO(non-C#): certify matching exact C# native-output diagnostics on a",
             "roadmap late C# handoff scope",

@@ -12744,6 +12744,10 @@ const verifyNativeEvmProverArtifacts = (input, options = {}, profile) => {
     );
   }
   assertNativeEvmProofArtifactFormat(proofArtifactBytes, "proofArtifactBytes");
+  assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
+    proofArtifactBytes,
+    "proofArtifactBytes",
+  );
   assertNativeEvmProvingKeyFormat(provingKeyBytes, "provingKeyBytes");
   if (profile.domain === SCCP_DOMAIN_BSC) {
     validateBscVerifierKeyBytes(verifierKeyBytes, nativeProverBundle, profile);

@@ -172,7 +172,7 @@ public static class BscTestnetSccp
             }
         }
 
-        if (expectedKey is not null && !string.Equals(expectedKey.Trim(), key, StringComparison.Ordinal))
+        if (expectedKey is not null && !string.Equals(expectedKey, key, StringComparison.Ordinal))
         {
             throw new ArgumentException(
                 "expectedKey must match the BSC testnet destination binding.",
@@ -517,7 +517,53 @@ public sealed record BscTestnetLocalAdmissionSubmissionInput(
     string VerifierBackend = BscTestnetSccp.EvmGroth16Bn254ProofBackend,
     string EnvelopeEncoding = BscTestnetSccp.LocalAdmissionEnvelopeEncoding,
     string SubmissionKind = BscTestnetSccp.LocalAdmissionSubmissionKind,
-    string VerifierEntrypoint = BscTestnetSccp.LocalAdmissionEntrypoint);
+    string VerifierEntrypoint = BscTestnetSccp.LocalAdmissionEntrypoint)
+{
+    private byte[] proofBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] envelopeBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+}
 
 public sealed record BscTestnetLocalAdmissionPayload(
     byte[] ProofBytes,
@@ -527,10 +573,44 @@ public sealed record BscTestnetLocalAdmissionPayload(
     string SourceVerifierMaterialHash,
     string SourceAdapterEngineDeploymentHash)
 {
+    private byte[] proofBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
     public int Version { get; } = 1;
-    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
-    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
-    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+    public string ProofBytesHex => "0x" + Convert.ToHexString(proofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex => "0x" + Convert.ToHexString(publicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex => "0x" + Convert.ToHexString(bundleBytes).ToLowerInvariant();
 }
 
 public sealed record BscTestnetLocalAdmissionSubmission(
@@ -547,14 +627,68 @@ public sealed record BscTestnetLocalAdmissionSubmission(
     byte[] BundleBytes,
     byte[] EnvelopeBytes)
 {
+    private byte[] proofBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        ProofBytes,
+        nameof(ProofBytes));
+    private byte[] publicInputsBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        PublicInputsBytes,
+        nameof(PublicInputsBytes));
+    private byte[] bundleBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        BundleBytes,
+        nameof(BundleBytes));
+    private byte[] envelopeBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+        EnvelopeBytes,
+        nameof(EnvelopeBytes));
+
+    public byte[] ProofBytes
+    {
+        get => proofBytes.ToArray();
+        init => proofBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(ProofBytes));
+    }
+
+    public byte[] PublicInputsBytes
+    {
+        get => publicInputsBytes.ToArray();
+        init => publicInputsBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(PublicInputsBytes));
+    }
+
+    public byte[] BundleBytes
+    {
+        get => bundleBytes.ToArray();
+        init => bundleBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(BundleBytes));
+    }
+
+    public byte[] EnvelopeBytes
+    {
+        get => envelopeBytes.ToArray();
+        init => envelopeBytes = BscTestnetSccpByteGuards.CopyRequiredBytes(
+            value,
+            nameof(EnvelopeBytes));
+    }
+
     public int Version { get; } = 1;
     public string PlatformPayload { get; } = BscTestnetSccp.LocalAdmissionSubmissionKind;
     public string EnvelopeEncoding { get; } = BscTestnetSccp.LocalAdmissionEnvelopeEncoding;
     public string SubmissionKind { get; } = BscTestnetSccp.LocalAdmissionSubmissionKind;
     public string VerifierEntrypoint { get; } = BscTestnetSccp.LocalAdmissionEntrypoint;
     public IReadOnlyList<object> Arguments { get; } = Array.Empty<object>();
-    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
-    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
-    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
-    public string EnvelopeHex { get; } = "0x" + Convert.ToHexString(EnvelopeBytes).ToLowerInvariant();
+    public string ProofBytesHex => "0x" + Convert.ToHexString(proofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex => "0x" + Convert.ToHexString(publicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex => "0x" + Convert.ToHexString(bundleBytes).ToLowerInvariant();
+    public string EnvelopeHex => "0x" + Convert.ToHexString(envelopeBytes).ToLowerInvariant();
+}
+
+file static class BscTestnetSccpByteGuards
+{
+    internal static byte[] CopyRequiredBytes(byte[] value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        return value.ToArray();
+    }
 }

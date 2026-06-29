@@ -243,7 +243,7 @@ unsafe fn close_gpu_library_handle(handle: *mut c_void) {
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
 unsafe fn close_gpu_library_handle(handle: *mut c_void) {
-    extern "system" {
+    unsafe extern "system" {
         fn FreeLibrary(hLibModule: *mut c_void) -> i32;
     }
 
@@ -450,7 +450,7 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
 unsafe fn load_cuda_crc64() -> Option<GpuLib> {
     use std::{env, os::windows::ffi::OsStrExt, path::PathBuf, ptr};
 
-    extern "system" {
+    unsafe extern "system" {
         fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
         fn LoadLibraryExW(
             lp_lib_file_name: *const u16,
@@ -485,7 +485,7 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
     for path in candidates {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         let search_flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
-        let handle = LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags);
+        let handle = unsafe { LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags) };
         if handle.is_null() {
             continue;
         }
@@ -502,7 +502,7 @@ unsafe fn load_library_unix(path: &CStr) -> Option<GpuLib> {
     unsafe extern "C" {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     }
-    let handle = dlopen(path.as_ptr(), RTLD_LAZY);
+    let handle = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
     if handle.is_null() {
         return None;
     }
@@ -514,7 +514,7 @@ unsafe fn load_library_unix(path: &CStr) -> Option<GpuLib> {
 unsafe fn load_library_windows(path: &CStr) -> Option<GpuLib> {
     use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
 
-    extern "system" {
+    unsafe extern "system" {
         fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
         fn LoadLibraryExW(
             lp_lib_file_name: *const u16,
@@ -538,7 +538,7 @@ unsafe fn load_library_windows(path: &CStr) -> Option<GpuLib> {
     let path_str = path.to_str().ok()?;
     let wide: Vec<u16> = OsStr::new(path_str).encode_wide().chain(Some(0)).collect();
     let search_flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
-    let handle = LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags);
+    let handle = unsafe { LoadLibraryExW(wide.as_ptr(), ptr::null_mut(), search_flags) };
     if handle.is_null() {
         return None;
     }
@@ -553,28 +553,28 @@ unsafe fn resolve_symbol_unix(handle: *mut c_void, symbols: &[&[u8]]) -> Option<
         fn dlclose(handle: *mut c_void) -> c_int;
     }
     for sym in symbols {
-        let ptr = dlsym(handle, sym.as_ptr() as *const c_char);
+        let ptr = unsafe { dlsym(handle, sym.as_ptr() as *const c_char) };
         if !ptr.is_null() {
-            return Some(std::mem::transmute(ptr));
+            return Some(unsafe { std::mem::transmute(ptr) });
         }
     }
-    let _ = dlclose(handle);
+    let _ = unsafe { dlclose(handle) };
     None
 }
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
 unsafe fn resolve_symbol_windows(handle: *mut c_void, symbols: &[&[u8]]) -> Option<GpuFn> {
-    extern "system" {
+    unsafe extern "system" {
         fn GetProcAddress(hModule: *mut c_void, lpProcName: *const u8) -> *mut c_void;
         fn FreeLibrary(hLibModule: *mut c_void) -> i32;
     }
     for sym in symbols {
-        let ptr = GetProcAddress(handle, sym.as_ptr());
+        let ptr = unsafe { GetProcAddress(handle, sym.as_ptr()) };
         if !ptr.is_null() {
-            return Some(std::mem::transmute(ptr));
+            return Some(unsafe { std::mem::transmute(ptr) });
         }
     }
-    let _ = FreeLibrary(handle);
+    let _ = unsafe { FreeLibrary(handle) };
     None
 }
 

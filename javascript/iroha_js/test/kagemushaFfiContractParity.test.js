@@ -1350,9 +1350,9 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       "Pallas open-envelopes archive must contain a non-empty Norito payload",
       "KagemushaNoritoFrameWithPayload",
       "AssertRejectsMalformedEverywhere",
-      "AssertRejectsMalformedEverywhere(compressed, validArchive)",
-      "AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive)",
-      "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive)",
+      "AssertRejectsMalformedEverywhere(compressed, validArchive, validRecordBundle)",
+      "AssertRejectsMalformedEverywhere(unsupportedFlags, validArchive, validRecordBundle)",
+      "AssertRejectsMalformedEverywhere(invalidFieldBitset, validArchive, validRecordBundle)",
       "compressed[22] = 1",
       "unsupportedFlags[39] = 0x08",
       "invalidFieldBitset[39] = 0x20",
@@ -6606,7 +6606,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?_ = recursiveCompactAvailable;[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
+      /KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?void recursiveCompactAvailable;[\s\S]*?_ = recursive_compact_available[\s\S]*?KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*?\.recursiveCompactV1[\s\S]*?Mode\.RECURSIVE_COMPACT_V1[\s\S]*?KagemushaOfflineSpendMode\.RecursiveCompactV1/u,
       "cross-SDK production default selector",
     ],
     [
@@ -14397,6 +14397,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-non-csharp-pallas-builder-native-output-guards",
     "--negative-control-non-csharp-pallas-metadata-option-shape",
     "--negative-control-non-csharp-pallas-sequence-count-prechecks",
+    "--negative-control-csharp-pallas-open-envelope-preflight",
+    "--negative-control-csharp-init-append-request-codecs",
     "--negative-control-jvm-android-pallas-transcript-label-byte-limit",
     "--negative-control-swift-pallas-transcript-label-byte-limit",
     "--negative-control-js-python-pallas-transcript-label-byte-limit",
@@ -14427,8 +14429,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-verify-result-redeem-aliases",
     "--negative-control-sdk-verify-lineage-record-preflight",
     "--negative-control-sdk-lineage-witness-trailing-field-vectors",
-    "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks",
-    "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks",
+    "--negative-control-sdk-lineage-witness-count-prefix-prechecks",
+    "--negative-control-sdk-record-bundle-fold-step-count-prechecks",
     "--negative-control-sdk-current-note-amount-trailing-field-vectors",
     "--negative-control-sdk-bundle-proof-circuit-vectors",
     "--negative-control-sdk-bundle-proof-backend-vectors",
@@ -14697,6 +14699,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-dotnet-info-script",
     "--negative-control-csharp-sdk-dotnet-override-script",
     "--negative-control-csharp-sdk-dotnet-major-script",
+    "--negative-control-csharp-sdk-dotnet-artifacts-path-script",
+    "--negative-control-csharp-sdk-recursive-spend-fixtures-project",
     "--negative-control-csharp-sdk-native-bridge-script",
     "--negative-control-csharp-sdk-native-library-evidence-script",
     "--negative-control-csharp-sdk-native-library-sha-case-script",
@@ -16849,13 +16853,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha compact-first mode policy",
       "Python preferred Kagemusha compact-first mode policy",
       "Rust data-model preferred Kagemusha compact-first mode policy",
+      "C# preferred Kagemusha compact-first mode policy",
     ],
-    "preferred-mode fallback negative control must require every JS/Python/Rust fallback drift label",
+    "preferred-mode fallback negative control must require every JS/Python/Rust/C# fallback drift label",
   );
   assert.match(
     preferredModeFallbackBranch,
-    /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha mode fallback policy/u,
-    "preferred-mode fallback negative control must expect editable-SDK compact-first labels and the C# deferral label",
+    /Swift preferred Kagemusha compact-first mode policy[\s\S]*Android Java preferred Kagemusha compact-first mode policy[\s\S]*C# preferred Kagemusha compact-first mode policy/u,
+    "preferred-mode fallback negative control must expect compact-first labels across editable SDKs including C#",
   );
   assertPerMutationDetector(
     preferredModeFallbackBranch,
@@ -19437,7 +19442,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const nonCsharpPallasSequenceCountBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-non-csharp-pallas-sequence-count-prechecks":'),
-    guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
+    guard.indexOf('if mode == "--negative-control-csharp-pallas-open-envelope-preflight":'),
   );
   assertContainsAll(
     nonCsharpPallasSequenceCountBranch,
@@ -19496,6 +19501,93 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     nonCsharpPallasSequenceCountBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "non-C# Pallas sequence-count negative control must not unconditionally pass after run_checks",
+  );
+  const csharpPallasOpenEnvelopePreflightBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-pallas-open-envelope-preflight":'),
+    guard.indexOf('if mode == "--negative-control-csharp-init-append-request-codecs":'),
+  );
+  assertContainsAll(
+    csharpPallasOpenEnvelopePreflightBranch,
+    [
+      "C# Pallas open-envelope semantic preflight",
+      "C# Pallas open-envelope malformed vector tests",
+      "private static byte[] RequireValidPallasOpenEnvelopesArchive(",
+      "private static int ReadPallasFixed32SequenceCount(",
+      "private static byte[] ReadRequiredPallasMetadataOption(",
+      "RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge",
+      "spec.ParamsGSequencePayload = U64LE(5)",
+      "spec.ProofRSequencePayload = U64LE(3)",
+      "spec.VkCommitmentPayload = KagemushaFixedArrayPayload(0x70, 32)",
+      "spec.VkCommitmentOptionPayload = OptionRawWithUnknownTag()",
+      "spec.VkCommitmentOptionPayload = OptionRawWithDeclaredLengthTooLong(SyntheticFixed32(0x70))",
+    ],
+    "C# Pallas open-envelope negative control must mutate source parser and malformed vector markers",
+  );
+  assert.match(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /for target, old, new, label in replacements:[\s\S]*?if label not in expected_labels:[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?C# Pallas open-envelope preflight drift was not detected for/u,
+    "C# Pallas open-envelope negative control must require every mutated C# label to be reported",
+  );
+  assert.match(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "C# Pallas open-envelope negative control must print diagnostics for each mutated label",
+  );
+  assert.match(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: C# Pallas open-envelope preflight drift was not detected"\s*\)/u,
+    "C# Pallas open-envelope negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpPallasOpenEnvelopePreflightBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# Pallas open-envelope negative control must not unconditionally pass after run_checks",
+  );
+  const csharpInitAppendRequestCodecBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-init-append-request-codecs":'),
+    guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
+  );
+  assertContainsAll(
+    csharpInitAppendRequestCodecBranch,
+    [
+      "C# typed recursive spend init/append request codecs",
+      "C# typed recursive spend init/append request codec tests",
+      "public static byte[] EncodeInitRequestWithLineageMaterials(",
+      "public static byte[] EncodeAppendRequestWithLineageMaterials(",
+      "public static byte[] EncodeInitRequestWithGeneratedPallas(",
+      "public static byte[] EncodeAppendRequestWithGeneratedPallas(",
+      "PrepareAppendGeneratedPallasPreflight(",
+      "previousProofOpenEnvelopesArchive is required for lineage append output",
+      "lineageKeyArtifacts are only valid for lineage append output",
+      "RecursiveSpendInitRequestEncoderRejectsMalformedLineageAndPallasInputsBeforeNativeBridge",
+      "RecursiveSpendAppendRequestEncoderRejectsPreviousProofOpeningAndLineageDriftBeforeNativeBridge",
+      "RecursiveSpendGeneratedPallasInitRequestHelperRejectsLineageBeforeNativeBuilder",
+      "RecursiveSpendGeneratedPallasAppendRequestHelperRejectsLineageBeforeNativeBuilder",
+      "missingPreviousOpenings",
+      "danglingLineageKeyMaterial",
+      "malformedRecordBundle",
+    ],
+    "C# init/append request codec negative control must mutate source and test markers",
+  );
+  assert.match(
+    csharpInitAppendRequestCodecBranch,
+    /for target, old, new, label in replacements:[\s\S]*?if label not in expected_labels:[\s\S]*?expected_labels\.append\(label\)[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?C# init\/append request codec drift was not detected for/u,
+    "C# init/append request codec negative control must require every mutated C# label to be reported",
+  );
+  assert.match(
+    csharpInitAppendRequestCodecBranch,
+    /for detected_message in first_lines_for_labels\(message, expected_labels\):[\s\S]*?print\(detected_message\)/u,
+    "C# init/append request codec negative control must print diagnostics for each mutated label",
+  );
+  assert.match(
+    csharpInitAppendRequestCodecBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: C# init\/append request codec drift was not detected"\s*\)/u,
+    "C# init/append request codec negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpInitAppendRequestCodecBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# init/append request codec negative control must not unconditionally pass after run_checks",
   );
   const jvmAndroidPallasTranscriptLabelByteLimitBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-jvm-android-pallas-transcript-label-byte-limit":'),
@@ -19893,28 +19985,28 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /NON_CSHARP_NATIVE_MATERIAL_README_NEEDLES\s*=\s*\([\s\S]*?generic proof-state \(`proofState`, `ProofState`, `proof_state`\)[\s\S]*?recursive\/lineage proof-state[\s\S]*?aggregation-transcript[\s\S]*?fixed-window table-schedule\/shared-manifest\/table-base[\s\S]*?table-schedule\/shared-manifest\/table-base, verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive verifier scalar-projection[\s\S]*?previous\/resulting accumulator aliases are native-owned material[\s\S]*?\)/u,
+    /SDK_NATIVE_MATERIAL_README_NEEDLES\s*=\s*\([\s\S]*?generic proof-state \(`proofState`, `ProofState`, `proof_state`\)[\s\S]*?recursive\/lineage proof-state[\s\S]*?aggregation-transcript[\s\S]*?fixed-window table-schedule\/shared-manifest\/table-base[\s\S]*?table-schedule\/shared-manifest\/table-base, verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive verifier scalar-projection[\s\S]*?previous\/resulting accumulator aliases are native-owned material[\s\S]*?\)/u,
     "SDK README native material alias markers must be centralized and complete",
   );
   assert.match(
     guard,
-    /NON_CSHARP_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES\s*=\s*\{[\s\S]*?IrohaSwift\/README\.md[\s\S]*?not Swift request fields[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?not Android Java request fields[\s\S]*?kotlin\/README\.md[\s\S]*?not Kotlin request fields[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?not JavaScript or TypeScript request fields[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?not Python request fields[\s\S]*?\}/u,
+    /SDK_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES\s*=\s*\{[\s\S]*?IrohaSwift\/README\.md[\s\S]*?not Swift request fields[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?not Android Java request fields[\s\S]*?kotlin\/README\.md[\s\S]*?not Kotlin request fields[\s\S]*?csharp\/README\.md[\s\S]*?not C# request fields[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?not JavaScript or TypeScript request fields[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?not Python request fields[\s\S]*?\}/u,
     "SDK README native material request-field markers must be centralized and SDK-specific",
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
-    /replacements\s*=\s*\{[\s\S]*?IrohaSwift\/README\.md[\s\S]*?proofState[\s\S]*?aggregation-transcript[\s\S]*?fixed-window[\s\S]*?verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive verifier[\s\S]*?previous\/resulting accumulator aliases[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\}[\s\S]*?run_checks\(mutated\)/u,
-    "SDK README native material alias negative control must mutate the alias boundary across non-C# READMEs",
-  );
-  assert.doesNotMatch(
-    sdkReadmeNativeMaterialAliasBranch,
-    /csharp\/README\.md/u,
-    "SDK README native material alias negative control must leave C# for the Windows follow-up",
+    /replacements\s*=\s*\{[\s\S]*?IrohaSwift\/README\.md[\s\S]*?proofState[\s\S]*?aggregation-transcript[\s\S]*?fixed-window[\s\S]*?verifier-witness batch[\s\S]*?transition-profile binding[\s\S]*?append-opening preflight[\s\S]*?recursive verifier[\s\S]*?previous\/resulting accumulator aliases[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?kotlin\/README\.md[\s\S]*?csharp\/README\.md[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?\}[\s\S]*?run_checks\(mutated\)/u,
+    "SDK README native material alias negative control must mutate the alias boundary across SDK READMEs",
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
-    /detected_messages = \[\][\s\S]*?for target, \(old, new\) in replacements\.items\(\):[\s\S]*?for needle in NON_CSHARP_NATIVE_MATERIAL_README_NEEDLES[\s\S]*?NON_CSHARP_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES\[target\][\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK README native material alias drift was not detected for/u,
-    "SDK README native material alias negative control must require every non-C# README marker and request-field drift to be reported",
+    /csharp\/README\.md[\s\S]*?Proof-state and accumulator material aliases may be C# request fields\./u,
+    "SDK README native material alias negative control must mutate C# now that the C# README boundary is source-pinned",
+  );
+  assert.match(
+    sdkReadmeNativeMaterialAliasBranch,
+    /detected_messages = \[\][\s\S]*?for target, \(old, new\) in replacements\.items\(\):[\s\S]*?for needle in SDK_NATIVE_MATERIAL_README_NEEDLES[\s\S]*?SDK_NATIVE_MATERIAL_README_REQUEST_FIELD_NEEDLES\[target\][\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\][\s\S]*?SDK README native material alias drift was not detected for/u,
+    "SDK README native material alias negative control must require each mutated SDK README marker and request-field drift to be reported",
   );
   assert.match(
     sdkReadmeNativeMaterialAliasBranch,
@@ -20987,7 +21079,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkLineageWitnessTrailingFieldVectorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-trailing-field-vectors":'),
-    guard.indexOf('if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":'),
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-count-prefix-prechecks":'),
   );
   assert.match(
     sdkLineageWitnessTrailingFieldVectorBranch,
@@ -21029,14 +21121,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK lineage-witness trailing-field vector negative control must not unconditionally pass after run_checks",
   );
-  const nonCsharpLineageWitnessCountPrefixBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-non-csharp-lineage-witness-count-prefix-prechecks":'),
+  const sdkLineageWitnessCountPrefixBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-witness-count-prefix-prechecks":'),
     guard.indexOf(
-      'if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":',
+      'if mode == "--negative-control-sdk-record-bundle-fold-step-count-prechecks":',
     ),
   );
   assertContainsAll(
-    nonCsharpLineageWitnessCountPrefixBranch,
+    sdkLineageWitnessCountPrefixBranch,
     [
       "JavaScript lineage-witness previous-proof count precheck decoder",
       "JavaScript dist lineage-witness previous-proof count precheck decoder",
@@ -21044,68 +21136,73 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Swift lineage-witness previous-proof count precheck decoder",
       "Kotlin lineage-witness previous-proof count precheck decoder",
       "Android Java lineage-witness previous-proof count precheck decoder",
+      "C# lineage-witness previous-proof count precheck decoder",
       "JavaScript lineage-witness previous-proof count-prefix vectors",
       "JavaScript package dist lineage-witness previous-proof count-prefix vectors",
       "Python lineage-witness previous-proof count-prefix vectors",
       "Swift lineage-witness previous-proof count-prefix vectors",
       "Kotlin lineage-witness previous-proof count-prefix vectors",
       "Android Java lineage-witness previous-proof count-prefix vectors",
+      "C# lineage-witness previous-proof count-prefix vectors",
       "count > BigInt(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS)",
       "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
       "guard count <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
       "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+      "if (count > CompactTokenMaxHops)",
       "recursiveSpendLineageWitnessWithPreviousProofCountPrefixOnly(",
       "_recursive_spend_lineage_witness_with_previous_proof_count_prefix_only(",
+      "Archive: RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly(),",
+      "RecursiveSpendLineageWitnessWithOverLimitPreviousProofCountOnly()",
       "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1",
       "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1",
     ],
-    "non-C# lineage-witness count-prefix negative control must mutate decoder prechecks and vectors",
-  );
-  assert.doesNotMatch(
-    nonCsharpLineageWitnessCountPrefixBranch,
-    /csharp\//u,
-    "non-C# lineage-witness count-prefix negative control must leave C# for the Windows follow-up",
+    "SDK lineage-witness count-prefix negative control must mutate decoder prechecks and vectors",
   );
   assert.match(
-    nonCsharpLineageWitnessCountPrefixBranch,
+    sdkLineageWitnessCountPrefixBranch,
+    /csharp\/src\/Hyperledger\.Iroha\.Sdk\/Offline\/KagemushaRecursiveSpend\.cs[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK lineage-witness count-prefix negative control must mutate C# source and tests",
+  );
+  assert.match(
+    sdkLineageWitnessCountPrefixBranch,
     /expected_marker = old\.splitlines\(\)\[0\]\.strip\(\)[\s\S]*?expected_label = f"\{label\} missing \{expected_marker\}"[\s\S]*?run_checks\(mutated\)/u,
-    "non-C# lineage-witness count-prefix negative control must validate the mutated text snapshot",
+    "SDK lineage-witness count-prefix negative control must validate the mutated text snapshot",
   );
   assert.match(
-    nonCsharpLineageWitnessCountPrefixBranch,
-    /if expected_label not in message:[\s\S]*?non-C# lineage-witness count-prefix drift was rejected for the wrong reason/u,
-    "non-C# lineage-witness count-prefix negative control must require every SDK drift to be reported",
+    sdkLineageWitnessCountPrefixBranch,
+    /if expected_label not in message:[\s\S]*?SDK lineage-witness count-prefix drift was rejected for the wrong reason/u,
+    "SDK lineage-witness count-prefix negative control must require every SDK drift to be reported",
   );
   assert.match(
-    nonCsharpLineageWitnessCountPrefixBranch,
+    sdkLineageWitnessCountPrefixBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
-    "non-C# lineage-witness count-prefix negative control must restore each target snapshot between mutations",
+    "SDK lineage-witness count-prefix negative control must restore each target snapshot between mutations",
   );
   assert.match(
-    nonCsharpLineageWitnessCountPrefixBranch,
+    sdkLineageWitnessCountPrefixBranch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
-    "non-C# lineage-witness count-prefix negative control must print diagnostics for every mutated surface",
+    "SDK lineage-witness count-prefix negative control must print diagnostics for every mutated surface",
   );
   assert.match(
-    nonCsharpLineageWitnessCountPrefixBranch,
-    /non-C# lineage-witness count-prefix drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: non-C# lineage-witness count-prefix drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
-    "non-C# lineage-witness count-prefix negative control must only pass after detecting every injected drift",
+    sdkLineageWitnessCountPrefixBranch,
+    /SDK lineage-witness count-prefix drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK lineage-witness count-prefix drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK lineage-witness count-prefix negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
-    nonCsharpLineageWitnessCountPrefixBranch,
+    sdkLineageWitnessCountPrefixBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
-    "non-C# lineage-witness count-prefix negative control must not unconditionally pass after run_checks",
+    "SDK lineage-witness count-prefix negative control must not unconditionally pass after run_checks",
   );
-  const nonCsharpRecordBundleFoldStepCountPrefixBranch = guard.slice(
+  const sdkRecordBundleFoldStepCountPrefixBranch = guard.slice(
     guard.indexOf(
-      'if mode == "--negative-control-non-csharp-record-bundle-fold-step-count-prechecks":',
+      'if mode == "--negative-control-sdk-record-bundle-fold-step-count-prechecks":',
     ),
     guard.indexOf(
       'if mode == "--negative-control-sdk-current-note-amount-trailing-field-vectors":',
     ),
   );
   assertContainsAll(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     [
       "JavaScript record-bundle fold-step count precheck decoder",
       "JavaScript dist record-bundle fold-step count precheck decoder",
@@ -21113,12 +21210,14 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Swift record-bundle fold-step count precheck decoder",
       "Kotlin record-bundle fold-step count precheck decoder",
       "Android Java record-bundle fold-step count precheck decoder",
+      "C# record-bundle fold-step count precheck decoder",
       "JavaScript record-bundle fold-step count-prefix vectors",
       "JavaScript package dist record-bundle fold-step count-prefix vectors",
       "Python record-bundle fold-step count-prefix vectors",
       "Swift record-bundle fold-step count-prefix vectors",
       "Kotlin record-bundle fold-step count-prefix vectors",
       "Android Java record-bundle fold-step count-prefix vectors",
+      "C# record-bundle fold-step count-prefix vectors",
       "function kagemushaReadVerifiedFoldStepCount(payload, flags, field)",
       "def _kagemusha_read_verified_fold_step_count(",
       "private static func readVerifiedFoldStepCount(",
@@ -21128,48 +21227,51 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "if count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS:",
       "guard count64 <= UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) else",
       "count <= KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS",
+      "if (count > CompactTokenMaxHops)",
       "stepsPayload: u64LE(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
       "steps_payload=_u64_le(kagemusha.KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1)",
       "Self.uint64Payload(UInt64(KagemushaRecursiveSpendProver.compactTokenMaxHops) + 1)",
       '"recordBundle.steps fold step count must not exceed ${KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS}"',
       "KagemushaRecursiveSpendProver.COMPACT_TOKEN_MAX_HOPS + 1L",
+      "var recordBundle = RecordBundleWithOverLimitStepCountOnly();",
+      "RecordBundleWithOverLimitStepCountOnly()",
     ],
-    "non-C# record-bundle fold-step count-prefix negative control must mutate decoder prechecks and vectors",
-  );
-  assert.doesNotMatch(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
-    /csharp\//u,
-    "non-C# record-bundle fold-step count-prefix negative control must leave C# for the Windows follow-up",
+    "SDK record-bundle fold-step count-prefix negative control must mutate decoder prechecks and vectors",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
+    /csharp\/src\/Hyperledger\.Iroha\.Sdk\/Offline\/KagemushaRecursiveSpend\.cs[\s\S]*?csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/KagemushaRecursiveSpendNativeTests\.cs/u,
+    "SDK record-bundle fold-step count-prefix negative control must mutate C# source and tests",
+  );
+  assert.match(
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /expected_label = f"\{label\} missing \{expected_marker\}"[\s\S]*?run_checks\(mutated\)/u,
-    "non-C# record-bundle fold-step count-prefix negative control must validate the mutated text snapshot",
+    "SDK record-bundle fold-step count-prefix negative control must validate the mutated text snapshot",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
-    /if expected_label not in message:[\s\S]*?non-C# record-bundle fold-step count-prefix drift was rejected for the wrong reason/u,
-    "non-C# record-bundle fold-step count-prefix negative control must require every SDK drift to be reported",
+    sdkRecordBundleFoldStepCountPrefixBranch,
+    /if expected_label not in message:[\s\S]*?SDK record-bundle fold-step count-prefix drift was rejected for the wrong reason/u,
+    "SDK record-bundle fold-step count-prefix negative control must require every SDK drift to be reported",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
-    "non-C# record-bundle fold-step count-prefix negative control must restore each target snapshot between mutations",
+    "SDK record-bundle fold-step count-prefix negative control must restore each target snapshot between mutations",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /detected_messages\.append\(first_lines_for_labels\(message, \(expected_label,\)\)\[0\]\)[\s\S]*?for detected_message in detected_messages:[\s\S]*?print\(detected_message\)/u,
-    "non-C# record-bundle fold-step count-prefix negative control must print diagnostics for every mutated surface",
+    "SDK record-bundle fold-step count-prefix negative control must print diagnostics for every mutated surface",
   );
   assert.match(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
-    /non-C# record-bundle fold-step count-prefix drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: non-C# record-bundle fold-step count-prefix drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
-    "non-C# record-bundle fold-step count-prefix negative control must only pass after detecting every injected drift",
+    sdkRecordBundleFoldStepCountPrefixBranch,
+    /SDK record-bundle fold-step count-prefix drift was not detected for[\s\S]*?if not detected_messages:[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK record-bundle fold-step count-prefix drift was not detected"\s*\)[\s\S]*?raise\s+SystemExit\(0\)/u,
+    "SDK record-bundle fold-step count-prefix negative control must only pass after detecting every injected drift",
   );
   assert.doesNotMatch(
-    nonCsharpRecordBundleFoldStepCountPrefixBranch,
+    sdkRecordBundleFoldStepCountPrefixBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
-    "non-C# record-bundle fold-step count-prefix negative control must not unconditionally pass after run_checks",
+    "SDK record-bundle fold-step count-prefix negative control must not unconditionally pass after run_checks",
   );
   const sdkCurrentNoteAmountTrailingFieldVectorBranch = guard.slice(
     guard.indexOf(
@@ -21570,6 +21672,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /def expected_redeem_change_output_reserved_collision_label\(old, label\):[\s\S]*?marker = old\.splitlines\(\)\[0\][\s\S]*?expected_label = expected_redeem_change_output_reserved_collision_label\(old, label\)[\s\S]*?if expected_label not in message:[\s\S]*?SDK redeem change-output reserved collision drift was rejected for the wrong reason/u,
     "SDK redeem change-output reserved collision negative control must require exact reported markers",
   );
+  assertContainsAll(
+    sdkRedeemChangeOutputReservedCollisionBranch,
+    [
+      "C# recursive spend redeem change-output reserved collision guard",
+      "C# recursive spend redeem change-output reserved collision tests",
+      "bundleSummary.TopupAnchorNullifiers",
+      "bundleSummary.TopupAnchorNullifiers[0]",
+    ],
+    "SDK redeem change-output reserved collision negative control must mutate C# guard and tests",
+  );
   assert.match(
     sdkRedeemChangeOutputReservedCollisionBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current/u,
@@ -21623,6 +21735,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "Swift typed recursive spend top-up anchor nullifier invariant tests",
       "Kotlin typed recursive spend top-up anchor nullifier invariant tests",
       "Android Java typed recursive spend top-up anchor nullifier invariant tests",
+      "C# recursive spend top-up anchor nullifier invariant guard",
+      "C# recursive spend top-up anchor nullifier precedence guard",
+      "C# recursive spend top-up anchor nullifier invariant tests",
+      "RecursiveSpendTransitionProfileSummaryDecoderRejectsPreviousTopupAnchorDrift",
+      "previousTopupAnchorNullifiers.Length == 0 || previousTopupAnchorNullifiers.Length > FoldStepMaxInputs",
+      "transition_profile.previous_topup_anchor_nullifiers count is out of range",
+      "transition_profile.output_commitments must not reuse previous top-up anchor nullifiers",
       "malformed proof cannot mask invalid top-up anchor nullifiers",
       "malformed proof can mask invalid top-up anchor nullifiers",
       "trailing accumulator cannot mask invalid top-up anchor nullifiers",
@@ -25432,7 +25551,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     csharpArchiveCopyBranch,
-    /AssertRejectsMalformedEverywhere\(invalidFieldBitset, validArchive\)[\s\S]*?AssertRejectsMalformedEverywhere\(validArchive, validArchive\)/u,
+    /AssertRejectsMalformedEverywhere\(invalidFieldBitset, validArchive, validRecordBundle\)[\s\S]*?AssertRejectsMalformedEverywhere\(validArchive, validArchive, validRecordBundle\)/u,
     "C# archive wrapper copy negative control must mutate native input malformed-header coverage",
   );
   assert.match(
@@ -26866,6 +26985,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");
   const swiftRunner = source("ci/check_kagemusha_recursive_spend_swift_sdk.sh");
   const csharpRunner = source("ci/check_kagemusha_recursive_spend_csharp_sdk.sh");
+  const csharpTestsProject = source(
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+  );
   const jvmRunner = source("ci/check_kagemusha_recursive_spend_jvm_sdk.sh");
   assert.match(
     pythonRunner,
@@ -27026,6 +27148,16 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     csharpRunner,
     /DOTNET_BIN="\$\{KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet\}"/,
     "Kagemusha C# SDK runner must keep the documented dotnet override variable",
+  );
+  assert.match(
+    csharpRunner,
+    /DOTNET_ARTIFACTS_PATH="\$\{BRIDGE_TARGET_DIR\}\/dotnet-artifacts"[\s\S]*rm -rf "\$\{DOTNET_ARTIFACTS_PATH\}"[\s\S]*--artifacts-path "\$\{DOTNET_ARTIFACTS_PATH\}"[\s\S]*-p:ProduceReferenceAssembly=false/u,
+    "Kagemusha C# SDK runner must keep dotnet test artifacts under the native bridge target",
+  );
+  assert.match(
+    csharpTestsProject,
+    /fixtures\/kagemusha_recursive_spend_abi6\/\*\.json[\s\S]*Link="fixtures\/kagemusha_recursive_spend_abi6\/%\(Filename\)%\(Extension\)"[\s\S]*fixtures\/kagemusha_recursive_spend_abi7\/\*\.json[\s\S]*Link="fixtures\/kagemusha_recursive_spend_abi7\/%\(Filename\)%\(Extension\)"/u,
+    "Kagemusha C# test project must copy shared recursive spend fixtures to the test output",
   );
   assert.match(
     csharpRunner,

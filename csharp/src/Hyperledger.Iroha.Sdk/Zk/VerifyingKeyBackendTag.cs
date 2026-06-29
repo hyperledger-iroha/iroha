@@ -79,11 +79,17 @@ public static class VerifyingKeyBackendTags
 
     public static VerifyingKeyBackendTag FromCatalogLabel(string? raw)
     {
-        var label = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        if (raw is null)
+        {
+            return VerifyingKeyBackendTag.Unsupported;
+        }
+
+        var label = raw.Trim().ToLowerInvariant();
         if (label.Length == 0)
         {
             return VerifyingKeyBackendTag.Unsupported;
         }
+
         if (HasNonAscii(label))
         {
             return VerifyingKeyBackendTag.Unsupported;
@@ -108,6 +114,7 @@ public static class VerifyingKeyBackendTags
         var backend = raw;
         if (backend.Length == 0
             || backend.Trim() != backend
+            || ContainsWhitespace(backend)
             || !IsPortableVerifierBackendLabel(backend)
             || IsPendingProductionBackendLabel(backend)
             || IsProductionClaimBackendLabel(backend)
@@ -135,6 +142,11 @@ public static class VerifyingKeyBackendTags
             throw new ArgumentException($"{context} must not contain surrounding whitespace.", context);
         }
 
+        if (ContainsWhitespace(backend))
+        {
+            throw new ArgumentException($"{context} must not contain whitespace.", context);
+        }
+
         if (!IsProductionVerifyBackendLabel(backend))
         {
             throw new ArgumentException(
@@ -143,6 +155,19 @@ public static class VerifyingKeyBackendTags
         }
 
         return backend;
+    }
+
+    private static bool ContainsWhitespace(string value)
+    {
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static readonly HashSet<string> ProductionNativeHalo2PastaBackends =

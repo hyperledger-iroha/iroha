@@ -5,6 +5,8 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class OfflineCashLifecycleTests
 {
+    private const string IssuerPublicKeyBase64 = "aXNzdWVyLWtleQ==";
+
     [Fact]
     public void TransportCapabilitiesHideUnsupportedNfc()
     {
@@ -33,7 +35,7 @@ public sealed class OfflineCashLifecycleTests
             new RecordingWallet(events),
             new RecordingSynchronizer(events, hasPending: true));
 
-        var result = await controller.LoadAsync("pkr#sbp", "10");
+        var result = await controller.LoadAsync("pkr#sbp", "10", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", result);
         Assert.Equal(new[] { "hasPending", "sync", "load:pkr#sbp:10" }, events);
@@ -51,7 +53,7 @@ public sealed class OfflineCashLifecycleTests
                 syncFailure: new InvalidOperationException("audit sync failed")));
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await controller.LoadAsync("pkr#sbp", "10"));
+            async () => await controller.LoadAsync("pkr#sbp", "10", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("audit sync failed", error.Message);
         Assert.Equal(new[] { "hasPending", "sync" }, events);
@@ -64,8 +66,10 @@ public sealed class OfflineCashLifecycleTests
             ChainId: "00000042",
             AssetDefinitionId: "pkr#sbp",
             OfflinePaymentsEnabled: true,
-            IssuerPublicKeyBase64: "issuer-key",
+            IssuerPublicKeyBase64: IssuerPublicKeyBase64,
             NativeBridgeAbiVersion: 7,
+            ArtifactSetId: "offline-bearer-cash-v1",
+            CircuitId: "kagemusha-recursive-compact-v1",
             CreatedAtMs: 100,
             ExpiresAtMs: 1_000);
 
@@ -79,11 +83,14 @@ public sealed class OfflineCashLifecycleTests
         foreach (var issuerKey in new[]
         {
             "",
+            "issuer-key",
             " issuer-key",
             "issuer-key ",
             "issuer key",
             "issuer-key\n",
             "issuer-key\u2603",
+            "AR==",
+            "====",
         })
         {
             var noncanonical = snapshot with { IssuerPublicKeyBase64 = issuerKey };
@@ -110,6 +117,72 @@ public sealed class OfflineCashLifecycleTests
     }
 
     [Fact]
+    public void ConfigurationSnapshotRejectsMalformedCachedIdentityAndAbiGates()
+    {
+        var snapshot = new OfflineCashConfigurationSnapshot(
+            ChainId: "00000042",
+            AssetDefinitionId: "pkr#sbp",
+            OfflinePaymentsEnabled: true,
+            IssuerPublicKeyBase64: IssuerPublicKeyBase64,
+            NativeBridgeAbiVersion: 7,
+            ArtifactSetId: "offline-bearer-cash-v1",
+            CircuitId: "kagemusha-recursive-compact-v1",
+            CreatedAtMs: 100,
+            ExpiresAtMs: 1_000);
+
+        AssertSnapshotCode(
+            snapshot with { ChainId = " 00000042" },
+            "invalid_chain_id");
+        AssertSnapshotCode(
+            snapshot with { ChainId = "0000\n0042" },
+            "invalid_chain_id");
+        AssertSnapshotCode(
+            snapshot with { ChainId = "chain-\u2603" },
+            "invalid_chain_id");
+        AssertSnapshotCode(
+            snapshot with { AssetDefinitionId = "" },
+            "invalid_asset_definition_id");
+        AssertSnapshotCode(
+            snapshot with { AssetDefinitionId = "pkr #sbp" },
+            "invalid_asset_definition_id");
+        AssertSnapshotCode(
+            snapshot with { AssetDefinitionId = "pkr#sbp\u007f" },
+            "invalid_asset_definition_id");
+        AssertSnapshotCode(
+            snapshot with { ArtifactSetId = "" },
+            "invalid_artifact_set_id");
+        AssertSnapshotCode(
+            snapshot with { ArtifactSetId = "offline bearer cash" },
+            "invalid_artifact_set_id");
+        AssertSnapshotCode(
+            snapshot with { CircuitId = "kagemusha recursive compact v1" },
+            "invalid_circuit_id");
+        AssertSnapshotCode(
+            snapshot with { CircuitId = "kagemusha-recursive-compact-v1\t" },
+            "invalid_circuit_id");
+        AssertSnapshotCode(
+            snapshot with { CreatedAtMs = 201 },
+            "snapshot_created_in_future");
+        AssertSnapshotCode(
+            snapshot with { ExpiresAtMs = 100 },
+            "invalid_snapshot_timestamps",
+            nowMs: 50);
+        AssertSnapshotCode(
+            snapshot with { ExpiresAtMs = 99 },
+            "invalid_snapshot_timestamps",
+            nowMs: 50);
+        AssertSnapshotCode(
+            snapshot with { NativeBridgeAbiVersion = 0 },
+            "invalid_native_bridge_abi");
+
+        var error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
+            () => snapshot.RequireUsableForOfflineExchange(
+                nowMs: 200,
+                requiredNativeBridgeAbiVersion: 0));
+        Assert.Equal("invalid_required_native_bridge_abi", error.Code);
+    }
+
+    [Fact]
     public void KagemushaWireNameConstantsAreCanonical()
     {
         Assert.Equal(
@@ -122,6 +195,18 @@ public sealed class OfflineCashLifecycleTests
             "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1",
             KagemushaWireNames.RecursiveRedeemRequest);
         Assert.Equal(KagemushaWireNames.TransferInstruction, KagemushaInstructionType.Transfer.WireName());
+    }
+
+    private static void AssertSnapshotCode(
+        OfflineCashConfigurationSnapshot snapshot,
+        string expectedCode,
+        ulong nowMs = 200)
+    {
+        var error = Assert.Throws<OfflineCashConfigurationSnapshotException>(
+            () => snapshot.RequireUsableForOfflineExchange(
+                nowMs: nowMs,
+                requiredNativeBridgeAbiVersion: 7));
+        Assert.Equal(expectedCode, error.Code);
     }
 
     private sealed class RecordingSynchronizer : IOfflineCashAuditReceiptSynchronizer

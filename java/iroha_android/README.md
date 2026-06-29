@@ -1395,8 +1395,10 @@ instead of ignoring smuggled JSON.
 on every committed wallet-state revision and rejects app-data rollback or
 cloned preference snapshots after the old revision key has been deleted. Legacy
 `SPEND_PENDING` records decode as `SPENT`, and legacy `CHANGE_PENDING` records
-decode as `SPENDABLE`.
-the core module includes an in-memory store and `ToriiOfflineNoteIssuerClient`
+decode as `SPENDABLE`. Wallet `load` records newly issued local notes as
+`ISSUE_PENDING` until sync observes the matching `IssueOfflineNote` commit;
+rejected issue outcomes cancel the pending note. The core module includes an
+in-memory store and `ToriiOfflineNoteIssuerClient`
 for body-signed key-refill in tests and JVM tooling. Legacy note issue and
 `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions remain
 for source compatibility, but fail closed; production offline payments use

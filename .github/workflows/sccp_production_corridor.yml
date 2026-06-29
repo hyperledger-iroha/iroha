@@ -40,6 +40,7 @@ on:
       - "pytests/scripts/sccp_release_readiness_report_test.py"
       - "pytests/scripts/sccp_*"
       - "roadmap.md"
+      - "rust-toolchain.toml"
       - "scripts/check_sccp_production_corridor.sh"
       - "scripts/sccp_evm_contract_smoke.sh"
       - "scripts/sccp_release_readiness_report.py"
@@ -241,14 +242,22 @@ jobs:
   dotnet-sdk:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all' || github.event.inputs.phase == 'dotnet-sdk' }}
     needs: runner-self-check
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: "false"
+          toolchain: "1.93.1-x86_64-pc-windows-msvc"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
       - name: .NET SCCP native facade corridor
+        shell: bash
         run: |
           set -o pipefail
           mkdir -p dist/sccp-production-corridor
