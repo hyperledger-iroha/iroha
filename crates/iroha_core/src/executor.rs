@@ -9931,7 +9931,7 @@ mod tests {
         let mut block = state.block(block_header);
         let mut stx = block.transaction();
 
-        super::Executor::charge_nexus_fees(&mut stx, &payer_id, tx_hash, None, 0, 0, 0, true)
+        super::Executor::charge_nexus_fees(&mut stx, &payer_id, &tx, tx_hash, None, 0, 0, 0, true)
             .expect("redeem-funded public balance should record a lane fee receipt");
 
         let pending = stx.drain_nexus_fee_records();

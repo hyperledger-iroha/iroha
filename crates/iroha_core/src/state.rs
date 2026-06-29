@@ -47792,8 +47792,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        let elastic_lane =
-            autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
+        let elastic_lane = autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 1);
         state
             .set_nexus(autoscale_transition_test_nexus(
                 vec![LaneConfig::default()],

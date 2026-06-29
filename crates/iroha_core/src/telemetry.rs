@@ -4909,7 +4909,7 @@ fn emit_sorafs_proof_health_alert(metrics: &Metrics, alert: &SorafsProofHealthAl
     );
 }
 
-/// Update gauges that track transaction queue load and capacity saturation as observed by consensus.
+/// Update gauges that track transaction queue load and saturation as observed by consensus.
 pub fn record_state_tx_queue_backpressure(
     telemetry: &StateTelemetry,
     depth: u64,
@@ -4918,6 +4918,8 @@ pub fn record_state_tx_queue_backpressure(
     max_retained_bytes: u64,
     saturated_by_count: bool,
     saturated_by_bytes: bool,
+    saturated_by_age: bool,
+    oldest_queued_age_ms: u64,
 ) {
     if telemetry.is_enabled() {
         telemetry.metrics.sumeragi_tx_queue_depth.set(depth);
@@ -4930,10 +4932,25 @@ pub fn record_state_tx_queue_backpressure(
             .metrics
             .sumeragi_tx_queue_max_retained_bytes
             .set(max_retained_bytes);
+        telemetry.metrics.sumeragi_tx_queue_saturated.set(u64::from(
+            saturated_by_count || saturated_by_bytes || saturated_by_age,
+        ));
         telemetry
             .metrics
-            .sumeragi_tx_queue_saturated
-            .set(u64::from(saturated_by_count || saturated_by_bytes));
+            .sumeragi_tx_queue_saturated_by_count
+            .set(u64::from(saturated_by_count));
+        telemetry
+            .metrics
+            .sumeragi_tx_queue_saturated_by_bytes
+            .set(u64::from(saturated_by_bytes));
+        telemetry
+            .metrics
+            .sumeragi_tx_queue_saturated_by_age
+            .set(u64::from(saturated_by_age));
+        telemetry
+            .metrics
+            .sumeragi_tx_queue_oldest_queued_age_ms
+            .set(oldest_queued_age_ms);
     }
 }
 
@@ -6129,7 +6146,7 @@ impl Telemetry {
         }
     }
 
-    /// Update gauges that track transaction queue load and capacity saturation as observed by consensus.
+    /// Update gauges that track transaction queue load and saturation as observed by consensus.
     pub fn record_tx_queue_backpressure(
         &self,
         depth: u64,
@@ -6138,6 +6155,8 @@ impl Telemetry {
         max_retained_bytes: u64,
         saturated_by_count: bool,
         saturated_by_bytes: bool,
+        saturated_by_age: bool,
+        oldest_queued_age_ms: u64,
     ) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.sumeragi_tx_queue_depth.set(depth);
@@ -6148,9 +6167,21 @@ impl Telemetry {
             self.metrics
                 .sumeragi_tx_queue_max_retained_bytes
                 .set(max_retained_bytes);
+            self.metrics.sumeragi_tx_queue_saturated.set(u64::from(
+                saturated_by_count || saturated_by_bytes || saturated_by_age,
+            ));
             self.metrics
-                .sumeragi_tx_queue_saturated
-                .set(u64::from(saturated_by_count || saturated_by_bytes));
+                .sumeragi_tx_queue_saturated_by_count
+                .set(u64::from(saturated_by_count));
+            self.metrics
+                .sumeragi_tx_queue_saturated_by_bytes
+                .set(u64::from(saturated_by_bytes));
+            self.metrics
+                .sumeragi_tx_queue_saturated_by_age
+                .set(u64::from(saturated_by_age));
+            self.metrics
+                .sumeragi_tx_queue_oldest_queued_age_ms
+                .set(oldest_queued_age_ms);
         }
     }
 
@@ -12468,19 +12499,31 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
-        record_state_tx_queue_backpressure(&telemetry, 12, 64, 1_024, 2_048, false, false);
+        record_state_tx_queue_backpressure(
+            &telemetry, 12, 64, 1_024, 2_048, false, false, false, 500,
+        );
         assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 12);
         assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 64);
         assert_eq!(metrics.sumeragi_tx_queue_retained_bytes.get(), 1_024);
         assert_eq!(metrics.sumeragi_tx_queue_max_retained_bytes.get(), 2_048);
         assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_count.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 500);
 
-        record_state_tx_queue_backpressure(&telemetry, 63, 64, 2_048, 2_048, false, true);
+        record_state_tx_queue_backpressure(
+            &telemetry, 63, 64, 2_048, 2_048, false, true, true, 7_500,
+        );
         assert_eq!(metrics.sumeragi_tx_queue_depth.get(), 63);
         assert_eq!(metrics.sumeragi_tx_queue_capacity.get(), 64);
         assert_eq!(metrics.sumeragi_tx_queue_retained_bytes.get(), 2_048);
         assert_eq!(metrics.sumeragi_tx_queue_max_retained_bytes.get(), 2_048);
         assert_eq!(metrics.sumeragi_tx_queue_saturated.get(), 1);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_count.get(), 0);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_bytes.get(), 1);
+        assert_eq!(metrics.sumeragi_tx_queue_saturated_by_age.get(), 1);
+        assert_eq!(metrics.sumeragi_tx_queue_oldest_queued_age_ms.get(), 7_500);
     }
 
     #[cfg(feature = "telemetry")]

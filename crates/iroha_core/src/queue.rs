@@ -426,7 +426,7 @@ pub struct QueuePressureSnapshot {
 }
 
 impl QueuePressureSnapshot {
-    /// Whether either saturation signal is active.
+    /// Whether any saturation signal is active.
     #[must_use]
     pub const fn is_saturated(self) -> bool {
         self.saturated_by_count || self.saturated_by_bytes || self.saturated_by_age
@@ -4887,6 +4887,8 @@ impl Queue {
                 snapshot.max_retained_bytes.get(),
                 snapshot.saturated_by_count,
                 snapshot.saturated_by_bytes,
+                snapshot.saturated_by_age,
+                snapshot.oldest_queued_tx_age_ms,
             );
         }
         #[cfg(not(feature = "telemetry"))]
